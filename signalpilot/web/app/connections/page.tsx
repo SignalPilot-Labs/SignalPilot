@@ -1035,19 +1035,36 @@ export default function ConnectionsPage() {
                       </div>
                     ) : tables && Object.keys(tables).length > 0 ? (
                       <div className="space-y-2">
-                        <p className="text-[10px] text-[var(--color-text-dim)] mb-3 tracking-wider">
-                          {Object.keys(tables).length} tables
-                        </p>
-                        <div className="grid grid-cols-2 gap-px max-h-80 overflow-auto bg-[var(--color-border)]">
-                          {Object.values(tables).map((t) => (
+                        <div className="flex items-center gap-3 mb-3">
+                          <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                            {Object.keys(tables).length} tables
+                          </p>
+                          {(() => {
+                            const totalFKs = Object.values(tables).reduce((sum: number, t: any) => sum + (t.foreign_keys?.length || 0), 0);
+                            const totalIdxs = Object.values(tables).reduce((sum: number, t: any) => sum + (t.indexes?.length || 0), 0);
+                            return (
+                              <>
+                                {totalFKs > 0 && <span className="text-[9px] text-purple-400 tracking-wider">{totalFKs} FKs</span>}
+                                {totalIdxs > 0 && <span className="text-[9px] text-blue-400 tracking-wider">{totalIdxs} indexes</span>}
+                              </>
+                            );
+                          })()}
+                        </div>
+                        <div className="grid grid-cols-2 gap-px max-h-96 overflow-auto bg-[var(--color-border)]">
+                          {Object.values(tables).map((t: any) => (
                             <div key={t.name} className="p-3 bg-[var(--color-bg)]">
                               <div className="flex items-center gap-2 mb-2">
                                 <Table2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
                                 <span className="text-[10px] text-[var(--color-text-muted)]">{t.schema}.{t.name}</span>
                                 <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">{t.columns.length} cols</span>
+                                {t.row_count > 0 && (
+                                  <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+                                    ~{t.row_count >= 1000000 ? `${(t.row_count / 1000000).toFixed(1)}M` : t.row_count >= 1000 ? `${(t.row_count / 1000).toFixed(1)}K` : t.row_count} rows
+                                  </span>
+                                )}
                               </div>
                               <div className="space-y-0.5">
-                                {t.columns.slice(0, 8).map((col) => (
+                                {t.columns.slice(0, 8).map((col: any) => (
                                   <div key={col.name} className="flex items-center gap-2 text-[9px] tracking-wider">
                                     <span className={col.primary_key ? "text-[var(--color-warning)]" : "text-[var(--color-text-dim)]"}>
                                       {col.name}
@@ -1060,6 +1077,16 @@ export default function ConnectionsPage() {
                                   <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">+ {t.columns.length - 8} more</p>
                                 )}
                               </div>
+                              {/* Foreign keys */}
+                              {t.foreign_keys?.length > 0 && (
+                                <div className="mt-2 pt-1.5 border-t border-[var(--color-border)]">
+                                  {t.foreign_keys.map((fk: any, i: number) => (
+                                    <div key={i} className="text-[8px] text-purple-400/80 tracking-wider">
+                                      {fk.column} → {fk.references_table}.{fk.references_column}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>

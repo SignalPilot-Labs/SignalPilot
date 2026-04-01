@@ -46,13 +46,28 @@ export const createConnection = (c: Record<string, unknown>) =>
 export const deleteConnection = (name: string) =>
   request<void>(`/api/connections/${name}`, { method: "DELETE" });
 export const testConnection = (name: string) =>
-  request<{ status: string; message: string }>(`/api/connections/${name}/test`, { method: "POST" });
+  request<{
+    status: string;
+    message: string;
+    phases?: { phase: string; status: string; message: string; duration_ms?: number }[];
+    total_duration_ms?: number;
+  }>(`/api/connections/${name}/test`, { method: "POST" });
 export const getConnectionSchema = (name: string) =>
   request<{
     connection_name: string;
     db_type: string;
     table_count: number;
-    tables: Record<string, { schema: string; name: string; columns: { name: string; type: string; nullable: boolean; primary_key?: boolean }[] }>;
+    tables: Record<string, {
+      schema: string;
+      name: string;
+      columns: { name: string; type: string; nullable: boolean; primary_key?: boolean; comment?: string; stats?: { distinct_count?: number; distinct_fraction?: number } }[];
+      foreign_keys?: { column: string; references_schema?: string; references_table: string; references_column: string }[];
+      indexes?: { name: string; definition?: string; columns?: string; unique?: boolean }[];
+      row_count?: number;
+      description?: string;
+      engine?: string;
+      sorting_key?: string;
+    }>;
   }>(`/api/connections/${name}/schema`);
 
 // Sandboxes

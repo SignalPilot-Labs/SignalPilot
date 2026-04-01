@@ -378,26 +378,61 @@ export default function SettingsPage() {
       <section className="mb-8">
         <SectionHeader icon={Cpu} title="mcp integration" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-4">
+          <div className="p-6 space-y-5">
             <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
               connect claude code or any mcp client to signalpilot:
             </p>
-            <CodeBlock
-              code="claude mcp add signalpilot -- python -m gateway.mcp_server"
-              language="bash"
-              showLineNumbers={false}
-              maxHeight="4rem"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              {["query_database", "execute_code", "describe_table", "check_budget"].map(tool => (
-                <div key={tool} className="flex items-center gap-2 px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)]">
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                    <rect width="8" height="8" rx="0" fill="var(--color-success)" opacity="0.2" />
-                    <rect x="2" y="2" width="4" height="4" rx="0" fill="var(--color-success)" />
-                  </svg>
-                  <code className="text-[10px] text-[var(--color-text-muted)] tracking-wider">{tool}</code>
+
+            {/* Step-by-step setup */}
+            <div className="space-y-3">
+              {[
+                { step: "01", label: "install", code: "pip install signalpilot" },
+                { step: "02", label: "register", code: "claude mcp add signalpilot -- python -m gateway.mcp_server" },
+                { step: "03", label: "verify", code: "claude mcp list | grep signalpilot" },
+              ].map((s) => (
+                <div key={s.step} className="flex items-start gap-3">
+                  <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider mt-2.5 w-5">{s.step}</span>
+                  <div className="flex-1">
+                    <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
+                    <CodeBlock
+                      code={s.code}
+                      language="bash"
+                      showLineNumbers={false}
+                      maxHeight="3rem"
+                    />
+                  </div>
                 </div>
               ))}
+            </div>
+
+            {/* Available tools */}
+            <div className="pt-3 border-t border-[var(--color-border)]">
+              <div className="flex items-center gap-2 mb-3">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <rect x="1" y="1" width="10" height="10" stroke="var(--color-success)" strokeWidth="1" fill="none" opacity="0.4" />
+                  <path d="M4 6L5.5 7.5L8 4.5" stroke="var(--color-success)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">available tools</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { name: "query_database", desc: "governed sql queries" },
+                  { name: "execute_code", desc: "sandbox code execution" },
+                  { name: "describe_table", desc: "schema introspection" },
+                  { name: "check_budget", desc: "spending limit status" },
+                ].map(tool => (
+                  <div key={tool.name} className="flex items-center gap-2.5 px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors group">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0">
+                      <rect width="10" height="10" fill="var(--color-success)" opacity="0.15" />
+                      <rect x="2.5" y="2.5" width="5" height="5" fill="var(--color-success)" />
+                    </svg>
+                    <div className="min-w-0">
+                      <code className="text-[10px] text-[var(--color-text-muted)] tracking-wider block">{tool.name}</code>
+                      <span className="text-[8px] text-[var(--color-text-dim)] tracking-wider">{tool.desc}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>

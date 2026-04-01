@@ -2,3 +2,20 @@
 .mcp.json
 /.claude/
 .idea
+.env
+__pycache__/
+*.pyc
+
+# Benchmark
+benchmark/datasets/
+benchmark/results/
+benchmark/skills/improvements_*.json
+
+# Self-improve build artifacts
+self-improve/monitor-web/.next/
+self-improve/monitor-web/node_modules/
+self-improve/monitor-web/package-lock.json
+self-improve/monitor/static/
+
+# Docker volumes / runtime
+*.log

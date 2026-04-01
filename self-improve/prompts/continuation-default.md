@@ -1,0 +1,1 @@
+Continue your self-improvement pass. Look for more improvements you haven't addressed yet. If you've covered all the major areas, look deeper into edge cases, error handling, and test coverage gaps. Keep committing each change separately.

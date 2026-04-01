@@ -1,0 +1,59 @@
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    jq \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (required for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI via npm
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    claude-agent-sdk \
+    asyncpg==0.30.* \
+    httpx==0.28.* \
+    python-dotenv \
+    fastapi==0.115.* \
+    uvicorn[standard]==0.34.*
+
+WORKDIR /app
+
+COPY agent/ /app/agent/
+
+# Run as non-root — Claude CLI refuses --dangerously-skip-permissions as root
+RUN useradd -m agentuser \
+    && mkdir -p /home/agentuser/.claude \
+    && echo '{}' > /home/agentuser/.claude.json \
+    && chown -R agentuser:agentuser /app /home/agentuser/.claude /home/agentuser/.claude.json
+
+# Give agentuser access to docker socket (will be mounted)
+RUN usermod -aG docker agentuser 2>/dev/null || true
+
+USER agentuser
+
+# Git config as agentuser
+RUN git config --global user.name "SignalPilot Improve Bot" \
+    && git config --global user.email "improve-bot@signalpilot.dev" \
+    && git config --global --add safe.directory /workspace \
+    && git config --global --add safe.directory '*'
+
+ENV PYTHONPATH="/app"
+
+CMD ["python", "-m", "agent.main"]

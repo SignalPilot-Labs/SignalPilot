@@ -86,8 +86,27 @@ export default function Sidebar() {
         </Link>
       </div>
 
+      {/* Command palette hint */}
+      <div className="px-3 pt-4 pb-2">
+        <button
+          className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
+          onClick={() => {
+            window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+            <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1" />
+            <path d="M8 8L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+          </svg>
+          <span className="flex-1 text-left">search</span>
+          <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono">
+            ctrl+K
+          </kbd>
+        </button>
+      </div>
+
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      <nav className="flex-1 px-3 py-2 space-y-0.5">
         {nav.map(({ href, label, icon: Icon, shortcut }) => {
           const active = pathname.startsWith(href);
           return (

@@ -5,6 +5,96 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 2: SSH Tunnels, Index Metadata, Schema Compression (2026-04-01)
+
+### 1. SSH Tunnel Support (sshtunnel library)
+
+**What:** Full SSH tunnel implementation for bastion-host connections — the most-requested enterprise feature.
+
+**Implementation:**
+- `SSHTunnel` class wrapping `sshtunnel.SSHTunnelForwarder`
+- Supports password and private key auth (RSA, Ed25519, ECDSA)
+- Auto-selects a free local port for tunnel binding
+- 60-second keepalive interval (industry standard)
+- Lifecycle-managed alongside connector pools in `PoolManager`
+- Connection string automatically rewritten to route through tunnel
+- Supported DB types: Postgres, MySQL, Redshift, ClickHouse
+
+**Architecture pattern:** On-demand SSH sessions (matches HEX pattern) — each pool manager entry gets its own tunnel, cleaned up on idle timeout or close.
+
+### 2. Index Metadata in Schema
+
+**Before:** No index information in schema output.
+
+**After:** Full index metadata for query planning:
+
+| Database | Index Info Available |
+|----------|-------------------|
+| PostgreSQL | Index name + DDL definition from `pg_indexes` |
+| MySQL | Index name + columns + uniqueness from `STATISTICS` |
+| ClickHouse | Engine type + sorting key + primary key from `system.tables` |
+| DuckDB | Foreign keys from `information_schema` |
+| SQLite | Foreign keys via `PRAGMA foreign_key_list` |
+
+**Spider2.0 impact:** Index metadata helps the agent understand access patterns. For example, knowing a table has a btree index on `(customer_id, created_at)` tells the agent to use those columns in WHERE clauses and ORDER BY, avoiding full table scans.
+
+### 3. Schema Compression for LLM Context Windows
+
+**What:** `compact=true` query parameter on `/api/connections/{name}/schema` returns compressed DDL-style schema.
+
+**Compression results on enterprise_prod (10 tables, 136 columns, 43 indexes, 10 FKs):**
+- Full schema: 25,264 bytes
+- Compact schema: 6,476 bytes
+- **75% reduction** in token count
+
+**Compact format per table:**
+```json
+{
+  "ddl": "CREATE TABLE public.orders (\n  id integer NOT NULL, user_id integer NOT NULL, amount numeric\n  PRIMARY KEY (id)\n)",
+  "row_count": 50000,
+  "foreign_keys": ["user_id -> public.users.id"],
+  "indexes": ["orders_pkey"]
+}
+```
+
+**Spider2.0 impact:** Top performers (LinkAlign, Paytm Prism) use table compression for schemas >50K tokens. This is especially critical for Spider2.0-Snow tasks where Snowflake schemas can have 100+ tables with 20+ columns each.
+
+### 4. Two-Phase Connection Testing
+
+**Before:** Single-phase test — connect and health check.
+
+**After:** Industry-standard two-phase pattern (matches HEX/DBeaver):
+1. **Phase 1 (SSH Tunnel):** Verify tunnel configuration and connectivity
+2. **Phase 2 (Database):** Authenticate and run test query
+
+**Response format:**
+```json
+{
+  "status": "healthy",
+  "phases": [
+    {"phase": "ssh_tunnel", "status": "ok", "message": "...", "duration_ms": 45.2},
+    {"phase": "database", "status": "ok", "message": "...", "duration_ms": 22.6}
+  ],
+  "total_duration_ms": 67.8
+}
+```
+
+This makes debugging connection issues much easier — users can see exactly which phase failed.
+
+### 5. ClickHouse Enhanced Metadata
+
+**Before:** Only columns from `system.columns`.
+
+**After:** Added table-level metadata from `system.tables`:
+- `engine` (MergeTree, ReplacingMergeTree, etc.)
+- `sorting_key` (the columns data is sorted by on disk)
+- `row_count` (exact count from `total_rows`)
+- `total_bytes` (storage size)
+
+This is critical for ClickHouse query optimization — the sorting key determines which queries can use primary key index scans vs full scans.
+
+---
+
 ## Round 1: Connector Expansion & HEX-Style UX (2026-04-01)
 
 ### 1. Expanded Database Support (5 → 9 connectors)
@@ -48,19 +138,19 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 **After:** Rich metadata critical for AI agent join path discovery:
 
-| Metadata | PostgreSQL | MySQL | Snowflake | ClickHouse |
-|----------|-----------|-------|-----------|------------|
-| Columns + types | Yes | Yes | Yes | Yes |
-| Primary keys | Yes | Yes | Best-effort | Yes (ordering key) |
-| **Foreign keys** | **Yes (new)** | **Yes (new)** | N/A | N/A |
-| **Row count estimates** | **Yes (new)** | **Yes (new)** | N/A | N/A |
-| **Table comments** | **Yes (new)** | **Yes (new)** | Yes | Yes |
-| **Column comments** | **Yes (new)** | **Yes (new)** | Yes | Yes |
-| Column defaults | **Yes (new)** | **Yes (new)** | N/A | N/A |
+| Metadata | PostgreSQL | MySQL | Snowflake | ClickHouse | DuckDB | SQLite |
+|----------|-----------|-------|-----------|------------|--------|--------|
+| Columns + types | Yes | Yes | Yes | Yes | Yes | Yes |
+| Primary keys | Yes | Yes | Best-effort | Yes | N/A | N/A |
+| **Foreign keys** | **Yes** | **Yes** | N/A | N/A | **Yes** | **Yes** |
+| **Row count estimates** | **Yes** | **Yes** | N/A | **Yes** | N/A | **Yes** |
+| **Indexes** | **Yes** | **Yes** | N/A | **Engine/sort key** | N/A | N/A |
+| **Table comments** | **Yes** | **Yes** | Yes | Yes | N/A | N/A |
+| **Column comments** | **Yes** | **Yes** | Yes | Yes | N/A | N/A |
 
-**Performance optimization:** PostgreSQL schema pulling now uses `asyncio.gather` with separate pool connections to fetch columns, foreign keys, and row counts concurrently (3x faster on large schemas).
+**Performance optimization:** PostgreSQL schema pulling now uses `asyncio.gather` with separate pool connections to fetch columns, foreign keys, row counts, and indexes concurrently (4 parallel queries).
 
-**Spider2.0 impact:** Foreign key metadata is the #1 predictor of join accuracy in text-to-SQL benchmarks. The top-performing agents (Genloop Sentinel at 96.7% on Snow) rely on comprehensive FK graphs for multi-table query generation.
+**Spider2.0 impact:** Foreign key metadata is the #1 predictor of join accuracy in text-to-SQL benchmarks. Schema linking errors cause 27.6% of SQL failures (EDBT 2026).
 
 ### 4. Cost Estimation for All DB Types
 
@@ -75,11 +165,9 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 | Databricks | EXPLAIN (heuristic) | $0.000001/row |
 | DuckDB/SQLite | EXPLAIN | $0 (local/free) |
 
-**BigQuery dry_run** is especially accurate — it uses Google's actual billing API to predict exact bytes processed before execution.
-
 ### 5. Security Improvements
 
-- Error sanitization expanded to cover all new connection string formats (Redshift, ClickHouse, Snowflake, Databricks)
+- Error sanitization expanded to cover all new connection string formats
 - Access token and private key patterns added to sensitive data redaction
 - Credential extras stored in-memory only (never persisted to disk)
 - SSH tunnel credentials stripped from persistent connection info
@@ -87,17 +175,9 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ### 6. Testing
 
-- **25 new integration tests** covering all connector types:
-  - Connection, health check, query execution, schema introspection
-  - Connection string builder for all 9 DB types
-  - Registry completeness verification
-- **Live tests verified against Docker containers:**
-  - PostgreSQL 17 (enterprise-pg:5601)
-  - MySQL 8.0 (sp-mysql-test:3307)
-  - ClickHouse 26.3 (sp-clickhouse-test:9100)
-  - DuckDB 1.5 (in-memory)
-  - SQLite (in-memory)
-- **All 94 original tests still passing**
+- **25 new integration tests** covering all connector types
+- **Live tests verified:** PostgreSQL 17, MySQL 8.0, ClickHouse 26.3, DuckDB, SQLite
+- **All 132 tests passing**
 
 ---
 
@@ -118,14 +198,49 @@ All connectors implement the same `BaseConnector` abstract class:
 The `PoolManager` singleton reuses connectors across requests with:
 - Health-check-on-acquire pattern
 - Idle timeout cleanup (300s)
-- Support for `credential_extras` for connectors needing structured auth (BigQuery, Snowflake)
+- SSH tunnel lifecycle management
+- Support for `credential_extras` for connectors needing structured auth
+
+### Schema Compression Pipeline
+```
+Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
+                                          ↓
+                                  Preserves: FKs, PKs, indexes,
+                                  row counts, comments
+                                          ↓
+                                  Optimal for LLM context windows
+```
+
+---
+
+## Industry Standards Compliance (April 2026 Research)
+
+### Comparison with HEX
+| Feature | HEX | SignalPilot |
+|---------|-----|-------------|
+| DB type count | 15+ | 9 (covering all Spider2.0 DBs) |
+| SSH tunnels | On-demand sessions | On-demand sessions (sshtunnel) |
+| SSL/TLS modes | Full (disable→verify-full) | Full (disable→verify-full) |
+| Two-phase test | Yes | Yes |
+| IP allowlisting | Static IPs | Not needed (self-hosted) |
+| OAuth | Some DBs | Planned |
+| Connection string mode | Yes | Yes |
+| Schema caching | Yes | Yes (with TTL) |
+| Schema compression | N/A | Yes (compact mode for AI agents) |
+
+### Spider2.0 Leaderboard Context
+- **Genloop Sentinel:** 96.7% (Snow) — multi-agent swarm, table compression
+- **Paytm Prism:** 82.63% (Snow) — multi-agent swarm architecture
+- **LinkAlign:** 33.09% (Lite, open-source only) — semantic retrieval, approximate string matching
+- **Key insight (EDBT 2026):** Schema linking errors cause 27.6% of SQL failures → our FK + index metadata directly addresses this
 
 ---
 
 ## Next Steps
-- [ ] Add SSH tunnel actual implementation (sshtunnel library)
-- [ ] Encrypt credentials at rest
-- [ ] Add index metadata to schema (currently only in ClickHouse)
+- [ ] Encrypt credentials at rest (AES-256-GCM)
+- [ ] OAuth support for Snowflake, BigQuery, Databricks
 - [ ] Schema diff detection (track changes over time)
 - [ ] Automated schema refresh scheduling (like HEX workspace connections)
-- [ ] OAuth support for Snowflake, BigQuery, Databricks
+- [ ] Sample value extraction for column linking (reduces schema linking errors by ~15%)
+- [ ] Multi-round semantic retrieval for irrelevant table filtering
+- [ ] Approximate string matching (threshold 0.5) for column name hallucination correction

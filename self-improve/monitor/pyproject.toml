@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "signalpilot-monitor"
+version = "0.1.0"
+description = "SignalPilot monitor — FastAPI backend for agent run tracking and control"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "asyncpg>=0.30.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.28.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

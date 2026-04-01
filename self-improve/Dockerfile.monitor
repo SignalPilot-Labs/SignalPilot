@@ -19,12 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
 WORKDIR /app
 
 # Python deps for the API backend
-RUN pip install --no-cache-dir \
-    fastapi==0.115.* \
-    uvicorn[standard]==0.34.* \
-    asyncpg==0.30.* \
-    pydantic==2.* \
-    httpx==0.28.*
+COPY monitor/pyproject.toml /app/monitor/pyproject.toml
+COPY monitor/__init__.py /app/monitor/__init__.py
+RUN pip install --no-cache-dir /app/monitor/
 
 # Copy the FastAPI backend
 COPY monitor/ /app/monitor/

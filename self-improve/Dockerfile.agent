@@ -32,16 +32,11 @@ RUN npm install -g @anthropic-ai/claude-code @playwright/mcp
 # Install Playwright browser system deps (as root for apt packages)
 RUN npx playwright install-deps chromium
 
-# Install Python dependencies
-RUN pip install --no-cache-dir \
-    claude-agent-sdk \
-    asyncpg==0.30.* \
-    httpx==0.28.* \
-    python-dotenv \
-    fastapi==0.115.* \
-    uvicorn[standard]==0.34.*
-
 WORKDIR /app
+
+COPY agent/pyproject.toml /app/agent/pyproject.toml
+COPY agent/__init__.py /app/agent/__init__.py
+RUN pip install --no-cache-dir /app/agent/
 
 COPY agent/ /app/agent/
 COPY playwright-mcp.sh /usr/local/bin/playwright-mcp

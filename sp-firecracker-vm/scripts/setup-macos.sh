@@ -1,9 +1,9 @@
 #!/bin/bash
-# SignalPilot Firecracker Setup — macOS
+# SignalPilot Sandbox Setup — macOS
 #
-# Checks prerequisites for running Firecracker inside Docker on macOS.
-# macOS support depends on Docker Desktop's nested virtualization
-# which is available on Apple Silicon (M1+) with recent Docker Desktop versions.
+# Auto-detects the best sandbox backend:
+#   - /dev/kvm available → Firecracker microVMs
+#   - No /dev/kvm        → gVisor (user-space kernel, no KVM needed)
 #
 # Usage:
 #   chmod +x setup-macos.sh && ./setup-macos.sh
@@ -12,7 +12,7 @@ set -euo pipefail
 
 echo ""
 echo "========================================"
-echo "  SignalPilot Firecracker Setup (macOS)  "
+echo "  SignalPilot Sandbox Setup (macOS)      "
 echo "========================================"
 echo ""
 
@@ -23,7 +23,7 @@ MACOS_MAJOR=$(echo "$MACOS_VERSION" | cut -d. -f1)
 echo "[OK] macOS ${MACOS_VERSION}"
 
 if [ "$MACOS_MAJOR" -lt 13 ]; then
-    echo "[FAIL] macOS 13 (Ventura) or later required for nested virtualization."
+    echo "[FAIL] macOS 13 (Ventura) or later required."
     exit 1
 fi
 
@@ -31,10 +31,9 @@ fi
 
 ARCH=$(uname -m)
 if [ "$ARCH" = "arm64" ]; then
-    echo "[OK] Apple Silicon ($ARCH) — nested virtualization supported"
+    echo "[OK] Apple Silicon ($ARCH)"
 elif [ "$ARCH" = "x86_64" ]; then
-    echo "[WARN] Intel Mac ($ARCH) — nested virtualization may work but is less tested"
-    echo "       Intel Macs are EOL. Consider container fallback mode."
+    echo "[OK] Intel Mac ($ARCH)"
 else
     echo "[FAIL] Unknown architecture: $ARCH"
     exit 1
@@ -50,27 +49,35 @@ else
     exit 1
 fi
 
-# ─── Step 4: Check for KVM inside Docker ────────────────────────────────────
+# ─── Step 4: Detect backend ─────────────────────────────────────────────────
 
 echo "[...] Checking /dev/kvm inside Docker..."
 KVM_CHECK=$(docker run --rm --device /dev/kvm alpine ls /dev/kvm 2>&1 || true)
 
+BACKEND="gvisor"
 if echo "$KVM_CHECK" | grep -q "/dev/kvm"; then
-    echo "[OK] /dev/kvm available inside Docker — Firecracker ready!"
+    BACKEND="firecracker"
+    echo "[OK] /dev/kvm available — will use Firecracker"
 else
-    echo "[WARN] /dev/kvm not available inside Docker."
-    echo ""
-    echo "  To enable on Apple Silicon:"
-    echo "    1. Open Docker Desktop → Settings → General"
-    echo "    2. Enable 'Use Virtualization framework'"
-    echo "    3. Enable 'Use Rosetta for x86_64/amd64 emulation' (if needed)"
-    echo "    4. Settings → Resources → Advanced"
-    echo "    5. Check for nested virtualization option"
-    echo "    6. Restart Docker Desktop"
-    echo ""
-    echo "  If nested virtualization is not available in your Docker Desktop version:"
-    echo "    SignalPilot will automatically fall back to container sandbox mode."
-    echo "    Run: sp serve --sandbox-mode=container"
+    echo "[OK] No /dev/kvm — will use gVisor (user-space kernel sandbox)"
+fi
+
+# ─── Step 5: Verify gVisor binary availability ──────────────────────────────
+
+if [ "$BACKEND" = "gvisor" ]; then
+    echo "[...] Testing gVisor (runsc) on ${ARCH}..."
+    GVISOR_CHECK=$(docker run --rm python:3.12-slim sh -c \
+        "apt-get update -qq && apt-get install -qq -y curl >/dev/null 2>&1 && \
+         curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/runsc -o /tmp/runsc && \
+         chmod +x /tmp/runsc && /tmp/runsc --version 2>&1" 2>&1 || true)
+
+    if echo "$GVISOR_CHECK" | grep -q "runsc version"; then
+        echo "[OK] gVisor works on ${ARCH}"
+    else
+        echo "[FAIL] gVisor not available for ${ARCH}."
+        echo "       Output: $GVISOR_CHECK"
+        exit 1
+    fi
 fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
@@ -81,14 +88,16 @@ echo "  Setup Summary"
 echo "========================================"
 echo ""
 
-if echo "$KVM_CHECK" | grep -q "/dev/kvm"; then
-    echo "Ready! Run:"
-    echo "  docker run --device /dev/kvm signalpilot-sandbox"
+if [ "$BACKEND" = "firecracker" ]; then
+    echo "Backend: Firecracker (microVM, ~200ms snapshot restore)"
+    echo ""
+    echo "Run:"
+    echo "  docker compose --profile firecracker up -d"
 else
-    echo "Firecracker not available. Options:"
-    echo "  1. Update Docker Desktop and enable nested virtualization"
-    echo "  2. Use container sandbox mode: sp serve --sandbox-mode=container"
-    echo "  3. Use SignalPilot Cloud: sp login"
+    echo "Backend: gVisor (user-space kernel, ~50ms startup)"
+    echo ""
+    echo "Run:"
+    echo "  docker compose up -d"
 fi
 
 echo ""

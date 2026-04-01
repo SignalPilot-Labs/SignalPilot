@@ -17,7 +17,7 @@ import { getAudit, getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
 import { EmptyList, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { ActivityDots, StatusDot } from "@/components/ui/data-viz";
+import { ActivityDots, StatusDot, Sparkline } from "@/components/ui/data-viz";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
 
@@ -157,8 +157,25 @@ export default function AuditPage() {
               <span className={`text-xs tabular-nums ${s.color}`}>{s.value}</span>
             </div>
           ))}
+          {/* Latency sparkline from recent entries */}
+          {(() => {
+            const latencyVals = filtered
+              .filter(e => e.duration_ms != null)
+              .slice(0, 30)
+              .map(e => e.duration_ms || 0)
+              .reverse();
+            if (latencyVals.length < 3) return null;
+            const avg = latencyVals.reduce((a, b) => a + b, 0) / latencyVals.length;
+            return (
+              <div className="flex items-center gap-2 ml-auto">
+                <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</span>
+                <Sparkline values={latencyVals} color="var(--color-success)" width={60} height={16} />
+                <span className="text-[9px] tabular-nums text-[var(--color-text-dim)]">avg {avg.toFixed(0)}ms</span>
+              </div>
+            );
+          })()}
           {activitySlots.length > 0 && (
-            <div className="ml-auto flex items-center gap-2">
+            <div className={`flex items-center gap-2 ${filtered.filter(e => e.duration_ms != null).length < 3 ? "ml-auto" : ""}`}>
               <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">activity</span>
               <ActivityDots values={activitySlots} rows={3} cols={12} dotSize={5} gap={2} />
             </div>
@@ -303,10 +320,21 @@ export default function AuditPage() {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-[10px] text-right tabular-nums text-[var(--color-text-dim)] whitespace-nowrap align-top tracking-wider">
-                      {entry.duration_ms != null ? `${entry.duration_ms.toFixed(0)}ms` : "—"}
+                    <td className="px-4 py-2.5 text-[10px] text-right tabular-nums whitespace-nowrap align-top tracking-wider">
+                      {entry.duration_ms != null ? (
+                        <span className={
+                          entry.duration_ms < 50 ? "text-[var(--color-success)]" :
+                          entry.duration_ms < 200 ? "text-[var(--color-text-dim)]" :
+                          entry.duration_ms < 1000 ? "text-[var(--color-warning)]" :
+                          "text-[var(--color-error)]"
+                        }>
+                          {entry.duration_ms.toFixed(0)}ms
+                        </span>
+                      ) : (
+                        <span className="text-[var(--color-text-dim)]">—</span>
+                      )}
                       {entry.rows_returned != null && (
-                        <div className="text-[9px] text-[var(--color-text-dim)] mt-0.5">{entry.rows_returned}r</div>
+                        <div className="text-[9px] text-[var(--color-text-dim)] mt-0.5">{entry.rows_returned.toLocaleString()}r</div>
                       )}
                     </td>
                   </tr>

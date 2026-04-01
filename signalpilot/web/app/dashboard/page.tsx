@@ -18,6 +18,7 @@ import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, 
 import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
+import { RingGauge } from "@/components/ui/data-viz";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -423,20 +424,23 @@ export default function DashboardPage() {
             <div className="p-4 space-y-3">
               {cacheStats ? (
                 <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">hit_rate</span>
-                    <span className={`text-xs font-light tabular-nums ${
-                      cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" :
-                      cacheStats.hit_rate > 0.3 ? "text-[var(--color-warning)]" : "text-[var(--color-text)]"
-                    }`}>
-                      {(cacheStats.hit_rate * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="w-full h-1 bg-[var(--color-bg)] overflow-hidden">
-                    <div
-                      className="h-full bg-[var(--color-success)] transition-all"
-                      style={{ width: `${cacheStats.hit_rate * 100}%` }}
+                  <div className="flex items-center gap-3">
+                    <RingGauge
+                      value={cacheStats.hit_rate * 100}
+                      max={100}
+                      size={36}
+                      strokeWidth={3}
+                      color={cacheStats.hit_rate > 0.7 ? "var(--color-success)" : cacheStats.hit_rate > 0.3 ? "var(--color-warning)" : "var(--color-error)"}
                     />
+                    <div>
+                      <p className={`text-lg font-light tabular-nums ${
+                        cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" :
+                        cacheStats.hit_rate > 0.3 ? "text-[var(--color-warning)]" : "text-[var(--color-text)]"
+                      }`}>
+                        {(cacheStats.hit_rate * 100).toFixed(1)}%
+                      </p>
+                      <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
+                    </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3 pt-1">
                     <div>

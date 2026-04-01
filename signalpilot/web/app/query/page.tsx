@@ -472,14 +472,21 @@ export default function QueryExplorerPage() {
                 history ({history.length})
               </span>
             </div>
-            <button
-              onClick={() => { setHistory([]); localStorage.removeItem(HISTORY_KEY); }}
-              className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors tracking-wider"
-            >
-              clear
-            </button>
+            <div className="flex items-center gap-3">
+              {history.length >= 3 && (
+                <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+                  avg: {Math.round(history.reduce((s, h) => s + h.duration_ms, 0) / history.length)}ms
+                </span>
+              )}
+              <button
+                onClick={() => { setHistory([]); localStorage.removeItem(HISTORY_KEY); }}
+                className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors tracking-wider"
+              >
+                clear
+              </button>
+            </div>
           </div>
-          <div className="divide-y divide-[var(--color-border)]/30 max-h-72 overflow-auto">
+          <div className="divide-y divide-[var(--color-border)]/30 max-h-72 overflow-auto stagger-fade-in">
             {history.map((h, i) => (
               <button
                 key={i}
@@ -487,17 +494,34 @@ export default function QueryExplorerPage() {
                   setSql(h.sql);
                   setSelectedConn(h.connection);
                 }}
-                className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group"
+                className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group flex items-start gap-3"
               >
-                <div className="text-[11px] block truncate overflow-hidden">
-                  <SqlHighlight sql={h.sql.slice(0, 100)} className="text-[11px]" />
-                </div>
-                <div className="flex items-center gap-3 mt-1 text-[9px] text-[var(--color-text-dim)] tracking-wider">
-                  <span>{h.connection}</span>
-                  <span className="tabular-nums">{h.duration_ms.toFixed(0)}ms</span>
-                  {h.row_count != null && <span className="tabular-nums">{h.row_count} rows</span>}
-                  {h.cache_hit && <span className="text-[var(--color-success)]">cached</span>}
-                  <span className="tabular-nums">{new Date(h.ts).toLocaleTimeString()}</span>
+                <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-40 select-none">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] block truncate overflow-hidden">
+                    <SqlHighlight sql={h.sql.slice(0, 100)} className="text-[11px]" />
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                    <span className="flex items-center gap-1">
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                        <ellipse cx="4" cy="3" rx="3" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
+                        <path d="M1 3V5.5C1 6.3 2.3 7 4 7C5.7 7 7 6.3 7 5.5V3" stroke="currentColor" strokeWidth="0.75" />
+                      </svg>
+                      {h.connection}
+                    </span>
+                    <span className={`tabular-nums ${h.duration_ms < 100 ? "text-[var(--color-success)]" : h.duration_ms < 500 ? "text-[var(--color-text-dim)]" : "text-[var(--color-warning)]"}`}>
+                      {h.duration_ms.toFixed(0)}ms
+                    </span>
+                    {h.row_count != null && <span className="tabular-nums">{h.row_count} rows</span>}
+                    {h.cache_hit && (
+                      <span className="flex items-center gap-0.5 text-[var(--color-success)]">
+                        <Zap className="w-2.5 h-2.5" /> cached
+                      </span>
+                    )}
+                    <span className="tabular-nums ml-auto">{new Date(h.ts).toLocaleTimeString()}</span>
+                  </div>
                 </div>
               </button>
             ))}

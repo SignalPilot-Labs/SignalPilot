@@ -1,1 +1,3 @@
 # SignalPilot
+
+SignalPilot is an intelligent text-to-SQL platform that translates natural language questions into precise database queries across multiple data sources. It features a web interface for interactive data exploration and a gateway service that handles query parsing, optimization, and execution in a secure sandboxed environment. SignalPilot supports enterprise PostgreSQL and data warehouse connectors, making it easy to query and analyze data without writing SQL by hand.

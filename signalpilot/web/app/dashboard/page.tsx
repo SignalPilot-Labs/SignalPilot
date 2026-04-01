@@ -20,6 +20,7 @@ import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, AreaChart, StackedBar } from "@/components/ui/data-viz";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { SystemDiagram } from "@/components/ui/system-diagram";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -306,6 +307,15 @@ export default function DashboardPage() {
       {/* ── Governance Pipeline ── */}
       <div className="mb-8">
         <GovernancePipeline />
+      </div>
+
+      {/* ── System topology ── */}
+      <div className="mb-8">
+        <SystemDiagram
+          connections={connections.length}
+          activeSandboxes={metrics?.active_sandboxes ?? 0}
+          governanceActive={true}
+        />
       </div>
 
       {/* ── Two-column layout ── */}

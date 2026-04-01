@@ -34,6 +34,10 @@ export const testConnection = (name: string) =>
 export const getDbTypes = () =>
   request<Array<Record<string, unknown>>>("/api/db-types");
 
+// Schema
+export const getConnectionSchema = (name: string, refresh = false) =>
+  request<Record<string, unknown>>(`/api/connections/${name}/schema${refresh ? "?refresh=true" : ""}`);
+
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");
 export const createSandbox = (s: Record<string, unknown>) =>

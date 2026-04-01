@@ -386,10 +386,15 @@ class DirectQueryRequest(_BaseModel):
     connection_name: str
     sql: str
     row_limit: int = 10_000
+    timeout: float = 30.0  # Query timeout in seconds
 
 
 @app.post("/api/query")
 async def query_database(req: DirectQueryRequest):
+    # Input length validation (MED-07: prevent memory abuse from huge queries)
+    if len(req.sql) > 100_000:
+        raise HTTPException(status_code=400, detail="SQL query exceeds maximum length (100KB)")
+
     info = get_connection(req.connection_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
@@ -414,7 +419,7 @@ async def query_database(req: DirectQueryRequest):
     connector = await _get_pooled_connector(req.connection_name)
     start = time.monotonic()
     try:
-        rows = await connector.execute(safe_sql)
+        rows = await connector.execute(safe_sql, timeout=req.timeout)
     except Exception as e:
         # Remove stale pool on error so next request reconnects
         _connector_pool.pop(req.connection_name, None)
@@ -448,6 +453,36 @@ async def query_database(req: DirectQueryRequest):
         "execution_ms": elapsed_ms,
         "sql_executed": safe_sql,
     }
+
+
+# ─── Schema Endpoint (cached) ────────────────────────────────────────────────
+
+_schema_cache: dict[str, tuple[float, dict]] = {}  # name -> (timestamp, schema)
+_SCHEMA_CACHE_TTL = 300.0  # 5 minutes
+
+
+@app.get("/api/connections/{name}/schema")
+async def get_connection_schema(name: str, refresh: bool = False):
+    """Return the schema for a database connection, with 5-minute caching."""
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    # Check cache
+    if not refresh and name in _schema_cache:
+        cached_at, schema = _schema_cache[name]
+        if time.time() - cached_at < _SCHEMA_CACHE_TTL:
+            return {"schema": schema, "cached": True, "cached_at": cached_at}
+
+    connector = await _get_pooled_connector(name)
+    try:
+        schema = await connector.get_schema()
+    except Exception as e:
+        _connector_pool.pop(name, None)
+        raise HTTPException(status_code=500, detail="Failed to fetch schema")
+
+    _schema_cache[name] = (time.time(), schema)
+    return {"schema": schema, "cached": False, "table_count": len(schema)}
 
 
 # ─── Audit ───────────────────────────────────────────────────────────────────

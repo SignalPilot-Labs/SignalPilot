@@ -156,7 +156,8 @@ async def run_agent(
     """Execute one improvement run."""
     global _current_run_id
 
-    model = os.environ.get("AGENT_MODEL", "claude-opus-4-20250514")
+    model = os.environ.get("AGENT_MODEL", "opus")
+    fallback_model = os.environ.get("AGENT_FALLBACK_MODEL", "sonnet")
 
     # --- Git setup ---
     git_ops.setup_git_auth()
@@ -165,7 +166,12 @@ async def run_agent(
     print(f"[agent] Created branch: {branch_name} (from {base_branch})")
 
     # --- DB record ---
-    run_id = await db.create_run(branch_name)
+    run_id = await db.create_run(
+        branch_name,
+        custom_prompt=custom_prompt,
+        duration_minutes=duration_minutes,
+        base_branch=base_branch,
+    )
     _current_run_id = run_id
     print(f"[agent] Run ID: {run_id}")
 
@@ -203,6 +209,7 @@ async def run_agent(
     # --- SDK options ---
     options = ClaudeAgentOptions(
         model=model,
+        fallback_model=fallback_model if fallback_model != model else None,
         effort="medium",
         system_prompt=prompt.build_system_prompt(
             custom_focus=custom_prompt,
@@ -215,13 +222,7 @@ async def run_agent(
         setting_sources=["project"],
         max_budget_usd=max_budget if max_budget > 0 else None,
         include_partial_messages=True,
-        mcp_servers={
-            "session_gate": session_mcp,
-            "playwright": {
-                "command": "playwright-mcp",
-                "args": [],
-            },
-        },
+        mcp_servers={"session_gate": session_mcp},
         hooks={
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],
@@ -277,6 +278,7 @@ async def run_agent(
                 # --- Per-round tracking for CEO summary ---
                 round_tools: list[str] = []
                 round_text_chunks: list[str] = []
+                _pending_inject: str | None = None
 
                 async for message in client.receive_response():
                     # --- Instant signal check (non-blocking) ---
@@ -310,7 +312,9 @@ async def run_agent(
                             session_gate.force_unlock()
                             await db.log_audit(run_id, "session_unlocked", {})
                         elif sig == "inject":
-                            pass  # picked up between rounds
+                            # Queue for delivery after current round completes
+                            _pending_inject = signal.get("payload", "")
+                            await db.log_audit(run_id, "prompt_injected", {"prompt": _pending_inject, "delivery": "queued"})
 
                     # --- StreamEvent ---
                     if isinstance(message, StreamEvent):
@@ -367,29 +371,44 @@ async def run_agent(
                             "utilization": info.utilization,
                         })
                         if info.status == "rejected":
-                            if info.resets_at:
-                                wait_sec = max(0, info.resets_at - time.time()) + 10
-                                print(f"[agent] Rate limited. Waiting {wait_sec:.0f}s...")
-                                await db.update_run_status(run_id, "rate_limited")
-                                # Wait but check for stop signals every 2s
-                                end_time = time.time() + min(wait_sec, 3600)
-                                while time.time() < end_time:
-                                    sig = await _wait_for_signal(timeout=2.0)
-                                    if sig and sig["signal"] == "stop":
-                                        final_status = "stopped"
-                                        should_stop = True
-                                        break
-                                if should_stop:
-                                    break
-                                await db.update_run_status(run_id, "running")
-                                rate_limited = True
+                            resets_at = info.resets_at
+                            wait_sec = max(0, resets_at - time.time()) if resets_at else 0
+
+                            if fallback_model and fallback_model != model:
+                                # Fallback model is configured — the SDK should auto-retry
+                                # with the fallback. Log it and let the loop continue.
+                                print(f"[agent] Rate limited on {model}, SDK should fallback to {fallback_model}. Continuing...")
+                                await db.log_audit(run_id, "rate_limit_fallback", {
+                                    "primary_model": model,
+                                    "fallback_model": fallback_model,
+                                    "resets_at": resets_at,
+                                })
+                                # Don't break — let the SDK handle the retry
                             else:
+                                # No fallback — save state and exit for manual resume
+                                wait_min = int(wait_sec / 60)
+                                print(f"[agent] Rate limited. Resets in {wait_min}m. Pausing run for resume.")
+                                await db.update_run_status(run_id, "rate_limited")
+                                if resets_at:
+                                    await db.save_rate_limit_reset(run_id, int(resets_at))
+                                await db.log_audit(run_id, "rate_limit_paused", {
+                                    "resets_at": resets_at,
+                                    "wait_seconds": int(wait_sec) if resets_at else None,
+                                    "message": "Run paused. Use Resume to continue when rate limit clears.",
+                                })
                                 final_status = "rate_limited"
+                                should_stop = True
                                 break
 
                     # --- ResultMessage ---
                     elif isinstance(message, ResultMessage):
                         round_result = message
+                        # Save session ID on first result (available immediately)
+                        if message.session_id:
+                            try:
+                                await db.save_session_id(run_id, message.session_id)
+                            except Exception:
+                                pass
                         if message.total_cost_usd:
                             total_cost = message.total_cost_usd
                         if message.usage:
@@ -431,11 +450,8 @@ async def run_agent(
                             await client.query(result[7:])
                             continue
                     elif sig == "inject":
-                        payload = signal.get("payload", "")
-                        if payload:
-                            await db.log_audit(run_id, "prompt_injected", {"prompt": payload})
-                            await client.query(payload)
-                            continue
+                        _pending_inject = signal.get("payload", "")
+                        await db.log_audit(run_id, "prompt_injected", {"prompt": _pending_inject, "delivery": "queued"})
                     elif sig == "unlock":
                         session_gate.force_unlock()
                         await db.log_audit(run_id, "session_unlocked", {})
@@ -444,9 +460,23 @@ async def run_agent(
                 if hooks._agent_role == "ceo":
                     hooks.set_agent_role("worker")
 
+                # --- Push commits between rounds so work isn't lost ---
+                try:
+                    if git_ops.has_changes() or True:  # Always try push in case there are unpushed commits
+                        git_ops.push_branch(branch_name)
+                        print(f"[agent] Pushed branch {branch_name}")
+                except Exception as e:
+                    print(f"[agent] Push between rounds failed (non-fatal): {e}")
+
                 # --- Continue logic ---
                 # Without a time lock or session unlocked: let the agent finish naturally
                 if duration_minutes <= 0 or session_gate.is_unlocked():
+                    # If operator injected a message, deliver it as a continuation
+                    if _pending_inject:
+                        await db.log_audit(run_id, "prompt_injected", {"prompt": _pending_inject})
+                        await client.query(f"Operator message: {_pending_inject}")
+                        _pending_inject = None
+                        continue
                     if round_result and round_result.subtype == "success":
                         print("[agent] Round complete, no time lock — finishing")
                         final_status = "completed"
@@ -489,6 +519,16 @@ async def run_agent(
                         round_summary=round_summary,
                         original_prompt=custom_prompt or "General self-improvement pass on the SignalPilot codebase.",
                     )
+
+                    # Include any pending injected message from the operator
+                    if _pending_inject:
+                        ceo_prompt += (
+                            f"\n\n---\n\n## Operator Message\n"
+                            f"The operator injected this message during the last round. "
+                            f"Factor it into your next assignment:\n\n> {_pending_inject}"
+                        )
+                        await db.log_audit(run_id, "prompt_injected", {"prompt": _pending_inject, "delivery": "with_ceo"})
+                        _pending_inject = None
 
                     await db.log_audit(run_id, "ceo_continuation", {
                         "round": round_num + 1,
@@ -590,6 +630,14 @@ async def run_agent(
             print(f"[agent] Failed to create PR: {e}")
             await db.log_audit(run_id, "pr_failed", {"error": str(e)})
 
+    # Capture git diff stats before finishing
+    diff_stats = None
+    try:
+        diff_stats = git_ops.get_branch_diff(branch_name, base_branch)
+        print(f"[agent] Captured diff: {len(diff_stats)} files changed")
+    except Exception as e:
+        print(f"[agent] Warning: could not capture diff stats: {e}")
+
     await db.finish_run(
         run_id=run_id,
         status=final_status,
@@ -597,6 +645,7 @@ async def run_agent(
         total_cost_usd=total_cost,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
+        diff_stats=diff_stats,
     )
 
     _current_run_id = None
@@ -678,6 +727,237 @@ async def start_run(body: StartRequest = StartRequest()):
     }
 
 
+class ResumeRequest(BaseModel):
+    run_id: str
+    max_budget_usd: float = 0
+
+
+async def resume_agent(run_id: str, max_budget: float = 0):
+    """Resume a previous run using its SDK session ID."""
+    global _current_run_id
+
+    run_info = await db.get_run_for_resume(run_id)
+    if not run_info:
+        raise RuntimeError(f"Run {run_id} not found")
+    session_id = run_info.get("sdk_session_id")  # May be None — will start fresh
+
+    branch_name = run_info["branch_name"]
+    custom_prompt = run_info.get("custom_prompt")
+    duration_minutes = run_info.get("duration_minutes", 0)
+    base_branch = run_info.get("base_branch", "main")
+    model = os.environ.get("AGENT_MODEL", "opus")
+    fallback_model = os.environ.get("AGENT_FALLBACK_MODEL", "sonnet")
+
+    # --- Git setup: checkout the existing branch ---
+    git_ops.setup_git_auth()
+    work_dir = git_ops.get_work_dir()
+    try:
+        git_ops._run_git(["fetch", "origin", branch_name], cwd=work_dir)
+        git_ops._run_git(["checkout", branch_name], cwd=work_dir)
+        git_ops._run_git(["pull", "origin", branch_name], cwd=work_dir)
+        print(f"[agent] Resumed on branch: {branch_name}")
+    except Exception as e:
+        print(f"[agent] Warning: couldn't checkout branch {branch_name}: {e}")
+        # Branch might only be local, try just checkout
+        try:
+            git_ops._run_git(["checkout", branch_name], cwd=work_dir)
+        except Exception:
+            print(f"[agent] Branch {branch_name} not found — starting fresh from {base_branch}")
+            git_ops.create_branch(branch_name, base_branch=base_branch)
+
+    _current_run_id = run_id
+    hooks.set_run_id(run_id)
+    hooks.set_agent_role("worker")
+    permissions.set_run_id(run_id)
+    session_gate.configure(run_id, duration_minutes)
+    session_mcp = session_gate.create_session_mcp_server()
+
+    await _start_signal_listener(run_id)
+    await db.update_run_status(run_id, "running")
+    await db.log_audit(run_id, "session_resumed", {
+        "sdk_session_id": session_id[:20] if session_id else None,
+        "branch": branch_name,
+    })
+
+    # --- Copy skills ---
+    skills_src = Path("/workspace/self-improve/.claude")
+    skills_dst = Path(work_dir) / ".claude"
+    if skills_src.exists():
+        if skills_dst.exists():
+            shutil.rmtree(skills_dst)
+        shutil.copytree(skills_src, skills_dst)
+
+    # --- SDK options with resume ---
+    options = ClaudeAgentOptions(
+        model=model,
+        fallback_model=fallback_model if fallback_model != model else None,
+        effort="medium",
+        system_prompt=prompt.build_system_prompt(
+            custom_focus=custom_prompt,
+            duration_minutes=duration_minutes,
+        ),
+        permission_mode="bypassPermissions",
+        can_use_tool=permissions.check_tool_permission,
+        cwd=work_dir,
+        add_dirs=["/workspace", "/home/agentuser/research"],
+        setting_sources=["project"],
+        max_budget_usd=max_budget if max_budget > 0 else None,
+        include_partial_messages=True,
+        resume=session_id if session_id else None,
+        mcp_servers={"session_gate": session_mcp},
+        hooks={
+            "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
+            "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],
+            "Stop": [HookMatcher(hooks=[hooks.stop_hook])],
+        },
+    )
+
+    if session_id:
+        print(f"[agent] Resuming session {session_id[:12]}...")
+    else:
+        print(f"[agent] No session ID — starting fresh on branch {branch_name}")
+
+    total_cost = run_info.get("total_cost_usd", 0) or 0
+    total_input_tokens = run_info.get("total_input_tokens", 0) or 0
+    total_output_tokens = run_info.get("total_output_tokens", 0) or 0
+    final_status = "completed"
+
+    try:
+        async with ClaudeSDKClient(options=options) as client:
+            # Send a continuation prompt to pick up where we left off
+            await client.query(
+                "You are resuming a previous session. Continue where you left off. "
+                "Check your recent commits with `git log --oneline -5` to remember what you were working on."
+            )
+            print("[agent] Resume prompt sent")
+
+            # Re-enter the main loop (simplified — same structure as run_agent)
+            for round_num in range(500):
+                current_role = hooks._agent_role
+                print(f"[agent] Round {round_num + 1} [{current_role.upper()}] | Resumed | Elapsed: {session_gate.elapsed_minutes():.0f}m")
+
+                round_result = None
+                should_stop = False
+                round_tools: list[str] = []
+                round_text_chunks: list[str] = []
+
+                async for message in client.receive_response():
+                    signal = await _drain_signal()
+                    if signal:
+                        sig = signal["signal"]
+                        if sig == "stop":
+                            await client.interrupt()
+                            final_status = "stopped"
+                            should_stop = True
+                            break
+                        elif sig == "unlock":
+                            session_gate.force_unlock()
+                            await db.log_audit(run_id, "session_unlocked", {})
+
+                    if isinstance(message, StreamEvent):
+                        event_data = message.event or {}
+                        if event_data.get("type") == "content_block_delta":
+                            delta = event_data.get("delta", {})
+                            dtype = delta.get("type", "")
+                            if dtype == "text_delta" and delta.get("text"):
+                                try:
+                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
+                                except Exception:
+                                    pass
+                            elif dtype == "thinking_delta" and delta.get("thinking"):
+                                try:
+                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
+                                except Exception:
+                                    pass
+                        continue
+
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                round_text_chunks.append(block.text[:500])
+                            elif isinstance(block, ToolUseBlock):
+                                round_tools.append(block.name)
+                        if message.usage:
+                            total_input_tokens += message.usage.get("input_tokens", 0)
+                            total_output_tokens += message.usage.get("output_tokens", 0)
+
+                    elif isinstance(message, ResultMessage):
+                        round_result = message
+                        if message.total_cost_usd:
+                            total_cost = message.total_cost_usd
+
+                if should_stop:
+                    break
+
+                if session_gate.has_ended():
+                    final_status = "completed"
+                    break
+
+                if hooks._agent_role == "ceo":
+                    hooks.set_agent_role("worker")
+
+                # Same continue logic as run_agent
+                if duration_minutes <= 0 or session_gate.is_unlocked():
+                    if round_result and round_result.subtype == "success":
+                        final_status = "completed"
+                        break
+                    else:
+                        break
+                else:
+                    # CEO continuation (same as run_agent)
+                    await client.query(prompt.build_continuation_prompt())
+
+    except asyncio.CancelledError:
+        final_status = "killed"
+    except Exception as e:
+        print(f"[agent] Resume error: {e}")
+        final_status = "error"
+        await db.log_audit(run_id, "fatal_error", {"error": str(e)})
+    finally:
+        await _stop_signal_listener()
+
+    if final_status != "killed":
+        try:
+            current = git_ops.get_current_branch()
+            if current == branch_name:
+                git_ops.push_branch(branch_name)
+                pr_url = git_ops.create_pr(branch_name, run_id)
+                await db.log_audit(run_id, "pr_created", {"url": pr_url})
+        except Exception as e:
+            print(f"[agent] PR failed: {e}")
+
+    # Capture git diff stats
+    diff_stats = None
+    try:
+        diff_stats = git_ops.get_branch_diff(branch_name, base_branch)
+    except Exception:
+        pass
+
+    await db.finish_run(
+        run_id=run_id,
+        status=final_status,
+        total_cost_usd=total_cost,
+        total_input_tokens=total_input_tokens,
+        total_output_tokens=total_output_tokens,
+        diff_stats=diff_stats,
+    )
+    _current_run_id = None
+    print(f"[agent] Resume complete. Status: {final_status}")
+
+
+@app.post("/resume")
+async def resume_run(body: ResumeRequest):
+    global _current_task
+    if _current_run_id is not None:
+        raise HTTPException(status_code=409, detail=f"Run already in progress: {_current_run_id}")
+
+    budget = body.max_budget_usd or float(os.environ.get("MAX_BUDGET_USD", "0"))
+    _current_task = asyncio.create_task(resume_agent(body.run_id, budget))
+    _current_task.add_done_callback(_on_task_done)
+    await asyncio.sleep(2)
+    return {"ok": True, "run_id": body.run_id, "resumed": True}
+
+
 @app.post("/stop")
 async def stop_run_instant():
     """Push stop signal directly to the in-process queue. Instant delivery."""
@@ -716,6 +996,39 @@ async def list_branches():
         return sorted(set(branches))
     except Exception:
         return ["main", "staging"]
+
+
+@app.get("/diff/live")
+async def get_live_diff():
+    """Get diff stats for the currently running branch (including uncommitted)."""
+    try:
+        git_ops.setup_git_auth()
+        # Determine base branch from current run
+        base = "main"
+        if _current_run_id:
+            pool = db.get_pool()
+            row = await pool.fetchrow("SELECT base_branch FROM runs WHERE id = $1", _current_run_id)
+            if row and row["base_branch"]:
+                base = row["base_branch"]
+        stats = git_ops.get_branch_diff_live(base)
+        return {"files": stats, "total_files": len(stats),
+                "total_added": sum(f["added"] for f in stats),
+                "total_removed": sum(f["removed"] for f in stats)}
+    except Exception as e:
+        return {"files": [], "error": str(e)}
+
+
+@app.get("/diff/{branch}")
+async def get_branch_diff(branch: str, base: str = "main"):
+    """Get diff stats between a branch and its base."""
+    try:
+        git_ops.setup_git_auth()
+        stats = git_ops.get_branch_diff(branch, base)
+        return {"files": stats, "total_files": len(stats),
+                "total_added": sum(f["added"] for f in stats),
+                "total_removed": sum(f["removed"] for f in stats)}
+    except Exception as e:
+        return {"files": [], "error": str(e)}
 
 
 def main():

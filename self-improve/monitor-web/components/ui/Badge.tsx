@@ -15,10 +15,10 @@ export function StatusBadge({
   return (
     <span
       className={clsx(
-        "inline-flex items-center gap-1.5 rounded-full font-medium",
+        "inline-flex items-center gap-1.5 rounded font-medium tracking-wider uppercase",
         meta.bg,
         meta.color,
-        size === "sm" ? "px-2 py-0.5 text-[10px]" : "px-3 py-1 text-xs"
+        size === "sm" ? "px-1.5 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]"
       )}
     >
       {meta.pulse && (
@@ -26,16 +26,19 @@ export function StatusBadge({
           <span
             className={clsx(
               "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
-              status === "running" ? "bg-emerald-400" : "bg-yellow-400"
+              meta.dot
             )}
           />
           <span
             className={clsx(
               "relative inline-flex h-1.5 w-1.5 rounded-full",
-              status === "running" ? "bg-emerald-400" : "bg-yellow-400"
+              meta.dot
             )}
           />
         </span>
+      )}
+      {!meta.pulse && (
+        <span className={clsx("h-1.5 w-1.5 rounded-full", meta.dot)} />
       )}
       {meta.label}
     </span>

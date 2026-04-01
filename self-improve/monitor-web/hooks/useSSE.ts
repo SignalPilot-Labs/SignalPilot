@@ -26,26 +26,26 @@ export function useSSE(runId: string | null) {
       try {
         const data: ToolCall = JSON.parse(e.data);
         if (data.phase === "post") {
-          // Merge post into the matching pre event (same tool_name, most recent)
+          // Merge post into the matching pre event
           setEvents((prev) => {
             for (let i = prev.length - 1; i >= 0; i--) {
               const ev = prev[i];
-              if (
-                ev._kind === "tool" &&
-                ev.data.phase === "pre" &&
-                ev.data.tool_name === data.tool_name &&
-                !ev.data.output_data
-              ) {
+              if (ev._kind !== "tool" || ev.data.phase !== "pre" || ev.data.output_data) continue;
+
+              // Match by tool_use_id (exact) or fall back to tool_name
+              const idMatch = data.tool_use_id && ev.data.tool_use_id === data.tool_use_id;
+              const nameMatch = !data.tool_use_id && ev.data.tool_name === data.tool_name;
+
+              if (idMatch || nameMatch) {
                 const merged = { ...ev.data };
                 merged.output_data = data.output_data;
                 merged.duration_ms = data.duration_ms;
-                merged.phase = "post"; // mark as complete
+                merged.phase = "post";
                 const next = [...prev];
                 next[i] = { _kind: "tool", data: merged };
                 return next;
               }
             }
-            // No matching pre found — show standalone
             return [...prev, { _kind: "tool", data }];
           });
         } else {

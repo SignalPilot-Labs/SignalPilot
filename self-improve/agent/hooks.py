@@ -52,6 +52,7 @@ async def pre_tool_use_hook(
             tool_name=tool_name,
             input_data=_safe_serialize(input_data),
             agent_role=_agent_role,
+            tool_use_id=tool_use_id,
         )
     except Exception as e:
         print(f"[hook] Failed to log pre-tool call: {e}")
@@ -84,6 +85,7 @@ async def post_tool_use_hook(
             output_data=_safe_serialize(tool_response) if tool_response is not None else None,
             duration_ms=duration_ms,
             agent_role=_agent_role,
+            tool_use_id=tool_use_id,
         )
     except Exception as e:
         print(f"[hook] Failed to log post-tool call: {e}")

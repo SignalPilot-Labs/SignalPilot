@@ -107,6 +107,22 @@ export async function startRun(
   return res.json();
 }
 
+export async function resumeRun(
+  runId: string,
+  maxBudgetUsd = 0
+): Promise<{ ok: boolean; run_id?: string }> {
+  const res = await fetch(`${getApiBase()}/api/agent/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ run_id: runId, max_budget_usd: maxBudgetUsd }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function stopAgentInstant(): Promise<{ ok: boolean }> {
   const res = await fetch(`${getApiBase()}/api/agent/stop`, { method: "POST" });
   return res.json();
@@ -124,6 +140,31 @@ export async function unlockSession(
     method: "POST",
   });
   return res.json();
+}
+
+export interface DiffFile {
+  path: string;
+  added: number;
+  removed: number;
+  status: "added" | "modified" | "deleted" | "renamed";
+}
+
+export interface DiffStats {
+  files: DiffFile[];
+  total_files: number;
+  total_added: number;
+  total_removed: number;
+  source: "stored" | "live" | "agent" | "unavailable";
+}
+
+export async function fetchRunDiff(runId: string): Promise<DiffStats> {
+  try {
+    const res = await fetch(`${getApiBase()}/api/runs/${runId}/diff`);
+    if (!res.ok) return { files: [], total_files: 0, total_added: 0, total_removed: 0, source: "unavailable" };
+    return res.json();
+  } catch {
+    return { files: [], total_files: 0, total_added: 0, total_removed: 0, source: "unavailable" };
+  }
 }
 
 export async function fetchBranches(): Promise<string[]> {

@@ -14,7 +14,13 @@ CREATE TABLE runs (
     total_input_tokens BIGINT DEFAULT 0,
     total_output_tokens BIGINT DEFAULT 0,
     rate_limit_info JSONB,
-    error_message TEXT
+    error_message TEXT,
+    sdk_session_id TEXT,
+    custom_prompt TEXT,
+    duration_minutes DOUBLE PRECISION DEFAULT 0,
+    base_branch TEXT DEFAULT 'main',
+    rate_limit_resets_at BIGINT,
+    diff_stats JSONB  -- git diff summary: [{path, added, removed, status}]
 );
 
 CREATE TABLE tool_calls (
@@ -28,7 +34,8 @@ CREATE TABLE tool_calls (
     duration_ms INT,
     permitted BOOLEAN NOT NULL DEFAULT TRUE,
     deny_reason TEXT,
-    agent_role TEXT NOT NULL DEFAULT 'worker'
+    agent_role TEXT NOT NULL DEFAULT 'worker',
+    tool_use_id TEXT  -- SDK correlation ID linking pre→post pairs
 );
 
 CREATE TABLE audit_log (
@@ -88,7 +95,8 @@ BEGIN
         'duration_ms', NEW.duration_ms,
         'permitted', NEW.permitted,
         'deny_reason', NEW.deny_reason,
-        'agent_role', NEW.agent_role
+        'agent_role', NEW.agent_role,
+        'tool_use_id', NEW.tool_use_id
     )::text);
     RETURN NEW;
 END;

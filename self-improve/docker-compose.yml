@@ -60,8 +60,10 @@ services:
       - ../research:/home/agentuser/research:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - ${SP_BENCHMARK_DIR:-D:\signalpilot-bench}:/bench:rw
-      # Persist Claude CLI auth state across restarts
+      # Persist Claude CLI auth + sessions across restarts
       - claude-agent-sessions:/home/agentuser/.claude
+      # Persist cloned repo so resume can pick up where it left off
+      - agent-repo:/home/agentuser/repo
     working_dir: /workspace
     depends_on:
       postgres:
@@ -72,3 +74,4 @@ services:
 volumes:
   improve-pg-data:
   claude-agent-sessions:
+  agent-repo:

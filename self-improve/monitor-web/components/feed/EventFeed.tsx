@@ -1,28 +1,25 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { clsx } from "clsx";
 import type { FeedEvent } from "@/lib/types";
-import { EventCard } from "./EventCard";
-import { LLMTextBlock, LLMThinkingBlock } from "./LLMOutput";
-import {
-  ArrowDownIcon,
-  ArrowsPointingOutIcon,
-} from "@heroicons/react/16/solid";
+import { groupEvents } from "@/lib/groupEvents";
+import { GroupedEventCard } from "./GroupedEventCard";
+import { EmptyEvents } from "@/components/ui/EmptyStates";
 
 export function EventFeed({ events }: { events: FeedEvent[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [userScrolled, setUserScrolled] = useState(false);
 
-  // Auto-scroll on new events
+  const grouped = useMemo(() => groupEvents(events), [events]);
+
   useEffect(() => {
     if (autoScroll && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [events, autoScroll]);
+  }, [grouped, autoScroll]);
 
-  // Detect user scroll
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
@@ -42,71 +39,39 @@ export function EventFeed({ events }: { events: FeedEvent[] }) {
   const toolCount = events.filter(
     (e) => e._kind === "tool" && e.data.phase === "pre"
   ).length;
-  const deniedCount = events.filter(
-    (e) => e._kind === "tool" && !e.data.permitted
-  ).length;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 relative">
       {/* Mini toolbar */}
-      <div className="flex items-center gap-4 px-4 py-2 border-b border-white/[0.04] bg-[#0a0d12]/80 backdrop-blur-sm">
-        <span className="text-[10px] text-zinc-500">
-          Events{" "}
-          <span className="text-zinc-300 font-semibold tabular-nums">
-            {events.length}
-          </span>
-        </span>
-        <span className="text-[10px] text-zinc-500">
-          Tools{" "}
-          <span className="text-zinc-300 font-semibold tabular-nums">
-            {toolCount}
-          </span>
-        </span>
-        {deniedCount > 0 && (
-          <span className="text-[10px] text-zinc-500">
-            Denied{" "}
-            <span className="text-red-400 font-semibold tabular-nums">
-              {deniedCount}
-            </span>
-          </span>
-        )}
+      <div className="flex items-center gap-4 px-4 py-2 border-b border-[#1a1a1a] bg-[#0a0a0a]/80 frosted-glass">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-[#555]">Events</span>
+          <span className="text-[10px] text-[#e8e8e8] font-semibold tabular-nums">{events.length}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-[#555]">Tools</span>
+          <span className="text-[10px] text-[#e8e8e8] font-semibold tabular-nums">{toolCount}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-[#555]">Groups</span>
+          <span className="text-[10px] text-[#e8e8e8] font-semibold tabular-nums">{grouped.length}</span>
+        </div>
       </div>
 
       {/* Event list */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-2 py-1 space-y-[2px] scrollbar-thin"
+        className="flex-1 overflow-y-auto px-3 py-2 space-y-2"
       >
         {events.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-zinc-600 text-xs">
-            <div className="text-center space-y-2">
-              <ArrowsPointingOutIcon className="h-6 w-6 mx-auto text-zinc-700" />
-              <p>Waiting for events&hellip;</p>
-            </div>
+          <div className="flex items-center justify-center h-full">
+            <EmptyEvents />
           </div>
         ) : (
-          events.map((event, i) => {
-            if (event._kind === "llm_text") {
-              return (
-                <LLMTextBlock
-                  key={`text-${i}`}
-                  text={event.text}
-                  agentRole={event.agent_role}
-                />
-              );
-            }
-            if (event._kind === "llm_thinking") {
-              return (
-                <LLMThinkingBlock
-                  key={`think-${i}`}
-                  text={event.text}
-                  agentRole={event.agent_role}
-                />
-              );
-            }
-            return <EventCard key={`ev-${i}`} event={event} />;
-          })
+          grouped.map((gev, i) => (
+            <GroupedEventCard key={`g-${i}`} event={gev} isLast={i === grouped.length - 1} />
+          ))
         )}
       </div>
 
@@ -116,13 +81,16 @@ export function EventFeed({ events }: { events: FeedEvent[] }) {
           onClick={scrollToBottom}
           className={clsx(
             "absolute bottom-4 right-4 z-10",
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-full",
-            "bg-sky-500/20 text-sky-400 text-[10px] font-medium",
-            "border border-sky-500/30 backdrop-blur-sm",
-            "hover:bg-sky-500/30 transition-all shadow-lg shadow-sky-500/10"
+            "flex items-center gap-1.5 px-3 py-1.5 rounded",
+            "bg-[#00ff88]/10 text-[#00ff88] text-[9px] font-medium",
+            "border border-[#00ff88]/20 frosted-glass",
+            "hover:bg-[#00ff88]/20 transition-all"
           )}
         >
-          <ArrowDownIcon className="h-3 w-3" />
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <line x1="5" y1="2" x2="5" y2="8" />
+            <polyline points="3 6 5 8 7 6" />
+          </svg>
           New events
         </button>
       )}

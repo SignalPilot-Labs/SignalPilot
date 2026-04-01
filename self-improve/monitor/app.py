@@ -251,6 +251,54 @@ async def list_branches():
     return ["main", "staging"]
 
 
+@app.get("/api/runs/{run_id}/diff")
+async def get_run_diff(run_id: str):
+    """Get the git diff for a run. Uses stored diff_stats if available, otherwise fetches live."""
+    # First check if we have stored diff_stats
+    row = await pool.fetchrow("SELECT diff_stats, branch_name, base_branch, status FROM runs WHERE id = $1", run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # If diff_stats are stored, return them directly
+    if row["diff_stats"]:
+        import json as _json
+        stats = _json.loads(row["diff_stats"]) if isinstance(row["diff_stats"], str) else row["diff_stats"]
+        return {
+            "files": stats,
+            "total_files": len(stats),
+            "total_added": sum(f.get("added", 0) for f in stats),
+            "total_removed": sum(f.get("removed", 0) for f in stats),
+            "source": "stored",
+        }
+
+    # For running/in-progress runs, fetch live from agent
+    if row["status"] in ("running", "paused"):
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                res = await client.get(f"{AGENT_API_URL}/diff/live")
+                if res.status_code == 200:
+                    data = res.json()
+                    data["source"] = "live"
+                    return data
+        except Exception:
+            pass
+
+    # Fallback: try to get diff from agent by branch name
+    branch = row["branch_name"]
+    base = row["base_branch"] or "main"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/diff/{branch}", params={"base": base})
+            if res.status_code == 200:
+                data = res.json()
+                data["source"] = "agent"
+                return data
+    except Exception:
+        pass
+
+    return {"files": [], "total_files": 0, "total_added": 0, "total_removed": 0, "source": "unavailable"}
+
+
 @app.post("/api/agent/stop")
 async def stop_agent_instant():
     """Instant stop — pushes directly to the agent's in-process queue."""
@@ -258,6 +306,29 @@ async def stop_agent_instant():
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.post(f"{AGENT_API_URL}/stop")
             return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+class ResumeRunRequest(BaseModel):
+    run_id: str
+    max_budget_usd: float = 0
+
+
+@app.post("/api/agent/resume")
+async def resume_agent_run(body: ResumeRunRequest):
+    """Resume a previous run using its SDK session ID."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/resume",
+                json={"run_id": body.run_id, "max_budget_usd": body.max_budget_usd},
+            )
+            if res.status_code == 409:
+                raise HTTPException(status_code=409, detail=res.json().get("detail", "Run in progress"))
+            return res.json()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 

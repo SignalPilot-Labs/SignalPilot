@@ -7,6 +7,7 @@ import {
   unlockSession,
   stopAgentInstant,
   killAgent,
+  resumeRun,
 } from "@/lib/api";
 import type { FeedEvent } from "@/lib/types";
 
@@ -80,5 +81,14 @@ export function useControl(
     [exec, runId]
   );
 
-  return { pause, resume, stop, kill, inject, unlock, busy };
+  const resumeSession = useCallback(
+    () =>
+      exec(
+        () => resumeRun(runId!),
+        "Resuming previous session..."
+      ),
+    [exec, runId]
+  );
+
+  return { pause, resume, stop, kill, inject, unlock, resumeSession, busy };
 }

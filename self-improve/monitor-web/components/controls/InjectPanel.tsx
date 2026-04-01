@@ -3,10 +3,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/Button";
-import {
-  PaperAirplaneIcon,
-  XMarkIcon,
-} from "@heroicons/react/16/solid";
 
 const PRESETS = [
   { label: "Wrap up", text: "You're done for now \u2014 commit your progress, write a summary of what you did and what remains, then stop." },
@@ -58,16 +54,16 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
           animate={{ height: "auto", opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.2, ease: "easeInOut" }}
-          className="overflow-hidden border-b border-white/[0.06]"
+          className="overflow-hidden border-b border-[#1a1a1a]"
         >
-          <div className="p-4 bg-[#0c0f14]">
+          <div className="p-4 bg-[#0a0a0a]">
             {/* Presets */}
             <div className="flex gap-1.5 mb-3 flex-wrap">
               {PRESETS.map((p) => (
                 <button
                   key={p.label}
                   onClick={() => setText(p.text)}
-                  className="text-[10px] px-2.5 py-1 rounded-full bg-white/[0.04] text-zinc-400 hover:bg-white/[0.08] hover:text-zinc-300 transition-colors border border-white/[0.04]"
+                  className="text-[9px] px-2 py-1 rounded bg-white/[0.03] text-[#777] hover:bg-white/[0.06] hover:text-[#aaa] transition-colors border border-[#1a1a1a]"
                 >
                   {p.label}
                 </button>
@@ -82,16 +78,24 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
               onKeyDown={handleKeyDown}
               placeholder="Type a prompt to inject into the running agent..."
               rows={3}
-              className="w-full bg-black/30 border border-white/[0.06] rounded-lg px-3 py-2.5 text-[12px] text-zinc-300 placeholder-zinc-600 resize-y focus:outline-none focus:border-sky-500/40 focus:ring-1 focus:ring-sky-500/20 transition-all"
+              className="w-full bg-black/40 border border-[#1a1a1a] rounded px-3 py-2.5 text-[11px] text-[#ccc] placeholder-[#444] resize-y focus:outline-none focus:border-[#00ff88]/30 transition-all"
             />
 
             {/* Actions */}
             <div className="flex items-center justify-between mt-2.5">
-              <span className="text-[10px] text-zinc-600">
+              <span className="text-[9px] text-[#444]">
                 {text.length > 0 ? `${text.length} chars` : "Ctrl+Enter to send"}
               </span>
               <div className="flex gap-2">
-                <Button variant="ghost" onClick={onClose} icon={<XMarkIcon className="h-3 w-3" />}>
+                <Button
+                  variant="ghost"
+                  onClick={onClose}
+                  icon={
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <line x1="2" y1="2" x2="8" y2="8" /><line x1="8" y1="2" x2="2" y2="8" />
+                    </svg>
+                  }
+                >
                   Cancel
                 </Button>
                 <Button
@@ -99,7 +103,11 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
                   size="md"
                   onClick={handleSend}
                   disabled={!text.trim() || busy}
-                  icon={<PaperAirplaneIcon className="h-3 w-3" />}
+                  icon={
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M1 5h7M6 2l3 3-3 3" />
+                    </svg>
+                  }
                 >
                   Send to Agent
                 </Button>

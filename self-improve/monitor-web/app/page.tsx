@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import type { Run, FeedEvent, RunStatus } from "@/lib/types";
+import type { Run, FeedEvent, RunStatus, ToolCall } from "@/lib/types";
 import { fetchToolCalls, fetchAuditLog, startRun, fetchAgentHealth, fetchBranches } from "@/lib/api";
 import type { AgentHealth } from "@/lib/api";
 import { useRuns } from "@/hooks/useRuns";
@@ -14,12 +14,10 @@ import { ControlBar } from "@/components/controls/ControlBar";
 import { InjectPanel } from "@/components/controls/InjectPanel";
 import { StartRunModal } from "@/components/controls/StartRunModal";
 import { StatsBar } from "@/components/stats/StatsBar";
+import { RateLimitBanner } from "@/components/controls/RateLimitBanner";
+import { WorkTree } from "@/components/worktree/WorkTree";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import {
-  SignalIcon,
-  RocketLaunchIcon,
-} from "@heroicons/react/16/solid";
 
 export default function MonitorPage() {
   const { runs, loading: runsLoading, refresh: refreshRuns } = useRuns();
@@ -39,7 +37,7 @@ export default function MonitorPage() {
     setHistoryEvents((prev) => [...prev, event]);
   }, []);
 
-  const { pause, resume, stop, kill, inject, unlock, busy } = useControl(
+  const { pause, resume, stop, kill, inject, unlock, resumeSession, busy } = useControl(
     selectedRunId,
     addEvent
   );
@@ -84,7 +82,62 @@ export default function MonitorPage() {
           fetchAuditLog(id, 500),
         ]);
 
-        const toolEvents: FeedEvent[] = tools.map((t) => ({
+        // API returns DESC order — sort ASC so pre comes before post
+        tools.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+        audits.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+        // Merge pre/post tool call pairs.
+        // Pre has input_data (no output), post has output_data (no input).
+        // Use tool_use_id when available (new runs), fall back to name-based
+        // matching for historical data without tool_use_id.
+        const mergedTools: ToolCall[] = [];
+
+        for (const t of tools) {
+          if (t.phase === "pre") {
+            mergedTools.push({ ...t });
+          } else {
+            // phase === "post": find matching pre and merge
+            let matched = false;
+
+            // Strategy 1: Match by tool_use_id (exact, handles parallel calls)
+            if (t.tool_use_id) {
+              for (let j = mergedTools.length - 1; j >= 0; j--) {
+                const pre = mergedTools[j];
+                if (pre.tool_use_id === t.tool_use_id && pre.phase === "pre") {
+                  pre.output_data = t.output_data;
+                  pre.duration_ms = t.duration_ms;
+                  pre.phase = "post";
+                  matched = true;
+                  break;
+                }
+              }
+            }
+
+            // Strategy 2: Fall back to name-based matching (old data)
+            if (!matched) {
+              for (let j = mergedTools.length - 1; j >= 0; j--) {
+                const pre = mergedTools[j];
+                if (
+                  pre.tool_name === t.tool_name &&
+                  pre.phase === "pre" &&
+                  !pre.output_data
+                ) {
+                  pre.output_data = t.output_data;
+                  pre.duration_ms = t.duration_ms;
+                  pre.phase = "post";
+                  matched = true;
+                  break;
+                }
+              }
+            }
+
+            if (!matched) {
+              mergedTools.push({ ...t });
+            }
+          }
+        }
+
+        const toolEvents: FeedEvent[] = mergedTools.map((t) => ({
           _kind: "tool" as const,
           data: t,
         }));
@@ -129,7 +182,6 @@ export default function MonitorPage() {
           text: `New run started${prompt ? ` with custom prompt` : ""}`,
           ts: new Date().toISOString(),
         });
-        // Wait a moment then refresh to pick up the new run
         setTimeout(async () => {
           await refreshRuns();
           if (result.run_id) {
@@ -156,18 +208,33 @@ export default function MonitorPage() {
   const agentReachable = agentHealth != null && agentHealth.status !== "unreachable";
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-screen flex flex-col bg-[var(--color-bg)]">
       {/* Header */}
-      <header className="relative z-10 flex items-center gap-4 px-5 py-3 border-b border-white/[0.06] bg-[#0a0d12] header-glow">
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-sky-500/10 border border-sky-500/20">
-            <SignalIcon className="h-3.5 w-3.5 text-sky-400" />
+      <header className="relative z-10 flex items-center gap-3 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
+        {/* Logo */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex items-center justify-center h-7 w-7">
+            {/* Animated status ring */}
+            <svg width="28" height="28" viewBox="0 0 28 28" className="absolute">
+              <circle
+                cx="14" cy="14" r="12"
+                fill="none"
+                stroke={runStatus === "running" ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}
+                strokeWidth="1"
+                strokeDasharray="4 3"
+                style={runStatus === "running" ? { animation: "spin 8s linear infinite" } : undefined}
+              />
+            </svg>
+            {/* Logo icon */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={runStatus === "running" ? "#00ff88" : "#555"} strokeWidth="1.5" strokeLinecap="round">
+              <path d="M2 10L5 4L7 7L9 3L12 10" />
+            </svg>
           </div>
           <div>
-            <h1 className="text-[13px] font-bold text-zinc-200 tracking-tight">
+            <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">
               SignalPilot
             </h1>
-            <p className="text-[9px] text-zinc-600 -mt-0.5">
+            <p className="text-[8px] text-[#444] tracking-[0.1em] uppercase -mt-0.5">
               Self-Improve Monitor
             </p>
           </div>
@@ -177,20 +244,37 @@ export default function MonitorPage() {
           <motion.div
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
-            className="flex items-center gap-3 ml-2"
+            className="flex items-center gap-2.5 ml-1"
           >
-            <div className="w-px h-5 bg-white/[0.06]" />
+            <div className="w-px h-4 bg-[#1a1a1a]" />
             <StatusBadge
               status={selectedRun.status as RunStatus}
               size="md"
             />
-            <span className="text-[11px] text-sky-400 font-medium">
-              {selectedRun.branch_name}
+            <span className="text-[10px] text-[#888] font-medium">
+              {selectedRun.branch_name.replace("improvements-round-", "")}
             </span>
           </motion.div>
         )}
 
         <div className="flex-1" />
+
+        {/* Agent health indicator */}
+        <div className="flex items-center gap-1.5 mr-2">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              agentReachable
+                ? agentIdle
+                  ? "bg-[#00ff88]/60"
+                  : "bg-[#00ff88]"
+                : "bg-[#ff4444]/60"
+            }`}
+            style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
+          />
+          <span className="text-[8px] text-[#555]">
+            {!agentReachable ? "Offline" : agentIdle ? "Idle" : "Active"}
+          </span>
+        </div>
 
         {/* Start Run button */}
         <Button
@@ -198,16 +282,20 @@ export default function MonitorPage() {
           size="md"
           onClick={() => { fetchBranches().then(setBranches); setStartModalOpen(true); }}
           disabled={!agentIdle || !agentReachable}
-          icon={<RocketLaunchIcon className="h-3.5 w-3.5" />}
+          icon={
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <polygon points="3 2 8 5 3 8" />
+            </svg>
+          }
         >
           {!agentReachable
-            ? "Agent Offline"
+            ? "Offline"
             : !agentIdle
-              ? "Run In Progress"
+              ? "Running"
               : "New Run"}
         </Button>
 
-        <div className="w-px h-5 bg-white/[0.06]" />
+        <div className="w-px h-4 bg-[#1a1a1a]" />
 
         <ControlBar
           status={runStatus}
@@ -217,6 +305,7 @@ export default function MonitorPage() {
           onKill={kill}
           onUnlock={unlock}
           onToggleInject={() => setInjectOpen(!injectOpen)}
+          onResumeRun={resumeSession}
           busy={busy}
           sessionLocked={agentHealth?.session_unlocked === false}
           timeRemaining={agentHealth?.time_remaining || null}
@@ -240,8 +329,18 @@ export default function MonitorPage() {
         branches={branches}
       />
 
-      {/* Main */}
+      {/* Rate Limit Banner */}
+      {selectedRun?.status === "rate_limited" && selectedRun.rate_limit_resets_at && (
+        <RateLimitBanner
+          resetsAt={selectedRun.rate_limit_resets_at}
+          onResume={resumeSession}
+          busy={busy}
+        />
+      )}
+
+      {/* Main Content */}
       <div className="flex flex-1 min-h-0">
+        {/* Left sidebar - Run list */}
         <RunList
           runs={runs}
           activeId={selectedRunId}
@@ -249,10 +348,14 @@ export default function MonitorPage() {
           loading={runsLoading}
         />
 
+        {/* Center - Event feed */}
         <main className="flex-1 flex flex-col min-h-0 min-w-0">
           <EventFeed events={allEvents} />
           <StatsBar run={selectedRun} connected={connected} />
         </main>
+
+        {/* Right sidebar - WorkTree */}
+        <WorkTree events={allEvents} runId={selectedRunId} />
       </div>
     </div>
   );

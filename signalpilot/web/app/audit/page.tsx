@@ -19,6 +19,7 @@ import { EmptyList, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { ActivityDots, StatusDot } from "@/components/ui/data-viz";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
+import { TimeAgo } from "@/components/ui/time-ago";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
@@ -242,7 +243,7 @@ export default function AuditPage() {
                         ) : (
                           <ChevronRight className="w-2.5 h-2.5 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
                         )}
-                        {new Date(entry.timestamp * 1000).toLocaleString()}
+                        <TimeAgo timestamp={entry.timestamp} live className="text-[10px]" />
                       </div>
                       {isExpanded && entry.sql && (
                         <div className="mt-3 ml-4 animate-fade-in">

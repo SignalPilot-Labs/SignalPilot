@@ -22,6 +22,7 @@ import { RingGauge, Sparkline, StatusDot, MiniBar, AreaChart, StackedBar } from 
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SystemDiagram } from "@/components/ui/system-diagram";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
+import { TimeAgo } from "@/components/ui/time-ago";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -68,13 +69,6 @@ function StatusBadge({ ok }: { ok: boolean | null }) {
 }
 
 /* ── Helpers ── */
-function timeAgo(ts: number): string {
-  const diff = Date.now() / 1000 - ts;
-  if (diff < 60) return `${Math.floor(diff)}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
-}
 
 const eventTypeConfig: Record<string, { label: string; color: string }> = {
   query: { label: "QRY", color: "text-[var(--color-success)]" },
@@ -378,9 +372,11 @@ export default function DashboardPage() {
                         {entry.duration_ms.toFixed(0)}ms
                       </span>
                     )}
-                    <span className="text-[10px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0 tabular-nums">
-                      {timeAgo(entry.timestamp)}
-                    </span>
+                    <TimeAgo
+                      timestamp={entry.timestamp}
+                      live
+                      className="text-[10px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
+                    />
                   </div>
                 );
               })

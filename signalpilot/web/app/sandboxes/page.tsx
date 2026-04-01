@@ -21,6 +21,7 @@ import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
+import { TimeAgo } from "@/components/ui/time-ago";
 
 const statusConfig: Record<string, { indicator: string; label: string }> = {
   ready: { indicator: "bg-blue-400", label: "ready" },
@@ -215,7 +216,7 @@ export default function SandboxesPage() {
                   )}
                   <div className="flex items-center gap-2">
                     <Clock className="w-3 h-3" strokeWidth={1.5} />
-                    <span className="tabular-nums">{new Date(sb.created_at * 1000).toLocaleTimeString()}</span>
+                    <TimeAgo timestamp={sb.created_at} live className="tabular-nums" />
                     {sb.uptime_sec != null && sb.uptime_sec > 0 && (
                       <span className="text-[var(--color-text-dim)]">
                         ({sb.uptime_sec < 60 ? `${sb.uptime_sec.toFixed(0)}s` : `${(sb.uptime_sec / 60).toFixed(0)}m`})

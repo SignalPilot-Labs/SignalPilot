@@ -28,7 +28,9 @@ class DuckDBConnector(BaseConnector):
             raise RuntimeError("duckdb not installed. Run: pip install duckdb")
         # connection_string is a file path, :memory:, or a MotherDuck URL (md:)
         self._db_path = connection_string
-        self._conn = duckdb.connect(connection_string, read_only=True)
+        # In-memory and MotherDuck databases cannot be opened in read_only mode
+        is_memory = connection_string == ":memory:" or connection_string.startswith("md:")
+        self._conn = duckdb.connect(connection_string, read_only=not is_memory)
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:

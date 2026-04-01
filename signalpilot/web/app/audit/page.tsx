@@ -15,12 +15,20 @@ import {
 } from "lucide-react";
 import { getAudit, getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
+import { EmptyList, EmptyState } from "@/components/ui/empty-states";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
   execute: Terminal,
   connect: DbIcon,
   block: ShieldAlert,
+};
+
+const typeColors: Record<string, string> = {
+  query: "text-[var(--color-success)]",
+  execute: "text-blue-400",
+  block: "text-[var(--color-error)]",
+  connect: "text-[var(--color-text-dim)]",
 };
 
 export default function AuditPage() {
@@ -74,13 +82,20 @@ export default function AuditPage() {
     );
   });
 
+  const statsData = {
+    total: filtered.length,
+    queries: filtered.filter(e => e.event_type === "query").length,
+    executions: filtered.filter(e => e.event_type === "execute").length,
+    blocked: filtered.filter(e => e.blocked).length,
+  };
+
   return (
-    <div className="p-8">
+    <div className="p-8 animate-fade-in">
       <div className="flex items-center justify-between mb-8">
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-lg font-light tracking-wide">audit</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-widest uppercase">/ log</span>
+            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ log</span>
           </div>
           <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
             full-chain audit trail of all governed operations
@@ -88,11 +103,11 @@ export default function AuditPage() {
         </div>
         <div className="flex items-center gap-2">
           <button onClick={exportCSV} disabled={filtered.length === 0}
-            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors disabled:opacity-30 tracking-wider">
+            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> csv
           </button>
           <a href={getAuditExportUrl("json", typeFilter || undefined)} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
           </a>
           <button onClick={refresh}
@@ -101,6 +116,23 @@ export default function AuditPage() {
           </button>
         </div>
       </div>
+
+      {/* Stats bar */}
+      {entries.length > 0 && (
+        <div className="flex items-center gap-6 mb-6 px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          {[
+            { label: "total", value: statsData.total, color: "" },
+            { label: "queries", value: statsData.queries, color: "text-[var(--color-success)]" },
+            { label: "executions", value: statsData.executions, color: "text-blue-400" },
+            { label: "blocked", value: statsData.blocked, color: statsData.blocked > 0 ? "text-[var(--color-error)]" : "" },
+          ].map(s => (
+            <div key={s.label} className="flex items-center gap-2">
+              <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
+              <span className={`text-xs tabular-nums ${s.color}`}>{s.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-6">
@@ -138,7 +170,7 @@ export default function AuditPage() {
           <thead>
             <tr className="border-b border-[var(--color-border)]">
               {["time", "type", "connection", "detail", "duration"].map((h, i) => (
-                <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest`}>
+                <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]`}>
                   {h}
                 </th>
               ))}
@@ -153,14 +185,18 @@ export default function AuditPage() {
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-[var(--color-text-dim)]">
-                  <ScrollText className="w-5 h-5 mx-auto mb-2 opacity-20" strokeWidth={1} />
-                  <span className="text-[10px] tracking-wider">no entries found</span>
+                <td colSpan={5}>
+                  <EmptyState
+                    icon={EmptyList}
+                    title="no entries found"
+                    description="run some queries to populate the audit log"
+                  />
                 </td>
               </tr>
             ) : (
               filtered.map((entry) => {
                 const Icon = typeIcons[entry.event_type] || ScrollText;
+                const color = typeColors[entry.event_type] || typeColors.connect;
                 const isExpanded = expandedRow === entry.id;
                 return (
                   <tr
@@ -168,7 +204,7 @@ export default function AuditPage() {
                     onClick={() => setExpandedRow(isExpanded ? null : entry.id)}
                     className="hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer group"
                   >
-                    <td className="px-4 py-2.5 text-[10px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider">
+                    <td className="px-4 py-2.5 text-[10px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider align-top">
                       <div className="flex items-center gap-1.5">
                         {isExpanded ? (
                           <ChevronDown className="w-2.5 h-2.5 text-[var(--color-text-dim)]" />
@@ -178,8 +214,8 @@ export default function AuditPage() {
                         {new Date(entry.timestamp * 1000).toLocaleString()}
                       </div>
                       {isExpanded && entry.sql && (
-                        <div className="mt-3 ml-4">
-                          <p className="text-[9px] uppercase tracking-widest text-[var(--color-text-dim)] mb-1">full sql</p>
+                        <div className="mt-3 ml-4 animate-fade-in">
+                          <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
                           <pre className="whitespace-pre-wrap text-[11px] text-[var(--color-text-muted)] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto">
                             {entry.sql}
                           </pre>
@@ -190,7 +226,7 @@ export default function AuditPage() {
                           )}
                           {entry.metadata && Object.keys(entry.metadata).length > 0 && (
                             <div className="mt-2">
-                              <p className="text-[9px] uppercase tracking-widest text-[var(--color-text-dim)] mb-1">metadata</p>
+                              <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
                               <pre className="text-[9px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)]">
                                 {JSON.stringify(entry.metadata, null, 2)}
                               </pre>
@@ -200,16 +236,11 @@ export default function AuditPage() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 align-top">
-                      <span className={`flex items-center gap-1.5 text-[10px] tracking-wider ${
-                        entry.event_type === "query" ? "text-[var(--color-success)]" :
-                        entry.event_type === "execute" ? "text-[var(--color-text-muted)]" :
-                        entry.event_type === "block" ? "text-[var(--color-error)]" :
-                        "text-blue-400"
-                      }`}>
+                      <span className={`flex items-center gap-1.5 text-[10px] tracking-wider ${color}`}>
                         <Icon className="w-3 h-3" strokeWidth={1.5} />
                         {entry.event_type}
                         {entry.blocked && (
-                          <span className="px-1 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] text-[9px] uppercase tracking-wider">
+                          <span className="px-1 py-0.5 border badge-error text-[9px] uppercase tracking-wider">
                             blocked
                           </span>
                         )}

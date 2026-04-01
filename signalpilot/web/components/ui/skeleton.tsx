@@ -1,12 +1,10 @@
 /**
- * Skeleton loading placeholders.
+ * Skeleton loading placeholders with shimmer effect.
  */
 
 export function Skeleton({ className = "" }: { className?: string }) {
   return (
-    <div
-      className={`animate-pulse bg-[var(--color-border)] ${className}`}
-    />
+    <div className={`animate-shimmer ${className}`} />
   );
 }
 

@@ -6,44 +6,48 @@ import {
   Database,
   Cpu,
   Server,
-  CheckCircle2,
-  XCircle,
-  Loader2,
   Shield,
   DollarSign,
   Clock,
   Zap,
   BarChart3,
+  ArrowRight,
+  Loader2,
 } from "lucide-react";
 import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, getConnectionsHealth } from "@/lib/api";
 import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
+import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 
+/* ── Metric card ── */
 function MetricCard({
   label,
   value,
   subtext,
   icon: Icon,
+  accentColor,
 }: {
   label: string;
   value: string | number;
   subtext?: string;
   icon: React.ElementType;
+  accentColor?: string;
 }) {
   return (
-    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-glow">
+    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
       <div className="flex items-center gap-2 mb-3">
-        <Icon className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-widest">{label}</span>
+        <Icon className={`w-3.5 h-3.5 ${accentColor || "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
+        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{label}</span>
       </div>
-      <p className="text-xl font-light tabular-nums text-[var(--color-text)]">{value}</p>
+      <p className="text-xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
       {subtext && (
-        <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider">{subtext}</p>
+        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider">{subtext}</p>
       )}
     </div>
   );
 }
 
+/* ── Status badge ── */
 function StatusBadge({ ok }: { ok: boolean | null }) {
   if (ok === null) return <Loader2 className="w-3 h-3 animate-spin text-[var(--color-text-dim)]" />;
   return ok ? (
@@ -59,6 +63,7 @@ function StatusBadge({ ok }: { ok: boolean | null }) {
   );
 }
 
+/* ── Helpers ── */
 function timeAgo(ts: number): string {
   const diff = Date.now() / 1000 - ts;
   if (diff < 60) return `${Math.floor(diff)}s`;
@@ -67,12 +72,36 @@ function timeAgo(ts: number): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-const eventTypeConfig: Record<string, { label: string }> = {
-  query: { label: "QRY" },
-  execute: { label: "EXE" },
-  connect: { label: "CON" },
-  block: { label: "BLK" },
+const eventTypeConfig: Record<string, { label: string; color: string }> = {
+  query: { label: "QRY", color: "text-[var(--color-success)]" },
+  execute: { label: "EXE", color: "text-blue-400" },
+  connect: { label: "CON", color: "text-[var(--color-text-dim)]" },
+  block: { label: "BLK", color: "text-[var(--color-error)]" },
 };
+
+/* ── Mini sparkline SVG ── */
+function MiniSparkline({ values, color = "var(--color-text-dim)" }: { values: number[]; color?: string }) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+  const w = 60;
+  const h = 16;
+  const points = values.map((v, i) =>
+    `${(i / (values.length - 1)) * w},${h - (v / max) * h}`
+  ).join(" ");
+
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="flex-shrink-0">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
@@ -131,23 +160,33 @@ export default function DashboardPage() {
     return unsub;
   }, []);
 
+  const latencyValues = recentAudit
+    .filter(e => e.duration_ms != null)
+    .slice(0, 20)
+    .map(e => e.duration_ms || 0)
+    .reverse();
+
   return (
-    <div className="p-8 max-w-[1400px]">
+    <div className="p-8 max-w-[1400px] animate-fade-in">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-1">
           <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">dashboard</h1>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-widest uppercase">/ live overview</span>
+          <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ live overview</span>
         </div>
         <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
           signalpilot gateway status and metrics
         </p>
       </div>
 
-      {/* Status bar — terminal-style */}
+      {/* ── System status bar ── */}
       <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
         <div className="px-4 py-2 border-b border-[var(--color-border)] flex items-center gap-2">
-          <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest">system status</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <rect width="10" height="10" rx="0" fill="var(--color-success)" opacity="0.15" />
+            <circle cx="5" cy="5" r="2" fill="var(--color-success)" />
+          </svg>
+          <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">system status</span>
         </div>
         <div className="px-4 py-3 flex items-center gap-8 text-xs">
           <div className="flex items-center gap-2">
@@ -163,7 +202,13 @@ export default function DashboardPage() {
             <span className="text-[var(--color-text-dim)]">kvm:</span>
             <StatusBadge ok={metrics ? metrics.kvm_available : null} />
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          {latencyValues.length > 3 && (
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
+              <MiniSparkline values={latencyValues} color="var(--color-success)" />
+            </div>
+          )}
+          <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
             <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
               governance: active
@@ -172,8 +217,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Metric cards — top row */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)]">
+      {/* ── Metric cards — top row ── */}
+      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
         <MetricCard
           label="active sandboxes"
           value={metrics?.active_sandboxes ?? "—"}
@@ -196,25 +241,29 @@ export default function DashboardPage() {
           value={budgetData ? `$${budgetData.total_spent_usd.toFixed(4)}` : "$0.00"}
           subtext={budgetData ? `${budgetData.sessions.length} sessions` : undefined}
           icon={DollarSign}
+          accentColor="text-[var(--color-warning)]"
         />
       </div>
 
-      {/* Stats cards — second row */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)]">
+      {/* ── Stats cards — second row ── */}
+      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
         <MetricCard
           label="queries"
           value={auditStats.queries}
           icon={BarChart3}
+          accentColor="text-[var(--color-success)]"
         />
         <MetricCard
           label="executions"
           value={auditStats.executions}
           icon={Zap}
+          accentColor="text-blue-400"
         />
         <MetricCard
           label="blocked"
           value={auditStats.blocks}
           icon={Shield}
+          accentColor={auditStats.blocks > 0 ? "text-[var(--color-error)]" : undefined}
         />
         <MetricCard
           label="avg latency"
@@ -227,43 +276,49 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Governance Pipeline */}
+      {/* ── Governance Pipeline ── */}
       <div className="mb-8">
         <GovernancePipeline />
       </div>
 
-      {/* Two-column layout: Activity + Connections */}
+      {/* ── Two-column layout ── */}
       <div className="grid grid-cols-3 gap-4">
         {/* Recent activity — takes 2 cols */}
         <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-widest">
-              recent activity
-            </span>
-            <a href="/audit" className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-              view all &rarr;
+            <div className="flex items-center gap-2">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M2 6h2l1.5-3 1.5 6 1.5-3H11" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                recent activity
+              </span>
+            </div>
+            <a href="/audit" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              view all <ArrowRight className="w-3 h-3" />
             </a>
           </div>
           <div className="divide-y divide-[var(--color-border)]">
             {recentAudit.length === 0 ? (
-              <div className="px-4 py-12 text-center text-xs text-[var(--color-text-dim)]">
-                <Terminal className="w-5 h-5 mx-auto mb-2 opacity-30" strokeWidth={1} />
-                no activity yet. connect a database to get started.
-              </div>
+              <EmptyState
+                icon={EmptyTerminal}
+                title="no activity yet"
+                description="connect a database and run queries to see the activity feed"
+              />
             ) : (
               recentAudit.slice(0, 12).map((entry) => {
                 const cfg = eventTypeConfig[entry.event_type] || eventTypeConfig.query;
                 return (
                   <div
                     key={entry.id}
-                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors"
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group"
                   >
-                    <span className={`text-[9px] font-medium uppercase tracking-widest w-8 ${
-                      entry.blocked ? "text-[var(--color-error)]" : "text-[var(--color-text-dim)]"
+                    <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 ${
+                      entry.blocked ? "text-[var(--color-error)]" : cfg.color
                     }`}>
                       {cfg.label}
                     </span>
-                    <span className="flex-1 text-xs truncate text-[var(--color-text-muted)]">
+                    <span className="flex-1 text-xs truncate text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors">
                       {entry.sql
                         ? entry.sql.slice(0, 80)
                         : entry.metadata?.code_preview
@@ -300,11 +355,14 @@ export default function DashboardPage() {
           {/* Connections overview */}
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-widest">
-                connections
-              </span>
-              <a href="/connections" className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-                manage &rarr;
+              <div className="flex items-center gap-2">
+                <Database className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                  connections
+                </span>
+              </div>
+              <a href="/connections" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                manage <ArrowRight className="w-3 h-3" />
               </a>
             </div>
             <div className="divide-y divide-[var(--color-border)]">
@@ -355,16 +413,22 @@ export default function DashboardPage() {
           {/* Query Cache Stats */}
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
             <div className="px-4 py-3 border-b border-[var(--color-border)]">
-              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-widest">
-                query cache
-              </span>
+              <div className="flex items-center gap-2">
+                <Zap className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                  query cache
+                </span>
+              </div>
             </div>
             <div className="p-4 space-y-3">
               {cacheStats ? (
                 <>
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">hit_rate</span>
-                    <span className="text-xs font-light tabular-nums text-[var(--color-text)]">
+                    <span className={`text-xs font-light tabular-nums ${
+                      cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" :
+                      cacheStats.hit_rate > 0.3 ? "text-[var(--color-warning)]" : "text-[var(--color-text)]"
+                    }`}>
                       {(cacheStats.hit_rate * 100).toFixed(1)}%
                     </span>
                   </div>
@@ -376,21 +440,23 @@ export default function DashboardPage() {
                   </div>
                   <div className="grid grid-cols-3 gap-3 pt-1">
                     <div>
-                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest">hits</p>
+                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest">miss</p>
+                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest">size</p>
+                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
                       <p className="text-xs font-light tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
                     </div>
                   </div>
                 </>
               ) : (
-                <p className="text-[10px] text-[var(--color-text-dim)]">loading...</p>
+                <div className="flex items-center gap-2">
+                  <div className="w-full h-1 animate-shimmer" />
+                </div>
               )}
             </div>
           </div>

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { getConnections, getConnectionSchema, detectPII } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
+import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 
 interface Column {
   name: string;
@@ -52,6 +53,28 @@ const typeColorMap: Record<string, string> = {
 
 function getTypeColor(type: string): string {
   return typeColorMap[type.toLowerCase()] || "text-[var(--color-text-dim)]";
+}
+
+/* ── Type legend SVG dots ── */
+function TypeLegend() {
+  const types = [
+    { label: "int", color: "text-blue-400" },
+    { label: "float", color: "text-cyan-400" },
+    { label: "text", color: "text-green-400" },
+    { label: "bool", color: "text-yellow-400" },
+    { label: "time", color: "text-purple-400" },
+    { label: "json", color: "text-orange-400" },
+  ];
+  return (
+    <div className="flex items-center gap-3">
+      {types.map(t => (
+        <div key={t.label} className="flex items-center gap-1">
+          <span className={`w-1.5 h-1.5 ${t.color.replace("text-", "bg-")}`} />
+          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">{t.label}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function SchemaExplorerPage() {
@@ -145,12 +168,12 @@ export default function SchemaExplorerPage() {
     : [];
 
   return (
-    <div className="p-8">
+    <div className="p-8 animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-lg font-light tracking-wide">schema</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-widest uppercase">/ explorer</span>
+            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ explorer</span>
           </div>
           <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
             browse tables, columns, and types
@@ -181,51 +204,54 @@ export default function SchemaExplorerPage() {
         </div>
       </div>
 
-      {/* Search + stats */}
+      {/* Search + stats + type legend */}
       {schema && (
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex items-center gap-2 flex-1">
-            <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <input
-              type="text"
-              placeholder="search tables and columns..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
-            />
+        <div className="space-y-3 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 flex-1">
+              <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <input
+                type="text"
+                placeholder="search tables and columns..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+              />
+            </div>
+            <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+              <span className="flex items-center gap-1">
+                <Table2 className="w-3 h-3" strokeWidth={1.5} />
+                {schema.table_count} tables
+              </span>
+              <span className="flex items-center gap-1">
+                <Columns3 className="w-3 h-3" strokeWidth={1.5} />
+                {Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0)} cols
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={scanPii}
+                disabled={scanningPii}
+                className="flex items-center gap-1 px-2 py-1 text-[10px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider"
+              >
+                {scanningPii ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" strokeWidth={1.5} />}
+                {piiDetections ? `pii: ${Object.keys(piiDetections).length}` : "scan pii"}
+              </button>
+              <button onClick={expandAll} className="px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                expand
+              </button>
+              <button onClick={collapseAll} className="px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                collapse
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">
-            <span className="flex items-center gap-1">
-              <Table2 className="w-3 h-3" strokeWidth={1.5} />
-              {schema.table_count} tables
-            </span>
-            <span className="flex items-center gap-1">
-              <Columns3 className="w-3 h-3" strokeWidth={1.5} />
-              {Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0)} cols
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={scanPii}
-              disabled={scanningPii}
-              className="flex items-center gap-1 px-2 py-1 text-[10px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider"
-            >
-              {scanningPii ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" strokeWidth={1.5} />}
-              {piiDetections ? `pii: ${Object.keys(piiDetections).length}` : "scan pii"}
-            </button>
-            <button onClick={expandAll} className="px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-              expand
-            </button>
-            <button onClick={collapseAll} className="px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-              collapse
-            </button>
-          </div>
+          <TypeLegend />
         </div>
       )}
 
       {/* Error */}
       {error && (
-        <div className="mb-4 p-4 border border-[var(--color-error)]/30 bg-[var(--color-error)]/5">
+        <div className="mb-4 p-4 border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 animate-fade-in">
           <p className="text-xs text-[var(--color-error)]">{error}</p>
         </div>
       )}
@@ -240,17 +266,16 @@ export default function SchemaExplorerPage() {
 
       {/* Empty */}
       {!loading && !schema && !error && (
-        <div className="flex flex-col items-center justify-center py-24 text-center">
-          <Database className="w-6 h-6 text-[var(--color-text-dim)] mb-3 opacity-30" strokeWidth={1} />
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            select a connection to explore
-          </p>
-        </div>
+        <EmptyState
+          icon={EmptyDatabase}
+          title="select a connection to explore"
+          description="choose a database connection above to browse its schema"
+        />
       )}
 
       {/* Schema tree */}
       {schema && (
-        <div className="space-y-px">
+        <div className="space-y-px stagger-fade-in">
           {filteredTables.length === 0 ? (
             <div className="text-center py-12 text-xs text-[var(--color-text-dim)]">
               no tables matching &ldquo;{search}&rdquo;
@@ -262,7 +287,7 @@ export default function SchemaExplorerPage() {
                 <div key={key} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-hidden">
                   <button
                     onClick={() => toggleTable(key)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left"
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left group"
                   >
                     {expanded ? (
                       <ChevronDown className="w-3 h-3 text-[var(--color-text-dim)]" />
@@ -270,7 +295,7 @@ export default function SchemaExplorerPage() {
                       <ChevronRight className="w-3 h-3 text-[var(--color-text-dim)]" />
                     )}
                     <Table2 className="w-3 h-3 text-[var(--color-text-muted)]" strokeWidth={1.5} />
-                    <span className="text-xs text-[var(--color-text-muted)]">{table.name}</span>
+                    <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors">{table.name}</span>
                     <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">{table.schema}</span>
                     <span className="ml-auto text-[10px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
                       {table.columns.length} cols
@@ -282,12 +307,12 @@ export default function SchemaExplorerPage() {
                       <table className="w-full text-[11px]">
                         <thead>
                           <tr className="border-b border-[var(--color-border)]/50">
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest w-8">#</th>
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest">column</th>
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest">type</th>
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest w-24">nullable</th>
+                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-8">#</th>
+                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">column</th>
+                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">type</th>
+                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">nullable</th>
                             {piiDetections && (
-                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest w-20">pii</th>
+                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-20">pii</th>
                             )}
                           </tr>
                         </thead>
@@ -302,7 +327,10 @@ export default function SchemaExplorerPage() {
                                 </span>
                               </td>
                               <td className="px-4 py-1.5">
-                                <span className={getTypeColor(col.type)}>{col.type}</span>
+                                <span className={`${getTypeColor(col.type)} flex items-center gap-1.5`}>
+                                  <span className={`w-1 h-1 ${getTypeColor(col.type).replace("text-", "bg-")}`} />
+                                  {col.type}
+                                </span>
                               </td>
                               <td className="px-4 py-1.5">
                                 {col.nullable ? (
@@ -316,10 +344,10 @@ export default function SchemaExplorerPage() {
                                   {piiDetections[col.name.toLowerCase()] && (
                                     <span className={`text-[9px] px-1.5 py-0.5 border tracking-wider uppercase ${
                                       piiDetections[col.name.toLowerCase()] === "drop"
-                                        ? "border-[var(--color-error)]/30 text-[var(--color-error)]"
+                                        ? "badge-error"
                                         : piiDetections[col.name.toLowerCase()] === "hash"
                                           ? "border-purple-500/30 text-purple-400"
-                                          : "border-[var(--color-warning)]/30 text-[var(--color-warning)]"
+                                          : "badge-warning"
                                     }`}>
                                       {piiDetections[col.name.toLowerCase()]}
                                     </span>

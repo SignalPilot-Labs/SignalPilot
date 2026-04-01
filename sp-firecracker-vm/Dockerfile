@@ -48,15 +48,17 @@ COPY kernel/vmlinux.bin /opt/signalpilot/kernel/
 # Copy rootfs (Python sandbox environment as ext4 image)
 COPY rootfs/sandbox-rootfs.ext4 /opt/signalpilot/rootfs/
 
+# Install Python deps for sandbox manager
+COPY pyproject.toml /opt/signalpilot/
+RUN pip3 install --no-cache-dir /opt/signalpilot/
+
 # Copy sandbox manager
 COPY sandbox_manager.py /opt/signalpilot/
+COPY executor_base.py /opt/signalpilot/
+COPY executor_firecracker.py /opt/signalpilot/
+COPY executor_gvisor.py /opt/signalpilot/
 COPY scripts/setup-network.sh /opt/signalpilot/scripts/
 RUN chmod +x /opt/signalpilot/scripts/setup-network.sh
-
-# Install Python deps for sandbox manager
-RUN pip3 install --no-cache-dir \
-    aiohttp \
-    requests-unixsocket
 
 EXPOSE 8080
 

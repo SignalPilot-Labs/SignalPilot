@@ -87,6 +87,7 @@ async def finish_run(
     total_output_tokens: int | None = None,
     error_message: str | None = None,
     rate_limit_info: dict | None = None,
+    diff_stats: list | None = None,
 ) -> None:
     """Mark a run as finished with final stats."""
     pool = get_pool()
@@ -100,6 +101,7 @@ async def finish_run(
             total_output_tokens = $6,
             error_message = $7,
             rate_limit_info = $8,
+            diff_stats = $9,
             total_tool_calls = (SELECT count(*) FROM tool_calls WHERE run_id = $1 AND phase = 'pre')
         WHERE id = $1""",
         uuid.UUID(run_id),
@@ -110,6 +112,7 @@ async def finish_run(
         total_output_tokens,
         error_message,
         json.dumps(rate_limit_info) if rate_limit_info else None,
+        json.dumps(diff_stats) if diff_stats else None,
     )
 
 

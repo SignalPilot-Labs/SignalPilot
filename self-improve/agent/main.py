@@ -630,6 +630,14 @@ async def run_agent(
             print(f"[agent] Failed to create PR: {e}")
             await db.log_audit(run_id, "pr_failed", {"error": str(e)})
 
+    # Capture git diff stats before finishing
+    diff_stats = None
+    try:
+        diff_stats = git_ops.get_branch_diff(branch_name, base_branch)
+        print(f"[agent] Captured diff: {len(diff_stats)} files changed")
+    except Exception as e:
+        print(f"[agent] Warning: could not capture diff stats: {e}")
+
     await db.finish_run(
         run_id=run_id,
         status=final_status,
@@ -637,6 +645,7 @@ async def run_agent(
         total_cost_usd=total_cost,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
+        diff_stats=diff_stats,
     )
 
     _current_run_id = None
@@ -917,12 +926,20 @@ async def resume_agent(run_id: str, max_budget: float = 0):
         except Exception as e:
             print(f"[agent] PR failed: {e}")
 
+    # Capture git diff stats
+    diff_stats = None
+    try:
+        diff_stats = git_ops.get_branch_diff(branch_name, base_branch)
+    except Exception:
+        pass
+
     await db.finish_run(
         run_id=run_id,
         status=final_status,
         total_cost_usd=total_cost,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
+        diff_stats=diff_stats,
     )
     _current_run_id = None
     print(f"[agent] Resume complete. Status: {final_status}")
@@ -979,6 +996,39 @@ async def list_branches():
         return sorted(set(branches))
     except Exception:
         return ["main", "staging"]
+
+
+@app.get("/diff/live")
+async def get_live_diff():
+    """Get diff stats for the currently running branch (including uncommitted)."""
+    try:
+        git_ops.setup_git_auth()
+        # Determine base branch from current run
+        base = "main"
+        if _current_run_id:
+            pool = db.get_pool()
+            row = await pool.fetchrow("SELECT base_branch FROM runs WHERE id = $1", _current_run_id)
+            if row and row["base_branch"]:
+                base = row["base_branch"]
+        stats = git_ops.get_branch_diff_live(base)
+        return {"files": stats, "total_files": len(stats),
+                "total_added": sum(f["added"] for f in stats),
+                "total_removed": sum(f["removed"] for f in stats)}
+    except Exception as e:
+        return {"files": [], "error": str(e)}
+
+
+@app.get("/diff/{branch}")
+async def get_branch_diff(branch: str, base: str = "main"):
+    """Get diff stats between a branch and its base."""
+    try:
+        git_ops.setup_git_auth()
+        stats = git_ops.get_branch_diff(branch, base)
+        return {"files": stats, "total_files": len(stats),
+                "total_added": sum(f["added"] for f in stats),
+                "total_removed": sum(f["removed"] for f in stats)}
+    except Exception as e:
+        return {"files": [], "error": str(e)}
 
 
 def main():

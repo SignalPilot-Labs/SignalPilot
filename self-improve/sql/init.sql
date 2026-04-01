@@ -19,7 +19,8 @@ CREATE TABLE runs (
     custom_prompt TEXT,
     duration_minutes DOUBLE PRECISION DEFAULT 0,
     base_branch TEXT DEFAULT 'main',
-    rate_limit_resets_at BIGINT
+    rate_limit_resets_at BIGINT,
+    diff_stats JSONB  -- git diff summary: [{path, added, removed, status}]
 );
 
 CREATE TABLE tool_calls (

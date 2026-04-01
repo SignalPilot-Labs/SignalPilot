@@ -159,6 +159,103 @@ def create_pr(branch_name: str, run_id: str) -> str:
     return url
 
 
+def get_branch_diff(branch_name: str, base_branch: str = "main") -> list[dict]:
+    """Get file-level diff stats between base and branch.
+
+    Returns a list of {path, added, removed, status} dicts.
+    Status is one of: added, modified, deleted, renamed.
+    """
+    _ensure_repo()
+    try:
+        # Fetch latest base to compare against
+        try:
+            _run_git(["fetch", "origin", base_branch])
+        except RuntimeError:
+            pass
+
+        # --numstat gives machine-readable: added\tremoved\tpath
+        raw = _run_git(["diff", "--numstat", f"origin/{base_branch}...{branch_name}"])
+        if not raw.strip():
+            return []
+
+        # Also get name-status for add/modify/delete/rename
+        status_raw = _run_git(["diff", "--name-status", f"origin/{base_branch}...{branch_name}"])
+        status_map: dict[str, str] = {}
+        for line in status_raw.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                code = parts[0][0]  # A, M, D, R
+                path = parts[-1]    # last part (handles renames)
+                status_map[path] = {
+                    "A": "added", "M": "modified", "D": "deleted", "R": "renamed",
+                }.get(code, "modified")
+
+        results: list[dict] = []
+        for line in raw.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added = int(parts[0]) if parts[0] != "-" else 0
+            removed = int(parts[1]) if parts[1] != "-" else 0
+            path = parts[2]
+            results.append({
+                "path": path,
+                "added": added,
+                "removed": removed,
+                "status": status_map.get(path, "modified"),
+            })
+
+        return results
+    except Exception as e:
+        print(f"[git] Failed to get branch diff: {e}")
+        return []
+
+
+def get_branch_diff_live(base_branch: str = "main") -> list[dict]:
+    """Get diff stats for the current working branch (including uncommitted changes)."""
+    _ensure_repo()
+    try:
+        try:
+            _run_git(["fetch", "origin", base_branch])
+        except RuntimeError:
+            pass
+
+        # Diff from base to HEAD plus any uncommitted changes
+        raw = _run_git(["diff", "--numstat", f"origin/{base_branch}...HEAD"])
+        # Also include uncommitted changes
+        uncommitted = _run_git(["diff", "--numstat", "HEAD"])
+
+        all_lines = (raw.strip() + "\n" + uncommitted.strip()).strip()
+        if not all_lines:
+            return []
+
+        # Aggregate by path
+        path_stats: dict[str, dict] = {}
+        for line in all_lines.split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added = int(parts[0]) if parts[0] != "-" else 0
+            removed = int(parts[1]) if parts[1] != "-" else 0
+            path = parts[2]
+            if path in path_stats:
+                path_stats[path]["added"] += added
+                path_stats[path]["removed"] += removed
+            else:
+                path_stats[path] = {"path": path, "added": added, "removed": removed, "status": "modified"}
+
+        return list(path_stats.values())
+    except Exception as e:
+        print(f"[git] Failed to get live diff: {e}")
+        return []
+
+
 def has_changes() -> bool:
     """Check if there are any uncommitted or staged changes."""
     _ensure_repo()

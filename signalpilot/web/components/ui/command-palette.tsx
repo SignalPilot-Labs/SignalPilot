@@ -13,26 +13,51 @@ interface CommandItem {
   category: string;
 }
 
-function CommandIcon({ type }: { type: string }) {
-  const iconMap: Record<string, React.ReactNode> = {
-    nav: (
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <path d="M2 6H10M7 3L10 6L7 9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-    action: (
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <path d="M6 2V10M2 6H10" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      </svg>
-    ),
-    search: (
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1" />
-        <path d="M8 8L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      </svg>
-    ),
-  };
-  return <span className="text-[var(--color-text-dim)]">{iconMap[type] || iconMap.nav}</span>;
+/* ── Fuzzy match with highlighted spans ── */
+function fuzzyMatch(query: string, text: string): { matches: boolean; indices: number[] } {
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  const indices: number[] = [];
+  let qi = 0;
+  for (let i = 0; i < lower.length && qi < q.length; i++) {
+    if (lower[i] === q[qi]) {
+      indices.push(i);
+      qi++;
+    }
+  }
+  return { matches: qi === q.length, indices };
+}
+
+function HighlightedText({ text, indices }: { text: string; indices: number[] }) {
+  const set = new Set(indices);
+  return (
+    <span>
+      {text.split("").map((char, i) =>
+        set.has(i) ? (
+          <span key={i} className="text-[var(--color-text)]">{char}</span>
+        ) : (
+          <span key={i}>{char}</span>
+        )
+      )}
+    </span>
+  );
+}
+
+/* ── SVG icons ── */
+function IconNav() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <path d="M2 6H10M7 3L10 6L7 9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconAction() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <path d="M6 2V10M2 6H10" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 export function CommandPalette() {
@@ -45,36 +70,41 @@ export function CommandPalette() {
 
   const commands: CommandItem[] = useMemo(() => [
     // Navigation
-    { id: "nav-dashboard", label: "Dashboard", description: "Overview and metrics", shortcut: "ctrl+1", action: () => router.push("/dashboard"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-query", label: "Query Explorer", description: "Governed SQL queries", shortcut: "ctrl+2", action: () => router.push("/query"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-schema", label: "Schema Explorer", description: "Browse tables and columns", shortcut: "ctrl+3", action: () => router.push("/schema"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-sandboxes", label: "Sandboxes", description: "Firecracker microVMs", shortcut: "ctrl+4", action: () => router.push("/sandboxes"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-connections", label: "Connections", description: "Database connections", shortcut: "ctrl+5", action: () => router.push("/connections"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-health", label: "Health Monitoring", description: "Connection health and latency", shortcut: "ctrl+6", action: () => router.push("/health"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-audit", label: "Audit Log", description: "Compliance audit trail", shortcut: "ctrl+7", action: () => router.push("/audit"), icon: <CommandIcon type="nav" />, category: "navigation" },
-    { id: "nav-settings", label: "Settings", description: "Instance configuration", shortcut: "ctrl+8", action: () => router.push("/settings"), icon: <CommandIcon type="nav" />, category: "navigation" },
+    { id: "nav-dashboard", label: "dashboard", description: "overview and metrics", shortcut: "^1", action: () => router.push("/dashboard"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-query", label: "query explorer", description: "governed sql queries", shortcut: "^2", action: () => router.push("/query"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-schema", label: "schema explorer", description: "browse tables and columns", shortcut: "^3", action: () => router.push("/schema"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-sandboxes", label: "sandboxes", description: "firecracker microvms", shortcut: "^4", action: () => router.push("/sandboxes"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-connections", label: "connections", description: "database connections", shortcut: "^5", action: () => router.push("/connections"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-health", label: "health monitoring", description: "connection health and latency", shortcut: "^6", action: () => router.push("/health"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-audit", label: "audit log", description: "compliance audit trail", shortcut: "^7", action: () => router.push("/audit"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-settings", label: "settings", description: "instance configuration", shortcut: "^8", action: () => router.push("/settings"), icon: <IconNav />, category: "navigate" },
     // Actions
-    { id: "action-new-sandbox", label: "Create Sandbox", description: "Spin up a new microVM", action: () => router.push("/sandboxes"), icon: <CommandIcon type="action" />, category: "actions" },
-    { id: "action-new-connection", label: "Add Connection", description: "Configure a new database", action: () => router.push("/connections"), icon: <CommandIcon type="action" />, category: "actions" },
-    { id: "action-export-audit", label: "Export Audit Log", description: "Download compliance data", action: () => router.push("/audit"), icon: <CommandIcon type="action" />, category: "actions" },
+    { id: "action-new-sandbox", label: "create sandbox", description: "spin up a new microvm", action: () => router.push("/sandboxes"), icon: <IconAction />, category: "actions" },
+    { id: "action-new-connection", label: "add connection", description: "configure a new database", action: () => router.push("/connections"), icon: <IconAction />, category: "actions" },
+    { id: "action-export-audit", label: "export audit log", description: "download compliance data", action: () => router.push("/audit"), icon: <IconAction />, category: "actions" },
   ], [router]);
 
   const filtered = useMemo(() => {
-    if (!query) return commands;
-    const lower = query.toLowerCase();
-    return commands.filter(
-      (cmd) =>
-        cmd.label.toLowerCase().includes(lower) ||
-        cmd.description.toLowerCase().includes(lower) ||
-        cmd.category.includes(lower)
-    );
+    if (!query) return commands.map((cmd) => ({ cmd, labelIndices: [] as number[], descIndices: [] as number[] }));
+    return commands
+      .map((cmd) => {
+        const labelMatch = fuzzyMatch(query, cmd.label);
+        const descMatch = fuzzyMatch(query, cmd.description);
+        return {
+          cmd,
+          labelIndices: labelMatch.indices,
+          descIndices: descMatch.indices,
+          matches: labelMatch.matches || descMatch.matches,
+        };
+      })
+      .filter((r) => r.matches);
   }, [query, commands]);
 
   const groupedCommands = useMemo(() => {
-    const groups: Record<string, CommandItem[]> = {};
-    filtered.forEach((cmd) => {
-      if (!groups[cmd.category]) groups[cmd.category] = [];
-      groups[cmd.category].push(cmd);
+    const groups: Record<string, typeof filtered> = {};
+    filtered.forEach((item) => {
+      if (!groups[item.cmd.category]) groups[item.cmd.category] = [];
+      groups[item.cmd.category].push(item);
     });
     return groups;
   }, [filtered]);
@@ -84,11 +114,9 @@ export function CommandPalette() {
   }, [query]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Open with cmd+k or ctrl+k
     if ((e.metaKey || e.ctrlKey) && e.key === "k") {
       e.preventDefault();
       setOpen((prev) => !prev);
-      return;
     }
   }, []);
 
@@ -106,12 +134,14 @@ export function CommandPalette() {
 
   function handleSelect(cmd: CommandItem) {
     setOpen(false);
+    setQuery("");
     cmd.action();
   }
 
   function handleInputKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Escape") {
       setOpen(false);
+      setQuery("");
       return;
     }
     if (e.key === "ArrowDown") {
@@ -123,7 +153,7 @@ export function CommandPalette() {
       setSelectedIndex((prev) => Math.max(prev - 1, 0));
     }
     if (e.key === "Enter" && filtered[selectedIndex]) {
-      handleSelect(filtered[selectedIndex]);
+      handleSelect(filtered[selectedIndex].cmd);
     }
   }
 
@@ -141,18 +171,25 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center pt-[20vh] bg-black/70"
-      onClick={() => setOpen(false)}
+      className="fixed inset-0 z-[100] flex items-start justify-center pt-[18vh]"
+      onClick={() => { setOpen(false); setQuery(""); }}
     >
+      {/* Backdrop with blur */}
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+
+      {/* Palette */}
       <div
-        className="w-[480px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
+        className="relative w-[520px] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[var(--color-text-dim)] to-transparent opacity-30" />
+
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)]">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0">
-            <circle cx="6" cy="6" r="4.5" stroke="var(--color-text-dim)" strokeWidth="1" />
-            <path d="M10 10L13 13" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" />
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0 text-[var(--color-text-dim)]">
+            <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1" />
+            <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
           </svg>
           <input
             ref={inputRef}
@@ -160,50 +197,66 @@ export function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleInputKeyDown}
-            placeholder="search commands..."
+            placeholder="type a command or search..."
             className="flex-1 bg-transparent text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none tracking-wide"
+            autoComplete="off"
+            spellCheck={false}
           />
-          <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[9px] font-mono text-[var(--color-text-dim)]">
+          <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono text-[var(--color-text-dim)]">
             esc
           </kbd>
         </div>
 
         {/* Results */}
-        <div ref={listRef} className="max-h-80 overflow-auto py-2">
+        <div ref={listRef} className="max-h-80 overflow-auto py-1">
           {filtered.length === 0 ? (
-            <div className="px-4 py-8 text-center">
-              <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
+            <div className="px-4 py-10 text-center">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="mx-auto mb-2 text-[var(--color-text-dim)] opacity-40">
+                <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M15 15L21 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <path d="M7 10H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+              </svg>
+              <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
                 no results for &ldquo;{query}&rdquo;
               </p>
             </div>
           ) : (
             Object.entries(groupedCommands).map(([category, items]) => (
               <div key={category}>
-                <div className="px-4 py-1.5">
+                <div className="px-4 pt-2.5 pb-1">
                   <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                     {category}
                   </span>
                 </div>
-                {items.map((cmd) => {
+                {items.map((item) => {
                   flatIndex++;
                   const isSelected = flatIndex === selectedIndex;
                   return (
                     <button
-                      key={cmd.id}
+                      key={item.cmd.id}
                       data-selected={isSelected}
-                      onClick={() => handleSelect(cmd)}
+                      onClick={() => handleSelect(item.cmd)}
+                      onMouseEnter={() => setSelectedIndex(flatIndex)}
                       className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
-                        isSelected ? "bg-[var(--color-bg-hover)]" : "hover:bg-[var(--color-bg-hover)]"
+                        isSelected
+                          ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+                          : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                       }`}
                     >
-                      {cmd.icon}
+                      <span className={`flex-shrink-0 ${isSelected ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
+                        {item.cmd.icon}
+                      </span>
                       <div className="flex-1 min-w-0">
-                        <span className="text-xs text-[var(--color-text-muted)] tracking-wide">{cmd.label}</span>
-                        <span className="ml-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">{cmd.description}</span>
+                        <span className="text-xs tracking-wide">
+                          {query ? <HighlightedText text={item.cmd.label} indices={item.labelIndices} /> : item.cmd.label}
+                        </span>
+                        <span className="ml-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                          {query ? <HighlightedText text={item.cmd.description} indices={item.descIndices} /> : item.cmd.description}
+                        </span>
                       </div>
-                      {cmd.shortcut && (
-                        <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[9px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
-                          {cmd.shortcut}
+                      {item.cmd.shortcut && (
+                        <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
+                          {item.cmd.shortcut}
                         </kbd>
                       )}
                     </button>
@@ -215,20 +268,18 @@ export function CommandPalette() {
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-2 border-t border-[var(--color-border)] flex items-center justify-between">
-          <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[9px] font-mono">↑↓</kbd>
+              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono">↑↓</kbd>
               navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[9px] font-mono">↵</kbd>
+              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono">↵</kbd>
               select
             </span>
           </div>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
-            {filtered.length} command{filtered.length !== 1 ? "s" : ""}
-          </span>
+          <span>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
         </div>
       </div>
     </div>

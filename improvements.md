@@ -5,7 +5,16 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
-## Round 2: SSH Tunnels, Index Metadata, Schema Compression (2026-04-01)
+## Round 2: Enterprise Features & Spider2.0 Optimization (2026-04-01)
+
+**Summary:** 12 major features, encrypted credential persistence, 158 tests, 75% schema compression.
+
+**Key metrics on enterprise_prod (10 tables, 136 columns):**
+- Full schema: 25,264 bytes
+- Compact schema: 6,802 bytes (73% reduction)
+- Enriched schema (with samples): 11,855 bytes (53% reduction + sample values)
+- Connection test: 4.2ms (two-phase, with timing per phase)
+- Credentials: Encrypted at rest, survive container restarts
 
 ### 1. SSH Tunnel Support (sshtunnel library)
 
@@ -168,14 +177,34 @@ SSH tunnel validation: host, username, auth method + credential consistency.
 - credential_extras passthrough for http_path, access_token, catalog, schema_name
 - All structured params now correctly merged before connection
 
-### 11. Frontend Improvements
+### 11. Encrypted Credential Persistence
+
+**Before:** Credentials stored only in memory, lost on container restart.
+
+**After:** Credentials encrypted at rest using Fernet (AES-128-CBC + HMAC-SHA256):
+- Auto-generated encryption key stored in `.encryption_key` (0600 permissions)
+- Custom key via `SP_ENCRYPTION_KEY` environment variable
+- Credentials loaded on module import, saved on create/delete
+- Both connection strings and credential extras (SSH keys, service account JSON) encrypted
+- File: `credentials.enc` alongside `connections.json`
+
+### 12. MySQL Column Cardinality & Redshift Distribution Metadata
+
+**MySQL:** Column cardinality from `STATISTICS` table (highest cardinality per column from most selective index).
+
+**Redshift:** Distribution style and sort key metadata from `pg_table_def`:
+- `diststyle` (KEY, ALL, EVEN, AUTO)
+- `sortkey` (first sort key column)
+
+### 13. Frontend Improvements
 
 - Schema display shows FK count, index count, row counts per table
+- Row counts formatted (K/M for large tables)
 - Foreign key relationships displayed with arrow notation
 - Two-phase test results show per-phase timing and status
 - Updated API types for all new schema metadata fields
 
-### 12. Test Coverage
+### 14. Test Coverage
 
 **26 new tests added (132 → 158 total):**
 - SSH tunnel module (import, validation)
@@ -238,7 +267,7 @@ SSH tunnel validation: host, username, auth method + credential consistency.
 | **Foreign keys** | **Yes** | **Yes** | **Yes** | N/A | **Yes** | **Yes** |
 | **Row count estimates** | **Yes** | **Yes** | **Yes** | **Yes** | N/A | **Yes** |
 | **Indexes** | **Yes** | **Yes** | N/A | **Engine/sort key** | N/A | N/A |
-| **Column stats** | **Yes** | N/A | N/A | N/A | N/A | N/A |
+| **Column stats** | **Yes** | **Yes** | N/A | N/A | N/A | N/A |
 | **Sample values** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 | **Table comments** | **Yes** | **Yes** | Yes | Yes | N/A | N/A |
 | **Column comments** | **Yes** | **Yes** | Yes | Yes | N/A | N/A |

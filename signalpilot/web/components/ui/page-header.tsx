@@ -15,17 +15,21 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between mb-8">
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
-            {subtitle}
-          </span>
+    <div className="mb-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">{title}</h1>
+            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
+              {subtitle}
+            </span>
+          </div>
+          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">{description}</p>
         </div>
-        <p className="text-xs text-[var(--color-text-dim)] tracking-wider">{description}</p>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {/* Gradient accent line */}
+      <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
     </div>
   );
 }

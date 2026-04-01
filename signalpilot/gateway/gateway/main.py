@@ -45,6 +45,7 @@ from .models import (
     SandboxCreate,
 )
 from .connectors.pool_manager import pool_manager
+from .connectors.health_monitor import health_monitor
 from .sandbox_client import SandboxClient
 from .store import (
     append_audit,
@@ -442,16 +443,18 @@ async def query_database(req: DirectQueryRequest):
         rows = await connector.execute(safe_sql, timeout=timeout)
         await pool_manager.release(info.db_type, conn_str)
     except asyncio.TimeoutError:
+        health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, "timeout", info.db_type)
         raise HTTPException(
             status_code=408,
             detail=f"Query timed out after {timeout}s. Consider adding more specific WHERE clauses or reducing the scope.",
         )
     except Exception as e:
-        # Sanitize error message — never expose connection strings or internal details (HIGH-06)
+        health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, str(e)[:200], info.db_type)
         sanitized = _sanitize_db_error(str(e))
         raise HTTPException(status_code=500, detail=sanitized)
 
     elapsed_ms = (time.monotonic() - start) * 1000
+    health_monitor.record(req.connection_name, elapsed_ms, True, db_type=info.db_type)
 
     # Apply PII redaction from annotations (Feature #15)
     from .governance.pii import PIIRedactor
@@ -597,6 +600,24 @@ async def generate_annotations(name: str):
         "table_count": len(schema),
         "yaml": skeleton,
     }
+
+
+# ─── Connection Health ────────────────────────────────────────────────────────
+
+
+@app.get("/api/connections/health")
+async def get_all_connection_health(window: int = Query(default=300, ge=60, le=3600)):
+    """Get health stats for all monitored connections (Feature #31)."""
+    return {"connections": health_monitor.all_stats(window)}
+
+
+@app.get("/api/connections/{name}/health")
+async def get_connection_health(name: str, window: int = Query(default=300, ge=60, le=3600)):
+    """Get health stats for a specific connection."""
+    stats = health_monitor.connection_stats(name, window)
+    if stats is None:
+        raise HTTPException(status_code=404, detail=f"No health data for connection '{name}'")
+    return stats
 
 
 # ─── Query Cache ──────────────────────────────────────────────────────────────

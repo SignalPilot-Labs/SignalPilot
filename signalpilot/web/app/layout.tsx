@@ -6,6 +6,7 @@ import { KeyboardShortcuts } from "@/components/ui/keyboard-shortcuts";
 import { CommandPalette } from "@/components/ui/command-palette";
 import { ToastProvider } from "@/components/ui/toast";
 import { GridBackground } from "@/components/ui/grid-background";
+import { PageTransition } from "@/components/ui/page-transition";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -24,7 +25,9 @@ export default function RootLayout({
           <Sidebar />
           <GridBackground />
           <main className="ml-56 min-h-screen relative z-10">
-            <ErrorBoundary>{children}</ErrorBoundary>
+            <ErrorBoundary>
+              <PageTransition>{children}</PageTransition>
+            </ErrorBoundary>
             <KeyboardShortcuts />
             <CommandPalette />
           </main>

@@ -159,13 +159,23 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     """
     from .connectors.registry import get_connector
 
+    # Validate inputs at system boundary
+    name_err = _validate_connection_name(connection_name)
+    if name_err:
+        return f"Error: {name_err}"
+    sql_err = _validate_sql(sql)
+    if sql_err:
+        return f"Error: {sql_err}"
+
     conn_info = get_connection(connection_name)
     if not conn_info:
         available = [c.name for c in list_connections()]
         return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    # Validate SQL
-    validation = validate_sql(sql)
+    settings = load_settings()
+
+    # Validate SQL through governance engine
+    validation = validate_sql(sql, blocked_tables=settings.blocked_tables)
     if not validation.ok:
         await append_audit(AuditEntry(
             id=str(uuid.uuid4()),

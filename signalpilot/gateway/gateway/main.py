@@ -44,6 +44,7 @@ from .models import (
     GatewaySettings,
     SandboxCreate,
 )
+from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 from .sandbox_client import SandboxClient
 from .store import (
     append_audit,
@@ -104,6 +105,8 @@ _ALLOWED_ORIGINS = os.getenv(
     "SP_CORS_ORIGINS", "http://localhost:3200"
 ).split(",")
 
+# Middleware is applied in reverse order (last added = outermost).
+# Order: SecurityHeaders -> RateLimit -> Auth -> CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
@@ -111,6 +114,9 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
     allow_credentials=False,
 )
+app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ─── Health ──────────────────────────────────────────────────────────────────

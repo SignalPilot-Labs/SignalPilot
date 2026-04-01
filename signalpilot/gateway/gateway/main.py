@@ -463,6 +463,76 @@ def _compress_schema(schema: dict) -> dict:
     return compressed
 
 
+@app.get("/api/connections/{name}/schema/samples")
+async def get_schema_samples(
+    name: str,
+    tables: str = Query(default="", description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
+    limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
+):
+    """Get sample distinct values for columns — critical for Spider2.0 schema linking.
+
+    Top performers use sample values to reduce column name hallucination
+    and improve schema-to-question matching. Returns up to `limit` distinct
+    values per column for the specified tables.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+
+    # Get schema to know which columns exist
+    cached = schema_cache.get(name)
+    if cached is None:
+        try:
+            extras = get_credential_extras(name)
+            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+            cached = await connector.get_schema()
+            schema_cache.put(name, cached)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+    # Determine which tables to sample
+    table_keys = [t.strip() for t in tables.split(",") if t.strip()] if tables else list(cached.keys())
+    # Cap at 10 tables to prevent overload
+    table_keys = table_keys[:10]
+
+    try:
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+
+        samples: dict[str, dict[str, list]] = {}
+        for table_key in table_keys:
+            if table_key not in cached:
+                continue
+            table_info = cached[table_key]
+            # Only sample string-like columns (most useful for schema linking)
+            string_types = {"character varying", "varchar", "text", "char", "character", "enum",
+                           "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
+            sample_cols = [
+                col["name"] for col in table_info.get("columns", [])
+                if col.get("type", "") in string_types or "char" in col.get("type", "").lower()
+            ]
+            if not sample_cols:
+                continue
+
+            table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
+            values = await connector.get_sample_values(table_name, sample_cols, limit=limit)
+            if values:
+                samples[table_key] = values
+
+        await pool_manager.release(info.db_type, conn_str)
+        return {
+            "connection_name": name,
+            "tables_sampled": len(samples),
+            "samples": samples,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sandboxes")

@@ -182,6 +182,31 @@ class PostgresConnector(BaseConnector):
             })
         return schema
 
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Get sample distinct values for schema linking optimization."""
+        if self._pool is None:
+            return {}
+
+        result: dict[str, list] = {}
+        # Run sample queries concurrently
+        async def _sample(col: str):
+            try:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                    )
+                    return col, [r[col] for r in rows]
+            except Exception:
+                return col, []
+
+        tasks = [_sample(c) for c in columns[:20]]  # Cap at 20 columns
+        results = await asyncio.gather(*tasks)
+        for col, values in results:
+            if values:
+                # Convert to strings for JSON serialization
+                result[col] = [str(v) for v in values]
+        return result
+
     async def health_check(self) -> bool:
         if self._pool is None:
             return False

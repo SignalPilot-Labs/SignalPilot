@@ -35,3 +35,11 @@ class BaseConnector(ABC):
     @abstractmethod
     async def close(self) -> None:
         """Close connection pool."""
+
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Return sample distinct values for specified columns.
+
+        Helps LLM agents understand column semantics for schema linking.
+        Default implementation uses a generic SQL query.
+        """
+        return {}

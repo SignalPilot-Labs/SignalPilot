@@ -36,6 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .engine import inject_limit, validate_sql
+from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 from .models import (
     AuditEntry,
     ConnectionCreate,
@@ -59,6 +60,29 @@ from .store import (
     save_settings,
     upsert_sandbox,
 )
+
+# ─── Error Sanitization (HIGH-06) ────────────────────────────────────────────
+
+import re as _re
+
+_SENSITIVE_PATTERNS = [
+    _re.compile(r"postgresql://[^\s]+", _re.IGNORECASE),
+    _re.compile(r"mysql://[^\s]+", _re.IGNORECASE),
+    _re.compile(r"password[=:]\s*\S+", _re.IGNORECASE),
+    _re.compile(r"host=\S+", _re.IGNORECASE),
+]
+
+
+def _sanitize_db_error(error: str) -> str:
+    """Remove connection strings, passwords, and host info from error messages."""
+    sanitized = error
+    for pattern in _SENSITIVE_PATTERNS:
+        sanitized = pattern.sub("[REDACTED]", sanitized)
+    # Truncate to prevent information dump
+    if len(sanitized) > 500:
+        sanitized = sanitized[:500] + "..."
+    return sanitized
+
 
 # ─── Global sandbox client (recreated when settings change) ──────────────────
 
@@ -99,12 +123,31 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — restrict to known origins instead of wildcard (CRIT-02 fix)
+_ALLOWED_ORIGINS = [
+    "http://localhost:3200",
+    "http://localhost:3000",
+    "http://127.0.0.1:3200",
+    "http://127.0.0.1:3000",
+]
+# Allow override via env var for production deployments
+import os as _os
+_extra_origins = _os.getenv("SP_ALLOWED_ORIGINS", "")
+if _extra_origins:
+    _ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+    allow_credentials=True,
 )
+
+# Security middleware stack (order matters: outermost runs first)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30)
+app.add_middleware(APIKeyAuthMiddleware)
 
 
 # ─── Health ──────────────────────────────────────────────────────────────────
@@ -193,7 +236,7 @@ async def test_connection(name: str):
         await connector.close()
         return {"status": "healthy" if ok else "error", "message": "Connection test passed" if ok else "Health check failed"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": _sanitize_db_error(str(e))}
 
 
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
@@ -292,13 +335,13 @@ class QueryRequest(ConnectionCreate.__class__):
     pass
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DirectQueryRequest(BaseModel):
-    connection_name: str
-    sql: str
-    row_limit: int = 10_000
+    connection_name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    sql: str = Field(..., min_length=1, max_length=100_000)
+    row_limit: int = Field(default=10_000, ge=1, le=100_000)
 
 
 @app.post("/api/query")
@@ -339,8 +382,14 @@ async def query_database(req: DirectQueryRequest):
         rows = await connector.execute(safe_sql)
         await connector.close()
     except Exception as e:
-        await connector.close()
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            await connector.close()
+        except Exception:
+            pass
+        # Sanitize error message — never expose connection strings or internal details (HIGH-06)
+        error_msg = str(e)
+        sanitized = _sanitize_db_error(error_msg)
+        raise HTTPException(status_code=500, detail=sanitized)
 
     elapsed_ms = (time.monotonic() - start) * 1000
 

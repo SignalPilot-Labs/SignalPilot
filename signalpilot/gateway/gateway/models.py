@@ -43,16 +43,16 @@ class DBType(str, Enum):
 
 
 class ConnectionCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     db_type: DBType
-    host: str | None = None
-    port: int | None = None
-    database: str | None = None
-    username: str | None = None
-    password: str | None = None
-    connection_string: str | None = None  # alternative to individual fields
+    host: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    database: str | None = Field(default=None, max_length=128)
+    username: str | None = Field(default=None, max_length=128)
+    password: str | None = Field(default=None, max_length=1024)
+    connection_string: str | None = Field(default=None, max_length=2048)
     ssl: bool = False
-    description: str = ""
+    description: str = Field(default="", max_length=500)
 
 
 class ConnectionInfo(BaseModel):
@@ -95,8 +95,8 @@ class SandboxInfo(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
-    code: str
-    timeout: int = 30
+    code: str = Field(..., min_length=1, max_length=1_000_000)
+    timeout: int = Field(default=30, ge=1, le=300)
 
 
 class ExecuteResult(BaseModel):

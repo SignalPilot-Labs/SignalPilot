@@ -221,12 +221,16 @@ export default function ConnectionsPage() {
                 <div className="flex items-center gap-4 p-4">
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
-                    <span className={`block w-2 h-2 ${
-                      health?.status === "healthy" ? "bg-[var(--color-success)] glow-pulse" :
-                      health?.status === "warning" ? "bg-[var(--color-warning)]" :
-                      health?.status === "degraded" || health?.status === "unhealthy" ? "bg-[var(--color-error)]" :
-                      "bg-[var(--color-text-dim)]"
-                    }`} />
+                    <StatusDot
+                      status={
+                        health?.status === "healthy" ? "healthy" :
+                        health?.status === "warning" ? "warning" :
+                        health?.status === "degraded" || health?.status === "unhealthy" ? "error" :
+                        "unknown"
+                      }
+                      size={5}
+                      pulse={health?.status === "healthy"}
+                    />
                   </div>
 
                   {/* Connection info */}

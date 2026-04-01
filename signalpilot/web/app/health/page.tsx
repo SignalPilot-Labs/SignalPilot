@@ -129,21 +129,64 @@ export default function HealthPage() {
 
       {/* Overview cards */}
       <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
-        {[
-          { label: "connections", value: `${overallHealthy}/${overallTotal}`, sub: "healthy", icon: Wifi, accent: overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : undefined },
-          { label: "avg latency", value: avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--", sub: "all connections", icon: Clock },
-          { label: "query cache", value: cacheStats ? `${(cacheStats.hit_rate * 100).toFixed(1)}%` : "--", sub: cacheStats ? `${cacheStats.hits} hits / ${cacheStats.misses} misses` : "hit rate", icon: Zap, accent: cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : undefined },
-          { label: "schema cache", value: schemaCache ? String(schemaCache.cached_connections) : "--", sub: schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections", icon: Database },
-        ].map((card) => (
-          <div key={card.label} className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
-            <div className="flex items-center gap-2 mb-3">
-              <card.icon className={`w-3.5 h-3.5 ${card.accent || "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
-              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{card.label}</span>
-            </div>
-            <p className={`text-xl font-light tabular-nums ${card.accent || ""}`}>{card.value}</p>
-            <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider">{card.sub}</p>
+        {/* Connections */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Wifi className={`w-3.5 h-3.5 ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
+            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connections</span>
           </div>
-        ))}
+          <div className="flex items-center gap-3">
+            <RingGauge
+              value={overallHealthy}
+              max={Math.max(overallTotal, 1)}
+              size={32}
+              strokeWidth={3}
+              color={overallHealthy === overallTotal ? "var(--color-success)" : "var(--color-warning)"}
+            />
+            <div>
+              <p className={`text-lg font-light tabular-nums ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : ""}`}>{overallHealthy}/{overallTotal}</p>
+              <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">healthy</p>
+            </div>
+          </div>
+        </div>
+        {/* Avg Latency */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">avg latency</span>
+          </div>
+          <p className="text-xl font-light tabular-nums">{avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--"}</p>
+          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
+        </div>
+        {/* Query Cache */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className={`w-3.5 h-3.5 ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
+            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query cache</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <RingGauge
+              value={cacheStats ? cacheStats.hit_rate * 100 : 0}
+              max={100}
+              size={32}
+              strokeWidth={3}
+              color={cacheStats && cacheStats.hit_rate > 0.7 ? "var(--color-success)" : cacheStats && cacheStats.hit_rate > 0.3 ? "var(--color-warning)" : "var(--color-error)"}
+            />
+            <div>
+              <p className={`text-lg font-light tabular-nums ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : ""}`}>{cacheStats ? `${(cacheStats.hit_rate * 100).toFixed(1)}%` : "--"}</p>
+              <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">{cacheStats ? `${cacheStats.hits} hits / ${cacheStats.misses} misses` : "hit rate"}</p>
+            </div>
+          </div>
+        </div>
+        {/* Schema Cache */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
+          </div>
+          <p className="text-xl font-light tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
+          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
+        </div>
       </div>
 
       {/* Connection health cards */}
@@ -174,7 +217,11 @@ export default function HealthPage() {
                 <div key={health.connection_name} className="bg-[var(--color-bg-card)] overflow-hidden">
                   <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
                     <div className="flex items-center gap-3">
-                      <span className={`w-2 h-2 ${cfg.bg}`} />
+                      <StatusDot
+                        status={health.status === "healthy" ? "healthy" : health.status === "warning" || health.status === "degraded" ? "warning" : health.status === "unhealthy" ? "error" : "unknown"}
+                        size={5}
+                        pulse={health.status === "healthy"}
+                      />
                       <div>
                         <h3 className="text-xs text-[var(--color-text)]">{health.connection_name}</h3>
                         <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">

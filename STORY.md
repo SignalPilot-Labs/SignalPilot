@@ -140,14 +140,26 @@ She opened a new file, typed `# SignalPilot` at the top, and started writing the
 
 ## What Came Next
 
-That was the beginning. What followed was the hard, unglamorous work of turning a prototype into a product — the connector abstractions that let teams plug in any database, the RBAC system that gave administrators fine-grained control, the benchmark suite they built to prove their SQL validation didn't add meaningful latency, the SOC 2 compliance work that made enterprise sales possible.
+Vantage went live on a Thursday in March.
 
-But every feature, every late night, every architectural decision traced back to that first question Maya asked at 2:47 AM on a Tuesday:
+Maya and James were sitting side by side at the WeWork — they'd upgraded to an actual office by then, a glass-walled room the size of a parking space with a door that stuck. James had the metrics dashboard on his laptop. Maya had the audit log stream on hers. Priya had texted twenty minutes ago: *"Deploying now. Fingers crossed."*
 
-*"Who's watching the machines?"*
+The first query hit the gateway at 2:14 PM Pacific. A simple `SELECT` — one of Vantage's analysts pulling a weekly patient enrollment summary through their AI copilot. The dashboard ticked: one active connection, one query validated, one result returned. Latency: 280 milliseconds.
 
-SignalPilot was the answer.
+Then the second query. Then a burst of six more. The SSE stream on Maya's screen started scrolling — real queries, real analysts, real patient data flowing through SignalPilot's governance layer. Every query parsed, validated against Vantage's HIPAA-scoped column policies, executed, logged. The numbers climbed. Ten queries. Fifty. Two hundred by end of day.
 
----
+James didn't say anything. He just watched the dashboard. Active connections: 12. Governance checks passed: 847. Governance violations caught: 3. Three queries that would have touched columns containing protected health information outside the analyst's clearance level. Three quiet disasters that didn't happen.
 
-*This is the beginning of the SignalPilot story. It's still being written — by every team that deploys governed AI data access, by every query that's validated before it executes, by every audit log that catches what would have been a disaster. The machines are powerful. SignalPilot makes sure they're also safe.*
+Maya's phone buzzed at 11:47 PM that night. She was in bed, half asleep, laptop still warm on the nightstand. A Slack message from Priya:
+
+> One of our AI agents tried to pull the full SSN column from the patients table tonight. Some prompt injection thing — the analyst didn't even realize the query had been manipulated. SignalPilot flagged it, blocked it, and logged the whole chain. Our compliance officer almost cried when I showed her the audit trail this morning. Nobody on the team even noticed it happened. It just worked.
+
+Maya stared at the message for a long time. Then she screenshotted it and sent it to James with no caption.
+
+He replied in four seconds: a photo of the whiteboard in their office. The one with his handwriting on it, the words they'd written during their worst week, the principle that had cost them three weeks of runway they couldn't afford.
+
+*Don't become the thing you're fighting.*
+
+Below it, in Maya's handwriting — added sometime that afternoon, while James wasn't looking — two new words:
+
+*We didn't.*

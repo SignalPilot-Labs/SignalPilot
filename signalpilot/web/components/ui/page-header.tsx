@@ -19,7 +19,9 @@ export function PageHeader({
       <div>
         <div className="flex items-center gap-3 mb-1">
           <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ {subtitle}</span>
+          <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
+            {subtitle}
+          </span>
         </div>
         <p className="text-xs text-[var(--color-text-dim)] tracking-wider">{description}</p>
       </div>
@@ -52,15 +54,19 @@ export function TerminalBar({
         </div>
         {/* Path */}
         <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1">
-          <span className="text-[var(--color-success)]">~</span>
-          <span className="text-[var(--color-text-dim)]">/signalpilot/</span>
+          <span className="text-[var(--color-success)]">$</span>
+          <span className="text-[var(--color-text-dim)]"> signalpilot </span>
           <span className="text-[var(--color-text-muted)]">{path}</span>
         </code>
         {status}
       </div>
       {children && (
-        <div className="px-4 py-3">
+        <div className="px-4 py-2.5 flex items-center justify-between">
           {children}
+          {/* Animated data flow indicator */}
+          <div className="w-8 h-px ml-4 overflow-hidden opacity-30">
+            <div className="h-full animate-data-flow" />
+          </div>
         </div>
       )}
     </div>

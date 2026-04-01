@@ -133,6 +133,19 @@ export default function QueryExplorerPage() {
     URL.revokeObjectURL(url);
   }
 
+  function exportJSON() {
+    if (!result || result.rows.length === 0) return;
+    const blob = new Blob([JSON.stringify(result.rows, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `query-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function copyResults() {
     if (!result || result.rows.length === 0) return;
     const columns = Object.keys(result.rows[0]);
@@ -301,6 +314,13 @@ export default function QueryExplorerPage() {
               >
                 <Download className="w-3.5 h-3.5" />
                 CSV
+              </button>
+              <button
+                onClick={exportJSON}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                JSON
               </button>
             </div>
           </div>

@@ -14,6 +14,7 @@ import {
   Eye,
   EyeOff,
   Info,
+  Copy,
 } from "lucide-react";
 import { getSettings, updateSettings, getHealth, setApiKey } from "@/lib/api";
 import type { GatewaySettings } from "@/lib/types";
@@ -353,27 +354,75 @@ export default function SettingsPage() {
             <label className="block text-xs text-[var(--color-text-muted)] mb-1">
               Gateway API Key
             </label>
-            <div className="relative">
-              <input
-                type={showGatewayKey ? "text" : "password"}
-                value={settings.api_key || ""}
-                onChange={(e) =>
-                  setSettings({ ...settings, api_key: e.target.value || null })
-                }
-                placeholder="Protect gateway API with a key"
-                className="w-full px-3 py-2 pr-10 rounded-lg bg-[var(--color-bg-input)] border border-[var(--color-border)] text-sm focus:outline-none focus:border-[var(--color-accent)]"
-              />
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showGatewayKey ? "text" : "password"}
+                  value={settings.api_key || ""}
+                  onChange={(e) =>
+                    setSettings({ ...settings, api_key: e.target.value || null })
+                  }
+                  placeholder="Protect gateway API with a key"
+                  className="w-full px-3 py-2 pr-10 rounded-lg bg-[var(--color-bg-input)] border border-[var(--color-border)] text-sm focus:outline-none focus:border-[var(--color-accent)]"
+                />
+                <button
+                  onClick={() => setShowGatewayKey(!showGatewayKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                >
+                  {showGatewayKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
               <button
-                onClick={() => setShowGatewayKey(!showGatewayKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                onClick={() => {
+                  const key = "sp_" + Array.from(crypto.getRandomValues(new Uint8Array(24)))
+                    .map((b) => b.toString(16).padStart(2, "0"))
+                    .join("");
+                  setSettings({ ...settings, api_key: key });
+                  setShowGatewayKey(true);
+                }}
+                className="px-3 py-2 rounded-lg text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors whitespace-nowrap"
               >
-                {showGatewayKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                Generate
               </button>
             </div>
             <p className="text-xs text-[var(--color-text-dim)] mt-1">
               When set, all API requests require this key in the Authorization header
             </p>
           </div>
+        </div>
+      </section>
+
+      {/* MCP Integration */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <Cpu className="w-4 h-4 text-purple-400" />
+          <h2 className="text-sm font-semibold uppercase tracking-wider">
+            MCP Integration
+          </h2>
+        </div>
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-6 space-y-4">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Connect Claude Code or any MCP client to SignalPilot with this command:
+          </p>
+          <div className="relative">
+            <pre className="px-4 py-3 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-xs font-mono text-[var(--color-text-muted)] overflow-x-auto">
+              claude mcp add signalpilot -- python -m gateway.mcp_server
+            </pre>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(
+                  "claude mcp add signalpilot -- python -m gateway.mcp_server"
+                );
+              }}
+              className="absolute top-2 right-2 p-1.5 rounded-md text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+              title="Copy to clipboard"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-dim)]">
+            This exposes governed tools: query_database, execute_code, describe_table, check_budget, and more.
+          </p>
         </div>
       </section>
 

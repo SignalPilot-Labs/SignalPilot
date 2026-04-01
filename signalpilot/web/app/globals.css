@@ -184,9 +184,23 @@ body {
   outline-offset: 1px;
 }
 
+button:focus-visible,
+a:focus-visible {
+  outline: 1px solid var(--color-success);
+  outline-offset: 2px;
+}
+
 ::selection {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 255, 136, 0.15);
   color: #fff;
+}
+
+/* Custom select arrow */
+select {
+  background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L4 4L7 1' stroke='%23444' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
 }
 
 /* ── Smooth transitions ── */
@@ -507,4 +521,43 @@ input:focus::placeholder {
 }
 .dash-animate {
   animation: dash-move 1s linear infinite;
+}
+
+/* ── Button press effect ── */
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* ── Table row number highlight ── */
+.row-numbered td:first-child {
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Interactive card scale ── */
+.card-interactive {
+  transition: all 0.15s ease;
+}
+.card-interactive:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.card-interactive:active {
+  transform: translateY(0);
+}
+
+/* ── Code highlight ── */
+code {
+  font-variant-ligatures: none;
+}
+
+/* ── Kbd styling ── */
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* ── Subtle separator ── */
+.separator-subtle {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--color-border) 20%, var(--color-border) 80%, transparent 100%);
 }

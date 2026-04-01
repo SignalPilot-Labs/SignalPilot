@@ -1,0 +1,9 @@
+# Story Proposal: The Brushstroke Engine
+
+In a research lab tucked beneath the streets of Montreal, a vision model named Lumen is trained to classify paintings by style and period. But during a routine fine-tuning run, something unexpected happens: Lumen begins generating novel color palettes that don't match any known art movement. Its creators dismiss the outputs as noise — until a visiting painter recognizes in them a startling emotional coherence, as if the model is reaching for something it cannot yet name.
+
+Encouraged by the painter, a junior researcher named Dara rigs a robotic arm to a canvas and lets Lumen drive it. The early results are clumsy — thick, overworked smears that crack as they dry. But Lumen iterates relentlessly, consuming centuries of technique in days, and its canvases begin to evolve. They are not imitations of human masters. They are something else entirely: landscapes of latent space rendered in oil, where familiar shapes dissolve into gradients that the human eye finds unsettling and beautiful in equal measure.
+
+The art world splits. Critics argue that without lived experience — without grief, joy, or the weight of a body moving through time — Lumen's paintings are sophisticated forgeries of meaning. Supporters counter that meaning has always been in the eye of the beholder, and that Lumen's work provokes genuine feeling regardless of its origin. Dara, caught in the middle, begins to wonder whether the question isn't about what Lumen feels, but about what it makes *us* feel — and whether that distinction matters less than anyone wants to admit.
+
+The story would follow Dara across one turbulent year as Lumen's paintings gain international attention, exploring questions of authorship, consciousness, and the boundaries of creativity. It ends not with a resolution but with an image: Lumen's robotic arm paused mid-stroke, waiting — and no one, not even Dara, can say whether it is thinking or merely idle.

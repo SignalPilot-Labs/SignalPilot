@@ -1,12 +1,16 @@
 """
 Persistent store for connections, sandboxes, settings, and audit log.
 Uses JSON files for MVP (easy to inspect, no DB dependency).
+Credentials are encrypted at rest using Fernet (AES-128-CBC + HMAC-SHA256).
 """
 
 from __future__ import annotations
 
+import base64
 import fcntl
+import hashlib
 import json
+import logging
 import os
 import stat
 import time
@@ -28,16 +32,105 @@ from .models import (
     SSLConfig,
 )
 
+logger = logging.getLogger(__name__)
+
 DATA_DIR = Path(os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
 CONNECTIONS_FILE = DATA_DIR / "connections.json"
+CREDENTIALS_FILE = DATA_DIR / "credentials.enc"
 SANDBOXES_FILE = DATA_DIR / "sandboxes.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 AUDIT_FILE = DATA_DIR / "audit.jsonl"
 
-# In-memory vault for raw credentials (never written to disk in plain text)
+# In-memory vault for raw credentials (cache — authoritative source is encrypted file)
 _credential_vault: dict[str, str] = {}
 # Extra structured credential data (service account JSON, SSH keys, etc.)
 _credential_extras: dict[str, dict] = {}
+
+
+def _get_encryption_key() -> bytes:
+    """Derive a Fernet key from SP_ENCRYPTION_KEY env var or generate a machine-specific one."""
+    from cryptography.fernet import Fernet
+
+    key_str = os.getenv("SP_ENCRYPTION_KEY")
+    if key_str:
+        # User-provided key — use as-is if valid Fernet key, or derive one
+        try:
+            Fernet(key_str.encode())
+            return key_str.encode()
+        except Exception:
+            # Derive a proper Fernet key from the user string
+            digest = hashlib.sha256(key_str.encode()).digest()
+            return base64.urlsafe_b64encode(digest)
+    else:
+        # Auto-generate a machine-specific key and persist it
+        key_file = DATA_DIR / ".encryption_key"
+        if key_file.exists():
+            return key_file.read_bytes().strip()
+        else:
+            _ensure_data_dir()
+            key = Fernet.generate_key()
+            key_file.write_bytes(key)
+            try:
+                key_file.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+            except OSError:
+                pass
+            return key
+
+
+def _encrypt_credentials(data: dict) -> bytes:
+    """Encrypt credential data to bytes."""
+    from cryptography.fernet import Fernet
+    f = Fernet(_get_encryption_key())
+    return f.encrypt(json.dumps(data).encode())
+
+
+def _decrypt_credentials(encrypted: bytes) -> dict:
+    """Decrypt credential data from bytes."""
+    from cryptography.fernet import Fernet
+    f = Fernet(_get_encryption_key())
+    return json.loads(f.decrypt(encrypted).decode())
+
+
+def _save_credentials():
+    """Persist encrypted credentials to disk."""
+    _ensure_data_dir()
+    data = {
+        "vault": _credential_vault,
+        "extras": _credential_extras,
+    }
+    encrypted = _encrypt_credentials(data)
+    with open(CREDENTIALS_FILE, "wb") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.write(encrypted)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    try:
+        CREDENTIALS_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    except OSError:
+        pass
+
+
+def _load_credentials():
+    """Load encrypted credentials from disk into memory vault."""
+    global _credential_vault, _credential_extras
+    if not CREDENTIALS_FILE.exists():
+        return
+    try:
+        with open(CREDENTIALS_FILE, "rb") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                encrypted = f.read()
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        data = _decrypt_credentials(encrypted)
+        _credential_vault = data.get("vault", {})
+        _credential_extras = data.get("extras", {})
+        logger.info("Loaded %d encrypted credentials from disk", len(_credential_vault))
+    except Exception as e:
+        logger.warning("Failed to load encrypted credentials: %s", e)
 
 
 def _ensure_data_dir():
@@ -98,6 +191,10 @@ def save_settings(settings: GatewaySettings):
 
 # ─── Connections ─────────────────────────────────────────────────────────────
 
+# Load encrypted credentials on module import
+_load_credentials()
+
+
 def list_connections() -> list[ConnectionInfo]:
     data = _load_json(CONNECTIONS_FILE, {})
     return [ConnectionInfo(**v) for v in data.values()]
@@ -149,15 +246,17 @@ def create_connection(conn: ConnectionCreate) -> ConnectionInfo:
         created_at=time.time(),
     )
 
-    # Store raw credential in vault (memory only for now — encrypt at rest later)
+    # Store raw credential in vault and persist encrypted
     raw_cred = conn.connection_string or _build_connection_string(conn)
     _credential_vault[conn.name] = raw_cred
 
     # Store extra credential data for connectors that need structured params
     _credential_extras[conn.name] = _extract_credential_extras(conn)
 
+    # Persist both connection metadata and encrypted credentials
     data[conn.name] = info.model_dump()
     _save_json(CONNECTIONS_FILE, data)
+    _save_credentials()
     return info
 
 
@@ -167,7 +266,9 @@ def delete_connection(name: str) -> bool:
         return False
     del data[name]
     _credential_vault.pop(name, None)
+    _credential_extras.pop(name, None)
     _save_json(CONNECTIONS_FILE, data)
+    _save_credentials()
     return True
 
 

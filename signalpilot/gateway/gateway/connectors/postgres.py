@@ -104,15 +104,28 @@ class PostgresConnector(BaseConnector):
             FROM pg_stat_user_tables
         """
 
+        # Index metadata — helps Spider2.0 agent plan optimal queries
+        index_sql = """
+            SELECT
+                schemaname AS table_schema,
+                tablename AS table_name,
+                indexname AS index_name,
+                indexdef AS index_definition
+            FROM pg_indexes
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY schemaname, tablename, indexname
+        """
+
         # Run queries concurrently using separate connections from pool
         async def _fetch(query: str):
             async with self._pool.acquire() as c:
                 return await c.fetch(query)
 
-        rows, fk_rows, count_rows = await asyncio.gather(
+        rows, fk_rows, count_rows, idx_rows = await asyncio.gather(
             _fetch(sql),
             _fetch(fk_sql),
             _fetch(row_count_sql),
+            _fetch(index_sql),
         )
 
         # Build row count map
@@ -134,6 +147,17 @@ class PostgresConnector(BaseConnector):
                 "references_column": r["foreign_column_name"],
             })
 
+        # Build index map
+        indexes: dict[str, list[dict]] = {}
+        for r in idx_rows:
+            key = f"{r['table_schema']}.{r['table_name']}"
+            if key not in indexes:
+                indexes[key] = []
+            indexes[key].append({
+                "name": r["index_name"],
+                "definition": r["index_definition"],
+            })
+
         # Build schema
         schema: dict[str, Any] = {}
         for row in rows:
@@ -144,6 +168,7 @@ class PostgresConnector(BaseConnector):
                     "name": row["table_name"],
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
+                    "indexes": indexes.get(key, []),
                     "row_count": row_counts.get(key, 0),
                     "description": row["table_comment"] or "",
                 }

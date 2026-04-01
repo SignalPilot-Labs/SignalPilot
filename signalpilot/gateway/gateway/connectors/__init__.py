@@ -8,6 +8,7 @@ from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
 from .registry import get_connector
 from .snowflake import SnowflakeConnector
+from .ssh_tunnel import SSHTunnel
 
 __all__ = [
     "BaseConnector",
@@ -19,5 +20,6 @@ __all__ = [
     "PostgresConnector",
     "RedshiftConnector",
     "SnowflakeConnector",
+    "SSHTunnel",
     "get_connector",
 ]

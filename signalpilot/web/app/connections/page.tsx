@@ -621,7 +621,7 @@ export default function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<Record<string, { status: string; message: string }>>({});
+  const [testResult, setTestResult] = useState<Record<string, { status: string; message: string; phases?: { phase: string; status: string; message: string; duration_ms?: number }[]; total_duration_ms?: number }>>({});
   const [saving, setSaving] = useState(false);
   const [expandedConn, setExpandedConn] = useState<string | null>(null);
   const [schemaData, setSchemaData] = useState<Record<string, { tables: Record<string, { schema: string; name: string; columns: { name: string; type: string; nullable: boolean; primary_key?: boolean }[] }> }>>({});
@@ -983,7 +983,17 @@ export default function ConnectionsPage() {
                   {testResult[conn.name] && (
                     <span className={`flex items-center gap-1 text-[10px] tracking-wider ${testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
                       {testResult[conn.name].status === "healthy" ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                      {testResult[conn.name].message.slice(0, 40)}
+                      {testResult[conn.name].phases ? (
+                        <span className="flex items-center gap-1">
+                          {testResult[conn.name].phases!.map((p, i) => (
+                            <span key={i} className={`${p.status === "ok" ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
+                              {p.phase === "ssh_tunnel" ? "SSH" : "DB"}{p.status === "ok" ? "\u2713" : "\u2717"}
+                              {p.duration_ms ? ` ${p.duration_ms}ms` : ""}
+                            </span>
+                          ))}
+                          {testResult[conn.name].total_duration_ms ? ` (${testResult[conn.name].total_duration_ms}ms)` : ""}
+                        </span>
+                      ) : testResult[conn.name].message.slice(0, 40)}
                     </span>
                   )}
 

@@ -118,15 +118,47 @@ class ClickHouseConnector(BaseConnector):
         rows_data, columns_info = result
         col_names = [c[0] for c in columns_info]
 
+        # Table engine and sorting key info (critical for ClickHouse query optimization)
+        table_meta_sql = """
+            SELECT
+                database, name AS table_name,
+                engine, sorting_key, primary_key,
+                total_rows, total_bytes
+            FROM system.tables
+            WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+        """
+        table_meta: dict[str, dict] = {}
+        try:
+            meta_result = self._client.execute(table_meta_sql, with_column_types=True)
+            meta_rows, meta_cols = meta_result
+            meta_col_names = [c[0] for c in meta_cols]
+            for r in meta_rows:
+                rd = dict(zip(meta_col_names, r))
+                key = f"{rd['database']}.{rd['table_name']}"
+                table_meta[key] = {
+                    "engine": rd.get("engine", ""),
+                    "sorting_key": rd.get("sorting_key", ""),
+                    "primary_key": rd.get("primary_key", ""),
+                    "row_count": rd.get("total_rows", 0),
+                    "total_bytes": rd.get("total_bytes", 0),
+                }
+        except Exception:
+            pass
+
         schema: dict[str, Any] = {}
         for row_vals in rows_data:
             row = dict(zip(col_names, row_vals))
             key = f"{row['database']}.{row['table']}"
             if key not in schema:
+                meta = table_meta.get(key, {})
                 schema[key] = {
                     "schema": row["database"],
                     "name": row["table"],
                     "columns": [],
+                    "engine": meta.get("engine", ""),
+                    "sorting_key": meta.get("sorting_key", ""),
+                    "row_count": meta.get("row_count", 0),
+                    "total_bytes": meta.get("total_bytes", 0),
                 }
             # ClickHouse Nullable types contain 'Nullable(' wrapper
             data_type = row["data_type"]

@@ -24,6 +24,7 @@ dependencies = [
     # Database connectors
     "pymysql>=1.1.0",
     "psycopg2-binary>=2.9.0",
+    "sshtunnel>=0.4.0",
 ]
 
 [project.optional-dependencies]

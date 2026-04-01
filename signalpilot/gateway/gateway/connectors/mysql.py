@@ -111,11 +111,34 @@ class MySQLConnector(BaseConnector):
             WHERE REFERENCED_TABLE_NAME IS NOT NULL
                 AND TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
         """
+        # Index metadata — helps Spider2.0 agent plan optimal queries
+        idx_sql = """
+            SELECT
+                TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE,
+                GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columns
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+            GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE
+        """
         with self._conn.cursor() as cursor:
             cursor.execute(sql)
             rows = cursor.fetchall()
             cursor.execute(fk_sql)
             fk_rows = cursor.fetchall()
+            cursor.execute(idx_sql)
+            idx_rows = cursor.fetchall()
+
+        # Build index map
+        indexes: dict[str, list[dict]] = {}
+        for r in idx_rows:
+            key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}"
+            if key not in indexes:
+                indexes[key] = []
+            indexes[key].append({
+                "name": r["INDEX_NAME"],
+                "columns": r["columns"],
+                "unique": not r["NON_UNIQUE"],
+            })
 
         # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
@@ -139,6 +162,7 @@ class MySQLConnector(BaseConnector):
                     "name": row["TABLE_NAME"],
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
+                    "indexes": indexes.get(key, []),
                     "row_count": row.get("TABLE_ROWS", 0),
                     "description": row.get("TABLE_COMMENT", ""),
                 }

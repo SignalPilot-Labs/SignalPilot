@@ -27,6 +27,7 @@ import type { SandboxInfo } from "@/lib/types";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 
 interface HistoryEntry {
   type: "input" | "output" | "error" | "system" | "image" | "html";
@@ -317,6 +318,10 @@ export default function SandboxDetailPage() {
             <ArrowLeft className="w-3.5 h-3.5" />
           </button>
           <div>
+            <Breadcrumb items={[
+              { label: "sandboxes", href: "/sandboxes" },
+              { label: sandbox.label || sandbox.id.slice(0, 8) },
+            ]} />
             <h1 className="text-xs font-medium tracking-wide">
               {sandbox.label || sandbox.id.slice(0, 8)}
             </h1>

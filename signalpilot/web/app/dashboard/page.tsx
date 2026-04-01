@@ -18,7 +18,7 @@ import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, 
 import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { RingGauge, Sparkline, StatusDot } from "@/components/ui/data-viz";
+import { RingGauge, Sparkline, StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 
 /* ── Metric card ── */
@@ -374,9 +374,18 @@ export default function DashboardPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         {health?.latency_p50_ms != null && (
-                          <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
-                            {health.latency_p50_ms.toFixed(0)}ms
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <MiniBar
+                              value={health.latency_p50_ms}
+                              max={200}
+                              width={24}
+                              height={3}
+                              color={health.latency_p50_ms < 50 ? "var(--color-success)" : health.latency_p50_ms < 150 ? "var(--color-warning)" : "var(--color-error)"}
+                            />
+                            <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                              {health.latency_p50_ms.toFixed(0)}ms
+                            </span>
+                          </div>
                         )}
                         <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
                           {conn.db_type}

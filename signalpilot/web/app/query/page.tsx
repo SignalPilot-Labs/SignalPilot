@@ -21,6 +21,7 @@ import { getConnections, executeQuery as apiExecuteQuery } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 import { EmptyQuery, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { useToast } from "@/components/ui/toast";
 
 interface QueryResult {
   rows: Record<string, unknown>[];
@@ -40,6 +41,7 @@ interface QueryResult {
 const HISTORY_KEY = "sp_query_history";
 
 export default function QueryExplorerPage() {
+  const { toast } = useToast();
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string>("");
   const [sql, setSql] = useState<string>("");
@@ -164,6 +166,7 @@ export default function QueryExplorerPage() {
     navigator.clipboard.writeText(lines.join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+    toast(`${result.rows.length} rows copied to clipboard`, "success");
   }
 
   return (

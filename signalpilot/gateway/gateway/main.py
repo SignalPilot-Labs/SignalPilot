@@ -44,6 +44,7 @@ from .models import (
     GatewaySettings,
     SandboxCreate,
 )
+from .connectors.pool_manager import pool_manager
 from .sandbox_client import SandboxClient
 from .store import (
     append_audit,
@@ -111,9 +112,20 @@ def _reset_sandbox_client():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    if _sandbox_client:
-        await _sandbox_client.close()
+    # Start background pool cleanup task
+    async def _pool_cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            await pool_manager.cleanup_idle()
+
+    cleanup_task = asyncio.create_task(_pool_cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        await pool_manager.close_all()
+        if _sandbox_client:
+            await _sandbox_client.close()
 
 
 app = FastAPI(
@@ -219,8 +231,6 @@ async def remove_connection(name: str):
 
 @app.post("/api/connections/{name}/test")
 async def test_connection(name: str):
-    from .connectors.registry import get_connector
-
     info = get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
@@ -229,11 +239,10 @@ async def test_connection(name: str):
     if not conn_str:
         return {"status": "error", "message": "No credentials stored (restart gateway to reload)"}
 
-    connector = get_connector(info.db_type)
     try:
-        await connector.connect(conn_str)
+        connector = await pool_manager.acquire(info.db_type, conn_str)
         ok = await connector.health_check()
-        await connector.close()
+        await pool_manager.release(info.db_type, conn_str)
         return {"status": "healthy" if ok else "error", "message": "Connection test passed" if ok else "Health check failed"}
     except Exception as e:
         return {"status": "error", "message": _sanitize_db_error(str(e))}
@@ -346,8 +355,6 @@ class DirectQueryRequest(BaseModel):
 
 @app.post("/api/query")
 async def query_database(req: DirectQueryRequest):
-    from .connectors.registry import get_connector
-
     info = get_connection(req.connection_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
@@ -375,20 +382,14 @@ async def query_database(req: DirectQueryRequest):
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
-    connector = get_connector(info.db_type)
     start = time.monotonic()
     try:
-        await connector.connect(conn_str)
+        connector = await pool_manager.acquire(info.db_type, conn_str)
         rows = await connector.execute(safe_sql)
-        await connector.close()
+        await pool_manager.release(info.db_type, conn_str)
     except Exception as e:
-        try:
-            await connector.close()
-        except Exception:
-            pass
         # Sanitize error message — never expose connection strings or internal details (HIGH-06)
-        error_msg = str(e)
-        sanitized = _sanitize_db_error(error_msg)
+        sanitized = _sanitize_db_error(str(e))
         raise HTTPException(status_code=500, detail=sanitized)
 
     elapsed_ms = (time.monotonic() - start) * 1000

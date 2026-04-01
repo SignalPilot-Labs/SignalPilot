@@ -270,6 +270,9 @@ export default function QueryExplorerPage() {
             <Play className="w-3.5 h-3.5" />
           )}
           execute
+          <kbd className="ml-1 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30">
+            ctrl+⏎
+          </kbd>
         </button>
       </div>
 

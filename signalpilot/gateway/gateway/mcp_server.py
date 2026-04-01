@@ -15,6 +15,7 @@ Tools exposed:
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 
@@ -31,6 +32,30 @@ from .store import (
     list_sandboxes,
     load_settings,
 )
+
+_MAX_SQL_LENGTH = 100_000  # 100KB
+_MAX_CODE_LENGTH = 1_000_000  # 1MB
+_CONN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _validate_connection_name(name: str) -> str | None:
+    """Return an error message if the connection name is invalid, else None."""
+    if not name or not _CONN_NAME_RE.match(name):
+        return (
+            f"Invalid connection name '{name}'. "
+            "Must be 1-64 characters, alphanumeric/hyphens/underscores only."
+        )
+    return None
+
+
+def _validate_sql(sql: str) -> str | None:
+    """Return an error message if the raw SQL input is invalid, else None."""
+    if not sql or not sql.strip():
+        return "SQL query is empty"
+    if len(sql) > _MAX_SQL_LENGTH:
+        return f"SQL exceeds maximum length ({_MAX_SQL_LENGTH // 1000}KB)"
+    return None
+
 
 mcp = FastMCP(
     "SignalPilot",

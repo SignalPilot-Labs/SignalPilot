@@ -80,7 +80,8 @@ docker compose up -d
 
 | Container | Image | Port | Purpose |
 |-----------|-------|------|---------|
-| `docker-sandbox-1` | Custom | 8180 | Firecracker microVM manager: isolated code execution with KVM |
+| `sandbox` | `Dockerfile.gvisor` | 8080 | gVisor sandbox (default, no KVM needed, ~230ms) |
+| `sandbox-firecracker` | `Dockerfile` | 8080 | Firecracker microVMs (Linux/KVM only, ~200ms) |
 
 ### Testing (`testing/docker-compose.yml`)
 
@@ -210,22 +211,33 @@ Without a duration lock, it's single-shot: one round, then done.
 
 ### `sp-firecracker-vm/` -- Sandbox Manager
 
+Auto-detecting sandbox with two backends behind one API:
+- **Linux (KVM available):** Firecracker microVMs — separate guest kernel per sandbox, snapshot-accelerated (~200ms)
+- **macOS / no KVM:** gVisor (Google's user-space kernel) — syscall interception via Sentry (~230ms)
+
+Detection is automatic: if `/dev/kvm` exists → Firecracker, otherwise → gVisor. The gateway and LLM see the same `POST /execute` API regardless of backend.
+
 ```
 sp-firecracker-vm/
-  sandbox_manager.py        # FastAPI orchestrator: create/execute/kill microVMs
+  sandbox_manager.py        # HTTP API: /health, /execute, /vms — delegates to executor
+  executor_base.py          # Abstract executor interface
+  executor_firecracker.py   # Firecracker backend (Linux/KVM)
+  executor_gvisor.py        # gVisor backend (macOS/anywhere)
+  Dockerfile                # Firecracker image (requires --device /dev/kvm)
+  Dockerfile.gvisor         # gVisor image (works everywhere, no KVM needed)
+  Dockerfile.sandbox        # Self-contained Firecracker (downloads kernel + builds rootfs)
+  Dockerfile.rootfs         # Python + data science rootfs builder
   rootfs/
-    sandbox_agent.py        # In-VM agent: receives + executes code
-    sandbox_init.py         # VM boot init process
+    sandbox_agent.py        # In-VM agent: receives + executes code (vsock mode)
+    sandbox_init.py         # VM boot init process (serial mode)
   scripts/
     build-rootfs.sh         # Build ext4 root filesystem image
     setup-linux.sh          # Linux host prerequisites
-    setup-macos.sh          # macOS setup (via Lima)
+    setup-macos.sh          # macOS setup + backend auto-detection
     setup-network.sh        # Bridge networking for VMs
   test/boot-vm.py           # VM boot test
-  Dockerfile                # Sandbox manager image
-  Dockerfile.sandbox        # Orchestrator (used by main compose)
-  Dockerfile.rootfs         # Root filesystem builder
-  signalpilot-sandbox.yml   # VM resource spec
+  signalpilot-sandbox.yml   # Sandbox configuration (local/cloud/container modes)
+  docker-compose.yml        # Profiles: default (gVisor), firecracker (KVM)
   windows-instructions.md   # WSL2/KVM setup guide
 ```
 

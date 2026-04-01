@@ -14,12 +14,14 @@ import {
   Hash,
   Type,
   ToggleLeft,
+  Shield,
+  AlertTriangle,
+  Ban,
+  Download,
 } from "lucide-react";
-import { getConnections } from "@/lib/api";
+import { getConnections, getConnectionSchema, detectPII } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 
-const GATEWAY_URL =
-  process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
 interface Column {
   name: string;
@@ -85,6 +87,8 @@ export default function SchemaExplorerPage() {
   const [error, setError] = useState<string | null>(null);
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  const [piiDetections, setPiiDetections] = useState<Record<string, string> | null>(null);
+  const [scanningPii, setScanningPii] = useState(false);
 
   useEffect(() => {
     getConnections()
@@ -101,15 +105,9 @@ export default function SchemaExplorerPage() {
     if (!selectedConn) return;
     setLoading(true);
     setError(null);
+    setPiiDetections(null);
     try {
-      const res = await fetch(
-        `${GATEWAY_URL}/api/connections/${selectedConn}/schema`
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${res.status}`);
-      }
-      const data: SchemaData = await res.json();
+      const data = await getConnectionSchema(selectedConn) as SchemaData;
       setSchema(data);
       // Auto-expand first 5 tables
       const keys = Object.keys(data.tables).slice(0, 5);
@@ -118,6 +116,26 @@ export default function SchemaExplorerPage() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  }, [selectedConn]);
+
+  const scanPii = useCallback(async () => {
+    if (!selectedConn) return;
+    setScanningPii(true);
+    try {
+      const result = await detectPII(selectedConn);
+      // Flatten detections: { table: { col: rule } } -> { col: rule }
+      const flat: Record<string, string> = {};
+      for (const [, cols] of Object.entries(result.detections)) {
+        for (const [col, rule] of Object.entries(cols)) {
+          flat[col.toLowerCase()] = rule;
+        }
+      }
+      setPiiDetections(flat);
+    } catch {
+      // PII scan is optional, don't block UX
+    } finally {
+      setScanningPii(false);
     }
   }, [selectedConn]);
 
@@ -225,6 +243,18 @@ export default function SchemaExplorerPage() {
           </div>
           <div className="flex items-center gap-1">
             <button
+              onClick={scanPii}
+              disabled={scanningPii}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-purple-400 hover:bg-purple-500/10 transition-colors disabled:opacity-50"
+            >
+              {scanningPii ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Shield className="w-3 h-3" />
+              )}
+              {piiDetections ? `PII: ${Object.keys(piiDetections).length}` : "Scan PII"}
+            </button>
+            <button
               onClick={expandAll}
               className="px-2 py-1 rounded text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
             >
@@ -320,6 +350,11 @@ export default function SchemaExplorerPage() {
                             <th className="text-left px-4 py-2 text-[10px] font-medium text-[var(--color-text-dim)] uppercase tracking-wider w-24">
                               Nullable
                             </th>
+                            {piiDetections && (
+                              <th className="text-left px-4 py-2 text-[10px] font-medium text-[var(--color-text-dim)] uppercase tracking-wider w-20">
+                                PII
+                              </th>
+                            )}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[var(--color-border)]/30">
@@ -359,6 +394,23 @@ export default function SchemaExplorerPage() {
                                   </span>
                                 )}
                               </td>
+                              {piiDetections && (
+                                <td className="px-4 py-1.5">
+                                  {piiDetections[col.name.toLowerCase()] && (
+                                    <span
+                                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                        piiDetections[col.name.toLowerCase()] === "drop"
+                                          ? "bg-[var(--color-error)]/10 text-[var(--color-error)]"
+                                          : piiDetections[col.name.toLowerCase()] === "hash"
+                                            ? "bg-purple-500/10 text-purple-400"
+                                            : "bg-[var(--color-warning)]/10 text-[var(--color-warning)]"
+                                      }`}
+                                    >
+                                      {piiDetections[col.name.toLowerCase()]}
+                                    </span>
+                                  )}
+                                </td>
+                              )}
                             </tr>
                           ))}
                         </tbody>

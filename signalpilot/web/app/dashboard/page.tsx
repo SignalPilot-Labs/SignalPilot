@@ -16,8 +16,8 @@ import {
   Zap,
   BarChart3,
 } from "lucide-react";
-import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats } from "@/lib/api";
-import type { MetricsSnapshot, AuditEntry, ConnectionInfo } from "@/lib/types";
+import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, getConnectionsHealth } from "@/lib/api";
+import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 
 function MetricCard({
@@ -101,6 +101,7 @@ export default function DashboardPage() {
     misses: number;
     hit_rate: number;
   } | null>(null);
+  const [connHealth, setConnHealth] = useState<Record<string, ConnectionHealthStats>>({});
 
   useEffect(() => {
     const unsub = subscribeMetrics((data) => {
@@ -124,6 +125,15 @@ export default function DashboardPage() {
     getBudgets().then(setBudgetData).catch(() => {});
     getConnections().then(setConnections).catch(() => {});
     getCacheStats().then(setCacheStats).catch(() => {});
+    getConnectionsHealth()
+      .then((res) => {
+        const map: Record<string, ConnectionHealthStats> = {};
+        for (const h of res.connections) {
+          map[h.connection_name] = h;
+        }
+        setConnHealth(map);
+      })
+      .catch(() => {});
 
     return unsub;
   }, []);
@@ -308,31 +318,50 @@ export default function DashboardPage() {
                   </p>
                 </div>
               ) : (
-                connections.map((conn) => (
-                  <div
-                    key={conn.id}
-                    className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--color-bg-hover)] transition-colors"
-                  >
-                    <span className="text-lg">
-                      {conn.db_type === "postgres"
-                        ? "🐘"
-                        : conn.db_type === "duckdb"
-                          ? "🦆"
-                          : conn.db_type === "mysql"
-                            ? "🐬"
-                            : "❄️"}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{conn.name}</p>
-                      <p className="text-xs text-[var(--color-text-dim)] truncate">
-                        {conn.host}:{conn.port}/{conn.database}
-                      </p>
+                connections.map((conn) => {
+                  const health = connHealth[conn.name];
+                  const statusColor =
+                    health?.status === "healthy"
+                      ? "bg-[var(--color-success)]"
+                      : health?.status === "warning"
+                        ? "bg-[var(--color-warning)]"
+                        : health?.status === "degraded" || health?.status === "unhealthy"
+                          ? "bg-[var(--color-error)]"
+                          : "bg-[var(--color-text-dim)]";
+                  return (
+                    <div
+                      key={conn.id}
+                      className="flex items-center gap-3 px-5 py-3 hover:bg-[var(--color-bg-hover)] transition-colors"
+                    >
+                      <span className="text-lg">
+                        {conn.db_type === "postgres"
+                          ? "🐘"
+                          : conn.db_type === "duckdb"
+                            ? "🦆"
+                            : conn.db_type === "mysql"
+                              ? "🐬"
+                              : "❄️"}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{conn.name}</p>
+                        <p className="text-xs text-[var(--color-text-dim)] truncate">
+                          {conn.host}:{conn.port}/{conn.database}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {health?.latency_p50_ms != null && (
+                          <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                            {health.latency_p50_ms.toFixed(0)}ms
+                          </span>
+                        )}
+                        <div className={`w-2 h-2 rounded-full ${statusColor}`} />
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-bg)] text-[var(--color-text-muted)]">
+                          {conn.db_type}
+                        </span>
+                      </div>
                     </div>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-bg)] text-[var(--color-text-muted)]">
-                      {conn.db_type}
-                    </span>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

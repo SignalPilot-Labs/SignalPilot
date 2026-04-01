@@ -21,6 +21,7 @@ import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, AreaChart, StackedBar } from "@/components/ui/data-viz";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SystemDiagram } from "@/components/ui/system-diagram";
+import { SqlHighlight } from "@/components/ui/sql-highlight";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -355,12 +356,12 @@ export default function DashboardPage() {
                     }`}>
                       {cfg.label}
                     </span>
-                    <span className="flex-1 text-xs truncate text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors">
+                    <span className="flex-1 text-xs truncate overflow-hidden">
                       {entry.sql
-                        ? entry.sql.slice(0, 80)
-                        : entry.metadata?.code_preview
+                        ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
+                        : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
                           ? String(entry.metadata.code_preview).slice(0, 80)
-                          : entry.connection_name || "—"}
+                          : entry.connection_name || "—"}</span>}
                     </span>
                     {entry.blocked && (
                       <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">

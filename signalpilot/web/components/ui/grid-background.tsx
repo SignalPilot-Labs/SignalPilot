@@ -40,6 +40,19 @@ export function GridBackground() {
             <animate attributeName="opacity" values="0.3;0.8;0.3" dur="6s" begin={dot.delay} repeatCount="indefinite" />
           </circle>
         ))}
+        {/* Subtle data flow traces */}
+        {[
+          { path: "M0,192 L480,192 L480,384 L960,384", delay: "0s", dur: "8s" },
+          { path: "M0,480 L240,480 L240,288 L720,288 L720,576", delay: "3s", dur: "10s" },
+          { path: "M0,672 L360,672 L360,480 L840,480", delay: "6s", dur: "9s" },
+        ].map((trace, i) => (
+          <g key={`trace-${i}`} mask="url(#grid-mask)">
+            <path d={trace.path} stroke="currentColor" strokeWidth="0.5" fill="none" strokeDasharray="4 8" opacity="0">
+              <animate attributeName="stroke-dashoffset" from="48" to="0" dur="2s" repeatCount="indefinite" begin={trace.delay} />
+              <animate attributeName="opacity" values="0;0.5;0.5;0" dur={trace.dur} begin={trace.delay} repeatCount="indefinite" />
+            </path>
+          </g>
+        ))}
       </svg>
     </div>
   );

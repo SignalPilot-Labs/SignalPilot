@@ -88,8 +88,12 @@ def _reset_sandbox_client():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
+    # Clean up on shutdown
     if _sandbox_client:
         await _sandbox_client.close()
+    # Close all cached database connection pools
+    if _connector_pool:
+        await _close_all_pools()
 
 
 app = FastAPI(
@@ -322,16 +326,58 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
     return result
 
 
+# ─── Persistent Connection Pool Cache ────────────────────────────────────────
+
+from pydantic import BaseModel as _BaseModel
+from .connectors.base import BaseConnector as _BaseConnector
+
+_connector_pool: dict[str, _BaseConnector] = {}
+
+
+async def _get_pooled_connector(name: str) -> _BaseConnector:
+    """Get or create a persistent connector for the named connection.
+
+    Reuses existing connection pools instead of creating a new pool per query,
+    which is critical for performance under load.
+    """
+    from .connectors.registry import get_connector
+
+    if name in _connector_pool:
+        connector = _connector_pool[name]
+        if await connector.health_check():
+            return connector
+        # Pool went stale — close and reconnect
+        await connector.close()
+        del _connector_pool[name]
+
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored for this connection")
+
+    connector = get_connector(info.db_type)
+    await connector.connect(conn_str, ssl=info.ssl)
+    _connector_pool[name] = connector
+    return connector
+
+
+async def _close_all_pools():
+    """Close all cached connection pools (called on shutdown)."""
+    for connector in _connector_pool.values():
+        try:
+            await connector.close()
+        except Exception:
+            pass
+    _connector_pool.clear()
+
+
 # ─── Direct SQL Query ─────────────────────────────────────────────────────────
 
-class QueryRequest(ConnectionCreate.__class__):
-    pass
 
-
-from pydantic import BaseModel
-
-
-class DirectQueryRequest(BaseModel):
+class DirectQueryRequest(_BaseModel):
     connection_name: str
     sql: str
     row_limit: int = 10_000
@@ -339,13 +385,9 @@ class DirectQueryRequest(BaseModel):
 
 @app.post("/api/query")
 async def query_database(req: DirectQueryRequest):
-    from .connectors.registry import get_connector
-
     info = get_connection(req.connection_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
-
-    settings = load_settings()
 
     # Validate SQL
     validation = validate_sql(req.sql)
@@ -364,18 +406,13 @@ async def query_database(req: DirectQueryRequest):
     # Inject LIMIT
     safe_sql = inject_limit(req.sql, req.row_limit)
 
-    conn_str = get_connection_string(req.connection_name)
-    if not conn_str:
-        raise HTTPException(status_code=400, detail="No credentials stored for this connection")
-
-    connector = get_connector(info.db_type)
+    connector = await _get_pooled_connector(req.connection_name)
     start = time.monotonic()
     try:
-        await connector.connect(conn_str)
         rows = await connector.execute(safe_sql)
-        await connector.close()
     except Exception as e:
-        await connector.close()
+        # Remove stale pool on error so next request reconnects
+        _connector_pool.pop(req.connection_name, None)
         raise HTTPException(status_code=500, detail=str(e))
 
     elapsed_ms = (time.monotonic() - start) * 1000

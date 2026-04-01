@@ -361,6 +361,33 @@ const defaultForm: FormState = {
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
 };
 
+function buildConnectionPreview(form: FormState): string {
+  const dbType = form.db_type;
+  if (form.connectionMode === "url" && form.connection_string) return form.connection_string.replace(/:[^:@]*@/, ":****@");
+
+  switch (dbType) {
+    case "postgres":
+      return `postgresql://${form.username || "user"}:****@${form.host || "host"}:${form.port || "5432"}/${form.database || "db"}`;
+    case "mysql":
+      return `mysql://${form.username || "user"}:****@${form.host || "host"}:${form.port || "3306"}/${form.database || "db"}`;
+    case "redshift":
+      return `redshift://${form.username || "user"}:****@${form.host || "host"}:${form.port || "5439"}/${form.database || "dev"}`;
+    case "clickhouse":
+      return `clickhouse://${form.username || "default"}:****@${form.host || "host"}:${form.port || "9000"}/${form.database || "default"}`;
+    case "snowflake":
+      return `snowflake://${form.username || "user"}:****@${form.account || "account"}/${form.database || "db"}/${form.schema_name || "schema"}${form.warehouse ? `?warehouse=${form.warehouse}` : ""}`;
+    case "bigquery":
+      return `bigquery://${form.project || "project"}/${form.dataset || "dataset"}`;
+    case "databricks":
+      return `databricks://${form.host || "host"}${form.http_path || "/sql/..."}`;
+    case "duckdb":
+    case "sqlite":
+      return form.database || ":memory:";
+    default:
+      return "";
+  }
+}
+
 function buildCreatePayload(form: FormState): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     name: form.name,
@@ -911,6 +938,17 @@ export default function ConnectionsPage() {
             <div className="grid grid-cols-2 gap-4 mb-4">
               <ConnectionFieldsForm form={form} setForm={setForm} />
             </div>
+
+            {/* Connection string preview */}
+            {form.connectionMode !== "url" && (
+              <div className="mb-4 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
+                <div className="flex items-center gap-2">
+                  <Link2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+                  <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">connection preview</span>
+                </div>
+                <code className="text-[10px] text-[var(--color-text-muted)] tracking-wide break-all">{buildConnectionPreview(form)}</code>
+              </div>
+            )}
 
             {/* Advanced: SSL + SSH */}
             {(config.supportsSSL || config.supportsSSH) && (

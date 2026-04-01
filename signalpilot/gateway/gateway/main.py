@@ -46,6 +46,7 @@ from .models import (
 )
 from .connectors.pool_manager import pool_manager
 from .connectors.health_monitor import health_monitor
+from .connectors.schema_cache import schema_cache
 from .sandbox_client import SandboxClient
 from .store import (
     append_audit,
@@ -276,18 +277,33 @@ async def get_connection_schema(name: str):
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
+    # Check schema cache first (Feature #18)
+    cached = schema_cache.get(name)
+    if cached is not None:
+        return {
+            "connection_name": name,
+            "db_type": info.db_type,
+            "table_count": len(cached),
+            "tables": cached,
+            "cached": True,
+        }
+
     try:
         connector = await pool_manager.acquire(info.db_type, conn_str)
         schema = await connector.get_schema()
         await pool_manager.release(info.db_type, conn_str)
-        return {
-            "connection_name": name,
-            "db_type": info.db_type,
-            "table_count": len(schema),
-            "tables": schema,
-        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+    # Store in cache
+    schema_cache.put(name, schema)
+    return {
+        "connection_name": name,
+        "db_type": info.db_type,
+        "table_count": len(schema),
+        "tables": schema,
+        "cached": False,
+    }
 
 
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
@@ -734,6 +750,19 @@ async def invalidate_cache(connection_name: str | None = None):
     return {"invalidated": count, "connection_name": connection_name}
 
 
+@app.get("/api/schema-cache/stats")
+async def schema_cache_stats():
+    """Get schema cache statistics (Feature #18)."""
+    return schema_cache.stats()
+
+
+@app.post("/api/schema-cache/invalidate", status_code=200)
+async def invalidate_schema_cache(connection_name: str | None = None):
+    """Invalidate cached schema data. Optionally filter by connection."""
+    count = schema_cache.invalidate(connection_name)
+    return {"invalidated": count, "connection_name": connection_name}
+
+
 # ─── Metrics SSE ─────────────────────────────────────────────────────────────
 
 @app.get("/api/metrics")
@@ -770,6 +799,7 @@ async def metrics_stream():
                 "max_vms": max_vms,
                 "connections": len(list_connections()),
                 "query_cache": query_cache.stats(),
+                "schema_cache": schema_cache.stats(),
             }
 
             yield f"data: {json.dumps(payload)}\n\n"

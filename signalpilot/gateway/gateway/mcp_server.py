@@ -15,11 +15,33 @@ Tools exposed:
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+
+# Input validation patterns
+_CONN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_MAX_SQL_LENGTH = 100_000
+_MAX_CODE_LENGTH = 1_000_000
+
+
+def _validate_connection_name(name: str) -> str | None:
+    """Validate connection name. Returns error message or None if valid."""
+    if not name or not _CONN_NAME_RE.match(name):
+        return f"Invalid connection name '{name}'. Use only letters, numbers, hyphens, underscores (1-64 chars)."
+    return None
+
+
+def _validate_sql(sql: str) -> str | None:
+    """Validate SQL input length. Returns error message or None if valid."""
+    if not sql or not sql.strip():
+        return "SQL query cannot be empty."
+    if len(sql) > _MAX_SQL_LENGTH:
+        return f"SQL query exceeds maximum length ({_MAX_SQL_LENGTH} characters)."
+    return None
 
 from .engine import inject_limit, validate_sql
 from .models import AuditEntry
@@ -68,6 +90,14 @@ async def execute_code(code: str, timeout: int = 30) -> str:
     Returns:
         The stdout output from the code, or an error message.
     """
+    # Input validation
+    if not code or not code.strip():
+        return "Error: Code cannot be empty."
+    if len(code) > _MAX_CODE_LENGTH:
+        return f"Error: Code exceeds maximum length ({_MAX_CODE_LENGTH} characters)."
+    if timeout < 1 or timeout > 300:
+        return "Error: Timeout must be between 1 and 300 seconds."
+
     sandbox_url = _get_sandbox_url()
 
     async with httpx.AsyncClient(timeout=timeout + 10) as client:
@@ -132,6 +162,12 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     Returns:
         Query results as formatted text, or an error message.
     """
+    # Input validation
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if err := _validate_sql(sql):
+        return f"Error: {err}"
+
     from .connectors.registry import get_connector
     from .governance.annotations import load_annotations
 
@@ -320,6 +356,10 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     Returns:
         Column details as formatted text.
     """
+    # Input validation
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
     from .connectors.registry import get_connector
     from .governance.annotations import load_annotations
 
@@ -332,13 +372,19 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     if not conn_str:
         return "Error: No credentials stored for this connection"
 
-    connector = get_connector(conn_info.db_type)
-    try:
-        await connector.connect(conn_str)
-        schema = await connector.get_schema()
-        await connector.close()
-    except Exception as e:
-        return f"Error: {e}"
+    # Check schema cache first (Feature #18)
+    from .connectors.schema_cache import schema_cache
+
+    schema = schema_cache.get(connection_name)
+    if schema is None:
+        connector = get_connector(conn_info.db_type)
+        try:
+            await connector.connect(conn_str)
+            schema = await connector.get_schema()
+            await connector.close()
+        except Exception as e:
+            return f"Error: {e}"
+        schema_cache.put(connection_name, schema)
 
     # Find the table (case-insensitive)
     table_data = None

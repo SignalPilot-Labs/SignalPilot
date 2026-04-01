@@ -173,20 +173,16 @@ export default function SandboxesPage() {
               <Link
                 key={sb.id}
                 href={`/sandboxes/${sb.id}`}
-                className="group block bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-accent-top"
+                className="group block bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] transition-all card-accent-top overflow-hidden"
               >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <StatusDot
-                      status={sb.status === "running" ? "healthy" : sb.status === "error" ? "error" : sb.status === "ready" ? "idle" : "warning"}
-                      size={4}
-                      pulse={sb.status === "running"}
-                    />
-                    <span className="text-xs text-[var(--color-text)] group-hover:text-white transition-colors">
-                      {sb.label || sb.id.slice(0, 8)}
-                    </span>
-                    <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">{status.label}</span>
+                {/* Terminal-style card header */}
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: sb.status === "running" ? "var(--color-success)" : sb.status === "error" ? "var(--color-error)" : "var(--color-text-dim)", opacity: sb.status === "running" ? 1 : 0.4 }} />
+                    <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-20" />
+                    <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
                   </div>
+                  <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{status.label}</span>
                   <div className="flex items-center gap-1">
                     <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
                     <button
@@ -194,61 +190,76 @@ export default function SandboxesPage() {
                         e.preventDefault();
                         handleDelete(sb.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
+                      className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
 
-                <div className="space-y-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">
-                  {sb.connection_name && (
+                <div className="p-4 space-y-2.5">
+                  {/* Name + ID */}
+                  <div>
                     <div className="flex items-center gap-2">
-                      <Database className="w-3 h-3" strokeWidth={1.5} />
-                      <span>{sb.connection_name}</span>
+                      <StatusDot
+                        status={sb.status === "running" ? "healthy" : sb.status === "error" ? "error" : sb.status === "ready" ? "idle" : "warning"}
+                        size={4}
+                        pulse={sb.status === "running"}
+                      />
+                      <span className="text-xs text-[var(--color-text)] group-hover:text-white transition-colors">
+                        {sb.label || sb.id.slice(0, 8)}
+                      </span>
                     </div>
-                  )}
-                  {sb.vm_id && (
-                    <div className="flex items-center gap-2">
-                      <Cpu className="w-3 h-3" strokeWidth={1.5} />
-                      <code className="text-[9px]">{sb.vm_id}</code>
+                    {sb.vm_id && (
+                      <code className="text-[9px] text-[var(--color-text-dim)] tracking-wider mt-0.5 block pl-5">{sb.vm_id}</code>
+                    )}
+                  </div>
+
+                  {/* Info grid */}
+                  <div className="grid grid-cols-2 gap-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                    {sb.connection_name && (
+                      <div className="flex items-center gap-1.5">
+                        <Database className="w-3 h-3" strokeWidth={1.5} />
+                        <span className="truncate">{sb.connection_name}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-3 h-3" strokeWidth={1.5} />
+                      <TimeAgo timestamp={sb.created_at} live className="tabular-nums" />
+                      {sb.uptime_sec != null && sb.uptime_sec > 0 && (
+                        <span className="text-[var(--color-text-dim)]">
+                          ({sb.uptime_sec < 60 ? `${sb.uptime_sec.toFixed(0)}s` : `${(sb.uptime_sec / 60).toFixed(0)}m`})
+                        </span>
+                      )}
                     </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-3 h-3" strokeWidth={1.5} />
-                    <TimeAgo timestamp={sb.created_at} live className="tabular-nums" />
-                    {sb.uptime_sec != null && sb.uptime_sec > 0 && (
-                      <span className="text-[var(--color-text-dim)]">
-                        ({sb.uptime_sec < 60 ? `${sb.uptime_sec.toFixed(0)}s` : `${(sb.uptime_sec / 60).toFixed(0)}m`})
+                    <div className="flex items-center gap-1.5 tabular-nums">
+                      <DollarSign className="w-3 h-3" strokeWidth={1.5} />
+                      ${sb.budget_used.toFixed(4)} / ${sb.budget_usd.toFixed(2)}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
+                      {sb.row_limit.toLocaleString()} rows
+                    </div>
+                  </div>
+
+                  {/* Budget bar + boot time */}
+                  <div className="flex items-center gap-3 pt-1">
+                    {sb.budget_usd > 0 && (
+                      <div className="flex-1">
+                        <MiniBar
+                          value={budgetPct}
+                          max={100}
+                          height={3}
+                          color={budgetPct > 80 ? "var(--color-error)" : budgetPct > 50 ? "var(--color-warning)" : "var(--color-success)"}
+                        />
+                      </div>
+                    )}
+                    {sb.boot_ms != null && (
+                      <span className="px-1.5 py-0.5 border badge-success text-[9px] tracking-wider flex-shrink-0">
+                        boot: {sb.boot_ms.toFixed(0)}ms
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 pt-1">
-                    <span className="flex items-center gap-1 tabular-nums">
-                      <DollarSign className="w-3 h-3" strokeWidth={1.5} />
-                      ${sb.budget_used.toFixed(4)} / ${sb.budget_usd.toFixed(2)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
-                      {sb.row_limit.toLocaleString()}
-                    </span>
-                  </div>
-                  {/* Budget bar */}
-                  {sb.budget_usd > 0 && (
-                    <div className="mt-1">
-                      <MiniBar
-                        value={budgetPct}
-                        max={100}
-                        height={3}
-                        color={budgetPct > 80 ? "var(--color-error)" : budgetPct > 50 ? "var(--color-warning)" : "var(--color-success)"}
-                      />
-                    </div>
-                  )}
-                  {sb.boot_ms != null && (
-                    <span className="inline-block px-1.5 py-0.5 border badge-success text-[9px] tracking-wider">
-                      boot: {sb.boot_ms.toFixed(0)}ms
-                    </span>
-                  )}
                 </div>
               </Link>
             );

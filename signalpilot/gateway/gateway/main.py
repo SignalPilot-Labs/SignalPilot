@@ -3,13 +3,15 @@ SignalPilot Gateway — FastAPI application.
 
 Endpoints:
   GET  /health
-  GET  /api/settings          GET/PUT gateway settings (BYOF config)
+  GET  /api/settings           GET/PUT gateway settings (BYOF config)
   PUT  /api/settings
+  GET  /api/db-types           database type metadata (for frontend)
   GET  /api/connections        list connections
   POST /api/connections        create connection
   GET  /api/connections/{name} get connection details
   DELETE /api/connections/{name}
-  POST /api/connections/{name}/test
+  POST /api/connections/{name}/test   rich connection test with diagnostics
+  GET  /api/connections/{name}/schema cached schema introspection
 
   GET  /api/sandboxes          list active sandboxes
   POST /api/sandboxes          create sandbox
@@ -17,7 +19,7 @@ Endpoints:
   DELETE /api/sandboxes/{id}   kill sandbox
   POST /api/sandboxes/{id}/execute  run code
 
-  POST /api/query              governed SQL query (direct DB)
+  POST /api/query              governed SQL query (direct DB, pooled)
 
   GET  /api/audit              audit log
   GET  /api/metrics            SSE live metrics stream
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -424,7 +427,6 @@ async def query_database(req: DirectQueryRequest):
         # Remove stale pool on error so next request reconnects
         _connector_pool.pop(req.connection_name, None)
         # Log full error server-side but return sanitized message to client
-        import logging
         logging.getLogger("signalpilot.query").error(
             "Query failed on connection %s: %s", req.connection_name, e
         )

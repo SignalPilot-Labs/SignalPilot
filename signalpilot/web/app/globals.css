@@ -208,6 +208,54 @@ a, button, input, select, textarea {
   transition: all 0.15s ease;
 }
 
+/* ── Input focus glow ── */
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--color-border-hover) !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+/* ── Checkbox styling ── */
+input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-input);
+  cursor: pointer;
+  position: relative;
+}
+input[type="checkbox"]:checked {
+  border-color: var(--color-success);
+  background: var(--color-success);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid var(--color-bg);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+input[type="checkbox"]:focus-visible {
+  outline: 1px solid var(--color-success);
+  outline-offset: 2px;
+}
+
+/* ── Number input cleanup ── */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
 /* ── Noise grain overlay ── */
 .bg-noise {
   position: relative;

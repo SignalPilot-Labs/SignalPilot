@@ -706,6 +706,52 @@ async def get_enriched_schema(
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
 
+@app.get("/api/connections/{name}/schema/diff")
+async def get_schema_diff(name: str):
+    """Compare current database schema against cached version.
+
+    Returns added/removed/modified tables and columns. Useful for detecting
+    schema drift, migration verification, and keeping AI agent context current.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+
+    try:
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        new_schema = await connector.get_schema()
+        await pool_manager.release(info.db_type, conn_str)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+    # Compare with cached schema
+    diff = schema_cache.diff(name, new_schema)
+    if diff is None:
+        # No cached schema — store current and return no-diff baseline
+        schema_cache.put(name, new_schema)
+        return {
+            "connection_name": name,
+            "has_cached": False,
+            "message": "No cached schema to compare. Current schema cached as baseline.",
+            "table_count": len(new_schema),
+        }
+
+    # Update cache with new schema
+    schema_cache.put(name, new_schema)
+
+    return {
+        "connection_name": name,
+        "has_cached": True,
+        "diff": diff,
+        "table_count": len(new_schema),
+    }
+
+
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sandboxes")

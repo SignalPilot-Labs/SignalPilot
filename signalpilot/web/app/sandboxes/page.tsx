@@ -19,6 +19,7 @@ import { getSandboxes, createSandbox, deleteSandbox, getConnections } from "@/li
 import type { SandboxInfo, ConnectionInfo } from "@/lib/types";
 import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader } from "@/components/ui/page-header";
+import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 
 const statusConfig: Record<string, { indicator: string; label: string }> = {
   ready: { indicator: "bg-blue-400", label: "ready" },
@@ -163,7 +164,11 @@ export default function SandboxesPage() {
               >
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 flex-shrink-0 ${status.indicator}`} />
+                    <StatusDot
+                      status={sb.status === "running" ? "healthy" : sb.status === "error" ? "error" : sb.status === "ready" ? "idle" : "warning"}
+                      size={4}
+                      pulse={sb.status === "running"}
+                    />
                     <span className="text-xs text-[var(--color-text)] group-hover:text-white transition-colors">
                       {sb.label || sb.id.slice(0, 8)}
                     </span>
@@ -217,12 +222,12 @@ export default function SandboxesPage() {
                   </div>
                   {/* Budget bar */}
                   {sb.budget_usd > 0 && (
-                    <div className="w-full h-1 bg-[var(--color-bg)] overflow-hidden mt-1">
-                      <div
-                        className={`h-full transition-all ${
-                          budgetPct > 80 ? "bg-[var(--color-error)]" : budgetPct > 50 ? "bg-[var(--color-warning)]" : "bg-[var(--color-success)]"
-                        }`}
-                        style={{ width: `${Math.min(100, budgetPct)}%` }}
+                    <div className="mt-1">
+                      <MiniBar
+                        value={budgetPct}
+                        max={100}
+                        height={3}
+                        color={budgetPct > 80 ? "var(--color-error)" : budgetPct > 50 ? "var(--color-warning)" : "var(--color-success)"}
                       />
                     </div>
                   )}

@@ -191,6 +191,94 @@ export function ActivityDots({
 }
 
 /**
+ * Mini vertical bar chart for distribution data.
+ */
+export function MiniBarChart({
+  values,
+  width = 80,
+  height = 24,
+  color = "var(--color-text-dim)",
+  activeColor = "var(--color-success)",
+  highlightLast = false,
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+  color?: string;
+  activeColor?: string;
+  highlightLast?: boolean;
+}) {
+  if (values.length === 0) return null;
+  const max = Math.max(...values, 1);
+  const barWidth = Math.max(1, (width - (values.length - 1)) / values.length);
+  const gap = 1;
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+      {values.map((v, i) => {
+        const barH = Math.max(1, (v / max) * height);
+        const isLast = highlightLast && i === values.length - 1;
+        return (
+          <rect
+            key={i}
+            x={i * (barWidth + gap)}
+            y={height - barH}
+            width={barWidth}
+            height={barH}
+            fill={isLast ? activeColor : color}
+            opacity={isLast ? 1 : 0.5}
+            className="transition-all duration-200"
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+/**
+ * Trend indicator — up/down/flat arrow with percentage.
+ */
+export function TrendIndicator({
+  current,
+  previous,
+  size = 12,
+  invertColors = false,
+}: {
+  current: number;
+  previous: number;
+  size?: number;
+  invertColors?: boolean;
+}) {
+  if (previous === 0) return null;
+  const pctChange = ((current - previous) / previous) * 100;
+  const isUp = pctChange > 1;
+  const isDown = pctChange < -1;
+
+  const upColor = invertColors ? "var(--color-error)" : "var(--color-success)";
+  const downColor = invertColors ? "var(--color-success)" : "var(--color-error)";
+  const flatColor = "var(--color-text-dim)";
+
+  const color = isUp ? upColor : isDown ? downColor : flatColor;
+
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+        {isUp ? (
+          <path d="M6 2L10 8H2L6 2Z" fill={color} />
+        ) : isDown ? (
+          <path d="M6 10L2 4H10L6 10Z" fill={color} />
+        ) : (
+          <rect x="2" y="5" width="8" height="2" fill={color} />
+        )}
+      </svg>
+      <span className="text-[9px] tabular-nums" style={{ color }}>
+        {Math.abs(pctChange).toFixed(1)}%
+      </span>
+    </span>
+  );
+}
+
+/**
  * Status indicator with optional pulse.
  */
 export function StatusDot({

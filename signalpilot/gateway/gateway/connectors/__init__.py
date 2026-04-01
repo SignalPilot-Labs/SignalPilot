@@ -1,5 +1,14 @@
-from .base import BaseConnector
+from .base import BaseConnector, ConnectionTestResult
 from .postgres import PostgresConnector
-from .registry import get_connector
+from .mysql import MySQLConnector
+from .registry import get_connector, list_supported_types, DB_TYPE_META
 
-__all__ = ["BaseConnector", "PostgresConnector", "get_connector"]
+__all__ = [
+    "BaseConnector",
+    "ConnectionTestResult",
+    "PostgresConnector",
+    "MySQLConnector",
+    "get_connector",
+    "list_supported_types",
+    "DB_TYPE_META",
+]

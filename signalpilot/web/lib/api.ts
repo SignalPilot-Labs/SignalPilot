@@ -28,7 +28,11 @@ export const createConnection = (c: Record<string, unknown>) =>
 export const deleteConnection = (name: string) =>
   request<void>(`/api/connections/${name}`, { method: "DELETE" });
 export const testConnection = (name: string) =>
-  request<{ status: string; message: string }>(`/api/connections/${name}/test`, { method: "POST" });
+  request<Record<string, unknown>>(`/api/connections/${name}/test`, { method: "POST" });
+
+// Database type metadata
+export const getDbTypes = () =>
+  request<Array<Record<string, unknown>>>("/api/db-types");
 
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");

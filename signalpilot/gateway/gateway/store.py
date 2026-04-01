@@ -129,7 +129,14 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         host = conn.host or "localhost"
         port = conn.port or 5432
         db = conn.database or "postgres"
-        return f"postgresql://{conn.username}{pw}@{host}:{port}/{db}"
+        ssl_param = "?sslmode=require" if conn.ssl else ""
+        return f"postgresql://{conn.username}{pw}@{host}:{port}/{db}{ssl_param}"
+    elif conn.db_type == DBType.mysql:
+        pw = f":{conn.password}" if conn.password else ""
+        host = conn.host or "localhost"
+        port = conn.port or 3306
+        db = conn.database or "mysql"
+        return f"mysql://{conn.username}{pw}@{host}:{port}/{db}"
     elif conn.db_type == DBType.duckdb:
         return conn.database or ":memory:"
     return ""

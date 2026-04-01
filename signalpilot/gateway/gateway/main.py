@@ -175,7 +175,7 @@ async def remove_connection(name: str):
 
 
 @app.post("/api/connections/{name}/test")
-async def test_connection(name: str):
+async def test_connection_endpoint(name: str):
     from .connectors.registry import get_connector
 
     info = get_connection(name)
@@ -184,16 +184,52 @@ async def test_connection(name: str):
 
     conn_str = get_connection_string(name)
     if not conn_str:
-        return {"status": "error", "message": "No credentials stored (restart gateway to reload)"}
+        return {
+            "status": "error",
+            "message": "No credentials stored (restart gateway to reload)",
+            "error_hint": "Credentials are stored in memory only. Re-create the connection to restore them.",
+        }
 
     connector = get_connector(info.db_type)
     try:
-        await connector.connect(conn_str)
-        ok = await connector.health_check()
+        await connector.connect(conn_str, ssl=info.ssl)
+        result = await connector.test_connection()
         await connector.close()
-        return {"status": "healthy" if ok else "error", "message": "Connection test passed" if ok else "Health check failed"}
+
+        # Update connection status in store
+        _update_connection_status(name, "healthy" if result.healthy else "error")
+
+        return {
+            "status": "healthy" if result.healthy else "error",
+            **result.to_dict(),
+        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        _update_connection_status(name, "error")
+        msg, hint = connector.friendly_error(e)
+        return {
+            "status": "error",
+            "message": msg,
+            "error_hint": hint,
+        }
+
+
+def _update_connection_status(name: str, status: str):
+    """Update the stored status field for a connection."""
+    import time as _time
+    from .store import _load_json, _save_json, CONNECTIONS_FILE
+
+    data = _load_json(CONNECTIONS_FILE, {})
+    if name in data:
+        data[name]["status"] = status
+        data[name]["last_used"] = _time.time()
+        _save_json(CONNECTIONS_FILE, data)
+
+
+@app.get("/api/db-types")
+async def get_db_types():
+    """Return metadata about all supported database types for the frontend."""
+    from .connectors.registry import list_supported_types
+    return list_supported_types()
 
 
 # ─── Sandboxes ───────────────────────────────────────────────────────────────

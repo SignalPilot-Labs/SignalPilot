@@ -5,6 +5,7 @@ import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { KeyboardShortcuts } from "@/components/ui/keyboard-shortcuts";
 import { CommandPalette } from "@/components/ui/command-palette";
 import { ToastProvider } from "@/components/ui/toast";
+import { GridBackground } from "@/components/ui/grid-background";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -21,7 +22,8 @@ export default function RootLayout({
       <body className="antialiased bg-noise">
         <ToastProvider>
           <Sidebar />
-          <main className="ml-56 min-h-screen bg-dots">
+          <GridBackground />
+          <main className="ml-56 min-h-screen relative z-10">
             <ErrorBoundary>{children}</ErrorBoundary>
             <KeyboardShortcuts />
             <CommandPalette />

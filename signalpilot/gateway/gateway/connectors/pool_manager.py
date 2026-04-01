@@ -173,6 +173,18 @@ class PoolManager:
                     self._pools[key] = (connector, time.monotonic())
                     return connector
 
+            # Snowflake: pass credential_extras for structured auth params
+            if db_type == "snowflake" and credential_extras:
+                from .snowflake import SnowflakeConnector
+                if isinstance(connector, SnowflakeConnector):
+                    connector.set_credential_extras(credential_extras)
+
+            # Databricks: pass credential_extras for structured auth params
+            if db_type == "databricks" and credential_extras:
+                from .databricks import DatabricksConnector
+                if isinstance(connector, DatabricksConnector):
+                    connector.set_credential_extras(credential_extras)
+
             # SSH tunnel setup (for host:port-based databases)
             actual_conn_str = connection_string
             if (

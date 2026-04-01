@@ -22,6 +22,11 @@ class DatabricksConnector(BaseConnector):
     def __init__(self):
         self._conn = None
         self._connect_params: dict = {}
+        self._credential_extras: dict = {}
+
+    def set_credential_extras(self, extras: dict) -> None:
+        """Store structured credential data for connection."""
+        self._credential_extras = extras
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_DATABRICKS:
@@ -30,6 +35,13 @@ class DatabricksConnector(BaseConnector):
                 "Run: pip install databricks-sql-connector"
             )
         params = self._parse_connection(connection_string)
+        # Merge credential_extras (takes precedence)
+        if self._credential_extras:
+            for key in ("http_path", "access_token", "catalog", "schema_name"):
+                val = self._credential_extras.get(key)
+                if val:
+                    target = "schema" if key == "schema_name" else key
+                    params[target] = val
         self._connect_params = params
 
         connect_args = {

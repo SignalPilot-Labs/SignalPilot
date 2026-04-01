@@ -22,6 +22,11 @@ class SnowflakeConnector(BaseConnector):
     def __init__(self):
         self._conn = None
         self._connect_params: dict = {}
+        self._credential_extras: dict = {}
+
+    def set_credential_extras(self, extras: dict) -> None:
+        """Store structured credential data for connection."""
+        self._credential_extras = extras
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_SNOWFLAKE:
@@ -32,10 +37,21 @@ class SnowflakeConnector(BaseConnector):
         params = self._parse_connection(connection_string)
         self._connect_params = params
 
+        # Merge in credential_extras (takes precedence — they have the actual secrets)
+        if self._credential_extras:
+            for key in ("account", "username", "password", "warehouse", "schema_name", "role"):
+                val = self._credential_extras.get(key)
+                if val:
+                    # Map schema_name -> schema for snowflake-connector
+                    target_key = "schema" if key == "schema_name" else key
+                    # Map username -> user for snowflake-connector
+                    target_key = "user" if key == "username" else target_key
+                    params[target_key] = val
+
         connect_args = {
-            "account": params["account"],
-            "user": params["user"],
-            "password": params["password"],
+            "account": params.get("account", ""),
+            "user": params.get("user", ""),
+            "password": params.get("password", ""),
             "login_timeout": 15,
             "network_timeout": 30,
         }
@@ -51,19 +67,47 @@ class SnowflakeConnector(BaseConnector):
         self._conn = snowflake.connector.connect(**connect_args)
 
     def _parse_connection(self, conn_str: str) -> dict:
-        """Parse snowflake://account|user|pass|db|wh|schema|role format or structured extras."""
+        """Parse Snowflake connection strings.
+
+        Supports:
+        - snowflake://account|user|pass|db|wh|schema|role (legacy SignalPilot format)
+        - snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE (standard URL)
+        - account identifier only (for use with credential_extras)
+        """
         if conn_str.startswith("snowflake://"):
-            parts = conn_str[len("snowflake://"):].split("|")
+            inner = conn_str[len("snowflake://"):]
+
+            # Check for pipe-delimited format (legacy)
+            if "|" in inner:
+                parts = inner.split("|")
+                return {
+                    "account": parts[0] if len(parts) > 0 else "",
+                    "user": parts[1] if len(parts) > 1 else "",
+                    "password": parts[2] if len(parts) > 2 else "",
+                    "database": parts[3] if len(parts) > 3 else "",
+                    "warehouse": parts[4] if len(parts) > 4 else "",
+                    "schema": parts[5] if len(parts) > 5 else "",
+                    "role": parts[6] if len(parts) > 6 else "",
+                }
+
+            # Standard URL format: snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
+            from urllib.parse import urlparse, unquote, parse_qs
+
+            parsed = urlparse(conn_str)
+            path_parts = [p for p in (parsed.path or "").split("/") if p]
+            query = parse_qs(parsed.query or "")
+
             return {
-                "account": parts[0] if len(parts) > 0 else "",
-                "user": parts[1] if len(parts) > 1 else "",
-                "password": parts[2] if len(parts) > 2 else "",
-                "database": parts[3] if len(parts) > 3 else "",
-                "warehouse": parts[4] if len(parts) > 4 else "",
-                "schema": parts[5] if len(parts) > 5 else "",
-                "role": parts[6] if len(parts) > 6 else "",
+                "account": parsed.hostname or "",
+                "user": unquote(parsed.username or ""),
+                "password": unquote(parsed.password or ""),
+                "database": path_parts[0] if len(path_parts) > 0 else "",
+                "schema": path_parts[1] if len(path_parts) > 1 else "",
+                "warehouse": query.get("warehouse", [""])[0],
+                "role": query.get("role", [""])[0],
             }
-        # Fallback: treat as account identifier
+
+        # Fallback: treat as account identifier (credential_extras will fill the rest)
         return {"account": conn_str, "user": "", "password": ""}
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
@@ -103,6 +147,53 @@ class SnowflakeConnector(BaseConnector):
         rows = cursor.fetchall()
         cursor.close()
 
+        # Row count estimates from INFORMATION_SCHEMA.TABLES
+        row_counts: dict[str, int] = {}
+        try:
+            rc_sql = """
+                SELECT TABLE_SCHEMA, TABLE_NAME, ROW_COUNT
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+                    AND TABLE_TYPE = 'BASE TABLE'
+            """
+            cursor = self._conn.cursor(snowflake.connector.DictCursor)
+            cursor.execute(rc_sql)
+            for r in cursor.fetchall():
+                key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}"
+                row_counts[key] = r.get("ROW_COUNT", 0) or 0
+            cursor.close()
+        except Exception:
+            pass
+
+        # Foreign keys — Snowflake supports FK metadata even though it doesn't enforce them
+        foreign_keys: dict[str, list[dict]] = {}
+        try:
+            fk_sql = """
+                SELECT
+                    FK_SCHEMA_NAME, FK_TABLE_NAME, FK_COLUMN_NAME,
+                    PK_SCHEMA_NAME, PK_TABLE_NAME, PK_COLUMN_NAME
+                FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+                JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                    ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                    AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+                WHERE rc.CONSTRAINT_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+            """
+            cursor = self._conn.cursor(snowflake.connector.DictCursor)
+            cursor.execute(fk_sql)
+            for r in cursor.fetchall():
+                key = f"{r['FK_SCHEMA_NAME']}.{r['FK_TABLE_NAME']}"
+                if key not in foreign_keys:
+                    foreign_keys[key] = []
+                foreign_keys[key].append({
+                    "column": r["FK_COLUMN_NAME"],
+                    "references_schema": r["PK_SCHEMA_NAME"],
+                    "references_table": r["PK_TABLE_NAME"],
+                    "references_column": r["PK_COLUMN_NAME"],
+                })
+            cursor.close()
+        except Exception:
+            pass
+
         schema: dict[str, Any] = {}
         for row in rows:
             key = f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}"
@@ -111,12 +202,14 @@ class SnowflakeConnector(BaseConnector):
                     "schema": row["TABLE_SCHEMA"],
                     "name": row["TABLE_NAME"],
                     "columns": [],
+                    "foreign_keys": foreign_keys.get(key, []),
+                    "row_count": row_counts.get(key, 0),
                 }
             schema[key]["columns"].append({
                 "name": row["COLUMN_NAME"],
                 "type": row["DATA_TYPE"],
                 "nullable": row["IS_NULLABLE"] == "YES",
-                "primary_key": False,  # Snowflake doesn't enforce PKs, check constraints separately
+                "primary_key": False,
                 "comment": row.get("COMMENT", ""),
             })
 
@@ -146,6 +239,26 @@ class SnowflakeConnector(BaseConnector):
             pass  # PK enrichment is best-effort
 
         return schema
+
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Get sample distinct values for schema linking optimization."""
+        if self._conn is None:
+            return {}
+        result: dict[str, list] = {}
+        for col in columns[:20]:
+            try:
+                cursor = self._conn.cursor(snowflake.connector.DictCursor)
+                cursor.execute(
+                    f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                )
+                rows = cursor.fetchall()
+                cursor.close()
+                values = [str(r[col]) for r in rows if r.get(col) is not None]
+                if values:
+                    result[col] = values
+            except Exception:
+                continue
+        return result
 
     async def health_check(self) -> bool:
         if self._conn is None:

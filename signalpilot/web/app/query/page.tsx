@@ -20,6 +20,7 @@ import {
 import { getConnections, executeQuery as apiExecuteQuery } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 import { EmptyQuery, EmptyState } from "@/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 
 interface QueryResult {
   rows: Record<string, unknown>[];
@@ -167,23 +168,20 @@ export default function QueryExplorerPage() {
 
   return (
     <div className="p-8 flex flex-col h-screen max-h-screen animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6 flex-shrink-0">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide">query</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ explorer</span>
-          </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            governed, read-only sql queries
-          </p>
-        </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 border border-[var(--color-success)]/20 bg-[var(--color-success)]/5">
-          <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
-          <span className="text-[10px] text-[var(--color-success)] tracking-wider">
-            read-only / ddl blocked / limit enforced
-          </span>
-        </div>
+      <div className="flex-shrink-0">
+        <PageHeader
+          title="query"
+          subtitle="explorer"
+          description="governed, read-only sql queries"
+          actions={
+            <div className="flex items-center gap-2 px-3 py-1.5 border border-[var(--color-success)]/20 bg-[var(--color-success)]/5">
+              <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
+              <span className="text-[10px] text-[var(--color-success)] tracking-wider">
+                read-only / ddl blocked / limit enforced
+              </span>
+            </div>
+          }
+        />
       </div>
 
       {/* Connection bar + controls */}

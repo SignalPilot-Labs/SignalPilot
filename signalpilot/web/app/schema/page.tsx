@@ -16,6 +16,7 @@ import {
 import { getConnections, getConnectionSchema, detectPII } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
+import { PageHeader } from "@/components/ui/page-header";
 
 interface Column {
   name: string;
@@ -169,16 +170,11 @@ export default function SchemaExplorerPage() {
 
   return (
     <div className="p-8 animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide">schema</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ explorer</span>
-          </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            browse tables, columns, and types
-          </p>
-        </div>
+      <PageHeader
+        title="schema"
+        subtitle="explorer"
+        description="browse tables, columns, and types"
+        actions={
         <div className="flex items-center gap-3">
           <select
             value={selectedConn}
@@ -202,7 +198,8 @@ export default function SchemaExplorerPage() {
             refresh
           </button>
         </div>
-      </div>
+        }
+      />
 
       {/* Search + stats + type legend */}
       {schema && (

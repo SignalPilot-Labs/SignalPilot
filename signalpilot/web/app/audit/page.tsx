@@ -16,6 +16,7 @@ import {
 import { getAudit, getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
 import { EmptyList, EmptyState } from "@/components/ui/empty-states";
+import { PageHeader } from "@/components/ui/page-header";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
@@ -91,16 +92,12 @@ export default function AuditPage() {
 
   return (
     <div className="p-8 animate-fade-in">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide">audit</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ log</span>
-          </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            full-chain audit trail of all governed operations
-          </p>
-        </div>
+      <PageHeader
+        title="audit"
+        subtitle="log"
+        description="full-chain audit trail of all governed operations"
+        actions={<>
+
         <div className="flex items-center gap-2">
           <button onClick={exportCSV} disabled={filtered.length === 0}
             className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider">
@@ -115,7 +112,8 @@ export default function AuditPage() {
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
           </button>
         </div>
-      </div>
+        </>}
+      />
 
       {/* Stats bar */}
       {entries.length > 0 && (

@@ -26,6 +26,8 @@ import {
 } from "@/lib/api";
 import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
 import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
+import { PageHeader } from "@/components/ui/page-header";
+import { RingGauge, StatusDot } from "@/components/ui/data-viz";
 
 const statusConfig: Record<string, { color: string; bg: string; icon: React.ElementType; label: string }> = {
   healthy: { color: "text-[var(--color-success)]", bg: "bg-[var(--color-success)]", icon: CheckCircle2, label: "healthy" },
@@ -106,28 +108,24 @@ export default function HealthPage() {
 
   return (
     <div className="p-8 animate-fade-in">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide">health</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ monitoring</span>
+      <PageHeader
+        title="health"
+        subtitle="monitoring"
+        description="connection health, latency, and cache performance"
+        actions={
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-2 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-none" />
+              auto (10s)
+            </label>
+            <button onClick={refresh} disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} />
+              refresh
+            </button>
           </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            connection health, latency, and cache performance
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-2 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
-            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-none" />
-            auto (10s)
-          </label>
-          <button onClick={refresh} disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} />
-            refresh
-          </button>
-        </div>
-      </div>
+        }
+      />
 
       {/* Overview cards */}
       <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">

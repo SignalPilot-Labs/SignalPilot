@@ -18,6 +18,7 @@ import {
 import { getSandboxes, createSandbox, deleteSandbox, getConnections } from "@/lib/api";
 import type { SandboxInfo, ConnectionInfo } from "@/lib/types";
 import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
+import { PageHeader } from "@/components/ui/page-header";
 
 const statusConfig: Record<string, { indicator: string; label: string }> = {
   ready: { indicator: "bg-blue-400", label: "ready" },
@@ -66,23 +67,19 @@ export default function SandboxesPage() {
 
   return (
     <div className="p-8 animate-fade-in">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide">sandboxes</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ microvms</span>
-          </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            firecracker microvms for isolated code execution
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
-        >
-          <Plus className="w-3.5 h-3.5" /> new sandbox
-        </button>
-      </div>
+      <PageHeader
+        title="sandboxes"
+        subtitle="microvms"
+        description="firecracker microvms for isolated code execution"
+        actions={
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+          >
+            <Plus className="w-3.5 h-3.5" /> new sandbox
+          </button>
+        }
+      />
 
       {/* Create dialog */}
       {showCreate && (

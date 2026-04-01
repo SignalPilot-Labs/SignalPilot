@@ -18,7 +18,8 @@ import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, 
 import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { RingGauge } from "@/components/ui/data-viz";
+import { RingGauge, Sparkline, StatusDot } from "@/components/ui/data-viz";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -79,30 +80,6 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
   connect: { label: "CON", color: "text-[var(--color-text-dim)]" },
   block: { label: "BLK", color: "text-[var(--color-error)]" },
 };
-
-/* ── Mini sparkline SVG ── */
-function MiniSparkline({ values, color = "var(--color-text-dim)" }: { values: number[]; color?: string }) {
-  if (values.length < 2) return null;
-  const max = Math.max(...values, 1);
-  const w = 60;
-  const h = 16;
-  const points = values.map((v, i) =>
-    `${(i / (values.length - 1)) * w},${h - (v / max) * h}`
-  ).join(" ");
-
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="flex-shrink-0">
-      <polyline
-        points={points}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
@@ -169,27 +146,24 @@ export default function DashboardPage() {
 
   return (
     <div className="p-8 max-w-[1400px] animate-fade-in">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-1">
-          <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">dashboard</h1>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ live overview</span>
-        </div>
-        <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-          signalpilot gateway status and metrics
-        </p>
-      </div>
+      <PageHeader
+        title="dashboard"
+        subtitle="live overview"
+        description="signalpilot gateway status and metrics"
+      />
 
       {/* ── System status bar ── */}
-      <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-        <div className="px-4 py-2 border-b border-[var(--color-border)] flex items-center gap-2">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-            <rect width="10" height="10" rx="0" fill="var(--color-success)" opacity="0.15" />
-            <circle cx="5" cy="5" r="2" fill="var(--color-success)" />
-          </svg>
-          <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">system status</span>
-        </div>
-        <div className="px-4 py-3 flex items-center gap-8 text-xs">
+      <TerminalBar
+        path="dashboard --watch"
+        status={
+          <StatusDot
+            status={metrics?.sandbox_health === "healthy" && metrics?.kvm_available ? "healthy" : metrics ? "error" : "unknown"}
+            size={4}
+            pulse={metrics?.sandbox_health === "healthy"}
+          />
+        }
+      >
+        <div className="flex items-center gap-8 text-xs">
           <div className="flex items-center gap-2">
             <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
@@ -206,7 +180,7 @@ export default function DashboardPage() {
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
-              <MiniSparkline values={latencyValues} color="var(--color-success)" />
+              <Sparkline values={latencyValues} color="var(--color-success)" width={60} height={16} />
             </div>
           )}
           <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
@@ -216,7 +190,7 @@ export default function DashboardPage() {
             </span>
           </div>
         </div>
-      </div>
+      </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
       <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">

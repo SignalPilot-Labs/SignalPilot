@@ -29,6 +29,8 @@ import {
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusDot } from "@/components/ui/data-viz";
 
 const dbTypeLabels: Record<string, string> = {
   postgres: "pg",
@@ -121,23 +123,19 @@ export default function ConnectionsPage() {
 
   return (
     <div className="p-8 animate-fade-in">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide">connections</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ databases</span>
-          </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-            manage database connections for governed ai access
-          </p>
-        </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
-        >
-          <Plus className="w-3.5 h-3.5" /> add connection
-        </button>
-      </div>
+      <PageHeader
+        title="connections"
+        subtitle="databases"
+        description="manage database connections for governed ai access"
+        actions={
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+          >
+            <Plus className="w-3.5 h-3.5" /> add connection
+          </button>
+        }
+      />
 
       {/* Create form */}
       {showForm && (

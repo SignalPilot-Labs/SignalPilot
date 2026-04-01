@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { getSettings, updateSettings, getHealth, setApiKey } from "@/lib/api";
 import type { GatewaySettings } from "@/lib/types";
+import { PageHeader } from "@/components/ui/page-header";
 
 function SectionHeader({ icon: Icon, title, iconColor }: { icon: React.ElementType; title: string; iconColor?: string }) {
   return (
@@ -91,15 +92,11 @@ export default function SettingsPage() {
 
   return (
     <div className="p-8 max-w-3xl animate-fade-in">
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-1">
-          <h1 className="text-lg font-light tracking-wide">settings</h1>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">/ config</span>
-        </div>
-        <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
-          configure signalpilot instance, auth, and governance
-        </p>
-      </div>
+      <PageHeader
+        title="settings"
+        subtitle="config"
+        description="configure signalpilot instance, auth, and governance"
+      />
 
       {/* Browser Authentication */}
       <section className="mb-8">

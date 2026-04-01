@@ -28,6 +28,7 @@ class GatewaySettings(BaseModel):
     default_budget_usd: float = 10.0
     default_timeout_seconds: int = 30
     max_concurrent_sandboxes: int = 10
+    blocked_tables: list[str] = Field(default_factory=list)
 
     # Gateway
     gateway_url: str = "http://localhost:3300"

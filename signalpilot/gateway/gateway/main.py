@@ -322,7 +322,7 @@ async def query_database(req: DirectQueryRequest):
     settings = load_settings()
 
     # Validate SQL
-    validation = validate_sql(req.sql)
+    validation = validate_sql(req.sql, blocked_tables=settings.blocked_tables)
     if not validation.ok:
         await append_audit(AuditEntry(
             id=str(uuid.uuid4()),

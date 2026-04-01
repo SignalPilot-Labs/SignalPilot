@@ -9,16 +9,29 @@ from __future__ import annotations
 
 import time
 import uuid
+from urllib.parse import urlparse
 
 import httpx
 
 from .models import ExecuteResult, SandboxInfo
+
+_ALLOWED_SCHEMES = {"http", "https"}
 
 
 class SandboxClient:
     """HTTP client for the Firecracker sandbox manager."""
 
     def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 60):
+        parsed = urlparse(base_url)
+        if parsed.scheme not in _ALLOWED_SCHEMES:
+            raise ValueError(
+                f"Invalid sandbox manager URL scheme '{parsed.scheme}'. "
+                f"Only http and https are allowed."
+            )
+        if not parsed.hostname:
+            raise ValueError(
+                f"Invalid sandbox manager URL: missing hostname in '{base_url}'"
+            )
         self.base_url = base_url.rstrip("/")
         headers = {}
         if api_key:

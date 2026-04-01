@@ -27,7 +27,9 @@ import {
 import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
 import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { RingGauge, StatusDot } from "@/components/ui/data-viz";
+import { RingGauge, StatusDot, Sparkline, MiniBar } from "@/components/ui/data-viz";
+import { Tooltip } from "@/components/ui/tooltip";
+import { TimeAgo } from "@/components/ui/time-ago";
 
 const statusConfig: Record<string, { color: string; bg: string; icon: React.ElementType; label: string }> = {
   healthy: { color: "text-[var(--color-success)]", bg: "bg-[var(--color-success)]", icon: CheckCircle2, label: "healthy" },
@@ -44,12 +46,47 @@ function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: numbe
   const color = value < 50 ? "var(--color-success)" : value < 200 ? "var(--color-warning)" : "var(--color-error)";
 
   return (
-    <div className="flex items-center gap-3">
-      <span className="text-[9px] text-[var(--color-text-dim)] w-8 text-right uppercase tracking-[0.15em]">{label}</span>
-      <div className="flex-1 h-1.5 bg-[var(--color-bg)] overflow-hidden relative">
-        <div className="h-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+    <Tooltip content={`${label}: ${value.toFixed(2)}ms (${pct.toFixed(0)}% of ${maxMs}ms budget)`} position="top">
+      <div className="flex items-center gap-3 cursor-default">
+        <span className="text-[9px] text-[var(--color-text-dim)] w-8 text-right uppercase tracking-[0.15em]">{label}</span>
+        <div className="flex-1 h-1.5 bg-[var(--color-bg)] overflow-hidden relative">
+          <div className="h-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
+          {/* Threshold markers */}
+          <div className="absolute top-0 h-full w-px bg-[var(--color-text-dim)] opacity-20" style={{ left: `${(50/maxMs)*100}%` }} />
+          <div className="absolute top-0 h-full w-px bg-[var(--color-text-dim)] opacity-20" style={{ left: `${(200/maxMs)*100}%` }} />
+        </div>
+        <span className={`text-[10px] tabular-nums w-16 text-right tracking-wider ${
+          value < 50 ? "text-[var(--color-success)]" : value < 200 ? "text-[var(--color-text-dim)]" : "text-[var(--color-error)]"
+        }`}>{value.toFixed(1)}ms</span>
       </div>
-      <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] w-16 text-right tracking-wider">{value.toFixed(1)}ms</span>
+    </Tooltip>
+  );
+}
+
+/* ── Latency percentile distribution visualization ── */
+function LatencyDistribution({ p50, p95, p99 }: { p50: number | null; p95: number | null; p99: number | null }) {
+  const values = [p50, p95, p99].filter((v): v is number => v !== null);
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+
+  return (
+    <div className="flex items-end gap-1 h-6">
+      {[
+        { label: "p50", value: p50, color: "var(--color-success)" },
+        { label: "p95", value: p95, color: "var(--color-warning)" },
+        { label: "p99", value: p99, color: "var(--color-error)" },
+      ].map(({ label, value, color }) => {
+        if (value === null) return null;
+        const h = Math.max(4, (value / max) * 24);
+        return (
+          <Tooltip key={label} content={`${label}: ${value.toFixed(1)}ms`} position="top">
+            <div className="flex flex-col items-center gap-0.5 cursor-default">
+              <div className="w-3 transition-all duration-500" style={{ height: `${h}px`, backgroundColor: color, opacity: 0.7 }} />
+              <span className="text-[7px] text-[var(--color-text-dim)] tracking-wider">{label}</span>
+            </div>
+          </Tooltip>
+        );
+      })}
     </div>
   );
 }
@@ -252,9 +289,12 @@ export default function HealthPage() {
                   </div>
 
                   <div className="px-5 py-4 space-y-4">
-                    {/* Latency bars */}
+                    {/* Latency bars + distribution */}
                     <div className="space-y-2">
-                      <div className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</div>
+                      <div className="flex items-center justify-between">
+                        <div className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</div>
+                        <LatencyDistribution p50={health.latency_p50_ms} p95={health.latency_p95_ms} p99={health.latency_p99_ms} />
+                      </div>
                       <LatencyBar label="p50" value={health.latency_p50_ms} />
                       <LatencyBar label="p95" value={health.latency_p95_ms} />
                       <LatencyBar label="p99" value={health.latency_p99_ms} />
@@ -304,8 +344,8 @@ export default function HealthPage() {
                     )}
 
                     {health.last_check && (
-                      <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
-                        last check: {new Date(health.last_check * 1000).toLocaleString()}
+                      <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider flex items-center gap-1">
+                        last check: <TimeAgo timestamp={health.last_check} live className="text-[9px]" />
                       </p>
                     )}
                   </div>

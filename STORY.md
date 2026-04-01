@@ -48,6 +48,58 @@ The sandboxing was James's obsession. It wasn't enough to validate SQL. What if 
 
 ---
 
+## The Wall
+
+Week four is when everything almost fell apart.
+
+Maya had landed their first design partner — a mid-stage healthtech company called Vantage that was drowning in compliance requirements. Their head of data, a no-nonsense woman named Priya, agreed to a thirty-minute demo call. "Show me it works against our real query patterns," she said. "We'll send some examples ahead of time."
+
+The examples arrived the night before: a stack of twelve SQL queries their analysts ran daily. Most were straightforward. Query number seven was not. It was a six-level nested CTE with window functions, lateral joins, and a recursive reference that calculated rolling patient cohort metrics. The kind of query that only exists in companies where analysts have been layering logic on logic for years.
+
+Maya fed it into the gateway at 11 PM. SQLGlot choked. Not a graceful error — a hard crash, a stack trace, a silent exit code.
+
+"James." She didn't need to say more. He was already looking at the same screen.
+
+They spent the next four hours trying to patch the parser. Every fix broke something else. At 3 AM, James pushed back from his desk. "We can't ship this. The validation layer is the *whole product*. If it can't parse real-world SQL, we have nothing."
+
+The demo was at 10 AM. They didn't sleep. By 6 AM, Maya had written a custom pre-processing step that decomposed complex CTEs into an intermediate representation before feeding them to SQLGlot. It was ugly. It was held together with duct tape. It worked.
+
+Priya's query ran. Validated. Executed. Results streamed back clean. Priya nodded once and said, "Okay. I'm interested." She never knew how close it had been.
+
+But the demo cracked open a deeper fault line. That weekend, James sat Maya down in the WeWork — which was empty on Saturdays, the fluorescent lights buzzing overhead — and told her they needed to stop building features and finish the Firecracker sandbox before talking to another customer.
+
+"We're six weeks in and we don't have a single paying user," Maya shot back. "We can add sandboxing later. Right now we need to ship the gateway, get feedback, get *revenue* —"
+
+"And when someone runs arbitrary Python through our system and it escapes into the host?" James's voice was steady but his jaw was tight. "When that happens — not if, *when* — we won't be the company that solves AI governance. We'll be the company that *proved it was impossible*. We'll be the next cautionary tale in someone else's Slack thread."
+
+Maya stared at him. She wanted to argue. She had a spreadsheet on her laptop that showed their personal savings hitting zero in nine weeks. She'd done the math a dozen times, always hoping the numbers would change.
+
+"If we ship insecure," James said, quieter now, "we *are* the problem we're solving."
+
+The silence stretched. Maya closed the spreadsheet.
+
+"Okay," she said. "Security first. Always."
+
+It became the company's first principle, written on the whiteboard in James's handwriting and never erased: **Don't become the thing you're fighting.**
+
+The next three weeks were brutal. They burned through savings faster than planned — AWS bills for Firecracker testing, the WeWork hot desk, the health insurance they were paying out of pocket. By week six, Maya had $4,200 left in her checking account. She opened LinkedIn one morning and stared at a recruiter message from her old team at Stripe. Senior Staff Engineer. The number had a lot of zeros.
+
+She didn't tell James. She didn't need to. He'd seen her face when she checked her phone.
+
+"I got one too," he said, not looking up from his terminal. "Datadog. Principal Security Architect."
+
+"And?"
+
+"And I keep thinking about Priya's face when that query came back clean. She's been fighting for governed data access at her company for two years and nobody would build it." He finally looked up. "If we go back, who builds this?"
+
+Maya deleted the recruiter's message. Then she deleted the Stripe app from her phone for good measure.
+
+"Nobody," she said. "That's the problem."
+
+The same words from that first late night. But this time they weren't a complaint. They were a commitment.
+
+---
+
 ## The Moment
 
 It was a Friday evening, three weeks in. They were both running on caffeine and stubbornness. Maya had just finished wiring the MCP — Model Context Protocol — integration, which meant any AI model that spoke MCP could connect to their gateway natively. James had the audit logging pipeline streaming events in real time.

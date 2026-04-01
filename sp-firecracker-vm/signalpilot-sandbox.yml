@@ -4,31 +4,34 @@
 # The run_analysis tool behaves identically regardless of mode.
 
 sandbox:
-  # "local"     — Firecracker microVMs on your machine (requires KVM)
+  # "local"     — Auto-detect: Firecracker (Linux/KVM) or gVisor (macOS/no KVM)
   # "cloud"     — Firecracker on SignalPilot infrastructure (requires sp login)
-  # "container" — Hardened Docker containers (works everywhere, weaker isolation)
-  mode: container  # default: safest cross-platform option
+  # "container" — Basic Docker containers (works everywhere, weakest isolation)
+  mode: local   # recommended: auto-detects best backend
 
   local:
-    # Firecracker settings (only used when mode: local)
+    # Shared settings (apply to both Firecracker and gVisor)
     max_vms: 10
+    vm_timeout_sec: 300
+
+    # Firecracker-specific (only when /dev/kvm available)
     vm_memory_mb: 512
     vm_vcpus: 1
-    vm_timeout_sec: 300
-    # Network: VMs can ONLY reach the gateway. No internet.
     network_policy: gateway-only
 
+    # gVisor-specific (used on macOS / no KVM)
+    # runsc intercepts all syscalls via user-space kernel (Sentry)
+    # No network access, read-only rootfs, memory-limited
+    gvisor_memory_limit: 512m
+
   cloud:
-    # SignalPilot Cloud settings (only used when mode: cloud)
-    # Run `sp login` to authenticate
-    region: auto          # auto-selects closest region
-    vm_size: standard     # standard (1 vCPU/512MB) or heavy (4 vCPU/4GB)
+    region: auto
+    vm_size: standard
     vm_timeout_sec: 300
 
   container:
-    # Docker container settings (only used when mode: container)
     memory_limit: 512m
     cpu_limit: 1
-    network: gateway-only   # container can only reach SP gateway
-    read_only_rootfs: true  # tmpfs for scratch space
+    network: gateway-only
+    read_only_rootfs: true
     seccomp_profile: default

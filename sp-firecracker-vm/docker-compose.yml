@@ -1,19 +1,33 @@
-# SignalPilot Firecracker Sandbox — Local Mode
-#
-# Prerequisites:
-#   Linux:   /dev/kvm available (modprobe kvm)
-#   Win11:   .wslconfig → nestedVirtualization=true, restart WSL + Docker
-#   macOS:   Docker Desktop nested virtualization enabled
+# SignalPilot Sandbox — auto-detecting backend
 #
 # Usage:
-#   docker-compose up -d
+#   docker compose up -d
 #
-# The sandbox manager listens on :8080 for run_analysis requests from
-# the SignalPilot gateway. Each request spins up a Firecracker microVM,
-# executes Python code, and returns results.
+# On Linux with /dev/kvm:  Firecracker microVMs (snapshot-accelerated)
+# On macOS / no KVM:       gVisor user-space kernel sandbox
+#
+# Both serve the same API on :8080. The gateway doesn't need to know
+# which backend is running.
 
 services:
+  # ── gVisor backend (default, works everywhere) ──────────────────────
   sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.gvisor
+    ports:
+      - "8080:8080"
+    privileged: true    # runsc needs ptrace + mount capabilities
+    environment:
+      - SP_MAX_VMS=10
+      - SP_VM_MEMORY_MB=512
+      - SP_VM_TIMEOUT_SEC=300
+      - SP_LOG_LEVEL=info
+    profiles: ["gvisor", "default"]
+    restart: unless-stopped
+
+  # ── Firecracker backend (Linux with KVM only) ──────────────────────
+  sandbox-firecracker:
     build:
       context: .
       dockerfile: Dockerfile
@@ -22,8 +36,8 @@ services:
     devices:
       - "/dev/kvm:/dev/kvm"
     cap_add:
-      - NET_ADMIN      # TAP device creation for VM networking
-      - SYS_ADMIN      # jailer needs this for cgroup management
+      - NET_ADMIN
+      - SYS_ADMIN
     environment:
       - SP_GATEWAY_URL=http://host.docker.internal:3100
       - SP_MAX_VMS=10
@@ -33,6 +47,7 @@ services:
       - SP_LOG_LEVEL=info
     volumes:
       - sandbox-overlays:/opt/signalpilot/overlays
+    profiles: ["firecracker"]
     restart: unless-stopped
 
 volumes:

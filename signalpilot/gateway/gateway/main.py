@@ -53,6 +53,7 @@ from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeade
 from .models import (
     AuditEntry,
     ConnectionCreate,
+    ConnectionUpdate,
     ExecuteRequest,
     GatewaySettings,
     SandboxCreate,
@@ -75,6 +76,7 @@ from .store import (
     load_settings,
     read_audit,
     save_settings,
+    update_connection,
     upsert_sandbox,
 )
 
@@ -321,6 +323,79 @@ async def get_connection_detail(name: str):
 async def remove_connection(name: str):
     if not delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+    # Invalidate schema cache for deleted connection
+    schema_cache.invalidate(name)
+
+
+@app.put("/api/connections/{name}")
+async def edit_connection(name: str, update: ConnectionUpdate):
+    """Update an existing connection. Only provided fields are changed."""
+    existing = get_connection(name)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    # If db_type is changing, validate the new type's required fields
+    update_data = update.model_dump(exclude_none=True)
+    if update_data:
+        # Merge with existing to validate
+        merged_db_type = update_data.get("db_type", existing.db_type)
+        merged = ConnectionCreate(
+            name=name,
+            db_type=merged_db_type,
+            **{k: v for k, v in {**existing.model_dump(), **update_data}.items()
+               if k not in ("id", "created_at", "last_used", "status", "name", "db_type")},
+        )
+        errors = _validate_connection_params(merged)
+        if errors:
+            raise HTTPException(status_code=422, detail={"validation_errors": errors})
+
+    # Capture old connection string before update for pool cleanup
+    old_conn_str = get_connection_string(name)
+
+    result = update_connection(name, update)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    # Invalidate caches — connection params may have changed
+    schema_cache.invalidate(name)
+    if old_conn_str:
+        await pool_manager.close_pool(old_conn_str)
+
+    return result
+
+
+@app.post("/api/connections/{name}/schema/refresh")
+async def refresh_connection_schema(name: str):
+    """Force-refresh the cached schema for a connection.
+
+    Invalidates the cached schema and fetches fresh metadata from the database.
+    Useful after migrations or DDL changes.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+
+    # Invalidate cached schema
+    schema_cache.invalidate(name)
+
+    try:
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        schema = await connector.get_schema()
+        await pool_manager.release(info.db_type, conn_str)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+    schema_cache.put(name, schema)
+    return {
+        "connection_name": name,
+        "table_count": len(schema),
+        "message": "Schema refreshed successfully",
+    }
 
 
 @app.post("/api/connections/{name}/test")

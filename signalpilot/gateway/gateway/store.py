@@ -25,6 +25,7 @@ from .models import (
     AuditEntry,
     ConnectionCreate,
     ConnectionInfo,
+    ConnectionUpdate,
     DBType,
     GatewaySettings,
     SandboxInfo,
@@ -270,6 +271,61 @@ def delete_connection(name: str) -> bool:
     _save_json(CONNECTIONS_FILE, data)
     _save_credentials()
     return True
+
+
+def update_connection(name: str, update: ConnectionUpdate) -> ConnectionInfo | None:
+    """Update an existing connection with partial data. Only provided fields are changed."""
+    data = _load_json(CONNECTIONS_FILE, {})
+    if name not in data:
+        return None
+
+    existing = data[name]
+    update_fields = update.model_dump(exclude_none=True)
+
+    # Separate credential fields from metadata fields
+    credential_fields = {"password", "connection_string", "credentials_json", "access_token"}
+    meta_updates = {k: v for k, v in update_fields.items() if k not in credential_fields}
+
+    # Update metadata fields in connection info
+    for key, value in meta_updates.items():
+        if key == "ssh_tunnel" and value:
+            # Strip sensitive SSH fields for persistence
+            ssh_config = SSHTunnelConfig(**value) if isinstance(value, dict) else value
+            value = ssh_config.model_copy(update={
+                "password": None, "private_key": None, "private_key_passphrase": None,
+            }).model_dump()
+        if key == "ssl_config" and value:
+            if isinstance(value, dict):
+                value = SSLConfig(**value).model_dump()
+        existing[key] = value
+
+    # Rebuild connection string if credential-related fields changed
+    needs_cred_rebuild = any(k in update_fields for k in (
+        "host", "port", "database", "username", "password", "connection_string",
+        "account", "warehouse", "schema_name", "role", "project",
+        "credentials_json", "http_path", "access_token", "catalog",
+        "ssl", "ssl_config",
+    ))
+
+    if needs_cred_rebuild:
+        # Build a synthetic ConnectionCreate from merged data for string building
+        db_type = update_fields.get("db_type", existing.get("db_type"))
+        merged = {**existing, **update_fields, "name": name, "db_type": db_type}
+        # Remove fields not in ConnectionCreate
+        for rm_key in ("id", "created_at", "last_used", "status"):
+            merged.pop(rm_key, None)
+        try:
+            create_obj = ConnectionCreate(**merged)
+            raw_cred = create_obj.connection_string or _build_connection_string(create_obj)
+            _credential_vault[name] = raw_cred
+            _credential_extras[name] = _extract_credential_extras(create_obj)
+        except Exception:
+            pass  # Keep existing credentials if rebuild fails
+
+    data[name] = existing
+    _save_json(CONNECTIONS_FILE, data)
+    _save_credentials()
+    return ConnectionInfo(**existing)
 
 
 def get_connection_string(name: str) -> str | None:

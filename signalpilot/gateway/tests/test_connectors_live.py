@@ -640,5 +640,107 @@ class TestSQLiteSampleValues:
         await c.close()
 
 
+# ── Schema Cache Diff ──────────────────────────────────────────────────
+
+class TestSchemaCacheDiff:
+    def test_diff_no_changes(self):
+        from gateway.connectors.schema_cache import SchemaCache
+        cache = SchemaCache(ttl_seconds=300)
+        schema = {
+            "public.users": {
+                "schema": "public",
+                "name": "users",
+                "columns": [
+                    {"name": "id", "type": "integer"},
+                    {"name": "name", "type": "text"},
+                ],
+            }
+        }
+        cache.put("test", schema)
+        diff = cache.diff("test", schema)
+        assert diff is not None
+        assert diff["has_changes"] is False
+        assert diff["added_tables"] == []
+        assert diff["removed_tables"] == []
+
+    def test_diff_added_table(self):
+        from gateway.connectors.schema_cache import SchemaCache
+        cache = SchemaCache(ttl_seconds=300)
+        old = {"public.users": {"columns": [{"name": "id", "type": "int"}]}}
+        new = {
+            "public.users": {"columns": [{"name": "id", "type": "int"}]},
+            "public.orders": {"columns": [{"name": "id", "type": "int"}]},
+        }
+        cache.put("test", old)
+        diff = cache.diff("test", new)
+        assert diff["has_changes"] is True
+        assert "public.orders" in diff["added_tables"]
+
+    def test_diff_removed_table(self):
+        from gateway.connectors.schema_cache import SchemaCache
+        cache = SchemaCache(ttl_seconds=300)
+        old = {
+            "public.users": {"columns": [{"name": "id", "type": "int"}]},
+            "public.orders": {"columns": [{"name": "id", "type": "int"}]},
+        }
+        new = {"public.users": {"columns": [{"name": "id", "type": "int"}]}}
+        cache.put("test", old)
+        diff = cache.diff("test", new)
+        assert diff["has_changes"] is True
+        assert "public.orders" in diff["removed_tables"]
+
+    def test_diff_modified_column_type(self):
+        from gateway.connectors.schema_cache import SchemaCache
+        cache = SchemaCache(ttl_seconds=300)
+        old = {"public.users": {"columns": [{"name": "id", "type": "integer"}]}}
+        new = {"public.users": {"columns": [{"name": "id", "type": "bigint"}]}}
+        cache.put("test", old)
+        diff = cache.diff("test", new)
+        assert diff["has_changes"] is True
+        assert len(diff["modified_tables"]) == 1
+        mod = diff["modified_tables"][0]
+        assert mod["table"] == "public.users"
+        assert len(mod["type_changes"]) == 1
+        assert mod["type_changes"][0]["old_type"] == "integer"
+        assert mod["type_changes"][0]["new_type"] == "bigint"
+
+    def test_diff_no_cached_returns_none(self):
+        from gateway.connectors.schema_cache import SchemaCache
+        cache = SchemaCache(ttl_seconds=300)
+        diff = cache.diff("nonexistent", {"t": {"columns": []}})
+        assert diff is None
+
+
+# ── Connection Update Store ──────────────────────────────────────────────
+
+class TestConnectionUpdate:
+    def test_update_connection_host(self):
+        from gateway.models import ConnectionUpdate
+        update = ConnectionUpdate(host="new-host.example.com", port=5433)
+        data = update.model_dump(exclude_none=True)
+        assert data["host"] == "new-host.example.com"
+        assert data["port"] == 5433
+        # Fields not provided should not be in the output
+        assert "username" not in data
+        assert "password" not in data
+
+    def test_update_partial_fields_only(self):
+        from gateway.models import ConnectionUpdate
+        update = ConnectionUpdate(description="Updated description")
+        data = update.model_dump(exclude_none=True)
+        assert data == {"description": "Updated description"}
+
+
+# ── Pool Manager Close Pool ──────────────────────────────────────────────
+
+class TestPoolManagerClosePool:
+    @pytest.mark.asyncio
+    async def test_close_pool_empty(self):
+        from gateway.connectors.pool_manager import PoolManager
+        pm = PoolManager()
+        closed = await pm.close_pool("nonexistent")
+        assert closed == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

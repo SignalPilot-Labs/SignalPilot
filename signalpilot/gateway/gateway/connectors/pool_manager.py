@@ -254,6 +254,28 @@ class PoolManager:
                 tunnel.stop()
             self._tunnels.clear()
 
+    async def close_pool(self, key_substring: str) -> int:
+        """Close pools whose key contains the given substring.
+
+        Used when connection credentials change and existing pools are stale.
+        Pass the connection string or a unique identifier to match.
+        Returns number of pools closed.
+        """
+        closed = 0
+        async with self._lock:
+            stale_keys = [k for k in self._pools if key_substring in k]
+            for key in stale_keys:
+                connector, _ = self._pools.pop(key)
+                try:
+                    await connector.close()
+                except Exception:
+                    pass
+                if key in self._tunnels:
+                    self._tunnels[key].stop()
+                    del self._tunnels[key]
+                closed += 1
+        return closed
+
     @property
     def pool_count(self) -> int:
         return len(self._pools)

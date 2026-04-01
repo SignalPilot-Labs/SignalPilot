@@ -104,6 +104,31 @@ class ConnectionCreate(BaseModel):
     description: str = Field(default="", max_length=500)
 
 
+class ConnectionUpdate(BaseModel):
+    """Partial update for an existing connection. Only provided fields are changed."""
+    db_type: DBType | None = None
+    host: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    database: str | None = Field(default=None, max_length=128)
+    username: str | None = Field(default=None, max_length=128)
+    password: str | None = Field(default=None, max_length=1024)
+    connection_string: str | None = Field(default=None, max_length=4096)
+    ssl: bool | None = None
+    ssl_config: SSLConfig | None = None
+    ssh_tunnel: SSHTunnelConfig | None = None
+    account: str | None = Field(default=None, max_length=255)
+    warehouse: str | None = Field(default=None, max_length=128)
+    schema_name: str | None = Field(default=None, max_length=128)
+    role: str | None = Field(default=None, max_length=128)
+    project: str | None = Field(default=None, max_length=255)
+    dataset: str | None = Field(default=None, max_length=255)
+    credentials_json: str | None = Field(default=None, max_length=65536)
+    http_path: str | None = Field(default=None, max_length=512)
+    access_token: str | None = Field(default=None, max_length=1024)
+    catalog: str | None = Field(default=None, max_length=128)
+    description: str | None = Field(default=None, max_length=500)
+
+
 class ConnectionInfo(BaseModel):
     id: str
     name: str

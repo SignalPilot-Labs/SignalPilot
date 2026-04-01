@@ -151,12 +151,17 @@ def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") ->
     existing_limit = parsed.args.get("limit")
     if existing_limit:
         try:
-            current = int(existing_limit.this.this)
-            if current > max_rows:
-                existing_limit.this.this = str(max_rows)
+            # sqlglot stores limit value as either .this.this or .expression.this
+            limit_expr = existing_limit.expression or existing_limit.this
+            current = int(limit_expr.this) if limit_expr else None
+            if current is not None and current > max_rows:
+                parsed.set(
+                    "limit",
+                    exp.Limit(expression=exp.Literal.number(max_rows)),
+                )
         except Exception:
             pass
     else:
-        parsed.set("limit", exp.Limit(this=exp.Literal.number(max_rows)))
+        parsed.set("limit", exp.Limit(expression=exp.Literal.number(max_rows)))
 
     return parsed.sql(dialect=dialect)

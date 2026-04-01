@@ -14,13 +14,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-try:
-    import sqlglot
-    import sqlglot.expressions as exp
-
-    HAS_SQLGLOT = True
-except ImportError:
-    HAS_SQLGLOT = False
+import sqlglot
+import sqlglot.expressions as exp
 
 # DDL/DML statement types that must be blocked
 _BLOCKED_STATEMENT_TYPES = {
@@ -50,14 +45,17 @@ def validate_sql(
     if not sql:
         return ValidationResult(ok=False, blocked_reason="Empty query")
 
+    if "\x00" in sql:
+        return ValidationResult(ok=False, blocked_reason="Null bytes are not allowed in SQL")
+
+    if len(sql) > 100_000:
+        return ValidationResult(ok=False, blocked_reason="Query exceeds maximum length (100KB)")
+
     if _STACKING_PATTERN.search(sql.rstrip(";")):
         return ValidationResult(
             ok=False,
             blocked_reason="Statement stacking detected (multiple statements separated by ';')",
         )
-
-    if not HAS_SQLGLOT:
-        return ValidationResult(ok=True, tables=[], columns=[])
 
     try:
         statements = sqlglot.parse(sql, dialect=dialect)
@@ -107,12 +105,6 @@ def validate_sql(
 def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") -> str:
     sql = sql.strip().rstrip(";")
 
-    if not HAS_SQLGLOT:
-        upper = sql.upper()
-        if "LIMIT" not in upper:
-            return f"{sql} LIMIT {max_rows}"
-        return sql
-
     try:
         parsed = sqlglot.parse_one(sql, dialect=dialect)
     except Exception:
@@ -123,13 +115,15 @@ def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") ->
 
     existing_limit = parsed.args.get("limit")
     if existing_limit:
-        try:
-            current = int(existing_limit.this.this)
-            if current > max_rows:
-                existing_limit.this.this = str(max_rows)
-        except Exception:
-            pass
+        limit_expr = existing_limit.expression
+        if limit_expr is not None:
+            try:
+                current = int(limit_expr.this)
+                if current > max_rows:
+                    limit_expr.set("this", str(max_rows))
+            except (ValueError, TypeError):
+                pass
     else:
-        parsed.set("limit", exp.Limit(this=exp.Literal.number(max_rows)))
+        parsed.set("limit", exp.Limit(expression=exp.Literal.number(max_rows)))
 
     return parsed.sql(dialect=dialect)

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import time
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Settings ────────────────────────────────────────────────────────────────
@@ -42,8 +43,18 @@ class DBType(str, Enum):
     snowflake = "snowflake"
 
 
+_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
 class ConnectionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not _NAME_PATTERN.match(v):
+            raise ValueError("Connection name must contain only alphanumeric characters, hyphens, and underscores")
+        return v
     db_type: DBType
     host: str | None = None
     port: int | None = None
@@ -95,8 +106,8 @@ class SandboxInfo(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
-    code: str
-    timeout: int = 30
+    code: str = Field(..., max_length=1_000_000)  # 1MB limit
+    timeout: int = Field(default=30, ge=1, le=300)
 
 
 class ExecuteResult(BaseModel):

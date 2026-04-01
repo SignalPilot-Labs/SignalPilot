@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 import aiofiles
 
@@ -125,11 +126,12 @@ def get_connection_string(name: str) -> str | None:
 
 def _build_connection_string(conn: ConnectionCreate) -> str:
     if conn.db_type == DBType.postgres:
-        pw = f":{conn.password}" if conn.password else ""
+        user = quote_plus(conn.username) if conn.username else ""
+        pw = f":{quote_plus(conn.password)}" if conn.password else ""
         host = conn.host or "localhost"
         port = conn.port or 5432
         db = conn.database or "postgres"
-        return f"postgresql://{conn.username}{pw}@{host}:{port}/{db}"
+        return f"postgresql://{user}{pw}@{host}:{port}/{db}"
     elif conn.db_type == DBType.duckdb:
         return conn.database or ":memory:"
     return ""

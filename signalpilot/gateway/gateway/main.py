@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -99,11 +100,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_ALLOWED_ORIGINS = os.getenv(
+    "SP_CORS_ORIGINS", "http://localhost:3200"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
+    allow_credentials=False,
 )
 
 
@@ -292,12 +298,16 @@ class QueryRequest(ConnectionCreate.__class__):
     pass
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+_MAX_SQL_LENGTH = 100_000  # 100KB
+_MAX_CODE_LENGTH = 1_000_000  # 1MB
 
 
 class DirectQueryRequest(BaseModel):
     connection_name: str
-    sql: str
+    sql: str = Field(..., max_length=_MAX_SQL_LENGTH)
     row_limit: int = 10_000
 
 
@@ -340,7 +350,9 @@ async def query_database(req: DirectQueryRequest):
         await connector.close()
     except Exception as e:
         await connector.close()
-        raise HTTPException(status_code=500, detail=str(e))
+        import logging
+        logging.getLogger(__name__).error("Query execution failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Query execution failed")
 
     elapsed_ms = (time.monotonic() - start) * 1000
 

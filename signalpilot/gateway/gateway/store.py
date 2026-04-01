@@ -5,6 +5,7 @@ Uses JSON files for MVP (easy to inspect, no DB dependency).
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import stat
@@ -40,18 +41,33 @@ def _ensure_data_dir():
 
 
 def _load_json(path: Path, default: Any) -> Any:
+    """Load JSON file with shared (read) locking to prevent read-write races (MED-08 fix)."""
     _ensure_data_dir()
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text())
+        with open(path, "r") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except Exception:
         return default
 
 
 def _save_json(path: Path, data: Any):
+    """Save JSON file with exclusive locking to prevent concurrent write races (MED-08 fix)."""
     _ensure_data_dir()
-    path.write_text(json.dumps(data, indent=2))
+    content = json.dumps(data, indent=2)
+    with open(path, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     # Restrict file permissions to owner-only (0600) for sensitive data
     try:
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)

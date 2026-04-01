@@ -68,6 +68,10 @@ async def execute_code(code: str, timeout: int = 30) -> str:
     Returns:
         The stdout output from the code, or an error message.
     """
+    # Input length validation (MED-07)
+    if len(code) > 1_000_000:
+        return "Error: Code exceeds maximum length (1MB)"
+
     sandbox_url = _get_sandbox_url()
 
     async with httpx.AsyncClient(timeout=timeout + 10) as client:
@@ -133,6 +137,11 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         Query results as formatted text, or an error message.
     """
     from .connectors.registry import get_connector
+    from .connectors.base import BaseConnector
+
+    # Input length validation (MED-07)
+    if len(sql) > 100_000:
+        return "Error: SQL query exceeds maximum length (100KB)"
 
     conn_info = get_connection(connection_name)
     if not conn_info:
@@ -147,7 +156,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             timestamp=time.time(),
             event_type="block",
             connection_name=connection_name,
-            sql=sql,
+            sql=sql[:1000],  # Truncate in audit to prevent log bloat
             blocked=True,
             block_reason=validation.blocked_reason,
         ))
@@ -161,17 +170,26 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     if not conn_str:
         return "Error: No credentials stored for this connection (restart gateway to reload)"
 
-    connector = get_connector(conn_info.db_type)
+    # Use persistent pool (reuse across queries)
+    if not hasattr(query_database, "_pool_cache"):
+        query_database._pool_cache = {}
+
+    pool_cache = query_database._pool_cache
+    connector = pool_cache.get(connection_name)
+    if connector and not await connector.health_check():
+        await connector.close()
+        connector = None
+
+    if connector is None:
+        connector = get_connector(conn_info.db_type)
+        await connector.connect(conn_str, ssl=conn_info.ssl)
+        pool_cache[connection_name] = connector
+
     start = time.monotonic()
     try:
-        await connector.connect(conn_str)
         rows = await connector.execute(safe_sql)
-        await connector.close()
     except Exception as e:
-        try:
-            await connector.close()
-        except Exception:
-            pass
+        pool_cache.pop(connection_name, None)
         return f"Query error: {e}"
 
     elapsed_ms = (time.monotonic() - start) * 1000

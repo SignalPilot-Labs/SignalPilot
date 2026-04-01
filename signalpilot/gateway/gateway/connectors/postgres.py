@@ -116,16 +116,29 @@ class PostgresConnector(BaseConnector):
             ORDER BY schemaname, tablename, indexname
         """
 
+        # Column statistics from pg_stats — helps Spider2.0 understand data distribution
+        stats_sql = """
+            SELECT
+                schemaname AS table_schema,
+                tablename AS table_name,
+                attname AS column_name,
+                n_distinct,
+                most_common_vals::text AS common_values
+            FROM pg_stats
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+        """
+
         # Run queries concurrently using separate connections from pool
         async def _fetch(query: str):
             async with self._pool.acquire() as c:
                 return await c.fetch(query)
 
-        rows, fk_rows, count_rows, idx_rows = await asyncio.gather(
+        rows, fk_rows, count_rows, idx_rows, stat_rows = await asyncio.gather(
             _fetch(sql),
             _fetch(fk_sql),
             _fetch(row_count_sql),
             _fetch(index_sql),
+            _fetch(stats_sql),
         )
 
         # Build row count map
@@ -146,6 +159,20 @@ class PostgresConnector(BaseConnector):
                 "references_table": r["foreign_table_name"],
                 "references_column": r["foreign_column_name"],
             })
+
+        # Build column stats map (n_distinct: positive = exact count, negative = fraction of rows)
+        col_stats: dict[str, dict] = {}
+        for r in stat_rows:
+            stat_key = f"{r['table_schema']}.{r['table_name']}.{r['column_name']}"
+            n_distinct = r.get("n_distinct", 0)
+            stats: dict[str, Any] = {}
+            if n_distinct is not None:
+                if n_distinct > 0:
+                    stats["distinct_count"] = int(n_distinct)
+                elif n_distinct < 0:
+                    # Negative means fraction of rows (e.g., -1 = all unique)
+                    stats["distinct_fraction"] = float(n_distinct)
+            col_stats[stat_key] = stats
 
         # Build index map
         indexes: dict[str, list[dict]] = {}
@@ -172,14 +199,18 @@ class PostgresConnector(BaseConnector):
                     "row_count": row_counts.get(key, 0),
                     "description": row["table_comment"] or "",
                 }
-            schema[key]["columns"].append({
+            stat_key = f"{row['table_schema']}.{row['table_name']}.{row['column_name']}"
+            col_entry: dict[str, Any] = {
                 "name": row["column_name"],
                 "type": row["data_type"],
                 "nullable": row["is_nullable"] == "YES",
                 "primary_key": row["is_primary_key"],
                 "default": row["column_default"],
                 "comment": row["column_comment"] or "",
-            })
+            }
+            if stat_key in col_stats:
+                col_entry["stats"] = col_stats[stat_key]
+            schema[key]["columns"].append(col_entry)
         return schema
 
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:

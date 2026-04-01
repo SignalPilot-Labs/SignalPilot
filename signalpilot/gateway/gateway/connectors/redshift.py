@@ -182,6 +182,25 @@ class RedshiftConnector(BaseConnector):
 
         return schema
 
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Get sample distinct values for schema linking optimization."""
+        if self._conn is None:
+            return {}
+        result: dict[str, list] = {}
+        for col in columns[:20]:
+            try:
+                with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(
+                        f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                    )
+                    rows = cursor.fetchall()
+                    values = [str(r[col]) for r in rows if r.get(col) is not None]
+                    if values:
+                        result[col] = values
+            except Exception:
+                continue
+        return result
+
     async def health_check(self) -> bool:
         if self._conn is None:
             return False

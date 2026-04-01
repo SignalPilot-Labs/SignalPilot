@@ -423,7 +423,12 @@ def _compress_schema(schema: dict) -> dict:
         for col in table.get("columns", []):
             col_type = col.get("type", "")
             nullable = "" if col.get("nullable", True) else " NOT NULL"
-            cols.append(f"{col['name']} {col_type}{nullable}")
+            # Add cardinality hint for unique columns (helps Spider2.0 join planning)
+            unique_hint = ""
+            stats = col.get("stats", {})
+            if stats.get("distinct_fraction") == -1.0:
+                unique_hint = " UNIQUE"
+            cols.append(f"{col['name']} {col_type}{nullable}{unique_hint}")
             if col.get("primary_key"):
                 pk_cols.append(col["name"])
 

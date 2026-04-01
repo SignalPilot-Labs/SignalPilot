@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
+import { Tooltip } from "@/components/ui/tooltip";
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
   const s = active ? "currentColor" : "currentColor";
@@ -256,36 +257,42 @@ export default function Sidebar() {
 
       {/* Status footer */}
       <div className="px-4 py-3 border-t border-[var(--color-border)] space-y-2.5">
-        <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
-            <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
-          </span>
-          <span className="tracking-[0.15em] uppercase">governance active</span>
-        </div>
-        <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)]">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-            <circle cx="5" cy="5" r="4" stroke="var(--color-border-hover)" strokeWidth="1" fill="none" />
-            <path d="M5 2.5V5L6.5 6.5" stroke="var(--color-text-dim)" strokeWidth="0.8" strokeLinecap="round" />
-          </svg>
-          <span className="tracking-wider">uptime <UptimeCounter /></span>
-        </div>
+        <Tooltip content="all governance guards are active" position="right">
+          <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-default">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
+              <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
+            </span>
+            <span className="tracking-[0.15em] uppercase">governance active</span>
+          </div>
+        </Tooltip>
+        <Tooltip content="session uptime since page load" position="right">
+          <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)] cursor-default">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <circle cx="5" cy="5" r="4" stroke="var(--color-border-hover)" strokeWidth="1" fill="none" />
+              <path d="M5 2.5V5L6.5 6.5" stroke="var(--color-text-dim)" strokeWidth="0.8" strokeLinecap="round" />
+            </svg>
+            <span className="tracking-wider">uptime <UptimeCounter /></span>
+          </div>
+        </Tooltip>
         {/* System info line */}
         <div className="separator-subtle" />
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-              <path d="M1 4H3L4 2L5 6L6 4H7" stroke="var(--color-text-dim)" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
-              v0.1.0
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
+          <Tooltip content="signalpilot gateway version" position="right">
+            <div className="flex items-center gap-1.5 cursor-default">
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4H3L4 2L5 6L6 4H7" stroke="var(--color-text-dim)" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                v0.1.0
+              </span>
+            </div>
+          </Tooltip>
+          <Tooltip content="bring your own firecracker" position="left">
             <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
               byof
             </span>
-          </div>
+          </Tooltip>
         </div>
       </div>
     </aside>

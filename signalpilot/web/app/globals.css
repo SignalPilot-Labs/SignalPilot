@@ -1,35 +1,103 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0a0a0f;
-  --color-bg-card: #12121a;
-  --color-bg-hover: #1a1a25;
-  --color-bg-input: #0d0d14;
-  --color-border: #1e1e2e;
-  --color-border-hover: #2e2e42;
-  --color-text: #e4e4ef;
-  --color-text-muted: #6b6b8a;
-  --color-text-dim: #44445a;
-  --color-accent: #6366f1;
-  --color-accent-hover: #818cf8;
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-error: #ef4444;
-  --color-sidebar: #08080d;
+  --color-bg: #050505;
+  --color-bg-card: #0a0a0a;
+  --color-bg-hover: #111111;
+  --color-bg-input: #080808;
+  --color-border: #1a1a1a;
+  --color-border-hover: #2a2a2a;
+  --color-text: #e8e8e8;
+  --color-text-muted: #777777;
+  --color-text-dim: #444444;
+  --color-accent: #ffffff;
+  --color-accent-hover: #cccccc;
+  --color-success: #00ff88;
+  --color-warning: #ffaa00;
+  --color-error: #ff4444;
+  --color-sidebar: #030303;
+  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@latest/fonts/variable/JetBrainsMono[wght].woff2") format("woff2");
 }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-border-hover); }
 
 /* Terminal styling */
 .terminal-container .xterm { padding: 12px; }
 .terminal-container .xterm-viewport { overflow-y: auto !important; }
+
+/* Blinking cursor animation */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* Subtle scan-line effect for terminal areas */
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+/* Grid background pattern */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Dot grid pattern */
+.bg-dots {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Focus ring style */
+*:focus-visible {
+  outline: 1px solid var(--color-text-dim);
+  outline-offset: 1px;
+}
+
+/* Selection */
+::selection {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* Smooth transitions for interactive elements */
+a, button, input, select, textarea {
+  transition: all 0.15s ease;
+}
+
+/* Status pulse */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}

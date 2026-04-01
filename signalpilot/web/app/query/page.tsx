@@ -51,7 +51,6 @@ export default function QueryExplorerPage() {
   const [copied, setCopied] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load history from localStorage on mount
   useEffect(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
@@ -100,7 +99,6 @@ export default function QueryExplorerPage() {
   }, [sql, selectedConn, rowLimit, history]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    // Ctrl/Cmd + Enter to execute
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       runQuery();
@@ -162,15 +160,18 @@ export default function QueryExplorerPage() {
     <div className="p-8 flex flex-col h-screen max-h-screen">
       <div className="flex items-center justify-between mb-6 flex-shrink-0">
         <div>
-          <h1 className="text-2xl font-semibold mb-1">Query Explorer</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">
-            Run governed, read-only SQL queries against your databases
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-lg font-light tracking-wide">query</h1>
+            <span className="text-[9px] text-[var(--color-text-dim)] tracking-widest uppercase">/ explorer</span>
+          </div>
+          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">
+            governed, read-only sql queries
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Shield className="w-4 h-4 text-[var(--color-success)]" />
-          <span className="text-xs text-[var(--color-text-muted)]">
-            Read-only &middot; DDL/DML blocked &middot; LIMIT enforced
+          <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
+          <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+            read-only / ddl blocked / limit enforced
           </span>
         </div>
       </div>
@@ -181,10 +182,10 @@ export default function QueryExplorerPage() {
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
-            className="appearance-none pl-3 pr-8 py-2 rounded-lg bg-[var(--color-bg-card)] border border-[var(--color-border)] text-sm focus:outline-none focus:border-[var(--color-accent)] min-w-[200px]"
+            className="appearance-none pl-3 pr-8 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[200px] tracking-wide"
           >
             {connections.length === 0 ? (
-              <option value="">No connections</option>
+              <option value="">no connections</option>
             ) : (
               connections.map((c) => (
                 <option key={c.name} value={c.name}>
@@ -193,18 +194,18 @@ export default function QueryExplorerPage() {
               ))
             )}
           </select>
-          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--color-text-dim)] pointer-events-none" />
+          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--color-text-dim)] pointer-events-none" />
         </div>
 
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-[var(--color-text-muted)]">Limit:</label>
+          <label className="text-[10px] text-[var(--color-text-dim)] tracking-wider">limit:</label>
           <input
             type="number"
             value={rowLimit}
             onChange={(e) =>
               setRowLimit(Math.max(1, Math.min(100000, Number(e.target.value) || 1000)))
             }
-            className="w-24 px-2 py-2 rounded-lg bg-[var(--color-bg-card)] border border-[var(--color-border)] text-sm text-center focus:outline-none focus:border-[var(--color-accent)]"
+            className="w-20 px-2 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs text-center focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums"
           />
         </div>
 
@@ -213,14 +214,14 @@ export default function QueryExplorerPage() {
         <button
           onClick={runQuery}
           disabled={executing || !sql.trim() || !selectedConn}
-          className="flex items-center gap-2 px-5 py-2 rounded-lg bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white text-sm font-medium transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-5 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
         >
           {executing ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
-            <Play className="w-4 h-4" />
+            <Play className="w-3.5 h-3.5" />
           )}
-          Execute
+          execute
         </button>
       </div>
 
@@ -231,96 +232,95 @@ export default function QueryExplorerPage() {
           value={sql}
           onChange={(e) => setSql(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="SELECT * FROM users LIMIT 10;   (Ctrl+Enter to execute)"
+          placeholder="SELECT * FROM users LIMIT 10;   (ctrl+enter to execute)"
           rows={6}
           spellCheck={false}
-          className="w-full px-4 py-3 rounded-xl bg-[var(--color-bg-card)] border border-[var(--color-border)] text-sm font-mono focus:outline-none focus:border-[var(--color-accent)] resize-y placeholder:text-[var(--color-text-dim)]"
+          className="w-full px-4 py-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-y placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
         />
-        <div className="absolute bottom-3 right-3 text-[10px] text-[var(--color-text-dim)]">
+        <div className="absolute bottom-3 right-3 text-[9px] text-[var(--color-text-dim)] tabular-nums">
           {sql.length > 0 && `${sql.length} chars`}
         </div>
       </div>
 
       {/* Error display */}
       {error && (
-        <div className="mb-4 flex items-start gap-3 p-4 rounded-xl bg-[var(--color-error)]/5 border border-[var(--color-error)]/20 flex-shrink-0">
-          <XCircle className="w-4 h-4 text-[var(--color-error)] mt-0.5 flex-shrink-0" />
+        <div className="mb-4 flex items-start gap-3 p-4 border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 flex-shrink-0">
+          <XCircle className="w-3.5 h-3.5 text-[var(--color-error)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
           <div>
-            <p className="text-sm font-medium text-[var(--color-error)] mb-1">
-              Query Error
+            <p className="text-xs text-[var(--color-error)] mb-1 tracking-wider">
+              query error
             </p>
-            <p className="text-xs text-[var(--color-text-muted)]">{error}</p>
+            <p className="text-[10px] text-[var(--color-text-muted)]">{error}</p>
           </div>
         </div>
       )}
 
       {/* Results */}
       {result && (
-        <div className="flex-1 flex flex-col min-h-0 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           {/* Result header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-shrink-0">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5 text-xs text-[var(--color-success)]">
-                <Table2 className="w-3.5 h-3.5" />
-                {result.row_count.toLocaleString()} row
-                {result.row_count !== 1 ? "s" : ""}
+              <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-success)] tracking-wider">
+                <Table2 className="w-3 h-3" strokeWidth={1.5} />
+                {result.row_count.toLocaleString()} row{result.row_count !== 1 ? "s" : ""}
               </span>
-              <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
-                <Clock className="w-3.5 h-3.5" />
+              <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                <Clock className="w-3 h-3" strokeWidth={1.5} />
                 {result.execution_ms.toFixed(0)}ms
               </span>
               {result.tables.length > 0 && (
-                <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
-                  <Database className="w-3.5 h-3.5" />
+                <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                  <Database className="w-3 h-3" strokeWidth={1.5} />
                   {result.tables.join(", ")}
                 </span>
               )}
               {result.cache_hit && (
-                <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[var(--color-success)]/10 text-[var(--color-success)] font-medium">
-                  <Zap className="w-3 h-3" /> Cached
+                <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 border border-[var(--color-success)]/30 text-[var(--color-success)] tracking-wider uppercase">
+                  <Zap className="w-2.5 h-2.5" /> cached
                 </span>
               )}
               {result.cost_estimate && (
-                <span className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                <span className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 border tracking-wider ${
                   result.cost_estimate.is_expensive
-                    ? "bg-[var(--color-error)]/10 text-[var(--color-error)]"
-                    : "bg-[var(--color-bg)] text-[var(--color-text-dim)]"
+                    ? "border-[var(--color-error)]/30 text-[var(--color-error)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)]"
                 }`}>
-                  <DollarSign className="w-3 h-3" />
+                  <DollarSign className="w-2.5 h-2.5" />
                   ~${result.cost_estimate.estimated_usd.toFixed(6)}
                 </span>
               )}
               {result.pii_redacted && result.pii_redacted.length > 0 && (
-                <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 font-medium">
-                  <Shield className="w-3 h-3" /> PII redacted ({result.pii_redacted.length})
+                <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 border border-[var(--color-warning)]/30 text-[var(--color-warning)] tracking-wider uppercase">
+                  <Shield className="w-2.5 h-2.5" /> pii redacted ({result.pii_redacted.length})
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <button
                 onClick={copyResults}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 {copied ? (
-                  <Check className="w-3.5 h-3.5 text-[var(--color-success)]" />
+                  <Check className="w-3 h-3 text-[var(--color-success)]" />
                 ) : (
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-3 h-3" />
                 )}
-                {copied ? "Copied" : "Copy"}
+                {copied ? "copied" : "copy"}
               </button>
               <button
                 onClick={exportCSV}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
-                <Download className="w-3.5 h-3.5" />
-                CSV
+                <Download className="w-3 h-3" />
+                csv
               </button>
               <button
                 onClick={exportJSON}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
-                <Download className="w-3.5 h-3.5" />
-                JSON
+                <Download className="w-3 h-3" />
+                json
               </button>
             </div>
           </div>
@@ -328,27 +328,27 @@ export default function QueryExplorerPage() {
           {/* Result table */}
           <div className="flex-1 overflow-auto">
             {result.rows.length === 0 ? (
-              <div className="flex items-center justify-center py-12 text-sm text-[var(--color-text-dim)]">
-                Query returned 0 rows
+              <div className="flex items-center justify-center py-12 text-xs text-[var(--color-text-dim)]">
+                query returned 0 rows
               </div>
             ) : (
-              <table className="w-full text-xs">
+              <table className="w-full text-[11px]">
                 <thead className="sticky top-0 bg-[var(--color-bg-card)]">
                   <tr className="border-b border-[var(--color-border)]">
-                    <th className="px-3 py-2 text-left text-[10px] font-medium text-[var(--color-text-dim)] uppercase tracking-wider w-10">
+                    <th className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest w-10">
                       #
                     </th>
                     {Object.keys(result.rows[0]).map((col) => (
                       <th
                         key={col}
-                        className="px-3 py-2 text-left text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider"
+                        className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-widest"
                       >
                         {col}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--color-border)]/50">
+                <tbody className="divide-y divide-[var(--color-border)]/30">
                   {result.rows.map((row, i) => (
                     <tr
                       key={i}
@@ -360,15 +360,15 @@ export default function QueryExplorerPage() {
                       {Object.values(row).map((val, j) => (
                         <td
                           key={j}
-                          className="px-3 py-1.5 text-[var(--color-text)] max-w-[300px] truncate"
+                          className="px-3 py-1.5 text-[var(--color-text-muted)] max-w-[300px] truncate"
                           title={val == null ? "NULL" : String(val)}
                         >
                           {val == null ? (
                             <span className="text-[var(--color-text-dim)] italic">
-                              NULL
+                              null
                             </span>
                           ) : typeof val === "number" ? (
-                            <span className="tabular-nums text-[var(--color-accent)]">
+                            <span className="tabular-nums text-[var(--color-text)]">
                               {val.toLocaleString()}
                             </span>
                           ) : typeof val === "boolean" ? (
@@ -397,11 +397,11 @@ export default function QueryExplorerPage() {
           {result.sql_executed !== sql.trim() && (
             <div className="px-4 py-2 border-t border-[var(--color-border)] flex-shrink-0">
               <div className="flex items-center gap-2">
-                <AlertTriangle className="w-3 h-3 text-[var(--color-warning)]" />
-                <span className="text-[10px] text-[var(--color-text-muted)]">
-                  Governed SQL (LIMIT injected):
+                <AlertTriangle className="w-3 h-3 text-[var(--color-warning)]" strokeWidth={1.5} />
+                <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                  governed sql (limit injected):
                 </span>
-                <code className="text-[10px] text-[var(--color-text-dim)] font-mono truncate">
+                <code className="text-[10px] text-[var(--color-text-dim)] truncate">
                   {result.sql_executed}
                 </code>
               </div>
@@ -410,21 +410,21 @@ export default function QueryExplorerPage() {
         </div>
       )}
 
-      {/* Query history sidebar */}
+      {/* Query history */}
       {history.length > 0 && !result && !error && (
-        <div className="mt-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-            <h3 className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
-              Recent Queries ({history.length})
-            </h3>
+        <div className="mt-4 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
+            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-widest">
+              history ({history.length})
+            </span>
             <button
               onClick={() => { setHistory([]); localStorage.removeItem(HISTORY_KEY); }}
-              className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors"
+              className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors tracking-wider"
             >
-              Clear
+              clear
             </button>
           </div>
-          <div className="divide-y divide-[var(--color-border)]/50 max-h-72 overflow-auto">
+          <div className="divide-y divide-[var(--color-border)]/30 max-h-72 overflow-auto">
             {history.map((h, i) => (
               <button
                 key={i}
@@ -434,15 +434,15 @@ export default function QueryExplorerPage() {
                 }}
                 className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors"
               >
-                <code className="text-xs text-[var(--color-text)] block truncate">
+                <code className="text-[11px] text-[var(--color-text-muted)] block truncate">
                   {h.sql}
                 </code>
-                <div className="flex items-center gap-3 mt-1 text-[10px] text-[var(--color-text-dim)]">
+                <div className="flex items-center gap-3 mt-1 text-[9px] text-[var(--color-text-dim)] tracking-wider">
                   <span>{h.connection}</span>
-                  <span>{h.duration_ms.toFixed(0)}ms</span>
-                  {h.row_count != null && <span>{h.row_count} rows</span>}
+                  <span className="tabular-nums">{h.duration_ms.toFixed(0)}ms</span>
+                  {h.row_count != null && <span className="tabular-nums">{h.row_count} rows</span>}
                   {h.cache_hit && <span className="text-[var(--color-success)]">cached</span>}
-                  <span>{new Date(h.ts).toLocaleTimeString()}</span>
+                  <span className="tabular-nums">{new Date(h.ts).toLocaleTimeString()}</span>
                 </div>
               </button>
             ))}

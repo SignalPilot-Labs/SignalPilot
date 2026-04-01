@@ -1,106 +1,56 @@
 "use client";
 
-import {
-  Shield,
-  FileSearch,
-  Gauge,
-  Filter,
-  Eye,
-  ScrollText,
-  CheckCircle2,
-  XCircle,
-  ArrowRight,
-} from "lucide-react";
-
 interface PipelineStep {
   id: string;
   label: string;
-  icon: React.ElementType;
   description: string;
-  status: "active" | "passed" | "blocked" | "idle";
 }
 
 const PIPELINE_STEPS: PipelineStep[] = [
-  {
-    id: "parse",
-    label: "SQL Parse",
-    icon: FileSearch,
-    description: "AST validation via sqlglot — blocks DDL/DML, stacking",
-    status: "idle",
-  },
-  {
-    id: "policy",
-    label: "Policy Check",
-    icon: Shield,
-    description: "Blocked tables, schema annotations, read-only enforcement",
-    status: "idle",
-  },
-  {
-    id: "cost",
-    label: "Cost Estimate",
-    icon: Gauge,
-    description: "EXPLAIN-based pre-estimation, budget check",
-    status: "idle",
-  },
-  {
-    id: "limit",
-    label: "Row Limit",
-    icon: Filter,
-    description: "LIMIT injection/clamping to prevent context overflow",
-    status: "idle",
-  },
-  {
-    id: "pii",
-    label: "PII Redaction",
-    icon: Eye,
-    description: "Hash/mask/drop flagged columns before returning results",
-    status: "idle",
-  },
-  {
-    id: "audit",
-    label: "Audit Log",
-    icon: ScrollText,
-    description: "Append-only JSONL with full query chain for compliance",
-    status: "idle",
-  },
+  { id: "parse", label: "sql_parse", description: "AST validation via sqlglot — blocks DDL/DML, stacking" },
+  { id: "policy", label: "policy_check", description: "Blocked tables, schema annotations, read-only enforcement" },
+  { id: "cost", label: "cost_estimate", description: "EXPLAIN-based pre-estimation, budget check" },
+  { id: "limit", label: "row_limit", description: "LIMIT injection/clamping to prevent context overflow" },
+  { id: "pii", label: "pii_redact", description: "Hash/mask/drop flagged columns before returning results" },
+  { id: "audit", label: "audit_log", description: "Append-only JSONL with full query chain for compliance" },
 ];
-
-const statusColors = {
-  active: "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]",
-  passed: "border-[var(--color-success)] bg-[var(--color-success)]/10 text-[var(--color-success)]",
-  blocked: "border-[var(--color-error)] bg-[var(--color-error)]/10 text-[var(--color-error)]",
-  idle: "border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)]",
-};
 
 export function GovernancePipeline() {
   return (
-    <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <Shield className="w-4 h-4 text-[var(--color-success)]" />
-        <h3 className="text-sm font-medium">Query Governance Pipeline</h3>
+    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+      <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center gap-3">
+        <span className="text-[10px] uppercase tracking-widest text-[var(--color-text-dim)]">
+          governance pipeline
+        </span>
+        <span className="text-[9px] text-[var(--color-text-dim)]">
+          6-stage query validation
+        </span>
       </div>
-      <div className="flex items-center gap-1 overflow-x-auto pb-2">
-        {PIPELINE_STEPS.map((step, i) => {
-          const Icon = step.icon;
-          return (
-            <div key={step.id} className="flex items-center gap-1 flex-shrink-0">
+      <div className="px-4 py-4">
+        <div className="flex items-center gap-0 overflow-x-auto">
+          {PIPELINE_STEPS.map((step, i) => (
+            <div key={step.id} className="flex items-center flex-shrink-0">
               <div
-                className={`flex flex-col items-center gap-1.5 px-3 py-2 rounded-lg border ${statusColors[step.status]} transition-all min-w-[90px]`}
+                className="group relative px-3 py-2 border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-bg-hover)] hover:border-[var(--color-border-hover)] transition-all cursor-default"
                 title={step.description}
               >
-                <Icon className="w-4 h-4" />
-                <span className="text-[10px] font-medium whitespace-nowrap">{step.label}</span>
+                <div className="text-[10px] font-medium text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors tracking-wide">
+                  {step.label}
+                </div>
+                <div className="text-[9px] text-[var(--color-text-dim)] mt-0.5 tracking-wider">
+                  step_{i + 1}
+                </div>
               </div>
               {i < PIPELINE_STEPS.length - 1 && (
-                <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] flex-shrink-0" />
+                <div className="w-4 h-px bg-[var(--color-border)] flex-shrink-0" />
               )}
             </div>
-          );
-        })}
+          ))}
+        </div>
+        <p className="text-[9px] text-[var(--color-text-dim)] mt-3 tracking-wider">
+          every query passes through this pipeline before results reach the agent
+        </p>
       </div>
-      <p className="text-[10px] text-[var(--color-text-dim)] mt-2">
-        Every query passes through this 6-stage governance pipeline before results reach the agent.
-      </p>
     </div>
   );
 }

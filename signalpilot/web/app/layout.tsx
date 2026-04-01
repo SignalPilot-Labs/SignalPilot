@@ -18,7 +18,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className="antialiased">
         <Sidebar />
-        <main className="ml-60 min-h-screen">
+        <main className="ml-56 min-h-screen bg-dots">
           <ErrorBoundary>{children}</ErrorBoundary>
           <KeyboardShortcuts />
         </main>

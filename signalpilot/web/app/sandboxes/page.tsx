@@ -18,8 +18,9 @@ import {
 import { getSandboxes, createSandbox, deleteSandbox, getConnections } from "@/lib/api";
 import type { SandboxInfo, ConnectionInfo } from "@/lib/types";
 import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
+import { useToast } from "@/components/ui/toast";
 
 const statusConfig: Record<string, { indicator: string; label: string }> = {
   ready: { indicator: "bg-blue-400", label: "ready" },
@@ -30,6 +31,7 @@ const statusConfig: Record<string, { indicator: string; label: string }> = {
 };
 
 export default function SandboxesPage() {
+  const { toast } = useToast();
   const [sandboxes, setSandboxes] = useState<SandboxInfo[]>([]);
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [creating, setCreating] = useState(false);
@@ -57,7 +59,7 @@ export default function SandboxesPage() {
       setSandboxes((p) => [sb, ...p]);
       setShowCreate(false);
       setForm({ label: "", connection_name: "" });
-    } catch (e) { alert(String(e)); }
+    } catch (e) { toast(String(e), "error"); }
     finally { setCreating(false); }
   }
 
@@ -81,6 +83,16 @@ export default function SandboxesPage() {
           </button>
         }
       />
+
+      <TerminalBar
+        path="sandboxes --list --watch"
+        status={<StatusDot status={sandboxes.some(s => s.status === "running") ? "healthy" : sandboxes.length > 0 ? "warning" : "unknown"} size={4} pulse={sandboxes.some(s => s.status === "running")} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">total: <code className="text-[10px] text-[var(--color-text)]">{sandboxes.length}</code></span>
+          <span className="text-[var(--color-text-dim)]">running: <code className="text-[10px] text-[var(--color-success)]">{sandboxes.filter(s => s.status === "running").length}</code></span>
+        </div>
+      </TerminalBar>
 
       {/* Create dialog */}
       {showCreate && (

@@ -16,7 +16,8 @@ import {
 import { getConnections, getConnectionSchema, detectPII } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { StatusDot } from "@/components/ui/data-viz";
 
 interface Column {
   name: string;
@@ -200,6 +201,16 @@ export default function SchemaExplorerPage() {
         </div>
         }
       />
+
+      <TerminalBar
+        path={`schema ${selectedConn || "—"} --introspect`}
+        status={<StatusDot status={schema ? "healthy" : loading ? "unknown" : "error"} size={4} pulse={loading} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">tables: <code className="text-[10px] text-[var(--color-text)]">{schema ? Object.keys(schema.tables).length : "—"}</code></span>
+          <span className="text-[var(--color-text-dim)]">db: <code className="text-[10px] text-[var(--color-text)]">{schema?.db_type || "—"}</code></span>
+        </div>
+      </TerminalBar>
 
       {/* Search + stats + type legend */}
       {schema && (

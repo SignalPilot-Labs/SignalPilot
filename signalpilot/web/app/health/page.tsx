@@ -26,7 +26,7 @@ import {
 } from "@/lib/api";
 import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
 import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { RingGauge, StatusDot } from "@/components/ui/data-viz";
 
 const statusConfig: Record<string, { color: string; bg: string; icon: React.ElementType; label: string }> = {
@@ -126,6 +126,16 @@ export default function HealthPage() {
           </div>
         }
       />
+
+      <TerminalBar
+        path="health --monitor"
+        status={<StatusDot status={overallHealthy === overallTotal && overallTotal > 0 ? "healthy" : overallTotal > 0 ? "warning" : "unknown"} size={4} pulse={autoRefresh} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">nodes: <code className="text-[10px] text-[var(--color-text)]">{overallHealthy}/{overallTotal}</code></span>
+          <span className="text-[var(--color-text-dim)]">refresh: <code className="text-[10px] text-[var(--color-text)]">{autoRefresh ? "10s" : "manual"}</code></span>
+        </div>
+      </TerminalBar>
 
       {/* Overview cards */}
       <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">

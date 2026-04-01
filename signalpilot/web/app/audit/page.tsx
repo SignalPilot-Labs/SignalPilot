@@ -16,8 +16,8 @@ import {
 import { getAudit, getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
 import { EmptyList, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader } from "@/components/ui/page-header";
-import { ActivityDots } from "@/components/ui/data-viz";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { ActivityDots, StatusDot } from "@/components/ui/data-viz";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
@@ -130,6 +130,16 @@ export default function AuditPage() {
         </div>
         </>}
       />
+
+      <TerminalBar
+        path="audit --tail -f"
+        status={<StatusDot status={entries.length > 0 ? "healthy" : "unknown"} size={4} pulse={loading} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">events: <code className="text-[10px] text-[var(--color-text)]">{entries.length}</code></span>
+          {statsData.blocked > 0 && <span className="text-[var(--color-error)]">blocked: <code className="text-[10px]">{statsData.blocked}</code></span>}
+        </div>
+      </TerminalBar>
 
       {/* Stats bar */}
       {entries.length > 0 && (

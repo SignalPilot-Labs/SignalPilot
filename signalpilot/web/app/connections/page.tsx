@@ -29,7 +29,7 @@ import {
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 
@@ -142,6 +142,15 @@ export default function ConnectionsPage() {
           </button>
         }
       />
+
+      <TerminalBar
+        path="connections --list"
+        status={<StatusDot status={connections.length > 0 ? "healthy" : "unknown"} size={4} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">registered: <code className="text-[10px] text-[var(--color-text)]">{connections.length}</code></span>
+        </div>
+      </TerminalBar>
 
       {/* Create form */}
       {showForm && (

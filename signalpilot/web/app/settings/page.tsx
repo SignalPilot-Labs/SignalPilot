@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { getSettings, updateSettings, getHealth, setApiKey } from "@/lib/api";
 import type { GatewaySettings } from "@/lib/types";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 
 function SectionHeader({ icon: Icon, title, iconColor }: { icon: React.ElementType; title: string; iconColor?: string }) {
@@ -101,6 +102,15 @@ export default function SettingsPage() {
         subtitle="config"
         description="configure signalpilot instance, auth, and governance"
       />
+
+      <TerminalBar
+        path="settings --edit"
+        status={<StatusDot status={settings ? "healthy" : "unknown"} size={4} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">instance: <code className="text-[10px] text-[var(--color-text)]">{settings ? "loaded" : "—"}</code></span>
+        </div>
+      </TerminalBar>
 
       {/* Browser Authentication */}
       <section className="mb-8">

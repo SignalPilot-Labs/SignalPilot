@@ -10,6 +10,9 @@ import {
   Loader2,
   Clock,
   Cpu,
+  DollarSign,
+  Shield,
+  Database,
 } from "lucide-react";
 import { getSandboxes, createSandbox, deleteSandbox, getConnections } from "@/lib/api";
 import type { SandboxInfo, ConnectionInfo } from "@/lib/types";
@@ -179,29 +182,51 @@ export default function SandboxesPage() {
                 </button>
               </div>
 
-              <div className="space-y-2 text-xs text-[var(--color-text-muted)]">
+              <div className="space-y-1.5 text-xs text-[var(--color-text-muted)]">
+                {sb.connection_name && (
+                  <div className="flex items-center gap-2">
+                    <Database className="w-3 h-3" />
+                    <span>{sb.connection_name}</span>
+                  </div>
+                )}
                 {sb.vm_id && (
                   <div className="flex items-center gap-2">
                     <Cpu className="w-3 h-3" />
-                    <span>
-                      VM: <code>{sb.vm_id}</code>
-                    </span>
-                  </div>
-                )}
-                {sb.connection_name && (
-                  <div className="flex items-center gap-2">
-                    <Terminal className="w-3 h-3" />
-                    <span>{sb.connection_name}</span>
+                    <code className="text-[10px]">{sb.vm_id}</code>
                   </div>
                 )}
                 <div className="flex items-center gap-2">
                   <Clock className="w-3 h-3" />
-                  <span>
-                    {new Date(sb.created_at * 1000).toLocaleTimeString()}
+                  <span>{new Date(sb.created_at * 1000).toLocaleTimeString()}</span>
+                  {sb.uptime_sec != null && sb.uptime_sec > 0 && (
+                    <span className="text-[var(--color-text-dim)]">
+                      ({sb.uptime_sec < 60 ? `${sb.uptime_sec.toFixed(0)}s` : `${(sb.uptime_sec / 60).toFixed(0)}m`})
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 pt-1">
+                  <span className="flex items-center gap-1">
+                    <DollarSign className="w-3 h-3" />
+                    ${sb.budget_used.toFixed(4)} / ${sb.budget_usd.toFixed(2)}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Shield className="w-3 h-3 text-[var(--color-success)]" />
+                    {sb.row_limit.toLocaleString()}
                   </span>
                 </div>
+                {/* Budget progress bar */}
+                {sb.budget_usd > 0 && (
+                  <div className="w-full h-1 bg-[var(--color-bg)] rounded-full overflow-hidden mt-1">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        sb.budget_used / sb.budget_usd > 0.8 ? "bg-[var(--color-error)]" : "bg-[var(--color-success)]"
+                      }`}
+                      style={{ width: `${Math.min(100, (sb.budget_used / sb.budget_usd) * 100)}%` }}
+                    />
+                  </div>
+                )}
                 {sb.boot_ms != null && (
-                  <span className="inline-block px-2 py-0.5 rounded bg-[var(--color-success)]/10 text-[var(--color-success)]">
+                  <span className="inline-block px-2 py-0.5 rounded bg-[var(--color-success)]/10 text-[var(--color-success)] text-[10px]">
                     Boot: {sb.boot_ms.toFixed(0)}ms
                   </span>
                 )}

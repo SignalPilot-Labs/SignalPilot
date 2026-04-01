@@ -453,6 +453,28 @@ async def query_database(req: DirectQueryRequest):
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
+    # Cost estimation (Feature #13) — run EXPLAIN before execution
+    cost_estimate = None
+    try:
+        from .governance.cost_estimator import CostEstimator
+        estimator_connector = await pool_manager.acquire(info.db_type, conn_str)
+        cost_estimate = await CostEstimator.estimate(estimator_connector, safe_sql, info.db_type)
+        await pool_manager.release(info.db_type, conn_str)
+
+        # Check budget before executing expensive queries
+        if cost_estimate.is_expensive and cost_estimate.estimated_usd > 0:
+            # Warn in audit log but don't block (policy-based blocking is a future feature)
+            await append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="query",
+                connection_name=req.connection_name,
+                sql=req.sql,
+                metadata={"cost_warning": True, "estimated_usd": cost_estimate.estimated_usd, "estimated_rows": cost_estimate.estimated_rows},
+            ))
+    except Exception:
+        pass  # Cost estimation is best-effort
+
     start = time.monotonic()
     try:
         connector = await pool_manager.acquire(info.db_type, conn_str)
@@ -504,7 +526,7 @@ async def query_database(req: DirectQueryRequest):
         metadata={"pii_redacted": pii_redactor.last_redacted_columns} if pii_redactor.last_redacted_columns else {},
     ))
 
-    return {
+    response = {
         "rows": rows,
         "row_count": len(rows),
         "tables": validation.tables,
@@ -513,6 +535,13 @@ async def query_database(req: DirectQueryRequest):
         "cache_hit": False,
         "pii_redacted": pii_redactor.last_redacted_columns if pii_redactor.last_redacted_columns else None,
     }
+    if cost_estimate and not cost_estimate.warning:
+        response["cost_estimate"] = {
+            "estimated_rows": cost_estimate.estimated_rows,
+            "estimated_usd": round(cost_estimate.estimated_usd, 8),
+            "is_expensive": cost_estimate.is_expensive,
+        }
+    return response
 
 
 # ─── Audit ───────────────────────────────────────────────────────────────────

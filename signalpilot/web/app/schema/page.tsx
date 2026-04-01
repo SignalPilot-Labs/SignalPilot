@@ -17,7 +17,8 @@ import { getConnections, getConnectionSchema, detectPII } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot } from "@/components/ui/data-viz";
+import { StatusDot, StackedBar } from "@/components/ui/data-viz";
+import { Tooltip } from "@/components/ui/tooltip";
 
 interface Column {
   name: string;
@@ -254,6 +255,42 @@ export default function SchemaExplorerPage() {
             </div>
           </div>
           <TypeLegend />
+
+          {/* Column type distribution bar */}
+          {(() => {
+            const allCols = Object.values(schema.tables).flatMap(t => t.columns);
+            const typeCounts: Record<string, number> = {};
+            for (const col of allCols) {
+              const baseType = col.type.toLowerCase().replace(/\(.*\)/, "").trim();
+              const category =
+                /^(int|bigint|smallint|serial|int[248])$/.test(baseType) ? "int" :
+                /^(numeric|decimal|real|double|float|float[48])/.test(baseType) ? "float" :
+                /^(text|varchar|char)/.test(baseType) ? "text" :
+                /^(bool)/.test(baseType) ? "bool" :
+                /^(timestamp|date|time)/.test(baseType) ? "time" :
+                /^(json)/.test(baseType) ? "json" :
+                /^(uuid)/.test(baseType) ? "uuid" :
+                "other";
+              typeCounts[category] = (typeCounts[category] || 0) + 1;
+            }
+            const segments = [
+              { value: typeCounts.int || 0, color: "#60a5fa", label: `int: ${typeCounts.int || 0}` },
+              { value: typeCounts.float || 0, color: "#22d3ee", label: `float: ${typeCounts.float || 0}` },
+              { value: typeCounts.text || 0, color: "#4ade80", label: `text: ${typeCounts.text || 0}` },
+              { value: typeCounts.bool || 0, color: "#facc15", label: `bool: ${typeCounts.bool || 0}` },
+              { value: typeCounts.time || 0, color: "#a78bfa", label: `time: ${typeCounts.time || 0}` },
+              { value: typeCounts.json || 0, color: "#fb923c", label: `json: ${typeCounts.json || 0}` },
+              { value: (typeCounts.uuid || 0) + (typeCounts.other || 0), color: "#94a3b8", label: `other: ${(typeCounts.uuid || 0) + (typeCounts.other || 0)}` },
+            ].filter(s => s.value > 0);
+            if (segments.length === 0) return null;
+            return (
+              <Tooltip content={segments.map(s => s.label).join(" · ")} position="bottom">
+                <div className="cursor-default">
+                  <StackedBar segments={segments} width={400} height={4} />
+                </div>
+              </Tooltip>
+            );
+          })()}
         </div>
       )}
 

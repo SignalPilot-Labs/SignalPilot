@@ -755,6 +755,52 @@ async def invalidate_cache(connection_name: str | None = None):
     return {"invalidated": count, "connection_name": connection_name}
 
 
+@app.post("/api/connections/{name}/detect-pii")
+async def detect_pii(name: str):
+    """Auto-detect PII columns in a database schema based on naming patterns.
+
+    Returns suggested PII rules for columns with names matching known
+    PII patterns (email, ssn, phone, etc.). Results should be reviewed
+    and saved to schema.yml annotations.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored for this connection")
+
+    # Get schema (from cache if available)
+    cached_schema = schema_cache.get(name)
+    if cached_schema is None:
+        try:
+            connector = await pool_manager.acquire(info.db_type, conn_str)
+            cached_schema = await connector.get_schema()
+            await pool_manager.release(info.db_type, conn_str)
+            schema_cache.put(name, cached_schema)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+    from .governance.pii import detect_pii_columns
+
+    all_detections: dict[str, dict[str, str]] = {}
+    for table_key, table_data in cached_schema.items():
+        columns = [col["name"] for col in table_data.get("columns", [])]
+        detected = detect_pii_columns(columns)
+        if detected:
+            all_detections[table_data.get("name", table_key)] = {
+                col: rule.value for col, rule in detected.items()
+            }
+
+    return {
+        "connection_name": name,
+        "tables_scanned": len(cached_schema),
+        "tables_with_pii": len(all_detections),
+        "detections": all_detections,
+    }
+
+
 @app.get("/api/schema-cache/stats")
 async def schema_cache_stats():
     """Get schema cache statistics (Feature #18)."""

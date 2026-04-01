@@ -118,6 +118,72 @@ class PIIRedactor:
         return bool(self._rules)
 
 
+# ─── Auto-Detection ─────────────────────────────────────────────────────────
+
+# Column name patterns that commonly contain PII
+_PII_PATTERNS: dict[str, PIIRule] = {
+    # Direct identifiers
+    "ssn": PIIRule.hash,
+    "social_security": PIIRule.hash,
+    "national_id": PIIRule.hash,
+    "passport": PIIRule.hash,
+    "tax_id": PIIRule.hash,
+    "drivers_license": PIIRule.hash,
+    # Contact info
+    "email": PIIRule.mask,
+    "email_address": PIIRule.mask,
+    "phone": PIIRule.mask,
+    "phone_number": PIIRule.mask,
+    "mobile": PIIRule.mask,
+    "address": PIIRule.mask,
+    "street_address": PIIRule.mask,
+    "home_address": PIIRule.mask,
+    # Financial
+    "credit_card": PIIRule.hash,
+    "card_number": PIIRule.hash,
+    "account_number": PIIRule.hash,
+    "bank_account": PIIRule.hash,
+    "routing_number": PIIRule.hash,
+    "iban": PIIRule.hash,
+    # Auth/secrets
+    "password": PIIRule.drop,
+    "password_hash": PIIRule.drop,
+    "secret": PIIRule.drop,
+    "api_key": PIIRule.drop,
+    "access_token": PIIRule.drop,
+    "refresh_token": PIIRule.drop,
+    # Health
+    "diagnosis": PIIRule.mask,
+    "medical_record": PIIRule.hash,
+    # Personal
+    "date_of_birth": PIIRule.mask,
+    "dob": PIIRule.mask,
+    "salary": PIIRule.mask,
+    "income": PIIRule.mask,
+}
+
+
+def detect_pii_columns(column_names: list[str]) -> dict[str, PIIRule]:
+    """Auto-detect likely PII columns based on naming patterns.
+
+    Returns a dict of column_name -> suggested PIIRule for columns
+    whose names match known PII patterns. This is a heuristic —
+    results should be reviewed by a human and saved to schema.yml.
+    """
+    detected: dict[str, PIIRule] = {}
+    for col in column_names:
+        col_lower = col.lower().replace("-", "_")
+        if col_lower in _PII_PATTERNS:
+            detected[col] = _PII_PATTERNS[col_lower]
+        else:
+            # Check if the column name contains any PII keyword
+            for pattern, rule in _PII_PATTERNS.items():
+                if pattern in col_lower:
+                    detected[col] = rule
+                    break
+    return detected
+
+
 def _hash_value(val: Any) -> str:
     """SHA-256 hash a value, returning first 12 chars of hex digest."""
     if val is None:

@@ -57,15 +57,28 @@ const PIPELINE_STEPS: PipelineStep[] = [
 
 function PipelineConnectorSVG() {
   return (
-    <svg width="24" height="40" viewBox="0 0 24 40" fill="none" className="flex-shrink-0">
+    <svg width="32" height="40" viewBox="0 0 32 40" fill="none" className="flex-shrink-0">
+      {/* Dashed line with flow animation */}
       <line
-        x1="0" y1="20" x2="24" y2="20"
+        x1="0" y1="20" x2="32" y2="20"
         stroke="var(--color-border-hover)"
         strokeWidth="1"
         strokeDasharray="3 3"
         className="pipeline-connector"
       />
-      <circle cx="12" cy="20" r="1.5" fill="var(--color-border-hover)" />
+      {/* Arrow head */}
+      <path
+        d="M26 16L32 20L26 24"
+        stroke="var(--color-border-hover)"
+        strokeWidth="1"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Flow dot */}
+      <circle r="1.5" fill="var(--color-success)" opacity="0.6">
+        <animateMotion dur="1.5s" repeatCount="indefinite" path="M0,20 L32,20" />
+      </circle>
     </svg>
   );
 }
@@ -93,6 +106,16 @@ export function GovernancePipeline() {
       {/* Pipeline visualization */}
       <div className="px-4 py-5">
         <div className="flex items-center justify-between overflow-x-auto">
+          {/* Input indicator */}
+          <div className="flex items-center gap-1 flex-shrink-0 mr-2">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="1" width="12" height="12" stroke="var(--color-success)" strokeWidth="1" fill="none" opacity="0.4" />
+              <text x="7" y="10" textAnchor="middle" fill="var(--color-success)" fontSize="7" fontFamily="monospace">Q</text>
+            </svg>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+              <path d="M2 6H10M7 3L10 6L7 9" stroke="var(--color-border-hover)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
           {PIPELINE_STEPS.map((step, i) => (
             <div key={step.id} className="flex items-center flex-shrink-0">
               <div
@@ -147,6 +170,16 @@ export function GovernancePipeline() {
               {i < PIPELINE_STEPS.length - 1 && <PipelineConnectorSVG />}
             </div>
           ))}
+          {/* Output indicator */}
+          <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+              <path d="M2 6H10M7 3L10 6L7 9" stroke="var(--color-border-hover)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="1" width="12" height="12" stroke="var(--color-success)" strokeWidth="1" fill="var(--color-success)" opacity="0.15" />
+              <path d="M4 7L6 9L10 5" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
 
         {/* Footer note */}

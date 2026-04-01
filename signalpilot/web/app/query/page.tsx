@@ -21,6 +21,7 @@ import { getConnections, executeQuery as apiExecuteQuery } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 import { EmptyQuery, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 
 interface QueryResult {
@@ -186,6 +187,16 @@ export default function QueryExplorerPage() {
           }
         />
       </div>
+
+      <TerminalBar
+        path={`query ${selectedConn || "—"} --governed --read-only`}
+        status={<StatusDot status={selectedConn ? "healthy" : "unknown"} size={4} pulse={executing} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">history: <code className="text-[10px] text-[var(--color-text)]">{history.length}</code></span>
+          {result && <span className="text-[var(--color-success)]">rows: <code className="text-[10px]">{result.row_count}</code></span>}
+        </div>
+      </TerminalBar>
 
       {/* Connection bar + controls */}
       <div className="flex items-center gap-3 mb-4 flex-shrink-0">

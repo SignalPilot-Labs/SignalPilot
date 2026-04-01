@@ -37,6 +37,7 @@ class SQLiteConnector(BaseConnector):
 
         schema: dict[str, Any] = {}
         for table in tables:
+            # Column info
             cursor = self._conn.execute(f"PRAGMA table_info([{table}])")
             columns = []
             for row in cursor.fetchall():
@@ -45,11 +46,36 @@ class SQLiteConnector(BaseConnector):
                     "type": row[2],
                     "nullable": not row[3],
                     "primary_key": bool(row[5]),
+                    "default": row[4],
                 })
+
+            # Foreign keys — critical for Spider2.0-Lite join path discovery
+            foreign_keys = []
+            try:
+                cursor = self._conn.execute(f"PRAGMA foreign_key_list([{table}])")
+                for fk_row in cursor.fetchall():
+                    foreign_keys.append({
+                        "column": fk_row[3],  # from column
+                        "references_table": fk_row[2],  # table
+                        "references_column": fk_row[4],  # to column
+                    })
+            except Exception:
+                pass
+
+            # Row count estimate
+            row_count = 0
+            try:
+                cursor = self._conn.execute(f"SELECT COUNT(*) FROM [{table}]")
+                row_count = cursor.fetchone()[0]
+            except Exception:
+                pass
+
             schema[table] = {
                 "schema": "main",
                 "name": table,
                 "columns": columns,
+                "foreign_keys": foreign_keys,
+                "row_count": row_count,
             }
         return schema
 

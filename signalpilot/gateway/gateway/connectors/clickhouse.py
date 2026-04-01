@@ -50,21 +50,44 @@ class ClickHouseConnector(BaseConnector):
         self._client = CHClient(**connect_args)
 
     def _parse_connection_string(self, conn_str: str) -> dict:
-        """Parse clickhouse://user:pass@host:port/db or clickhouses://... format."""
+        """Parse ClickHouse connection strings.
+
+        Supported formats:
+        - clickhouse://user:pass@host:9000/db (native TCP, default)
+        - clickhouses://user:pass@host:9440/db (native TCP + TLS)
+        - clickhouse+http://user:pass@host:8123/db (HTTP protocol)
+        - clickhouse+https://user:pass@host:8443/db (HTTPS protocol)
+        """
         from urllib.parse import urlparse, unquote
 
         secure = False
+        use_http = False
         s = conn_str
-        if s.startswith("clickhouses://"):
+
+        if s.startswith("clickhouse+https://"):
+            secure = True
+            use_http = True
+            s = "clickhouse://" + s[len("clickhouse+https://"):]
+        elif s.startswith("clickhouse+http://"):
+            use_http = True
+            s = "clickhouse://" + s[len("clickhouse+http://"):]
+        elif s.startswith("clickhouses://"):
             secure = True
             s = "clickhouse://" + s[len("clickhouses://"):]
         elif not s.startswith("clickhouse://"):
             s = "clickhouse://" + s
 
         parsed = urlparse(s)
+
+        # Default port depends on protocol and TLS
+        if use_http:
+            default_port = 8443 if secure else 8123
+        else:
+            default_port = 9440 if secure else 9000
+
         result = {
             "host": parsed.hostname or "localhost",
-            "port": parsed.port or (9440 if secure else 9000),
+            "port": parsed.port or default_port,
             "user": unquote(parsed.username or "default"),
             "password": unquote(parsed.password or ""),
             "database": parsed.path.lstrip("/") or "default",

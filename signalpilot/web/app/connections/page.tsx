@@ -473,7 +473,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         onChange={(v) => setForm({ ...form, connection_string: v })}
         type="password"
         placeholder={urlHints[form.db_type] || "connection string"}
-        hint="full connection URL including credentials"
+        hint={form.db_type === "clickhouse" ? "native: clickhouse://... | HTTP: clickhouse+http://..." : "full connection URL including credentials"}
         className="col-span-2"
       />
     );

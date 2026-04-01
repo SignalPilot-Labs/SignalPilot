@@ -787,5 +787,48 @@ class TestTableGrouping:
         assert "public.settings" in groups["_other"]
 
 
+# ── ClickHouse URL Parsing ──────────────────────────────────────────────
+
+class TestClickHouseURLParsing:
+    def test_native_tcp(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        params = c._parse_connection_string("clickhouse://admin:pass@myhost:9000/analytics")
+        assert params["host"] == "myhost"
+        assert params["port"] == 9000
+        assert params["user"] == "admin"
+        assert params["database"] == "analytics"
+
+    def test_native_tls(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        params = c._parse_connection_string("clickhouses://admin:pass@cloud.clickhouse.com/analytics")
+        assert params["host"] == "cloud.clickhouse.com"
+        assert params["port"] == 9440
+        assert params.get("secure") is True
+
+    def test_http_protocol(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        params = c._parse_connection_string("clickhouse+http://admin:pass@myhost:8123/analytics")
+        assert params["host"] == "myhost"
+        assert params["port"] == 8123
+        assert params["database"] == "analytics"
+
+    def test_https_protocol(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        params = c._parse_connection_string("clickhouse+https://admin:pass@cloud.clickhouse.com/analytics")
+        assert params["host"] == "cloud.clickhouse.com"
+        assert params["port"] == 8443
+        assert params.get("secure") is True
+
+    def test_default_port_native(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        params = c._parse_connection_string("clickhouse://default@localhost/default")
+        assert params["port"] == 9000
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

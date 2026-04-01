@@ -63,8 +63,12 @@ export default function Sidebar() {
       </nav>
 
       {/* Status footer */}
-      <div className="px-4 py-3 border-t border-[var(--color-border)] text-xs text-[var(--color-text-dim)]">
-        v0.1.0 &middot; BYOF Ready
+      <div className="px-4 py-3 border-t border-[var(--color-border)] text-xs text-[var(--color-text-dim)] space-y-1">
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" />
+          <span>Governance Active</span>
+        </div>
+        <div>v0.1.0 &middot; BYOF Ready</div>
       </div>
     </aside>
   );

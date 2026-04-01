@@ -14,6 +14,8 @@ import {
   Check,
   XCircle,
   Shield,
+  DollarSign,
+  Zap,
 } from "lucide-react";
 import { getConnections, executeQuery as apiExecuteQuery } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
@@ -24,6 +26,13 @@ interface QueryResult {
   tables: string[];
   execution_ms: number;
   sql_executed: string;
+  cache_hit?: boolean;
+  cost_estimate?: {
+    estimated_rows: number;
+    estimated_usd: number;
+    is_expensive: boolean;
+  };
+  pii_redacted?: string[];
 }
 
 const HISTORY_KEY = "sp_query_history";
@@ -251,6 +260,26 @@ export default function QueryExplorerPage() {
                 <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
                   <Database className="w-3.5 h-3.5" />
                   {result.tables.join(", ")}
+                </span>
+              )}
+              {result.cache_hit && (
+                <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[var(--color-success)]/10 text-[var(--color-success)] font-medium">
+                  <Zap className="w-3 h-3" /> Cached
+                </span>
+              )}
+              {result.cost_estimate && (
+                <span className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                  result.cost_estimate.is_expensive
+                    ? "bg-[var(--color-error)]/10 text-[var(--color-error)]"
+                    : "bg-[var(--color-bg)] text-[var(--color-text-dim)]"
+                }`}>
+                  <DollarSign className="w-3 h-3" />
+                  ~${result.cost_estimate.estimated_usd.toFixed(6)}
+                </span>
+              )}
+              {result.pii_redacted && result.pii_redacted.length > 0 && (
+                <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 font-medium">
+                  <Shield className="w-3 h-3" /> PII redacted ({result.pii_redacted.length})
                 </span>
               )}
             </div>

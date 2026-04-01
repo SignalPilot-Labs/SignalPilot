@@ -66,13 +66,19 @@ def _ensure_repo() -> None:
         except RuntimeError as e:
             print(f"[git] Warning: fetch failed: {e}")
     else:
-        # Fresh clone
+        # Fresh clone — clear contents first (dir may be a volume mount)
         print(f"[git] Cloning {ALLOWED_REPO} into {_WORK_DIR}...")
         if repo_dir.exists():
-            shutil.rmtree(repo_dir)
+            for item in repo_dir.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+        else:
+            repo_dir.mkdir(parents=True)
         _run(
-            ["git", "clone", "--depth", "50", "--no-single-branch", remote_url, _WORK_DIR],
-            cwd="/home/agentuser",
+            ["git", "clone", "--depth", "50", "--no-single-branch", remote_url, "."],
+            cwd=_WORK_DIR,
             timeout=300,
         )
         print("[git] Clone complete")

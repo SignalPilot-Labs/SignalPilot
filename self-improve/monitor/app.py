@@ -262,6 +262,29 @@ async def stop_agent_instant():
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
+class ResumeRunRequest(BaseModel):
+    run_id: str
+    max_budget_usd: float = 0
+
+
+@app.post("/api/agent/resume")
+async def resume_agent_run(body: ResumeRunRequest):
+    """Resume a previous run using its SDK session ID."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/resume",
+                json={"run_id": body.run_id, "max_budget_usd": body.max_budget_usd},
+            )
+            if res.status_code == 409:
+                raise HTTPException(status_code=409, detail=res.json().get("detail", "Run in progress"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
 @app.post("/api/agent/kill")
 async def kill_agent():
     """Immediately kill the running task. No cleanup."""

@@ -1,39 +1,27 @@
-# SignalPilot Firecracker Sandbox — Local Mode
+# SignalPilot Sandbox Manager — Shuru Backend
 #
 # Prerequisites:
-#   Linux:   /dev/kvm available (modprobe kvm)
-#   Win11:   .wslconfig → nestedVirtualization=true, restart WSL + Docker
-#   macOS:   Docker Desktop nested virtualization enabled
+#   macOS: brew tap superhq-ai/tap && brew install shuru
 #
-# Usage:
-#   docker-compose up -d
+# Preferred usage (run natively on macOS — Shuru uses Apple Virtualization.framework):
+#   python3 sandbox_manager.py
 #
-# The sandbox manager listens on :8080 for run_analysis requests from
-# the SignalPilot gateway. Each request spins up a Firecracker microVM,
+# The sandbox manager listens on :8080 for code execution requests from
+# the SignalPilot gateway. Each request spawns a Shuru microVM sandbox,
 # executes Python code, and returns results.
 
 services:
   sandbox:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.sandbox
     ports:
       - "8080:8080"
-    devices:
-      - "/dev/kvm:/dev/kvm"
-    cap_add:
-      - NET_ADMIN      # TAP device creation for VM networking
-      - SYS_ADMIN      # jailer needs this for cgroup management
     environment:
-      - SP_GATEWAY_URL=http://host.docker.internal:3100
-      - SP_MAX_VMS=10
-      - SP_VM_MEMORY_MB=512
-      - SP_VM_VCPUS=1
-      - SP_VM_TIMEOUT_SEC=300
+      - SP_GATEWAY_URL=http://host.docker.internal:3300
+      - SP_MAX_SANDBOXES=10
+      - SP_SANDBOX_MEMORY_MB=512
+      - SP_SANDBOX_CPUS=1
+      - SP_SANDBOX_TIMEOUT_SEC=300
       - SP_LOG_LEVEL=info
-    volumes:
-      - sandbox-overlays:/opt/signalpilot/overlays
     restart: unless-stopped
-
-volumes:
-  sandbox-overlays:

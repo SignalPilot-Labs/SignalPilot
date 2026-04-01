@@ -1,5 +1,9 @@
 # SignalPilot — local development stack
 # Usage: docker compose up --build
+#
+# NOTE: The sandbox manager now uses Shuru (macOS-native microVMs).
+# Run it directly on the host: python3 sp-firecracker-vm/sandbox_manager.py
+# Or use the sandbox docker-compose for containerised mode.
 
 services:
   gateway:
@@ -10,13 +14,10 @@ services:
       - "3300:3300"
     environment:
       - SP_DATA_DIR=/data
-      - SP_SANDBOX_MANAGER_URL=http://sandbox:8080
+      - SP_SANDBOX_MANAGER_URL=http://host.docker.internal:8080
     volumes:
       - sp-data:/data
     command: ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]
-    depends_on:
-      sandbox:
-        condition: service_started
     restart: unless-stopped
 
   web:
@@ -30,22 +31,6 @@ services:
     command: ["npm", "start", "--", "--port", "3200"]
     depends_on:
       - gateway
-    restart: unless-stopped
-
-  sandbox:
-    build:
-      context: ../../sp-firecracker-vm
-      dockerfile: Dockerfile.sandbox
-    ports:
-      - "8180:8080"
-    devices:
-      - /dev/kvm:/dev/kvm
-    privileged: true
-    environment:
-      - SP_GATEWAY_URL=http://gateway:3300
-      - SP_MAX_VMS=10
-      - SP_VM_MEMORY_MB=512
-      - SP_VM_VCPUS=1
     restart: unless-stopped
 
   postgres:

@@ -266,7 +266,7 @@ export default function SandboxDetailPage() {
           </button>
         </div>
         <p className="text-xs text-[var(--color-text-dim)] mt-2">
-          Code runs inside an isolated Firecracker microVM. Ctrl+Enter to
+          Code runs inside an isolated Shuru microVM sandbox. Ctrl+Enter to
           execute.
         </p>
       </div>

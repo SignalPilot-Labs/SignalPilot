@@ -58,8 +58,8 @@ def status():
         resp = httpx.get(f"{settings.sandbox_manager_url}/health", timeout=5)
         data = resp.json()
         typer.echo(f"Sandbox Health:      {data.get('status', 'unknown')}")
-        typer.echo(f"KVM Available:       {data.get('kvm_available', False)}")
-        typer.echo(f"Active VMs:          {data.get('active_vms', 0)} / {data.get('max_vms', 10)}")
+        typer.echo(f"Shuru Available:     {data.get('shuru_available', False)}")
+        typer.echo(f"Active Sandboxes:    {data.get('active_sandboxes', 0)} / {data.get('max_sandboxes', 10)}")
     except Exception as e:
         typer.echo(f"Sandbox Health:      error — {e}")
 

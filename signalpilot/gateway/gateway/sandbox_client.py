@@ -1,8 +1,9 @@
 """
-Firecracker Sandbox Client — BYOF (Bring Your Own Firecracker) abstraction.
+Sandbox Client — abstraction over the sandbox manager HTTP API.
 
-Talks to the sandbox_manager HTTP API (sp-firecracker-vm/sandbox_manager.py).
-The URL is configurable from the settings page, enabling BYOF deployments.
+Talks to the sandbox_manager HTTP API (sandbox_manager.py),
+which spawns Shuru microVM sandboxes for isolated code execution.
+The URL is configurable from the settings page.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from .models import ExecuteResult, SandboxInfo
 
 
 class SandboxClient:
-    """HTTP client for the Firecracker sandbox manager."""
+    """HTTP client for the Shuru sandbox manager."""
 
     def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 60):
         self.base_url = base_url.rstrip("/")
@@ -48,9 +49,9 @@ class SandboxClient:
         row_limit: int = 10_000,
     ) -> SandboxInfo:
         """
-        Spin up a new Firecracker microVM and return a SandboxInfo.
-        We create the VM lazily — on first execute call — to avoid the overhead
-        of booting a VM that may never run code.
+        Create a new sandbox session and return a SandboxInfo.
+        The actual Shuru microVM is created lazily — on first execute call —
+        to avoid the overhead of booting a VM that may never run code.
         """
         sandbox_id = str(uuid.uuid4())
         return SandboxInfo(
@@ -110,7 +111,7 @@ class SandboxClient:
                 success=False,
                 error=(
                     f"Cannot connect to sandbox manager at {self.base_url}. "
-                    "Check your BYOF settings or ensure Firecracker is running."
+                    "Check your settings or ensure the sandbox manager is running."
                 ),
                 execution_ms=(time.monotonic() - start) * 1000,
             )

@@ -101,8 +101,8 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-2">
           <Cpu className="w-4 h-4 text-[var(--color-text-muted)]" />
-          <span className="text-sm text-[var(--color-text-muted)]">KVM:</span>
-          <StatusBadge ok={metrics ? metrics.kvm_available : null} />
+          <span className="text-sm text-[var(--color-text-muted)]">Shuru:</span>
+          <StatusBadge ok={metrics ? metrics.shuru_available : null} />
         </div>
       </div>
 

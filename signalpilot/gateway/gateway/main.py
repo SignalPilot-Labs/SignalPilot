@@ -399,11 +399,11 @@ async def metrics_stream():
                 client = _get_sandbox_client()
                 data = await client.health()
                 sandbox_health = data.get("status", "unknown")
-                kvm_available = data.get("kvm_available", False)
-                active_vms = data.get("active_vms", 0)
-                max_vms = data.get("max_vms", 10)
+                shuru_available = data.get("shuru_available", False)
+                active_vms = data.get("active_sandboxes", 0)
+                max_vms = data.get("max_sandboxes", 10)
             except Exception:
-                kvm_available = False
+                shuru_available = False
                 active_vms = 0
                 max_vms = 10
 
@@ -411,7 +411,7 @@ async def metrics_stream():
                 "timestamp": time.time(),
                 "sandbox_manager": settings.sandbox_manager_url,
                 "sandbox_health": sandbox_health,
-                "kvm_available": kvm_available,
+                "shuru_available": shuru_available,
                 "active_sandboxes": len(sandboxes),
                 "running_sandboxes": running,
                 "active_vms": active_vms,

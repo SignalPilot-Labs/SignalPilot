@@ -68,7 +68,7 @@ export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;
   sandbox_health: string;
-  kvm_available: boolean;
+  shuru_available: boolean;
   active_sandboxes: number;
   running_sandboxes: number;
   active_vms: number;

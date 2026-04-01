@@ -68,7 +68,7 @@ export default function SandboxesPage() {
         <div>
           <h1 className="text-2xl font-semibold mb-1">Sandboxes</h1>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Firecracker microVMs for isolated code execution
+            Shuru microVM sandboxes for isolated code execution
           </p>
         </div>
         <button
@@ -147,7 +147,7 @@ export default function SandboxesPage() {
             No sandboxes yet
           </p>
           <p className="text-xs text-[var(--color-text-dim)]">
-            Create a sandbox to start executing code in an isolated Firecracker
+            Create a sandbox to start executing code in an isolated Shuru
             microVM
           </p>
         </div>

@@ -65,22 +65,22 @@ export default function SettingsPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-semibold mb-1">Settings</h1>
         <p className="text-sm text-[var(--color-text-muted)]">
-          Configure your SignalPilot instance and BYOF Firecracker connection
+          Configure your SignalPilot instance and sandbox connection
         </p>
       </div>
 
-      {/* BYOF Firecracker Configuration */}
+      {/* Sandbox Configuration */}
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <Server className="w-4 h-4 text-[var(--color-accent)]" />
           <h2 className="text-sm font-semibold uppercase tracking-wider">
-            Firecracker Sandbox (BYOF)
+            Shuru Sandbox
           </h2>
         </div>
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-6 space-y-4">
           <p className="text-xs text-[var(--color-text-muted)] -mt-1 mb-2">
-            Bring Your Own Firecracker — point to any sandbox manager endpoint,
-            local or remote. The sandbox manager handles microVM lifecycle.
+            Point to any sandbox manager endpoint, local or remote. The sandbox
+            manager handles Shuru microVM lifecycle.
           </p>
           <div>
             <label className="block text-xs text-[var(--color-text-muted)] mb-1">
@@ -117,7 +117,7 @@ export default function SettingsPage() {
               className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-input)] border border-[var(--color-border)] text-sm font-mono focus:outline-none focus:border-[var(--color-accent)]"
             />
             <p className="text-xs text-[var(--color-text-dim)] mt-1">
-              The HTTP endpoint of your Firecracker sandbox manager (
+              The HTTP endpoint of your Shuru sandbox manager (
               <code>sandbox_manager.py</code>)
             </p>
           </div>

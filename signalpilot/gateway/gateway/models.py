@@ -17,9 +17,9 @@ class SandboxProvider(str, Enum):
 
 
 class GatewaySettings(BaseModel):
-    # BYOF Firecracker configuration
+    # Sandbox configuration
     sandbox_provider: SandboxProvider = SandboxProvider.local
-    sandbox_manager_url: str = "http://localhost:8180"
+    sandbox_manager_url: str = "http://localhost:8080"
     sandbox_api_key: str | None = None
 
     # Governance defaults

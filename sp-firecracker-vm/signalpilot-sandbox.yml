@@ -4,19 +4,18 @@
 # The run_analysis tool behaves identically regardless of mode.
 
 sandbox:
-  # "local"     — Firecracker microVMs on your machine (requires KVM)
-  # "cloud"     — Firecracker on SignalPilot infrastructure (requires sp login)
+  # "local"     — Shuru microVMs on your machine (macOS, Apple Virtualization.framework)
+  # "cloud"     — Hosted sandbox infrastructure (requires sp login)
   # "container" — Hardened Docker containers (works everywhere, weaker isolation)
-  mode: container  # default: safest cross-platform option
+  mode: local  # default: Shuru microVMs on macOS
 
   local:
-    # Firecracker settings (only used when mode: local)
-    max_vms: 10
-    vm_memory_mb: 512
-    vm_vcpus: 1
-    vm_timeout_sec: 300
-    # Network: VMs can ONLY reach the gateway. No internet.
-    network_policy: gateway-only
+    # Shuru settings (only used when mode: local)
+    max_sandboxes: 10
+    memory_mb: 512
+    cpus: 1
+    timeout_sec: 300
+    checkpoint: sp-python   # pre-loaded Python checkpoint for fast start
 
   cloud:
     # SignalPilot Cloud settings (only used when mode: cloud)

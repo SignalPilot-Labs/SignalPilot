@@ -279,6 +279,116 @@ export function TrendIndicator({
 }
 
 /**
+ * Horizontal stacked bar — shows distribution of categories.
+ */
+export function StackedBar({
+  segments,
+  width = 120,
+  height = 6,
+}: {
+  segments: { value: number; color: string; label?: string }[];
+  width?: number;
+  height?: number;
+}) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0) || 1;
+  let offset = 0;
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+      <rect width={width} height={height} fill="var(--color-bg)" rx="0" />
+      {segments.map((seg, i) => {
+        const w = (seg.value / total) * width;
+        const x = offset;
+        offset += w;
+        return (
+          <rect
+            key={i}
+            x={x}
+            y={0}
+            width={Math.max(0, w - 0.5)}
+            height={height}
+            fill={seg.color}
+            opacity={0.8}
+            className="transition-all duration-300"
+          >
+            {seg.label && <title>{seg.label}: {seg.value}</title>}
+          </rect>
+        );
+      })}
+    </svg>
+  );
+}
+
+/**
+ * Area chart with gradient fill — larger version of sparkline for detail views.
+ */
+export function AreaChart({
+  values,
+  width = 200,
+  height = 60,
+  color = "var(--color-success)",
+  showGrid = true,
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+  color?: string;
+  showGrid?: boolean;
+}) {
+  if (values.length < 2) return null;
+  const padding = 2;
+  const chartW = width - padding * 2;
+  const chartH = height - padding * 2;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+
+  const points = values.map((v, i) => ({
+    x: padding + (i / (values.length - 1)) * chartW,
+    y: padding + chartH - ((v - min) / range) * chartH,
+  }));
+
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const fillPath = `M${padding},${height - padding} ${points.map(p => `L${p.x},${p.y}`).join(" ")} L${width - padding},${height - padding}Z`;
+
+  const gridLines = showGrid ? [0.25, 0.5, 0.75] : [];
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+      <defs>
+        <linearGradient id={`area-grad-${color.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.15" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {/* Grid lines */}
+      {gridLines.map((pct, i) => (
+        <line
+          key={i}
+          x1={padding}
+          y1={padding + chartH * (1 - pct)}
+          x2={width - padding}
+          y2={padding + chartH * (1 - pct)}
+          stroke="var(--color-border)"
+          strokeWidth="0.5"
+          strokeDasharray="2 4"
+        />
+      ))}
+      {/* Fill */}
+      <path d={fillPath} fill={`url(#area-grad-${color.replace(/[^a-z0-9]/gi, "")})`} />
+      {/* Line */}
+      <path d={linePath} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      {/* End dot */}
+      <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="2.5" fill={color} />
+      <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="4" fill={color} opacity="0.2">
+        <animate attributeName="r" values="4;7;4" dur="3s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.2;0;0.2" dur="3s" repeatCount="indefinite" />
+      </circle>
+    </svg>
+  );
+}
+
+/**
  * Status indicator with optional pulse.
  */
 export function StatusDot({

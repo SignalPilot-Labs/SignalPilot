@@ -18,7 +18,7 @@ import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, 
 import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { RingGauge, Sparkline, StatusDot, MiniBar } from "@/components/ui/data-viz";
+import { RingGauge, Sparkline, StatusDot, MiniBar, AreaChart, StackedBar } from "@/components/ui/data-viz";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 
 /* ── Metric card ── */
@@ -250,6 +250,58 @@ export default function DashboardPage() {
           icon={Clock}
         />
       </div>
+
+      {/* ── Latency + Distribution row ── */}
+      {latencyValues.length > 3 && (
+        <div className="grid grid-cols-3 gap-4 mb-8 stagger-fade-in">
+          <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query latency</span>
+              </div>
+              <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">last {latencyValues.length} ops</span>
+            </div>
+            <AreaChart values={latencyValues} width={600} height={80} color="var(--color-success)" />
+          </div>
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
+            <div className="flex items-center gap-2 mb-3">
+              <BarChart3 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
+            </div>
+            <div className="space-y-3">
+              <StackedBar
+                segments={[
+                  { value: auditStats.queries, color: "var(--color-success)", label: "queries" },
+                  { value: auditStats.executions, color: "#60a5fa", label: "executions" },
+                  { value: auditStats.blocks, color: "var(--color-error)", label: "blocked" },
+                ]}
+                width={200}
+                height={8}
+              />
+              <div className="flex items-center gap-4 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-success)]" />queries</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400" />exec</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-error)]" />blocked</span>
+              </div>
+              <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
+                {[
+                  { label: "queries", value: auditStats.queries, total: auditStats.total, color: "text-[var(--color-success)]" },
+                  { label: "executions", value: auditStats.executions, total: auditStats.total, color: "text-blue-400" },
+                  { label: "blocked", value: auditStats.blocks, total: auditStats.total, color: "text-[var(--color-error)]" },
+                ].map(row => (
+                  <div key={row.label} className="flex items-center justify-between">
+                    <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">{row.label}</span>
+                    <span className={`text-[10px] tabular-nums ${row.color}`}>
+                      {row.value} <span className="text-[var(--color-text-dim)]">/ {row.total > 0 ? ((row.value / row.total) * 100).toFixed(0) : 0}%</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Governance Pipeline ── */}
       <div className="mb-8">

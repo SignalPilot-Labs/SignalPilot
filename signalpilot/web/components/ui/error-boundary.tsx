@@ -1,7 +1,7 @@
 "use client";
 
 import { Component, type ReactNode } from "react";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -11,6 +11,31 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
+}
+
+function ErrorSVG() {
+  return (
+    <svg width="64" height="64" viewBox="0 0 64 64" fill="none" className="mb-6">
+      {/* Outer frame */}
+      <rect x="4" y="4" width="56" height="56" stroke="var(--color-error)" strokeWidth="1" opacity="0.3" />
+      {/* Inner warning triangle */}
+      <path
+        d="M32 16L48 48H16L32 16Z"
+        stroke="var(--color-error)"
+        strokeWidth="1.5"
+        fill="none"
+        opacity="0.6"
+      />
+      {/* Exclamation */}
+      <line x1="32" y1="26" x2="32" y2="38" stroke="var(--color-error)" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="32" cy="43" r="1.5" fill="var(--color-error)" />
+      {/* Corner marks */}
+      <path d="M4 12V4H12" stroke="var(--color-error)" strokeWidth="1" opacity="0.5" />
+      <path d="M52 4H60V12" stroke="var(--color-error)" strokeWidth="1" opacity="0.5" />
+      <path d="M60 52V60H52" stroke="var(--color-error)" strokeWidth="1" opacity="0.5" />
+      <path d="M12 60H4V52" stroke="var(--color-error)" strokeWidth="1" opacity="0.5" />
+    </svg>
+  );
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -28,11 +53,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       if (this.props.fallback) return this.props.fallback;
 
       return (
-        <div className="flex flex-col items-center justify-center py-16 px-8">
-          <AlertTriangle className="w-5 h-5 text-[var(--color-error)] mb-4" strokeWidth={1.5} />
-          <h2 className="text-xs tracking-wider mb-2">something went wrong</h2>
-          <p className="text-[10px] text-[var(--color-text-dim)] mb-4 max-w-md text-center tracking-wider">
+        <div className="flex flex-col items-center justify-center py-24 px-8 animate-fade-in">
+          <ErrorSVG />
+          <h2 className="text-xs tracking-wider mb-2 text-[var(--color-text)]">something went wrong</h2>
+          <p className="text-[10px] text-[var(--color-text-dim)] mb-2 max-w-md text-center tracking-wider leading-relaxed">
             {this.state.error?.message || "an unexpected error occurred."}
+          </p>
+          <p className="text-[9px] text-[var(--color-text-dim)] mb-6 tracking-wider">
+            try reloading the page to recover
           </p>
           <button
             onClick={() => {

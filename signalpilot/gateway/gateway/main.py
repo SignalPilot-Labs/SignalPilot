@@ -530,6 +530,10 @@ async def query_database(req: DirectQueryRequest):
         sql_executed=safe_sql,
     )
 
+    # Charge query cost to budget (Feature #11 + #12)
+    query_cost_usd = (elapsed_ms / 1000) * 0.000014
+    budget_ledger.charge("default", query_cost_usd)
+
     await append_audit(AuditEntry(
         id=str(uuid.uuid4()),
         timestamp=time.time(),
@@ -539,6 +543,7 @@ async def query_database(req: DirectQueryRequest):
         tables=validation.tables,
         rows_returned=len(rows),
         duration_ms=elapsed_ms,
+        cost_usd=query_cost_usd,
         metadata={"pii_redacted": pii_redactor.last_redacted_columns} if pii_redactor.last_redacted_columns else {},
     ))
 

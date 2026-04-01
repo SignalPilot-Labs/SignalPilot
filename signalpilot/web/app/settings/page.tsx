@@ -14,7 +14,6 @@ import {
   Eye,
   EyeOff,
   Info,
-  Copy,
   Plus,
   X,
   Ban,
@@ -24,6 +23,7 @@ import type { GatewaySettings } from "@/lib/types";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
+import { CodeBlock } from "@/components/ui/code-block";
 
 function SectionHeader({ icon: Icon, title, iconColor }: { icon: React.ElementType; title: string; iconColor?: string }) {
   return (
@@ -200,19 +200,23 @@ export default function SettingsPage() {
                 test sandbox connection
               </button>
               {healthResult && (
-                <div className="mt-3 p-3 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono animate-fade-in">
+                <div className="mt-3 animate-fade-in">
                   {"error" in healthResult ? (
-                    <span className="text-[var(--color-error)]">
-                      <XCircle className="w-3 h-3 inline mr-1" />{String(healthResult.error)}
-                    </span>
+                    <div className="p-3 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5">
+                      <span className="text-[10px] text-[var(--color-error)] flex items-center gap-1">
+                        <XCircle className="w-3 h-3" />{String(healthResult.error)}
+                      </span>
+                    </div>
                   ) : (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-1 text-[var(--color-success)]">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1 text-[10px] text-[var(--color-success)] tracking-wider">
                         <CheckCircle2 className="w-3 h-3" /> connected
                       </div>
-                      <pre className="text-[var(--color-text-dim)] whitespace-pre-wrap text-[9px]">
-                        {JSON.stringify(healthResult, null, 2)}
-                      </pre>
+                      <CodeBlock
+                        code={JSON.stringify(healthResult, null, 2)}
+                        language="json"
+                        maxHeight="12rem"
+                      />
                     </div>
                   )}
                 </div>
@@ -365,18 +369,12 @@ export default function SettingsPage() {
             <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
               connect claude code or any mcp client to signalpilot:
             </p>
-            <div className="relative">
-              <pre className="px-4 py-3 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)] overflow-x-auto tracking-wider">
-                <span className="text-[var(--color-success)]">$</span> claude mcp add signalpilot -- python -m gateway.mcp_server
-              </pre>
-              <button
-                onClick={() => navigator.clipboard.writeText("claude mcp add signalpilot -- python -m gateway.mcp_server")}
-                className="absolute top-2 right-2 p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-                title="Copy"
-              >
-                <Copy className="w-3 h-3" />
-              </button>
-            </div>
+            <CodeBlock
+              code="claude mcp add signalpilot -- python -m gateway.mcp_server"
+              language="bash"
+              showLineNumbers={false}
+              maxHeight="4rem"
+            />
             <div className="grid grid-cols-2 gap-2">
               {["query_database", "execute_code", "describe_table", "check_budget"].map(tool => (
                 <div key={tool} className="flex items-center gap-2 px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)]">

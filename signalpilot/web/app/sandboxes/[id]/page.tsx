@@ -28,6 +28,7 @@ import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { CodeBlock } from "@/components/ui/code-block";
 
 interface HistoryEntry {
   type: "input" | "output" | "error" | "system" | "image" | "html";
@@ -428,9 +429,7 @@ export default function SandboxDetailPage() {
                     In [{history.filter((h, j) => j <= i && h.type === "input").length}]:
                   </span>
                 </div>
-                <pre className="whitespace-pre-wrap text-[var(--color-text-muted)] bg-[var(--color-bg-card)] p-3 border border-[var(--color-border)] text-[11px] leading-relaxed">
-                  {entry.text}
-                </pre>
+                <CodeBlock code={entry.text} language="python" maxHeight="20rem" />
               </div>
             )}
             {entry.type === "output" && (

@@ -32,6 +32,7 @@ import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const dbTypeLabels: Record<string, string> = {
   postgres: "pg",
@@ -53,6 +54,7 @@ export default function ConnectionsPage() {
   const [healthData, setHealthData] = useState<Record<string, ConnectionHealthStats>>({});
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "", db_type: "postgres" as const, host: "localhost",
     port: "5432", database: "", username: "", password: "", description: "",
@@ -99,10 +101,15 @@ export default function ConnectionsPage() {
   }
 
   async function handleDelete(name: string) {
-    if (!confirm(`Delete connection "${name}"?`)) return;
-    await deleteConnection(name);
+    setDeleteTarget(name);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await deleteConnection(deleteTarget);
     refresh();
-    toast(`${name} deleted`, "info");
+    toast(`${deleteTarget} deleted`, "info");
+    setDeleteTarget(null);
   }
 
   async function handleToggleSchema(name: string) {
@@ -416,6 +423,16 @@ export default function ConnectionsPage() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="delete connection"
+        message={`Remove "${deleteTarget}" and all associated health data? This cannot be undone.`}
+        confirmLabel="delete"
+        variant="danger"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

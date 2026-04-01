@@ -17,7 +17,11 @@ services:
       dockerfile: Dockerfile.gvisor
     ports:
       - "8080:8080"
-    privileged: true    # runsc needs ptrace + mount capabilities
+    cap_add:
+      - SYS_PTRACE      # runsc ptrace sandbox processes
+      - SYS_ADMIN        # runsc mount overlay filesystem
+    security_opt:
+      - apparmor:unconfined
     environment:
       - SP_MAX_VMS=10
       - SP_VM_MEMORY_MB=512

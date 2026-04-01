@@ -11,6 +11,7 @@ import http.client
 import json
 import logging
 import os
+import pathlib
 import shutil
 import socket
 import subprocess
@@ -146,7 +147,7 @@ class FirecrackerExecutor(ExecutorBase):
         for f in (sock_path, log_path):
             if os.path.exists(f):
                 os.remove(f)
-        open(log_path, "w").close()
+        pathlib.Path(log_path).touch()
 
         proc = subprocess.Popen(
             ["/usr/local/bin/firecracker", "--api-sock", sock_path, "--log-path", log_path, "--level", "Info"],
@@ -244,7 +245,7 @@ class FirecrackerExecutor(ExecutorBase):
         for f in (sock_path, log_path):
             if os.path.exists(f):
                 os.remove(f)
-        open(log_path, "w").close()
+        pathlib.Path(log_path).touch()
 
         start_time = time.monotonic()
 
@@ -308,7 +309,7 @@ class FirecrackerExecutor(ExecutorBase):
         shutil.copy2(BASE_ROOTFS_PATH, overlay_path)
         self._inject_code_into_rootfs(overlay_path, code)
 
-        open(log_path, "w").close()
+        pathlib.Path(log_path).touch()
         proc = subprocess.Popen(
             ["/usr/local/bin/firecracker", "--api-sock", sock_path, "--log-path", log_path,
              "--level", "Info", "--id", vm_id],
@@ -353,7 +354,7 @@ class FirecrackerExecutor(ExecutorBase):
 
     async def _collect_output(self, proc: subprocess.Popen, timeout: int) -> str:
         """Read all stdout from a Firecracker process."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _read():
             try:

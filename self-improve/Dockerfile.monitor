@@ -20,6 +20,7 @@ WORKDIR /app
 
 # Python deps for the API backend
 COPY monitor/pyproject.toml /app/monitor/pyproject.toml
+COPY monitor/__init__.py /app/monitor/__init__.py
 RUN pip install --no-cache-dir /app/monitor/
 
 # Copy the FastAPI backend

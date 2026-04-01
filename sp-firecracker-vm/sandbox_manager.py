@@ -40,7 +40,7 @@ def _detect_executor() -> ExecutorBase:
 
     from executor_gvisor import GVisorExecutor
     log.info("No KVM — using gVisor backend")
-    return GVisorExecutor(MAX_VMS, VM_MEMORY_MB, VM_TIMEOUT_SEC)
+    return GVisorExecutor(MAX_VMS, VM_TIMEOUT_SEC)
 
 
 # ─── HTTP handlers ───────────────────────────────────────────────────────────

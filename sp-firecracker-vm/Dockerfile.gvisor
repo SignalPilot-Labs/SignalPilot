@@ -5,11 +5,12 @@
 #   docker build -f Dockerfile.gvisor -t signalpilot-sandbox-gvisor .
 #
 # RUN:
-#   docker run --privileged -p 8080:8080 signalpilot-sandbox-gvisor
+#   docker run --cap-add SYS_PTRACE --cap-add SYS_ADMIN -p 8080:8080 signalpilot-sandbox-gvisor
 
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV GVISOR_VERSION=20260323.0
 
 # System deps (curl for healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,9 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install gVisor (runsc) — auto-detect architecture
+# Install gVisor (runsc) — pinned version, auto-detect architecture
 RUN ARCH=$(uname -m) && \
-    curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/runsc" \
+    curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}/runsc" \
     -o /usr/local/bin/runsc && \
     chmod +x /usr/local/bin/runsc
 

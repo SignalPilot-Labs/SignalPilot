@@ -24,7 +24,10 @@ log = logging.getLogger("executor.gvisor")
 RUNSC_PATH = "/usr/local/bin/runsc"
 PYTHON_PATH = os.getenv("SP_PYTHON_PATH", "/usr/local/bin/python3")
 
-# Matches the result format from rootfs/sandbox_init.py
+# Wrapper that executes user code and captures output as JSON.
+# User code is injected via json.dumps() which escapes all special chars,
+# then exec()'d inside gVisor's sandboxed kernel — no host access even if
+# the escaping were bypassed.
 _WRAPPER_TEMPLATE = '''
 import io, json, sys, traceback
 
@@ -61,17 +64,28 @@ print(result)
 class GVisorExecutor(ExecutorBase):
     """gVisor sandbox executor using runsc standalone mode."""
 
-    def __init__(self, max_sandboxes: int, memory_limit_mb: int, timeout_sec: int):
+    def __init__(self, max_sandboxes: int, timeout_sec: int):
         self._max_sandboxes = max_sandboxes
-        self._memory_limit_mb = memory_limit_mb
         self._timeout_sec = timeout_sec
         self._active: dict[str, dict] = {}
 
     async def start(self) -> None:
-        """Verify runsc binary is available."""
+        """Verify runsc binary is available and clean orphan temp dirs."""
         if not os.path.exists(RUNSC_PATH):
             raise RuntimeError(f"gVisor binary not found at {RUNSC_PATH}")
+        self._cleanup_orphan_temps()
         log.info("gVisor executor ready (runsc at %s)", RUNSC_PATH)
+
+    def _cleanup_orphan_temps(self) -> None:
+        """Remove leftover /tmp/sp_gvisor_* dirs from prior crashes."""
+        import glob
+        for path in glob.glob("/tmp/sp_gvisor_*"):
+            try:
+                for f in os.listdir(path):
+                    os.remove(os.path.join(path, f))
+                os.rmdir(path)
+            except OSError:
+                pass
 
     def health(self) -> dict:
         return {

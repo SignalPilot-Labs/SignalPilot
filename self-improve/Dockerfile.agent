@@ -35,6 +35,7 @@ RUN npx playwright install-deps chromium
 WORKDIR /app
 
 COPY agent/pyproject.toml /app/agent/pyproject.toml
+COPY agent/__init__.py /app/agent/__init__.py
 RUN pip install --no-cache-dir /app/agent/
 
 COPY agent/ /app/agent/

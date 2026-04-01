@@ -8,9 +8,6 @@ sandbox manager can swap backends without changing the HTTP layer.
 import abc
 
 
-RESULT_KEYS = ("success", "output", "error", "exit_code", "vm_id", "execution_ms")
-
-
 class ExecutorBase(abc.ABC):
     """Contract every sandbox executor must fulfill."""
 

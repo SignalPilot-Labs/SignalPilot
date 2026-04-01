@@ -681,7 +681,23 @@ export default function ConnectionsPage() {
       setForm({ ...defaultForm });
       setShowAdvanced(false);
       refresh();
-    } catch (e) { toast(String(e), "error"); } finally { setSaving(false); }
+    } catch (e) { toast(_parseError(e), "error"); } finally { setSaving(false); }
+  }
+
+  function _parseError(e: unknown): string {
+    const msg = String(e);
+    // Parse validation errors from the API
+    try {
+      const match = msg.match(/\{.*"validation_errors".*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed.validation_errors) {
+          return parsed.validation_errors.join("; ");
+        }
+      }
+    } catch {}
+    // Clean up generic error messages
+    return msg.replace(/^Error:\s*\d+:\s*/, "").replace(/^"?(.*?)"?$/, "$1").slice(0, 200);
   }
 
   async function handleSaveAndTest() {
@@ -705,7 +721,7 @@ export default function ConnectionsPage() {
       const result = await testConnection(connName);
       setTestResult((prev) => ({ ...prev, [connName]: result }));
       toast(result.status === "healthy" ? `${connName}: connection healthy` : `${connName}: ${result.message}`, result.status === "healthy" ? "success" : "error");
-    } catch (e) { toast(String(e), "error"); } finally { setSaving(false); }
+    } catch (e) { toast(_parseError(e), "error"); } finally { setSaving(false); }
   }
 
   function handleEditConnection(conn: ConnectionInfo) {

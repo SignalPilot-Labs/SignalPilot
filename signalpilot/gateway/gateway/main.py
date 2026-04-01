@@ -608,6 +608,115 @@ def _compress_schema(schema: dict) -> dict:
     return compressed
 
 
+def _group_tables(schema: dict) -> dict[str, list[str]]:
+    """Group related tables by naming patterns and FK relationships.
+
+    ReFoRCE (Spider2.0 SOTA) uses pattern-based table grouping to compress
+    large schemas. Tables are grouped when they share a common prefix
+    (e.g., order_items, order_history -> "order" group) or are connected
+    by foreign keys.
+    """
+    from collections import defaultdict
+
+    # Phase 1: Group by naming prefix (common enterprise pattern)
+    prefix_groups: dict[str, list[str]] = defaultdict(list)
+    for key in schema:
+        table_name = schema[key].get("name", key.split(".")[-1])
+        # Extract prefix — first word before underscore
+        parts = table_name.lower().split("_")
+        if len(parts) >= 2:
+            prefix = parts[0]
+            prefix_groups[prefix].append(key)
+        else:
+            prefix_groups[table_name].append(key)
+
+    # Phase 2: Merge FK-connected tables into same groups
+    fk_graph: dict[str, set[str]] = defaultdict(set)
+    for key, table in schema.items():
+        for fk in table.get("foreign_keys", []):
+            ref_schema = fk.get("references_schema", "")
+            ref_table = fk.get("references_table", "")
+            ref_key = f"{ref_schema}.{ref_table}" if ref_schema else ref_table
+            # Find the actual key that matches
+            for k in schema:
+                if k == ref_key or k.endswith(f".{ref_table}"):
+                    fk_graph[key].add(k)
+                    fk_graph[k].add(key)
+                    break
+
+    # Merge prefix groups that are FK-connected
+    groups: dict[str, list[str]] = {}
+    assigned: set[str] = set()
+    for prefix, members in sorted(prefix_groups.items(), key=lambda x: -len(x[1])):
+        if len(members) >= 2:
+            group_key = prefix
+            group_members = set(members)
+            # Add FK-connected tables
+            for m in list(group_members):
+                group_members.update(fk_graph.get(m, set()))
+            groups[group_key] = sorted(group_members - assigned)
+            assigned.update(group_members)
+
+    # Remaining ungrouped tables
+    ungrouped = [k for k in schema if k not in assigned]
+    if ungrouped:
+        groups["_other"] = sorted(ungrouped)
+
+    # Remove empty groups
+    return {k: v for k, v in groups.items() if v}
+
+
+@app.get("/api/connections/{name}/schema/grouped")
+async def get_grouped_schema(
+    name: str,
+    sample_limit: int = Query(default=3, ge=1, le=10),
+):
+    """Return schema organized by table groups — optimized for large schemas.
+
+    Uses ReFoRCE-style pattern-based table grouping to organize related tables
+    together. This helps AI agents understand table relationships and reduces
+    schema linking errors in text-to-SQL tasks.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+
+    try:
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+
+        cached = schema_cache.get(name)
+        if cached is None:
+            cached = await connector.get_schema()
+            schema_cache.put(name, cached)
+
+        # Compress and group
+        compressed = _compress_schema(cached)
+        groups = _group_tables(cached)
+
+        await pool_manager.release(info.db_type, conn_str)
+
+        return {
+            "connection_name": name,
+            "db_type": info.db_type,
+            "table_count": len(cached),
+            "group_count": len(groups),
+            "groups": {
+                group_name: {
+                    "tables": {k: compressed[k] for k in table_keys if k in compressed},
+                    "table_count": len(table_keys),
+                }
+                for group_name, table_keys in groups.items()
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+
 @app.get("/api/connections/{name}/schema/samples")
 async def get_schema_samples(
     name: str,

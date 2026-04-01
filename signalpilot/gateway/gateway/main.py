@@ -105,9 +105,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        "http://localhost:3200",
+        "http://127.0.0.1:3200",
+        "http://host.docker.internal:3200",
+    ],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+    allow_credentials=False,
 )
 
 
@@ -413,7 +418,15 @@ async def query_database(req: DirectQueryRequest):
     except Exception as e:
         # Remove stale pool on error so next request reconnects
         _connector_pool.pop(req.connection_name, None)
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log full error server-side but return sanitized message to client
+        import logging
+        logging.getLogger("signalpilot.query").error(
+            "Query failed on connection %s: %s", req.connection_name, e
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Query execution failed. Check the connection and SQL syntax.",
+        )
 
     elapsed_ms = (time.monotonic() - start) * 1000
 

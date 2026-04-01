@@ -14,13 +14,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-try:
-    import sqlglot
-    import sqlglot.expressions as exp
-
-    HAS_SQLGLOT = True
-except ImportError:
-    HAS_SQLGLOT = False
+import sqlglot
+import sqlglot.expressions as exp
 
 # DDL/DML statement types that must be blocked
 _BLOCKED_STATEMENT_TYPES = {
@@ -55,9 +50,6 @@ def validate_sql(
             ok=False,
             blocked_reason="Statement stacking detected (multiple statements separated by ';')",
         )
-
-    if not HAS_SQLGLOT:
-        return ValidationResult(ok=True, tables=[], columns=[])
 
     try:
         statements = sqlglot.parse(sql, dialect=dialect)
@@ -106,12 +98,6 @@ def validate_sql(
 
 def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") -> str:
     sql = sql.strip().rstrip(";")
-
-    if not HAS_SQLGLOT:
-        upper = sql.upper()
-        if "LIMIT" not in upper:
-            return f"{sql} LIMIT {max_rows}"
-        return sql
 
     try:
         parsed = sqlglot.parse_one(sql, dialect=dialect)

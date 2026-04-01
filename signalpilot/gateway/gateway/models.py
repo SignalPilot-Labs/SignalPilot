@@ -43,7 +43,7 @@ class DBType(str, Enum):
 
 
 class ConnectionCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
     db_type: DBType
     host: str | None = None
     port: int | None = None

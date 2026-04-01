@@ -18,7 +18,16 @@ from .models import ExecuteResult, SandboxInfo
 class SandboxClient:
     """HTTP client for the Firecracker sandbox manager."""
 
+    ALLOWED_SCHEMES = {"http", "https"}
+
     def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 60):
+        # Validate base_url to prevent SSRF via scheme injection
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if parsed.scheme not in self.ALLOWED_SCHEMES:
+            raise ValueError(f"Invalid sandbox manager URL scheme: {parsed.scheme!r}. Must be http or https.")
+        if not parsed.hostname:
+            raise ValueError("Invalid sandbox manager URL: missing hostname")
         self.base_url = base_url.rstrip("/")
         headers = {}
         if api_key:
@@ -115,15 +124,30 @@ class SandboxClient:
                 execution_ms=(time.monotonic() - start) * 1000,
             )
         except httpx.HTTPStatusError as e:
+            # Sanitize error: don't expose raw response body which may contain
+            # internal details, stack traces, or config info
+            status = e.response.status_code
+            if status == 429:
+                detail = "Rate limited — too many sandbox requests"
+            elif status >= 500:
+                detail = "Sandbox manager internal error"
+            else:
+                detail = f"Request rejected (HTTP {status})"
             return ExecuteResult(
                 success=False,
-                error=f"Sandbox manager error: {e.response.status_code} {e.response.text}",
+                error=f"Sandbox error: {detail}",
                 execution_ms=(time.monotonic() - start) * 1000,
             )
-        except Exception as e:
+        except httpx.TimeoutException:
             return ExecuteResult(
                 success=False,
-                error=str(e),
+                error=f"Sandbox execution timed out after {timeout}s",
+                execution_ms=(time.monotonic() - start) * 1000,
+            )
+        except Exception:
+            return ExecuteResult(
+                success=False,
+                error="Unexpected sandbox execution error",
                 execution_ms=(time.monotonic() - start) * 1000,
             )
 

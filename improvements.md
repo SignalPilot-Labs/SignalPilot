@@ -5,6 +5,157 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 3: Connection Management & Spider2.0 Schema Intelligence (2026-04-01)
+
+**Summary:** 8 features, connection CRUD lifecycle, ReFoRCE-inspired table grouping, 169 tests.
+
+**Key metrics:**
+- Connection update: PUT endpoint with automatic credential rebuild + pool/cache invalidation
+- Schema refresh: Force-refresh endpoint for post-migration workflows
+- Table grouping: Pattern-based grouping (ReFoRCE SOTA technique) working on compound-named tables
+- Validation: Field-level error messages displayed in frontend
+- All 3 live DBs tested: PostgreSQL (5601), MySQL (3307), ClickHouse (9100)
+
+### 1. Connection Update Endpoint (PUT /api/connections/{name})
+
+**Before:** Connections were create-only — changing a password required delete + recreate, losing audit history.
+
+**After:** Partial update with automatic credential rebuild:
+- Only provided fields are changed (PATCH semantics via PUT)
+- Connection string auto-rebuilt from merged fields
+- Schema cache invalidated on update
+- Stale connection pools closed and recycled
+- SSH tunnel and SSL config safely stripped for persistence
+
+### 2. Schema Refresh Endpoint (POST /api/connections/{name}/schema/refresh)
+
+**What:** Force-refresh cached schema after DDL changes or migrations.
+
+**Before:** Wait for TTL expiration (5 minutes) or restart gateway.
+
+**After:** One-click refresh that invalidates cache, fetches fresh schema, and re-caches.
+Useful for CI/CD pipelines that run migrations then need updated schema.
+
+### 3. Schema Diff Detection (GET /api/connections/{name}/schema/diff)
+
+**What:** Compare current database schema against cached version.
+
+**Returns:**
+```json
+{
+  "has_changes": true,
+  "added_tables": ["public.new_table"],
+  "removed_tables": [],
+  "modified_tables": [{"table": "public.users", "added_columns": ["bio"], "type_changes": [...]}]
+}
+```
+
+**Use case:** Migration verification, schema drift detection, keeping AI agent context current.
+
+### 4. ReFoRCE-Style Table Grouping (GET /api/connections/{name}/schema/grouped)
+
+**What:** Pattern-based table grouping inspired by ReFoRCE (Spider2.0 SOTA at 35.83% Snow).
+
+**How it works:**
+1. Phase 1: Group tables by naming prefix (e.g., `order_items` + `order_payments` → "order" group)
+2. Phase 2: Merge FK-connected tables into same groups
+3. Ungrouped single-word tables go to `_other`
+
+**Verified on MySQL test_analytics:**
+```
+groups: 3, tables: 6
+  order: [order_items, order_payments]
+  test: [test_orders, test_users]
+  _other: [events, users]
+```
+
+**Spider2.0 impact:** ReFoRCE's key innovation is "database information compression via pattern-based table grouping and LLM-guided schema linking." Our grouped endpoint provides the same capability at the API level — agents can process one group at a time instead of the full schema.
+
+### 5. Connection Editing in Frontend
+
+**Before:** No way to edit a connection — must delete and recreate.
+
+**After:**
+- "Edit" button on each connection opens pre-filled form
+- PUT request updates only changed fields
+- Connection name locked during editing (immutable identifier)
+- Password field blank by default ("leave empty to keep existing")
+- DB type selector and advanced options (SSL/SSH) preserved from existing config
+
+### 6. Save & Test Workflow
+
+**Before:** "Save & Test" button was a no-op duplicate of "Save."
+
+**After:** Saves the connection first, then automatically runs the two-phase connection test.
+- Button labels adapt: "save & test" for new, "update & test" for edits
+- Test result displayed inline with phase timing (SSH + DB phases)
+- Toast notifications for both save and test outcomes
+
+### 7. Snowflake URL Connection String Mode
+
+**Before:** Snowflake only supported individual fields mode.
+
+**After:** URL mode with standard format:
+```
+snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
+```
+Backend already supported URL parsing — this exposes it in the frontend toggle.
+
+### 8. Validation Error Display
+
+**Before:** Raw JSON error strings shown in toast notifications.
+
+**After:** Validation errors parsed and displayed as readable messages:
+- `postgres requires a host; postgres requires a username`
+- Cleaned up error prefixes and JSON wrapping
+
+### 9. Cache Invalidation on Delete
+
+**Before:** Deleting a connection left stale schema cache entries.
+
+**After:** Schema cache automatically invalidated when a connection is deleted.
+
+### 10. Test Coverage
+
+**11 new tests added (158 → 169 total):**
+- Schema diff detection (5 cases: no changes, added table, removed table, modified column type, no cache)
+- Connection update model (partial fields, exclude_none)
+- Pool manager close_pool
+- Table grouping (3 cases: prefix grouping, FK grouping, ungrouped)
+
+---
+
+### Spider2.0 Leaderboard Update (April 2026)
+
+| Method | Spider2.0-Snow | Spider2.0-Lite | Key Technique |
+|--------|---------------|----------------|---------------|
+| **ReFoRCE** (SOTA) | **35.83%** | **36.56%** | Table grouping + schema compression + self-refinement |
+| DSR-SQL | 35.28% | — | Dual-state reasoning (context + generation) |
+| Paytm Prism | Listed | — | Multi-agent swarm (first Indian company) |
+
+**Key research insights (EDBT 2026, ReFoRCE paper):**
+- Schema linking errors remain the #1 bottleneck in text-to-SQL
+- Pattern-based table grouping + LLM-guided schema linking is the winning approach
+- Combined methods can solve 66.91% (366/547) of Spider 2.0 examples
+- Identity-aware proxies replacing SSH tunnels in production (zero-trust trend 2026)
+
+### HEX Comparison Update
+
+| Feature | HEX | SignalPilot |
+|---------|-----|-------------|
+| Connection editing | Yes | **Yes** (new) |
+| Save & Test | Yes | **Yes** (fixed) |
+| Validation errors | Yes | **Yes** (new) |
+| Schema refresh | Manual | **Yes** (API endpoint) |
+| Schema diff | No | **Yes** (unique) |
+| Table grouping | No | **Yes** (unique — ReFoRCE-inspired) |
+| Grouped schema API | No | **Yes** (unique — for AI agents) |
+| Snowflake URL mode | Yes | **Yes** (new) |
+| OAuth | Some DBs | Planned |
+| Identity-Aware Proxy | No | Planned |
+
+---
+
 ## Round 2: Enterprise Features & Spider2.0 Optimization (2026-04-01)
 
 **Summary:** 12 major features, encrypted credential persistence, 158 tests, 75% schema compression.
@@ -356,7 +507,7 @@ Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
 | Connection validation | Yes | Yes (per-DB-type rules) |
 | Column statistics | N/A | Yes (pg_stats for Postgres) |
 
-### Spider2.0 Leaderboard Context
+### Spider2.0 Leaderboard Context (Round 2)
 - **Genloop Sentinel:** 96.7% (Snow) — multi-agent swarm, table compression
 - **Paytm Prism:** 82.63% (Snow) — multi-agent swarm architecture
 - **LinkAlign:** 33.09% (Lite, open-source only) — semantic retrieval, approximate string matching
@@ -365,12 +516,17 @@ Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
 ---
 
 ## Next Steps
-- [ ] Encrypt credentials at rest (AES-256-GCM)
+- [x] ~~Encrypt credentials at rest~~ (Done: Fernet AES-128-CBC + HMAC-SHA256)
+- [x] ~~Schema diff detection~~ (Done: GET /schema/diff endpoint)
+- [x] ~~Connection editing~~ (Done: PUT /api/connections/{name})
+- [x] ~~Save & Test workflow~~ (Done: auto-test after save)
+- [x] ~~Pattern-based table grouping~~ (Done: GET /schema/grouped)
 - [ ] OAuth support for Snowflake, BigQuery, Databricks
-- [ ] Schema diff detection (track changes over time)
 - [ ] Automated schema refresh scheduling (like HEX workspace connections)
-- [ ] Multi-round semantic retrieval for irrelevant table filtering
+- [ ] Multi-round semantic retrieval for irrelevant table filtering (LinkAlign approach)
+- [ ] LLM-guided schema linking (ReFoRCE Phase 2 — after table grouping)
 - [ ] Approximate string matching (threshold 0.5) for column name hallucination correction
 - [ ] Column statistics for MySQL and ClickHouse (currently Postgres only)
 - [ ] Identity-Aware Proxy (IAP) support for zero-trust database access
 - [ ] Query tagging for cost attribution (Databricks pattern)
+- [ ] Self-refinement loop for SQL generation (ReFoRCE approach)

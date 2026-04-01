@@ -31,22 +31,30 @@ function MetricCard({
   subtext,
   icon: Icon,
   accentColor,
+  sparkValues,
 }: {
   label: string;
   value: string | number;
   subtext?: string;
   icon: React.ElementType;
   accentColor?: string;
+  sparkValues?: number[];
 }) {
   return (
-    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
       <div className="flex items-center gap-2 mb-3">
-        <Icon className={`w-3.5 h-3.5 ${accentColor || "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
+        <Icon className={`w-3.5 h-3.5 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
         <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{label}</span>
       </div>
       <p className="text-xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
       {subtext && (
         <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider">{subtext}</p>
+      )}
+      {/* Background sparkline on hover */}
+      {sparkValues && sparkValues.length >= 3 && (
+        <div className="absolute bottom-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+          <Sparkline values={sparkValues} width={80} height={24} color={accentColor?.includes("success") ? "var(--color-success)" : accentColor?.includes("error") ? "var(--color-error)" : "var(--color-text-dim)"} fillOpacity={0.08} />
+        </div>
       )}
     </div>
   );

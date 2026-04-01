@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Plus,
-  Database,
   Trash2,
   CheckCircle2,
   XCircle,
@@ -41,6 +40,52 @@ const dbTypeLabels: Record<string, string> = {
   mysql: "mysql",
   snowflake: "snow",
 };
+
+/* ── Database type SVG icons ── */
+function DbTypeIcon({ type }: { type: string }) {
+  switch (type) {
+    case "postgres":
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <ellipse cx="6" cy="3" rx="4.5" ry="2" stroke="currentColor" strokeWidth="0.75" fill="none" />
+          <path d="M1.5 3V9C1.5 10.1 3.5 11 6 11C8.5 11 10.5 10.1 10.5 9V3" stroke="currentColor" strokeWidth="0.75" />
+          <path d="M1.5 6C1.5 7.1 3.5 8 6 8C8.5 8 10.5 7.1 10.5 6" stroke="currentColor" strokeWidth="0.5" opacity="0.5" />
+        </svg>
+      );
+    case "duckdb":
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
+          <circle cx="4.5" cy="5" r="0.8" fill="currentColor" />
+          <path d="M4 7.5C4.5 8.5 7.5 8.5 8 7.5" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" fill="none" />
+          <path d="M7.5 4L9 3.5" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" />
+        </svg>
+      );
+    case "mysql":
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <path d="M2 2L6 10L10 2" stroke="currentColor" strokeWidth="0.75" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <line x1="4" y1="6" x2="8" y2="6" stroke="currentColor" strokeWidth="0.75" />
+        </svg>
+      );
+    case "snowflake":
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="0.75" />
+          <line x1="1.7" y1="3.5" x2="10.3" y2="8.5" stroke="currentColor" strokeWidth="0.75" />
+          <line x1="1.7" y1="8.5" x2="10.3" y2="3.5" stroke="currentColor" strokeWidth="0.75" />
+          <circle cx="6" cy="6" r="1.5" stroke="currentColor" strokeWidth="0.5" fill="none" />
+        </svg>
+      );
+    default:
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor" strokeWidth="0.75" fill="none" />
+          <circle cx="6" cy="6" r="2" stroke="currentColor" strokeWidth="0.5" fill="none" />
+        </svg>
+      );
+  }
+}
 
 export default function ConnectionsPage() {
   const { toast } = useToast();
@@ -164,7 +209,7 @@ export default function ConnectionsPage() {
       {showForm && (
         <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
           <div className="px-6 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
-            <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[var(--color-text-dim)]"><DbTypeIcon type={form.db_type} /></span>
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">new connection</span>
           </div>
           <div className="p-6">
@@ -260,7 +305,8 @@ export default function ConnectionsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--color-text)]">{conn.name}</span>
-                      <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                      <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                        <DbTypeIcon type={conn.db_type} />
                         {dbTypeLabels[conn.db_type] || conn.db_type}
                       </span>
                       {health && (

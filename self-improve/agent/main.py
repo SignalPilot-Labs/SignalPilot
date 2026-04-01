@@ -215,7 +215,13 @@ async def run_agent(
         setting_sources=["project"],
         max_budget_usd=max_budget if max_budget > 0 else None,
         include_partial_messages=True,
-        mcp_servers={"session_gate": session_mcp},
+        mcp_servers={
+            "session_gate": session_mcp,
+            "playwright": {
+                "command": "playwright-mcp",
+                "args": [],
+            },
+        },
         hooks={
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],

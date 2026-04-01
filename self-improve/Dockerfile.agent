@@ -26,8 +26,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI via npm
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude Code CLI and Playwright MCP server via npm
+RUN npm install -g @anthropic-ai/claude-code @playwright/mcp
+
+# Install Playwright browser system deps (as root for apt packages)
+RUN npx playwright install-deps chromium
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
@@ -41,6 +44,8 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 
 COPY agent/ /app/agent/
+COPY playwright-mcp.sh /usr/local/bin/playwright-mcp
+RUN chmod +x /usr/local/bin/playwright-mcp
 
 # Run as non-root — Claude CLI refuses --dangerously-skip-permissions as root
 RUN useradd -m agentuser \
@@ -53,6 +58,9 @@ RUN groupadd -g 998 dockerhost || true \
     && usermod -aG dockerhost agentuser 2>/dev/null || true
 
 USER agentuser
+
+# Install Playwright browsers as agentuser (goes to ~/.cache/ms-playwright/)
+RUN npx playwright install chromium
 
 # Git config as agentuser
 RUN git config --global user.name "SignalPilot Improve Bot" \

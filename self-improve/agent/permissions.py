@@ -150,7 +150,7 @@ def _check_repo_exploration(cmd: str) -> str | None:
 
 def _check_token_exposure(cmd: str) -> str | None:
     """Block commands that would print or expose tokens/secrets."""
-    _secret_vars = "GIT_TOKEN|ANTHROPIC_API_KEY|GH_TOKEN|CLAUDE_SETUP_TOKEN|FGAT_GIT_TOKEN"
+    _secret_vars = "GIT_TOKEN|ANTHROPIC_API_KEY|GH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|FGAT_GIT_TOKEN"
     exposure_patterns = [
         rf"echo\s+.*\$\{{?({_secret_vars})",
         r"cat\s+.*\.env",

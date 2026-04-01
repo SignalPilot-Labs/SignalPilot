@@ -50,8 +50,8 @@ finally:
 
 result = json.dumps({{
     "success": exit_code == 0,
-    "output": stdout_buf.getvalue(),
-    "error": stderr_buf.getvalue() or None,
+    "output": stdout_buf.getvalue().rstrip("\\n"),
+    "error": stderr_buf.getvalue().rstrip("\\n") or None,
     "exit_code": exit_code,
 }})
 print(result)

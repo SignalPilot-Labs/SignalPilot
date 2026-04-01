@@ -538,6 +538,109 @@ async def get_schema_samples(
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
 
+@app.get("/api/connections/{name}/schema/enriched")
+async def get_enriched_schema(
+    name: str,
+    sample_limit: int = Query(default=3, ge=1, le=10, description="Max sample values per column"),
+):
+    """Return enriched compact schema optimized for Spider2.0 text-to-SQL.
+
+    Combines compact DDL + foreign keys + sample values + statistics in one call.
+    This is the recommended endpoint for AI agents — provides everything needed
+    for accurate schema linking in a single request with minimal token count.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+
+    try:
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+
+        # Get or use cached schema
+        cached = schema_cache.get(name)
+        if cached is None:
+            cached = await connector.get_schema()
+            schema_cache.put(name, cached)
+
+        # Build enriched compact schema
+        enriched: dict[str, Any] = {}
+        for key, table in cached.items():
+            # Compact DDL
+            cols = []
+            pk_cols = []
+            for col in table.get("columns", []):
+                col_type = col.get("type", "")
+                nullable = "" if col.get("nullable", True) else " NOT NULL"
+                unique_hint = ""
+                stats = col.get("stats", {})
+                if stats.get("distinct_fraction") == -1.0:
+                    unique_hint = " UNIQUE"
+                cols.append(f"{col['name']} {col_type}{nullable}{unique_hint}")
+                if col.get("primary_key"):
+                    pk_cols.append(col["name"])
+
+            ddl_parts = [f"CREATE TABLE {table.get('schema', '')}.{table['name']} ("]
+            ddl_parts.append("  " + ", ".join(cols))
+            if pk_cols:
+                ddl_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
+            ddl_parts.append(")")
+
+            fk_refs = []
+            for fk in table.get("foreign_keys", []):
+                ref_table = fk.get("references_table", "")
+                if fk.get("references_schema"):
+                    ref_table = f"{fk['references_schema']}.{ref_table}"
+                fk_refs.append(f"{fk['column']} -> {ref_table}.{fk.get('references_column', '')}")
+
+            entry: dict[str, Any] = {
+                "ddl": "\n".join(ddl_parts),
+                "row_count": table.get("row_count", 0),
+            }
+            if fk_refs:
+                entry["foreign_keys"] = fk_refs
+            if table.get("indexes"):
+                entry["indexes"] = [idx.get("name", "") for idx in table["indexes"]]
+            if table.get("description"):
+                entry["description"] = table["description"]
+
+            enriched[key] = entry
+
+        # Sample values (string columns only, limited tables)
+        string_types = {"character varying", "varchar", "text", "char", "character",
+                       "enum", "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
+        for key in list(enriched.keys())[:15]:  # Cap at 15 tables
+            table_info = cached.get(key, {})
+            sample_cols = [
+                col["name"] for col in table_info.get("columns", [])
+                if col.get("type", "") in string_types or "char" in col.get("type", "").lower()
+            ]
+            if not sample_cols:
+                continue
+            table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
+            try:
+                values = await connector.get_sample_values(table_name, sample_cols, limit=sample_limit)
+                if values:
+                    enriched[key]["sample_values"] = values
+            except Exception:
+                pass
+
+        await pool_manager.release(info.db_type, conn_str)
+
+        return {
+            "connection_name": name,
+            "db_type": info.db_type,
+            "table_count": len(enriched),
+            "tables": enriched,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+
+
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sandboxes")

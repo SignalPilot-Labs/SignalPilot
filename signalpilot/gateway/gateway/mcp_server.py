@@ -230,8 +230,13 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             duration_ms=elapsed_ms,
         ))
 
+    # Build status footer
+    meta_parts = [f"{len(rows)} rows", f"{elapsed_ms:.0f}ms"]
+    if cached:
+        meta_parts.append("cache hit")
+
     if not rows:
-        return f"Query returned 0 rows ({elapsed_ms:.0f}ms)"
+        return f"Query returned 0 rows ({', '.join(meta_parts)})"
 
     # Format as readable table
     columns = list(rows[0].keys())
@@ -242,7 +247,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     if len(rows) > 50:
         lines.append(f"... ({len(rows)} rows total, showing first 50)")
 
-    return "\n".join(lines) + f"\n\n[{len(rows)} rows, {elapsed_ms:.0f}ms]"
+    return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]"
 
 
 @mcp.tool()

@@ -145,7 +145,7 @@ export default function SettingsPage() {
                     value={browserApiKey}
                     onChange={(e) => setBrowserApiKey(e.target.value)}
                     placeholder="enter gateway api key"
-                    className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                    className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                   />
                   <button onClick={() => setShowApiKey(!showApiKey)}
                     className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 sm:p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
@@ -179,7 +179,7 @@ export default function SettingsPage() {
               <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">provider</label>
               <select value={settings.sandbox_provider}
                 onChange={(e) => setSettings({ ...settings, sandbox_provider: e.target.value as "local" | "remote" })}
-                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]">
+                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]">
                 <option value="local">local (same machine / docker)</option>
                 <option value="remote">remote (byof hosted instance)</option>
               </select>
@@ -189,7 +189,7 @@ export default function SettingsPage() {
               <input type="text" value={settings.sandbox_manager_url}
                 onChange={(e) => setSettings({ ...settings, sandbox_manager_url: e.target.value })}
                 placeholder="http://localhost:8080"
-                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
+                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
             </div>
             {settings.sandbox_provider === "remote" && (
               <div className="animate-fade-in">
@@ -197,14 +197,14 @@ export default function SettingsPage() {
                 <input type="password" value={settings.sandbox_api_key || ""}
                   onChange={(e) => setSettings({ ...settings, sandbox_api_key: e.target.value || null })}
                   placeholder="bearer token for remote sandbox manager"
-                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]" />
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]" />
               </div>
             )}
             <div>
               <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">max concurrent sandboxes</label>
               <input type="number" value={settings.max_concurrent_sandboxes}
                 onChange={(e) => setSettings({ ...settings, max_concurrent_sandboxes: parseInt(e.target.value) || 10 })}
-                className="w-32 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
+                className="w-32 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
             </div>
             <div className="pt-2">
               <button onClick={handleTestConnection} disabled={testingHealth}
@@ -257,7 +257,7 @@ export default function SettingsPage() {
                     step={field.step}
                     value={settings[field.key as keyof GatewaySettings] as number}
                     onChange={(e) => setSettings({ ...settings, [field.key]: field.step ? parseFloat(e.target.value) : parseInt(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums"
+                    className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums"
                   />
                   <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider">{field.desc}</p>
                 </div>
@@ -288,7 +288,7 @@ export default function SettingsPage() {
                     }
                   }}
                   placeholder="e.g. users_private, financial_records"
-                  className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                  className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                 />
                 <button
                   onClick={() => {
@@ -337,7 +337,7 @@ export default function SettingsPage() {
               <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway url</label>
               <input type="text" value={settings.gateway_url}
                 onChange={(e) => setSettings({ ...settings, gateway_url: e.target.value })}
-                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
+                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
               <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandbox vms use to call back to the gateway</p>
             </div>
             <div>
@@ -349,7 +349,7 @@ export default function SettingsPage() {
                     value={settings.api_key || ""}
                     onChange={(e) => setSettings({ ...settings, api_key: e.target.value || null })}
                     placeholder="protect gateway with api key"
-                    className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                    className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                   />
                   <button onClick={() => setShowGatewayKey(!showGatewayKey)}
                     className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 sm:p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">

@@ -232,7 +232,7 @@ export default function ConnectionsPage() {
                     <select
                       value={form.db_type}
                       onChange={(e) => setForm({ ...form, db_type: e.target.value as typeof form.db_type, port: e.target.value === "postgres" ? "5432" : e.target.value === "mysql" ? "3306" : form.port })}
-                      className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                      className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                     >
                       <option value="postgres">PostgreSQL</option>
                       <option value="duckdb">DuckDB</option>
@@ -245,7 +245,7 @@ export default function ConnectionsPage() {
                       placeholder={field.placeholder}
                       value={form[field.key as keyof typeof form]}
                       onChange={(e) => setForm({ ...form, [field.key]: e.target.value })}
-                      className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                      className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                     />
                   )}
                 </div>

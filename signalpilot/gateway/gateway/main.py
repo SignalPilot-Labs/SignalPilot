@@ -84,6 +84,7 @@ from .store import (
     get_schema_endorsements,
     set_schema_endorsements,
     apply_endorsement_filter,
+    DATA_DIR,
 )
 
 # ─── Error Sanitization (HIGH-06) ────────────────────────────────────────────
@@ -2554,6 +2555,9 @@ async def get_agent_context(
             linked = set(list(filtered.keys())[:max_tables])
         filtered = {k: filtered[k] for k in sorted(linked)[:max_tables] if k in filtered}
 
+    # Load semantic model for enrichment (HEX pattern)
+    semantic = _load_semantic_model(name)
+
     # Build context sections
     sections: list[str] = []
 
@@ -2564,6 +2568,15 @@ async def get_agent_context(
     sections.append(f"-- Tables: {len(filtered)}, Total rows: {total_rows:,}, Total size: {total_mb:.1f} MB")
     sections.append("")
 
+    # Section 0.5: Business glossary (if present in semantic model)
+    glossary = semantic.get("glossary", {})
+    if glossary:
+        glossary_lines = ["-- === Business Glossary ==="]
+        for term, col_ref in sorted(glossary.items())[:30]:
+            glossary_lines.append(f"-- {term} = {col_ref}")
+        sections.append("\n".join(glossary_lines))
+        sections.append("")
+
     # Section 2: DDL with inline metadata
     inferred = _infer_implicit_joins(filtered)
     inferred_map: dict[str, list[dict]] = {}
@@ -2572,6 +2585,9 @@ async def get_agent_context(
         if key not in inferred_map:
             inferred_map[key] = []
         inferred_map[key].append(ij)
+
+    # Semantic join hints from model
+    semantic_joins = semantic.get("joins", [])
 
     for key in sorted(filtered.keys()):
         table = filtered[key]
@@ -2583,17 +2599,30 @@ async def get_agent_context(
             meta_parts.append(f"{rc:,} rows")
         if size:
             meta_parts.append(f"{size:.1f} MB")
-        desc = table.get("description", "")
+        # Semantic model description overrides database comment
+        sem_table = semantic.get("tables", {}).get(key, {})
+        desc = sem_table.get("description", "") or table.get("description", "")
         if desc:
             meta_parts.append(desc)
         meta_comment = f" -- {', '.join(meta_parts)}" if meta_parts else ""
 
         obj_kw = "CREATE VIEW" if table.get("type") == "view" else "CREATE TABLE"
         col_lines = []
+        sem_cols = sem_table.get("columns", {})
         for col in table.get("columns", []):
             ct = col.get("type", "").upper()
             nn = " NOT NULL" if not col.get("nullable", True) else ""
-            comment = col.get("comment", "")
+            # Semantic column description overrides database comment
+            sem_col = sem_cols.get(col["name"], {})
+            comment = sem_col.get("description", "") or col.get("comment", "")
+            # Add business name if different from column name
+            biz_name = sem_col.get("business_name", "")
+            if biz_name and biz_name.lower() != col["name"].lower().replace("_", " "):
+                comment = f"{biz_name}: {comment}" if comment else biz_name
+            # Add unit annotation
+            unit = sem_col.get("unit", "")
+            if unit:
+                comment = f"{comment} ({unit})" if comment else f"({unit})"
             comment_str = f" -- {comment}" if comment else ""
             col_lines.append(f"  {col['name']} {ct}{nn}{comment_str}")
 
@@ -2611,6 +2640,19 @@ async def get_agent_context(
         for ij in inferred_map.get(key, []):
             ref = f"{ij.get('to_schema', '')}.{ij['to_table']}" if ij.get("to_schema") else ij["to_table"]
             col_lines.append(f"  -- inferred join: {ij['from_column']} -> {ref}({ij['to_column']})")
+
+        # Semantic join hints from model (curated by user)
+        for sj in semantic_joins:
+            sj_from = sj.get("from", "")
+            if sj_from.startswith(f"{key}.") or sj_from.startswith(f"{table_name}."):
+                join_type = sj.get("type", "")
+                join_desc = sj.get("description", "")
+                hint = f"  -- join hint: {sj_from} -> {sj.get('to', '')}"
+                if join_type:
+                    hint += f" ({join_type})"
+                if join_desc:
+                    hint += f" -- {join_desc}"
+                col_lines.append(hint)
 
         ddl = f"{obj_kw} {table_name} (\n{',\n'.join(col_lines)}\n);{meta_comment}"
         sections.append(ddl)
@@ -4200,6 +4242,238 @@ async def update_endorsements(name: str, body: dict):
     # Invalidate schema cache so next fetch applies the new filter
     schema_cache.invalidate(name)
     return result
+
+
+# ─── Semantic Model (HEX inline schema editing) ───────────────────────────
+
+# Persistent storage for semantic descriptions (table/column/join)
+# Stored as JSON files alongside the SQLite DB
+_semantic_models: dict[str, dict] = {}  # connection_name → model
+
+
+def _semantic_model_path(name: str):
+    """Path to the semantic model JSON file for a connection."""
+    return DATA_DIR / f"semantic_{name}.json"
+
+
+def _load_semantic_model(name: str) -> dict:
+    """Load semantic model from disk (cached in memory)."""
+    if name in _semantic_models:
+        return _semantic_models[name]
+    path = _semantic_model_path(name)
+    if path.exists():
+        try:
+            model = json.loads(path.read_text())
+            _semantic_models[name] = model
+            return model
+        except Exception:
+            pass
+    empty = {"tables": {}, "joins": [], "glossary": {}}
+    _semantic_models[name] = empty
+    return empty
+
+
+def _save_semantic_model(name: str, model: dict) -> None:
+    """Save semantic model to disk."""
+    _semantic_models[name] = model
+    path = _semantic_model_path(name)
+    path.write_text(json.dumps(model, indent=2))
+
+
+@app.get("/api/connections/{name}/semantic-model")
+async def get_semantic_model(name: str):
+    """Get the semantic model for a connection.
+
+    The semantic model contains human-curated metadata that enriches
+    the auto-detected schema for AI agents (HEX pattern):
+    - Table descriptions (what this table represents)
+    - Column descriptions (business definitions, units, examples)
+    - Join hints (preferred join paths, join types)
+    - Business glossary (domain term → table.column mapping)
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+    return _load_semantic_model(name)
+
+
+@app.put("/api/connections/{name}/semantic-model")
+async def update_semantic_model(name: str, body: dict):
+    """Update the semantic model for a connection.
+
+    Body: {
+        "tables": {
+            "public.customers": {
+                "description": "Core customer records",
+                "columns": {
+                    "id": {"description": "Primary customer ID", "business_name": "Customer ID"},
+                    "ltv": {"description": "Lifetime value in USD", "unit": "USD"}
+                }
+            }
+        },
+        "joins": [
+            {"from": "orders.customer_id", "to": "customers.id", "type": "many_to_one", "description": "Order belongs to customer"}
+        ],
+        "glossary": {
+            "revenue": "orders.total_amount",
+            "customer name": "customers.full_name",
+            "ARR": "subscriptions.annual_recurring_revenue"
+        }
+    }
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    model = _load_semantic_model(name)
+    # Merge updates (don't replace — merge at the table/column level)
+    if "tables" in body:
+        for table_key, table_data in body["tables"].items():
+            if table_key not in model["tables"]:
+                model["tables"][table_key] = {"description": "", "columns": {}}
+            if "description" in table_data:
+                model["tables"][table_key]["description"] = table_data["description"]
+            if "columns" in table_data:
+                if "columns" not in model["tables"][table_key]:
+                    model["tables"][table_key]["columns"] = {}
+                for col_name, col_data in table_data["columns"].items():
+                    if col_name not in model["tables"][table_key]["columns"]:
+                        model["tables"][table_key]["columns"][col_name] = {}
+                    model["tables"][table_key]["columns"][col_name].update(col_data)
+    if "joins" in body:
+        model["joins"] = body["joins"]
+    if "glossary" in body:
+        model["glossary"].update(body["glossary"])
+
+    _save_semantic_model(name, model)
+    return model
+
+
+@app.patch("/api/connections/{name}/semantic-model/table/{table_key:path}")
+async def update_table_description(name: str, table_key: str, body: dict):
+    """Quick edit a single table's description or column descriptions.
+
+    Body: {"description": "Core customer table"} or
+          {"columns": {"email": {"description": "Primary email address"}}}
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    model = _load_semantic_model(name)
+    if table_key not in model["tables"]:
+        model["tables"][table_key] = {"description": "", "columns": {}}
+    if "description" in body:
+        model["tables"][table_key]["description"] = body["description"]
+    if "columns" in body:
+        if "columns" not in model["tables"][table_key]:
+            model["tables"][table_key]["columns"] = {}
+        for col_name, col_data in body["columns"].items():
+            if col_name not in model["tables"][table_key]["columns"]:
+                model["tables"][table_key]["columns"][col_name] = {}
+            model["tables"][table_key]["columns"][col_name].update(col_data)
+
+    _save_semantic_model(name, model)
+    return model["tables"][table_key]
+
+
+@app.post("/api/connections/{name}/semantic-model/generate")
+async def generate_semantic_model(name: str):
+    """Auto-generate a semantic model skeleton from the database schema.
+
+    Populates table/column descriptions from database comments (if available),
+    infers join hints from FK relationships, and suggests business terms
+    from column names.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        try:
+            extras = get_credential_extras(name)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+        schema_cache.put(name, cached)
+
+    model = _load_semantic_model(name)
+
+    tables_added = 0
+    joins_added = 0
+    glossary_added = 0
+
+    for key, table in cached.items():
+        if key not in model["tables"]:
+            model["tables"][key] = {"description": "", "columns": {}}
+        table_model = model["tables"][key]
+
+        # Use database comments as descriptions (if not already set)
+        if not table_model.get("description") and table.get("description"):
+            table_model["description"] = table["description"]
+            tables_added += 1
+
+        if "columns" not in table_model:
+            table_model["columns"] = {}
+
+        for col in table.get("columns", []):
+            col_name = col.get("name", "")
+            if col_name and col_name not in table_model["columns"]:
+                table_model["columns"][col_name] = {}
+            if col_name and not table_model["columns"].get(col_name, {}).get("description"):
+                comment = col.get("comment", "")
+                if comment:
+                    table_model["columns"][col_name]["description"] = comment
+
+        # Generate join hints from FK relationships
+        for fk in table.get("foreign_keys", []):
+            from_col = fk.get("column", "")
+            to_table = fk.get("references_table", "")
+            to_col = fk.get("references_column", "")
+            to_schema = fk.get("references_schema", table.get("schema", ""))
+            to_key = f"{to_schema}.{to_table}" if to_schema else to_table
+
+            join_entry = {
+                "from": f"{key}.{from_col}",
+                "to": f"{to_key}.{to_col}",
+                "type": "many_to_one",
+            }
+            # Check for duplicate
+            existing = any(
+                j.get("from") == join_entry["from"] and j.get("to") == join_entry["to"]
+                for j in model.get("joins", [])
+            )
+            if not existing:
+                model["joins"].append(join_entry)
+                joins_added += 1
+
+        # Auto-generate glossary entries from column names
+        tbl_name = table.get("name", "")
+        for col in table.get("columns", []):
+            col_name = col.get("name", "")
+            # Convert column names to natural language terms
+            natural = col_name.replace("_", " ").replace("-", " ").lower()
+            if len(natural) > 3 and natural not in model.get("glossary", {}):
+                model["glossary"][natural] = f"{key}.{col_name}"
+                glossary_added += 1
+
+    _save_semantic_model(name, model)
+
+    return {
+        "tables": len(model["tables"]),
+        "joins": len(model.get("joins", [])),
+        "glossary_terms": len(model.get("glossary", {})),
+        "generated": {
+            "tables_with_descriptions": tables_added,
+            "joins_added": joins_added,
+            "glossary_terms_added": glossary_added,
+        },
+    }
 
 
 # ─── Column Name Correction (Spider2.0 hallucination fix) ──────────────────

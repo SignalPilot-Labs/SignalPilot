@@ -313,6 +313,7 @@ export interface ParallelRunSlot {
   run_id: string | null;
   container_id: string;
   container_name: string;
+  volume_name?: string | null;
   status: "starting" | "running" | "completed" | "stopped" | "error" | "killed";
   prompt: string | null;
   max_budget_usd: number;

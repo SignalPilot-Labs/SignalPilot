@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
+import { clsx } from "clsx";
 import Image from "next/image";
 import Link from "next/link";
 import type { Run, FeedEvent, RunStatus, ToolCall, SettingsStatus, RepoInfo } from "@/lib/types";
@@ -11,6 +12,7 @@ import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
 import { useSSE } from "@/hooks/useSSE";
 import { useControl } from "@/hooks/useControl";
+import { useParallelRuns } from "@/hooks/useParallelRuns";
 import { RunList } from "@/components/sidebar/RunList";
 import { EventFeed } from "@/components/feed/EventFeed";
 import { ControlBar } from "@/components/controls/ControlBar";
@@ -23,6 +25,7 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { RepoSelector } from "@/components/ui/RepoSelector";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
+import { ParallelRunsView } from "@/components/parallel/ParallelRunsView";
 
 export default function MonitorPage() {
   const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(() => {
@@ -35,12 +38,17 @@ export default function MonitorPage() {
   const [historyEvents, setHistoryEvents] = useState<FeedEvent[]>([]);
   const [injectOpen, setInjectOpen] = useState(false);
   const [startModalOpen, setStartModalOpen] = useState(false);
+  const [parallelModalOpen, setParallelModalOpen] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [agentHealth, setAgentHealth] = useState<AgentHealth | null>(null);
   const [branches, setBranches] = useState<string[]>(["main"]);
   const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
+  const [activeView, setActiveView] = useState<"feed" | "parallel">("feed");
+
+  const { status: parallelStatus, startRun: startParallelRun } = useParallelRuns();
+  const parallelActive = parallelStatus?.active ?? 0;
 
   const { events: liveEvents, connected, clearEvents } = useSSE(selectedRunId);
 
@@ -294,6 +302,27 @@ export default function MonitorPage() {
     [addEvent, refreshRuns, handleSelectRun]
   );
 
+  // Start a parallel run
+  const handleStartParallelRun = useCallback(
+    async (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => {
+      setStartBusy(true);
+      try {
+        await startParallelRun(prompt, budget, durationMinutes, baseBranch);
+        setParallelModalOpen(false);
+        setActiveView("parallel"); // Switch to parallel view to see the new run
+      } catch (err) {
+        addEvent({
+          _kind: "control",
+          text: `Failed to start parallel run: ${err}`,
+          ts: new Date().toISOString(),
+        });
+      } finally {
+        setStartBusy(false);
+      }
+    },
+    [startParallelRun, addEvent]
+  );
+
   const runStatus: RunStatus | null =
     (selectedRun?.status as RunStatus) || null;
   const agentIdle = agentHealth?.status === "idle";
@@ -358,6 +387,39 @@ export default function MonitorPage() {
 
         <div className="flex-1" />
 
+        {/* View toggle */}
+        <div className="flex items-center gap-0.5 bg-white/[0.03] rounded p-0.5 border border-[#1a1a1a]">
+          <button
+            onClick={() => setActiveView("feed")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all",
+              activeView === "feed"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]"
+            )}
+          >
+            Event Feed
+          </button>
+          <button
+            onClick={() => setActiveView("parallel")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
+              activeView === "parallel"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]"
+            )}
+          >
+            Parallel
+            {parallelActive > 0 && (
+              <span className="min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88] text-[9px] font-bold px-1">
+                {parallelActive}
+              </span>
+            )}
+          </button>
+        </div>
+
+        <div className="w-px h-4 bg-[#1a1a1a]" />
+
         {/* Agent health indicator */}
         <div className="flex items-center gap-1.5 mr-2">
           <span
@@ -391,8 +453,15 @@ export default function MonitorPage() {
         <Button
           variant="success"
           size="md"
-          onClick={() => { fetchBranches(activeRepoFilter || undefined).then(setBranches); setStartModalOpen(true); }}
-          disabled={!agentIdle || !agentReachable || !isConfigured}
+          onClick={() => {
+            fetchBranches(activeRepoFilter || undefined).then(setBranches);
+            if (activeView === "parallel") {
+              setParallelModalOpen(true);
+            } else {
+              setStartModalOpen(true);
+            }
+          }}
+          disabled={activeView === "parallel" ? !isConfigured : (!agentIdle || !agentReachable || !isConfigured)}
           title={!isConfigured ? "Configure credentials in Settings first" : undefined}
           icon={
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -406,7 +475,7 @@ export default function MonitorPage() {
               ? "Offline"
               : !agentIdle
                 ? "Running"
-                : "New Run"}
+                : activeView === "parallel" ? "New Parallel Run" : "New Run"}
         </Button>
 
         <div className="w-px h-4 bg-[#1a1a1a]" />
@@ -441,6 +510,16 @@ export default function MonitorPage() {
         onStart={handleStartRun}
         busy={startBusy}
         branches={branches}
+      />
+
+      {/* Parallel Start Run Modal */}
+      <StartRunModal
+        open={parallelModalOpen}
+        onClose={() => setParallelModalOpen(false)}
+        onStart={handleStartParallelRun}
+        busy={startBusy}
+        branches={branches}
+        mode="parallel"
       />
 
       {/* Onboarding Modal */}
@@ -481,14 +560,28 @@ export default function MonitorPage() {
           loading={runsLoading}
         />
 
-        {/* Center - Event feed */}
-        <main className="flex-1 flex flex-col min-h-0 min-w-0">
-          <EventFeed events={allEvents} />
-          <StatsBar run={selectedRun} connected={connected} events={allEvents} />
-        </main>
+        {activeView === "feed" ? (
+          <>
+            {/* Center - Event feed */}
+            <main className="flex-1 flex flex-col min-h-0 min-w-0">
+              <EventFeed events={allEvents} />
+              <StatsBar run={selectedRun} connected={connected} events={allEvents} />
+            </main>
 
-        {/* Right sidebar - WorkTree */}
-        <WorkTree events={allEvents} runId={selectedRunId} />
+            {/* Right sidebar - WorkTree */}
+            <WorkTree events={allEvents} runId={selectedRunId} />
+          </>
+        ) : (
+          <main className="flex-1 flex flex-col min-h-0 min-w-0">
+            <ParallelRunsView
+              onStartNew={() => {
+                fetchBranches(activeRepoFilter || undefined).then(setBranches);
+                setParallelModalOpen(true);
+              }}
+              branches={branches}
+            />
+          </main>
+        )}
       </div>
     </div>
   );

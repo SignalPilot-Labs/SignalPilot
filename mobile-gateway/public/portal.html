@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/public/icon-192.svg">
+  <title>SignalPilot</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #06060f;
+      --surface: #0d0d1f;
+      --surface-2: #141430;
+      --surface-3: #1a1a40;
+      --border: #252552;
+      --border-hover: #3a3a6e;
+      --text: #e8ecf4;
+      --text-muted: #8892a8;
+      --text-dim: #5a6178;
+      --primary: #6366f1;
+      --primary-light: #818cf8;
+      --primary-glow: rgba(99, 102, 241, 0.15);
+      --violet: #8b5cf6;
+      --green: #10b981;
+      --green-glow: rgba(16, 185, 129, 0.12);
+      --amber: #f59e0b;
+      --amber-glow: rgba(245, 158, 11, 0.12);
+      --red: #ef4444;
+      --red-glow: rgba(239, 68, 68, 0.12);
+      --cyan: #06b6d4;
+      --cyan-glow: rgba(6, 182, 212, 0.12);
+      --radius: 16px;
+      --radius-sm: 12px;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    html { height: 100%; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(ellipse 600px 400px at 15% 10%, rgba(99,102,241,0.07) 0%, transparent 70%),
+        radial-gradient(ellipse 500px 500px at 85% 80%, rgba(139,92,246,0.05) 0%, transparent 70%),
+        radial-gradient(ellipse 400px 300px at 50% 50%, rgba(6,182,212,0.03) 0%, transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+
+    .header {
+      padding: 14px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      background: rgba(13,13,31,0.85);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .header-logo {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 11px;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(99,102,241,0.25);
+    }
+    .header-logo svg { width: 22px; height: 22px; }
+    .header-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    .header-badge {
+      font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 6px;
+      background: var(--primary-glow); color: var(--primary-light);
+      letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .header-actions { display: flex; gap: 6px; }
+    .icon-btn {
+      width: 38px; height: 38px;
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px;
+      color: var(--text-muted); display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+    }
+    .icon-btn:active { transform: scale(0.93); }
+    .icon-btn:hover { border-color: var(--border-hover); color: var(--text); }
+    .icon-btn svg { width: 18px; height: 18px; }
+
+    .content {
+      position: relative; z-index: 1;
+      padding: 20px 16px calc(20px + var(--safe-bottom));
+      max-width: 540px; margin: 0 auto;
+    }
+
+    .install-banner {
+      display: none;
+      background: linear-gradient(135deg, var(--primary-glow), rgba(139,92,246,0.08));
+      border: 1px solid rgba(99,102,241,0.25); border-radius: var(--radius);
+      padding: 14px 18px; margin-bottom: 20px;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    .install-banner:active { transform: scale(0.98); }
+    .install-banner-row { display: flex; align-items: center; gap: 12px; }
+    .install-banner-icon {
+      width: 40px; height: 40px; border-radius: 10px; background: var(--primary);
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .install-banner-icon svg { width: 20px; height: 20px; color: white; }
+    .install-banner-text { font-size: 14px; font-weight: 600; }
+    .install-banner-sub { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+
+    .status-bar {
+      display: flex; gap: 8px; margin-bottom: 24px;
+      overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding: 2px 0;
+    }
+    .status-bar::-webkit-scrollbar { display: none; }
+    .status-chip {
+      flex-shrink: 0; display: flex; align-items: center; gap: 7px;
+      padding: 8px 14px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); font-size: 12px; font-weight: 600;
+      letter-spacing: 0.2px; transition: border-color 0.3s;
+    }
+    .status-chip.ok { border-color: rgba(16,185,129,0.3); }
+    .status-chip.warn { border-color: rgba(245,158,11,0.3); }
+    .status-chip.err { border-color: rgba(239,68,68,0.3); }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-dim); transition: all 0.5s;
+    }
+    .status-dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .status-dot.amber { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+    .status-dot.red { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+    .section-title {
+      font-size: 11px; font-weight: 700; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 1.2px;
+      margin-bottom: 12px; padding-left: 2px;
+    }
+
+    .app-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; }
+    .app-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 20px 16px 18px; text-decoration: none; color: var(--text);
+      transition: all 0.25s; display: flex; flex-direction: column; gap: 12px;
+      position: relative; overflow: hidden; -webkit-tap-highlight-color: transparent;
+    }
+    .app-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0;
+      height: 3px; border-radius: 0 0 2px 2px;
+    }
+    .app-card:active { transform: scale(0.97); }
+    .app-card:hover { border-color: var(--border-hover); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    .app-card-icon {
+      width: 48px; height: 48px; border-radius: 13px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .app-card-icon svg { width: 26px; height: 26px; }
+    .app-card-title { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+    .app-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+    .app-card-status {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; width: fit-content;
+    }
+    .card-web::before { background: linear-gradient(90deg, #6366f1, #818cf8); }
+    .card-web .app-card-icon { background: var(--primary-glow); color: var(--primary-light); }
+    .card-web .app-card-status { background: var(--primary-glow); color: var(--primary-light); }
+    .card-monitor::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+    .card-monitor .app-card-icon { background: rgba(139,92,246,0.12); color: #a78bfa; }
+    .card-monitor .app-card-status { background: rgba(139,92,246,0.12); color: #a78bfa; }
+
+    .quick-links { display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px; }
+    .quick-link {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 14px 16px; display: flex; align-items: center; gap: 14px;
+      text-decoration: none; color: var(--text); transition: all 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .quick-link:active { transform: scale(0.98); }
+    .quick-link:hover { border-color: var(--border-hover); }
+    .quick-link-icon {
+      width: 40px; height: 40px; border-radius: 11px;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .quick-link-icon svg { width: 20px; height: 20px; }
+    .quick-link-content { flex: 1; min-width: 0; }
+    .quick-link-title { font-size: 14px; font-weight: 600; }
+    .quick-link-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .quick-link-arrow { color: var(--text-dim); flex-shrink: 0; transition: transform 0.2s; }
+    .quick-link:hover .quick-link-arrow { transform: translateX(2px); }
+
+    .session-panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px; margin-bottom: 16px;
+    }
+    .session-panel-title {
+      font-size: 13px; font-weight: 700; margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .session-panel-title svg { width: 16px; height: 16px; color: var(--text-muted); }
+    .session-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 0; border-bottom: 1px solid rgba(37,37,82,0.5);
+    }
+    .session-row:last-child { border-bottom: none; }
+    .session-label { font-size: 13px; color: var(--text-muted); }
+    .session-value {
+      font-size: 13px; font-weight: 600;
+      font-family: 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .session-value.online {
+      color: var(--green); display: flex; align-items: center; gap: 5px;
+    }
+    .session-value.online::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); box-shadow: 0 0 6px var(--green);
+    }
+
+    .logout-btn {
+      width: 100%; padding: 14px; background: transparent;
+      border: 1px solid rgba(239,68,68,0.2); color: var(--red);
+      border-radius: var(--radius-sm); font-size: 14px; font-weight: 600;
+      font-family: inherit; cursor: pointer; transition: all 0.2s;
+      -webkit-tap-highlight-color: transparent; margin-bottom: 12px;
+    }
+    .logout-btn:active { transform: scale(0.98); background: var(--red-glow); }
+
+    .footer {
+      text-align: center; padding: 8px 0 4px;
+      font-size: 11px; color: var(--text-dim);
+    }
+
+    /* Modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      z-index: 200; align-items: flex-end; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-sheet {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px 20px 0 0;
+      padding: 24px 20px calc(24px + var(--safe-bottom));
+      width: 100%; max-width: 540px; max-height: 80dvh; overflow-y: auto;
+      animation: slideUp 0.3s ease-out;
+    }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .modal-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 16px; }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .modal-title { font-size: 17px; font-weight: 700; }
+    .session-card {
+      padding: 12px 14px; background: var(--surface-2);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px;
+    }
+    .session-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .session-card-label { font-size: 13px; font-weight: 600; }
+    .session-card-badge {
+      font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .session-card-badge.current { background: var(--green-glow); color: var(--green); }
+    .session-card-badge.other { background: var(--surface-3); color: var(--text-muted); }
+    .session-card-details { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+    .revoke-btn {
+      width: 100%; padding: 13px; background: var(--red-glow);
+      border: 1px solid rgba(239,68,68,0.25); color: var(--red);
+      border-radius: var(--radius-sm); font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: inherit; margin-top: 12px;
+    }
+    .revoke-btn:active { transform: scale(0.98); }
+
+    @media (max-width: 360px) { .app-cards { grid-template-columns: 1fr; } .content { padding: 16px 14px; } }
+    @media (min-width: 540px) { .modal-sheet { border-radius: 20px; margin-bottom: 20px; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <div class="header-logo">
+        <svg viewBox="0 0 32 32" fill="none"><path d="M8 16l5 5L24 10" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <span class="header-brand">SignalPilot</span>
+      <span class="header-badge">Mobile</span>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" id="refreshBtn" title="Refresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="sessionsBtn" title="Sessions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="install-banner" id="installBanner">
+      <div class="install-banner-row">
+        <div class="install-banner-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <div>
+          <div class="install-banner-text">Install SignalPilot</div>
+          <div class="install-banner-sub">Add to home screen for instant access</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-bar" id="statusBar">
+      <div class="status-chip" id="webChip"><div class="status-dot" id="webStatus"></div><span>Web UI</span></div>
+      <div class="status-chip" id="monitorChip"><div class="status-dot" id="monitorStatus"></div><span>Monitor</span></div>
+      <div class="status-chip" id="gatewayChip"><div class="status-dot" id="gatewayStatus"></div><span>Gateway</span></div>
+    </div>
+
+    <div class="section-title">Applications</div>
+    <div class="app-cards">
+      <a href="/app" class="app-card card-web">
+        <div class="app-card-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2.5"/><path d="M8 21h8M12 17v4"/>
+          </svg>
+        </div>
+        <div class="app-card-title">Web UI</div>
+        <div class="app-card-desc">Query editor, connections, schema browser</div>
+        <div class="app-card-status" id="webCardStatus"><div class="status-dot" style="width:5px;height:5px;"></div> Checking...</div>
+      </a>
+      <a href="/monitor" class="app-card card-monitor">
+        <div class="app-card-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+        </div>
+        <div class="app-card-title">Agent Monitor</div>
+        <div class="app-card-desc">Self-improve runs, tool calls, live controls</div>
+        <div class="app-card-status" id="monitorCardStatus"><div class="status-dot" style="width:5px;height:5px;"></div> Checking...</div>
+      </a>
+    </div>
+
+    <div class="section-title">Quick Access</div>
+    <div class="quick-links">
+      <a href="/app" class="quick-link">
+        <div class="quick-link-icon" style="background:var(--green-glow);color:var(--green);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <div class="quick-link-content">
+          <div class="quick-link-title">Query Editor</div>
+          <div class="quick-link-desc">Write and execute governed SQL queries</div>
+        </div>
+        <div class="quick-link-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+      </a>
+      <a href="/app" class="quick-link">
+        <div class="quick-link-icon" style="background:var(--amber-glow);color:var(--amber);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <div class="quick-link-content">
+          <div class="quick-link-title">Audit Log</div>
+          <div class="quick-link-desc">Review all governed query activity</div>
+        </div>
+        <div class="quick-link-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+      </a>
+      <a href="/monitor" class="quick-link">
+        <div class="quick-link-icon" style="background:var(--cyan-glow);color:var(--cyan);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="quick-link-content">
+          <div class="quick-link-title">Agent Runs</div>
+          <div class="quick-link-desc">Monitor active improvement cycles</div>
+        </div>
+        <div class="quick-link-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+      </a>
+    </div>
+
+    <div class="section-title">Session</div>
+    <div class="session-panel">
+      <div class="session-panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Session Info
+      </div>
+      <div class="session-row">
+        <span class="session-label">Status</span>
+        <span class="session-value online" id="sessionStatus">Connected</span>
+      </div>
+      <div class="session-row">
+        <span class="session-label">Signed in as</span>
+        <span class="session-value" id="sessionUser">---</span>
+      </div>
+      <div class="session-row">
+        <span class="session-label">Active sessions</span>
+        <span class="session-value" id="sessionCount">---</span>
+      </div>
+      <div class="session-row">
+        <span class="session-label">Access</span>
+        <span class="session-value" id="accessType" style="color: var(--primary-light);">---</span>
+      </div>
+    </div>
+
+    <button class="logout-btn" id="logoutBtn">Sign Out</button>
+    <div class="footer">SignalPilot Mobile Gateway &middot; Authenticated &amp; Encrypted</div>
+  </div>
+
+  <div class="modal-overlay" id="sessionsModal">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <span class="modal-title">Active Sessions</span>
+        <button class="icon-btn" id="closeModal" style="width:32px;height:32px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="sessionsList"></div>
+      <button class="revoke-btn" id="revokeAllBtn">Revoke All Other Sessions</button>
+    </div>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
+    async function checkStatus() {
+      const checks = [
+        { dot: 'webStatus', chip: 'webChip', card: 'webCardStatus', url: '/app', label: 'Online' },
+        { dot: 'monitorStatus', chip: 'monitorChip', card: 'monitorCardStatus', url: '/monitor', label: 'Online' },
+        { dot: 'gatewayStatus', chip: 'gatewayChip', url: '/gateway-api/health', label: 'Online' },
+      ];
+      for (const c of checks) {
+        try {
+          const r = await fetch(c.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+          const ok = r.ok || r.status === 304;
+          document.getElementById(c.dot).className = 'status-dot ' + (ok ? 'green' : 'amber');
+          document.getElementById(c.chip).className = 'status-chip ' + (ok ? 'ok' : 'warn');
+          if (c.card) {
+            document.getElementById(c.card).innerHTML = '<div class="status-dot ' + (ok ? 'green' : 'amber') + '" style="width:5px;height:5px;"></div> ' + (ok ? c.label : 'Degraded');
+          }
+        } catch {
+          document.getElementById(c.dot).className = 'status-dot red';
+          document.getElementById(c.chip).className = 'status-chip err';
+          if (c.card) {
+            document.getElementById(c.card).innerHTML = '<div class="status-dot red" style="width:5px;height:5px;"></div> Offline';
+          }
+        }
+      }
+    }
+    checkStatus();
+    setInterval(checkStatus, 30000);
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      const btn = document.getElementById('refreshBtn');
+      btn.style.transform = 'rotate(360deg)';
+      btn.style.transition = 'transform 0.5s';
+      setTimeout(() => { btn.style.transform = ''; btn.style.transition = ''; }, 600);
+      checkStatus();
+    });
+
+    async function loadSessionInfo() {
+      try {
+        const r = await fetch('/api/sessions');
+        const data = await r.json();
+        document.getElementById('sessionUser').textContent = 'admin';
+        document.getElementById('sessionCount').textContent = data.sessions.length;
+        const isTunnel = location.protocol === 'https:' && !location.hostname.match(/^(localhost|127\.|192\.168\.|10\.)/);
+        document.getElementById('accessType').textContent = isTunnel ? 'Remote (Tunnel)' : 'Local Network';
+      } catch {
+        document.getElementById('sessionUser').textContent = '---';
+      }
+    }
+    loadSessionInfo();
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location = '/login';
+    });
+
+    const modal = document.getElementById('sessionsModal');
+    function parseUA(ua) {
+      if (!ua) return 'Unknown';
+      if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS';
+      if (ua.includes('Android')) return 'Android';
+      if (ua.includes('Mac')) return 'macOS';
+      if (ua.includes('Windows')) return 'Windows';
+      if (ua.includes('Linux')) return 'Linux';
+      return 'Other';
+    }
+
+    document.getElementById('sessionsBtn').addEventListener('click', async () => {
+      modal.classList.add('open');
+      try {
+        const r = await fetch('/api/sessions');
+        const data = await r.json();
+        document.getElementById('sessionsList').innerHTML = data.sessions.map(s => `
+          <div class="session-card">
+            <div class="session-card-header">
+              <span class="session-card-label">${s.current ? 'This Device' : 'Session ' + s.id}</span>
+              <span class="session-card-badge ${s.current ? 'current' : 'other'}">${s.current ? 'Current' : 'Other'}</span>
+            </div>
+            <div class="session-card-details">
+              IP: ${s.ip}<br>
+              Device: ${parseUA(s.userAgent)}<br>
+              Since: ${new Date(s.createdAt).toLocaleString()}
+            </div>
+          </div>
+        `).join('');
+      } catch {}
+    });
+    document.getElementById('closeModal').addEventListener('click', () => modal.classList.remove('open'));
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('open'); });
+
+    document.getElementById('revokeAllBtn').addEventListener('click', async () => {
+      try {
+        const csrf = await fetch('/api/csrf-token').then(r => r.json());
+        await fetch('/api/sessions/revoke-all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.token },
+        });
+      } catch {
+        await fetch('/api/sessions/revoke-all', { method: 'POST' });
+      }
+      modal.classList.remove('open');
+      loadSessionInfo();
+    });
+
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      document.getElementById('installBanner').style.display = 'block';
+    });
+    document.getElementById('installBanner').addEventListener('click', async () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        document.getElementById('installBanner').style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

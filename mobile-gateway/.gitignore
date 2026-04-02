@@ -1,0 +1,6 @@
+node_modules/
+credentials.json
+tunnel/
+*.pem
+*.key
+.env

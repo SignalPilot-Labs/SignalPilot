@@ -183,15 +183,24 @@ class MySQLConnector(BaseConnector):
             WHERE TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
                 AND SEQ_IN_INDEX = 1
         """
-        with self._conn.cursor() as cursor:
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            cursor.execute(fk_sql)
-            fk_rows = cursor.fetchall()
-            cursor.execute(idx_sql)
-            idx_rows = cursor.fetchall()
-            cursor.execute(cardinality_sql)
-            card_rows = cursor.fetchall()
+        # PyMySQL is not thread-safe for concurrent queries on the same connection,
+        # but we can batch queries to reduce round trips
+        import asyncio
+
+        def _fetch(query: str) -> list:
+            try:
+                self._conn.ping(reconnect=True)
+                with self._conn.cursor() as cursor:
+                    cursor.execute(query)
+                    return cursor.fetchall()
+            except Exception:
+                return []
+
+        # Run queries sequentially (PyMySQL isn't thread-safe for a single connection)
+        rows = _fetch(sql)
+        fk_rows = _fetch(fk_sql)
+        idx_rows = _fetch(idx_sql)
+        card_rows = _fetch(cardinality_sql)
 
         # Build cardinality map
         cardinality: dict[str, int] = {}

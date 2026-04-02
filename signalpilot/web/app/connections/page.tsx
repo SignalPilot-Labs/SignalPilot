@@ -381,7 +381,7 @@ function buildConnectionPreview(form: FormState): string {
     case "bigquery":
       return `bigquery://${form.project || "project"}/${form.dataset || "dataset"}`;
     case "databricks":
-      return `databricks://${form.host || "host"}${form.http_path || "/sql/..."}`;
+      return `databricks://****@${form.host || "host"}/${form.http_path || "sql/..."}${form.catalog ? `?catalog=${form.catalog}` : ""}`;
     case "duckdb":
     case "sqlite":
       return form.database || ":memory:";

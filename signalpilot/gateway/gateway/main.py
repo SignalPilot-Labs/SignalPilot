@@ -948,6 +948,112 @@ async def validate_connection_url(body: dict):
         return {"valid": False, "error": f"Invalid URL format: {e}"}
 
 
+@app.post("/api/connections/build-url")
+async def build_connection_url(body: dict):
+    """Build a connection string from individual fields.
+
+    HEX-pattern: users fill in separate fields, this builds the URL.
+    Supports all DB types with proper encoding and scheme selection.
+    """
+    from urllib.parse import quote_plus
+
+    db_type = body.get("db_type", "")
+    host = body.get("host", "")
+    port = body.get("port")
+    database = body.get("database", "")
+    username = body.get("username", "")
+    password = body.get("password", "")
+
+    if not db_type:
+        return {"url": "", "error": "db_type is required"}
+
+    try:
+        userpass = ""
+        if username:
+            userpass = quote_plus(username)
+            if password:
+                userpass += f":{quote_plus(password)}"
+            userpass += "@"
+
+        if db_type == "postgres":
+            p = port or 5432
+            url = f"postgresql://{userpass}{host}:{p}/{database}"
+        elif db_type == "mysql":
+            p = port or 3306
+            url = f"mysql://{userpass}{host}:{p}/{database}"
+        elif db_type == "redshift":
+            p = port or 5439
+            url = f"redshift://{userpass}{host}:{p}/{database}"
+        elif db_type == "mssql":
+            p = port or 1433
+            url = f"mssql://{userpass}{host}:{p}/{database}"
+        elif db_type == "clickhouse":
+            protocol = body.get("protocol", "native")
+            ssl = body.get("ssl", False)
+            if protocol == "http":
+                p = port or (8443 if ssl else 8123)
+                scheme = "clickhouse+https" if ssl else "clickhouse+http"
+            else:
+                p = port or (9440 if ssl else 9000)
+                scheme = "clickhouses" if ssl else "clickhouse"
+            url = f"{scheme}://{userpass}{host}:{p}/{database}"
+        elif db_type == "trino":
+            https = body.get("https", False)
+            p = port or (443 if https else 8080)
+            scheme = "trino+https" if https else "trino"
+            catalog = body.get("catalog", "")
+            schema_name = body.get("schema_name", "")
+            path = catalog
+            if schema_name:
+                path += f"/{schema_name}"
+            url = f"{scheme}://{userpass}{host}:{p}/{path}"
+        elif db_type == "snowflake":
+            account = body.get("account", "")
+            warehouse = body.get("warehouse", "")
+            schema_name = body.get("schema_name", "")
+            role = body.get("role", "")
+            url = f"snowflake://{userpass}{account}/{database}"
+            if schema_name:
+                url += f"/{schema_name}"
+            params = []
+            if warehouse:
+                params.append(f"warehouse={quote_plus(warehouse)}")
+            if role:
+                params.append(f"role={quote_plus(role)}")
+            if params:
+                url += "?" + "&".join(params)
+        elif db_type == "databricks":
+            access_token = body.get("access_token", "")
+            http_path = body.get("http_path", "")
+            catalog = body.get("catalog", "")
+            url = f"databricks://token:{quote_plus(access_token)}@{host}/{http_path}"
+            if catalog:
+                url += f"?catalog={quote_plus(catalog)}"
+        elif db_type in ("duckdb", "sqlite"):
+            url = database or ":memory:"
+        elif db_type == "bigquery":
+            project = body.get("project", "")
+            dataset = body.get("dataset", "")
+            url = f"bigquery://{project}"
+            if dataset:
+                url += f"/{dataset}"
+        else:
+            return {"url": "", "error": f"Unknown db_type: {db_type}"}
+
+        # Build masked version for display
+        masked = url
+        if password:
+            masked = masked.replace(quote_plus(password), "****")
+
+        return {
+            "url": url,
+            "masked_url": masked,
+            "db_type": db_type,
+        }
+    except Exception as e:
+        return {"url": "", "error": f"Failed to build URL: {e}"}
+
+
 @app.post("/api/connections/{name}/test")
 async def test_connection(name: str):
     """Three-phase connection test (industry standard pattern from HEX/DBeaver):

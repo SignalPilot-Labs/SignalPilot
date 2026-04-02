@@ -4,6 +4,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "SignalPilot \u00B7 Self-Improve Monitor",
   description: "Real-time monitoring dashboard for the self-improvement agent",
+  other: {
+    "viewport": "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no",
+  },
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
@@ -22,6 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
         <link
           rel="preconnect"
           href="https://fonts.googleapis.com"

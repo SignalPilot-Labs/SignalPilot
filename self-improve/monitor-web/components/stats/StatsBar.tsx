@@ -66,7 +66,7 @@ export function StatsBar({
 
   if (!run) {
     return (
-      <div className="h-8 flex items-center px-4 border-t border-[#1a1a1a] bg-[#050505]">
+      <div className="h-8 flex items-center px-3 md:px-4 border-t border-[#1a1a1a] bg-[#050505]">
         <span className="text-[10px] text-[#777]">No run selected</span>
       </div>
     );
@@ -76,7 +76,7 @@ export function StatsBar({
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="h-8 flex items-center gap-5 px-4 border-t border-[#1a1a1a] bg-[#050505]"
+      className="min-h-[32px] flex items-center gap-3 md:gap-5 px-3 md:px-4 py-1 border-t border-[#1a1a1a] bg-[#050505] flex-wrap"
     >
       <Stat
         icon={
@@ -124,7 +124,7 @@ export function StatsBar({
             <line x1="3" y1="4.5" x2="3" y2="5.5" />
             <path d="M7 4.5c0 1.5-1.5 2-4 3" />
           </svg>
-          PR #{run.pr_url.split("/").pop()}
+          <span className="hidden sm:inline">PR </span>#{run.pr_url.split("/").pop()}
         </a>
       )}
 

@@ -168,7 +168,7 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-[#0a0a0a] text-[#e8e8e8]">
       {/* Header */}
       <div className="border-b border-[#1a1a1a]">
-        <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-2xl mx-auto px-4 md:px-6 py-3 md:py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link
               href="/"
@@ -209,7 +209,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Content */}
-      <div className="max-w-2xl mx-auto px-6 py-8">
+      <div className="max-w-2xl mx-auto px-4 md:px-6 py-6 md:py-8">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -226,7 +226,7 @@ export default function SettingsPage() {
               <span className="text-[9px] text-[#666] font-mono">security</span>
             </div>
             <div className="flex items-start gap-3 px-4 py-3">
-              <svg width="44" height="44" viewBox="0 0 32 32" fill="none" className="shrink-0">
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="none" className="shrink-0 hidden sm:block">
                 <path
                   d="M16 2L4 8v8c0 7.2 5.1 13.2 12 15 6.9-1.8 12-7.8 12-15V8L16 2z"
                   stroke="#00ff88" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" opacity="0.4"
@@ -287,7 +287,7 @@ export default function SettingsPage() {
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: "auto" }}
                       exit={{ opacity: 0, height: 0 }}
-                      className="flex items-center gap-2 px-2.5 py-2 bg-black/30 rounded border border-[#1a1a1a] group"
+                      className="flex items-center gap-2 px-2 md:px-2.5 py-2 bg-black/30 rounded border border-[#1a1a1a] group"
                     >
                       {/* Repo icon */}
                       <svg
@@ -318,7 +318,7 @@ export default function SettingsPage() {
                       ) : (
                         <button
                           onClick={() => handleSetActive(r.repo)}
-                          className="text-[9px] text-[#888] hover:text-[#00ff88] transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                          className="text-[9px] text-[#888] hover:text-[#00ff88] transition-colors md:opacity-0 md:group-hover:opacity-100 shrink-0"
                         >
                           Set Active
                         </button>
@@ -327,7 +327,7 @@ export default function SettingsPage() {
                       {/* Remove button */}
                       <button
                         onClick={() => handleRemoveRepo(r.repo)}
-                        className="text-[#666] hover:text-[#ff4444] transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                        className="text-[#666] hover:text-[#ff4444] transition-colors md:opacity-0 md:group-hover:opacity-100 shrink-0"
                         title="Remove repository"
                       >
                         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">

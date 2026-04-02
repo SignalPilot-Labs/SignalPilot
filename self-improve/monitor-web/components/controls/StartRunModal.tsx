@@ -242,7 +242,7 @@ export function StartRunModal({
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="w-[520px] max-h-[80vh] overflow-y-auto bg-[#0a0a0a] border border-[#1a1a1a] rounded-lg shadow-2xl shadow-black/60 card-accent-top pointer-events-auto"
+              className="w-[calc(100vw-32px)] sm:w-[520px] max-h-[85vh] overflow-y-auto bg-[#0a0a0a] border border-[#1a1a1a] rounded-lg shadow-2xl shadow-black/60 card-accent-top pointer-events-auto"
             >
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a]">
@@ -281,7 +281,7 @@ export function StartRunModal({
                   <label className="text-[10px] uppercase tracking-[0.15em] text-[#999] font-semibold">
                     Quick Start
                   </label>
-                  <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                     {QUICK_PROMPTS.map((q, i) => (
                       <button
                         key={i}

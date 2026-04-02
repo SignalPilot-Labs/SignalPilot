@@ -435,3 +435,103 @@ input[type="number"]::-webkit-outer-spin-button {
 .tool-agent { border-left-color: #ff8844; }
 .tool-web { border-left-color: #44aaff; }
 .tool-default { border-left-color: var(--color-text-dim); }
+
+/* ── Mobile responsive utilities ────────────────────────────────────── */
+
+/* Mobile drawer overlay */
+.mobile-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Mobile drawer panel */
+.mobile-drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: 50;
+  width: 85vw;
+  max-width: 320px;
+  background: var(--color-sidebar);
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+  transition: transform 0.25s ease;
+}
+
+.mobile-drawer-right {
+  right: 0;
+  left: auto;
+  border-right: none;
+  border-left: 1px solid var(--color-border);
+}
+
+/* Mobile bottom sheet for controls */
+.mobile-bottom-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--color-bg-card);
+  border-top: 1px solid var(--color-border);
+  border-radius: 12px 12px 0 0;
+  padding: 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Hamburger button */
+.mobile-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: #888;
+  transition: all 0.15s ease;
+}
+
+.mobile-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #ccc;
+}
+
+/* Hide on mobile utility */
+@media (max-width: 768px) {
+  .hide-mobile {
+    display: none !important;
+  }
+
+  .mobile-menu-btn {
+    display: flex;
+  }
+
+  .mobile-only {
+    display: flex !important;
+  }
+
+  /* Make header wrap better */
+  .header-glow {
+    flex-wrap: wrap;
+    gap: 6px !important;
+    padding: 8px 12px !important;
+  }
+}
+
+/* Show only on mobile */
+.mobile-only {
+  display: none !important;
+}
+
+/* Touch-friendly tap targets */
+@media (pointer: coarse) {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

@@ -113,7 +113,7 @@ export function SlotCard({
             </button>
           )}
         </div>
-        <span className="text-[10px] text-[#888] font-mono">{slot.container_name}</span>
+        <span className="text-[10px] text-[#888] font-mono truncate max-w-[120px] md:max-w-none">{slot.container_name}</span>
       </div>
 
       {/* Prompt preview */}
@@ -122,7 +122,7 @@ export function SlotCard({
       )}
 
       {/* Meta row */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[#666] mb-3">
+      <div className="flex flex-wrap items-center gap-x-2 md:gap-x-3 gap-y-1 text-[10px] text-[#666] mb-3">
         <span>Branch: <span className="text-[#999] font-mono">{slot.base_branch}</span></span>
         <span>Elapsed: <span className="text-[#999] tabular-nums">{elapsed}m</span></span>
         {slot.max_budget_usd > 0 && (

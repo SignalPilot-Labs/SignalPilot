@@ -46,6 +46,10 @@ export default function MonitorPage() {
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
   const [activeView, setActiveView] = useState<"feed" | "bots">("bots");
 
+  // Mobile drawer state
+  const [mobileDrawer, setMobileDrawer] = useState<"runs" | "worktree" | null>(null);
+  const closeMobileDrawer = useCallback(() => setMobileDrawer(null), []);
+
   const {
     status: parallelStatus,
     startRun: startParallelRun,
@@ -326,7 +330,20 @@ export default function MonitorPage() {
   return (
     <div className="h-screen flex flex-col bg-[var(--color-bg)]">
       {/* Header */}
-      <header className="relative z-10 flex items-center gap-3 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
+      <header className="relative z-10 flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2 md:py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
+        {/* Mobile: Runs drawer toggle */}
+        <button
+          className="mobile-menu-btn md:!hidden"
+          onClick={() => setMobileDrawer(mobileDrawer === "runs" ? null : "runs")}
+          aria-label="Toggle runs sidebar"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <line x1="2" y1="4" x2="14" y2="4" />
+            <line x1="2" y1="8" x2="14" y2="8" />
+            <line x1="2" y1="12" x2="14" y2="12" />
+          </svg>
+        </button>
+
         {/* Logo */}
         <div className="flex items-center gap-2">
           <div className="relative flex items-center justify-center h-7 w-7">
@@ -344,7 +361,7 @@ export default function MonitorPage() {
             {/* Logo */}
             <Image src="/logo.svg" alt="SignalPilot" width={18} height={18} className="relative z-[1]" />
           </div>
-          <div>
+          <div className="hidden sm:block">
             <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">
               SignalPilot
             </h1>
@@ -355,25 +372,27 @@ export default function MonitorPage() {
         </div>
 
         {/* Repo Selector */}
-        <div className="w-px h-4 bg-[#1a1a1a]" />
-        <RepoSelector
-          repos={repos}
-          activeRepo={activeRepoFilter}
-          onSelect={handleRepoSwitch}
-        />
+        <div className="w-px h-4 bg-[#1a1a1a] hidden sm:block" />
+        <div className="hidden sm:block">
+          <RepoSelector
+            repos={repos}
+            activeRepo={activeRepoFilter}
+            onSelect={handleRepoSwitch}
+          />
+        </div>
 
         {selectedRun && (
           <motion.div
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
-            className="flex items-center gap-2.5 ml-1"
+            className="flex items-center gap-2 md:gap-2.5 ml-1"
           >
-            <div className="w-px h-4 bg-[#1a1a1a]" />
+            <div className="w-px h-4 bg-[#1a1a1a] hidden md:block" />
             <StatusBadge
               status={selectedRun.status as RunStatus}
               size="md"
             />
-            <span className="text-[10px] text-[#888] font-medium">
+            <span className="text-[10px] text-[#888] font-medium hidden md:inline">
               {selectedRun.branch_name.replace("improvements-round-", "")}
             </span>
           </motion.div>
@@ -386,7 +405,7 @@ export default function MonitorPage() {
           <button
             onClick={() => setActiveView("bots")}
             className={clsx(
-              "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
+              "px-2 md:px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
               activeView === "bots"
                 ? "bg-white/[0.08] text-[#e8e8e8]"
                 : "text-[#666] hover:text-[#aaa]"
@@ -402,20 +421,20 @@ export default function MonitorPage() {
           <button
             onClick={() => setActiveView("feed")}
             className={clsx(
-              "px-2.5 py-1 rounded text-[10px] font-medium transition-all",
+              "px-2 md:px-2.5 py-1 rounded text-[10px] font-medium transition-all",
               activeView === "feed"
                 ? "bg-white/[0.08] text-[#e8e8e8]"
                 : "text-[#666] hover:text-[#aaa]"
             )}
           >
-            Event Feed
+            Feed
           </button>
         </div>
 
-        <div className="w-px h-4 bg-[#1a1a1a]" />
+        <div className="w-px h-4 bg-[#1a1a1a] hidden md:block" />
 
-        {/* Agent health indicator */}
-        <div className="flex items-center gap-1.5 mr-2">
+        {/* Agent health indicator - hidden on small mobile */}
+        <div className="hidden md:flex items-center gap-1.5 mr-2">
           <span
             className={`h-1.5 w-1.5 rounded-full ${
               agentReachable
@@ -459,11 +478,13 @@ export default function MonitorPage() {
             </svg>
           }
         >
-          {!isConfigured ? "Setup Required" : "New Bot"}
+          <span className="hidden sm:inline">{!isConfigured ? "Setup Required" : "New Bot"}</span>
+          <span className="sm:hidden">{!isConfigured ? "Setup" : "New"}</span>
         </Button>
 
+        {/* Desktop control bar */}
         {activeView === "feed" && selectedRunId && (
-          <>
+          <div className="hidden lg:flex items-center">
             <div className="w-px h-4 bg-[#1a1a1a]" />
             <ControlBar
               status={runStatus}
@@ -478,7 +499,22 @@ export default function MonitorPage() {
               sessionLocked={false}
               timeRemaining={null}
             />
-          </>
+          </div>
+        )}
+
+        {/* Mobile: WorkTree drawer toggle (only in feed view) */}
+        {activeView === "feed" && selectedRunId && (
+          <button
+            className="mobile-menu-btn md:!hidden"
+            onClick={() => setMobileDrawer(mobileDrawer === "worktree" ? null : "worktree")}
+            aria-label="Toggle file changes"
+          >
+            <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M6 1v10M6 1L3 4M6 1l3 3" />
+              <circle cx="3" cy="6" r="1" /><circle cx="9" cy="8" r="1" />
+              <line x1="3" y1="6" x2="6" y2="6" /><line x1="9" y1="8" x2="6" y2="8" />
+            </svg>
+          </button>
         )}
       </header>
 
@@ -528,26 +564,89 @@ export default function MonitorPage() {
         />
       )}
 
-      {/* Main Content */}
-      <div className="flex flex-1 min-h-0">
-        {/* Left sidebar - Run list */}
+      {/* Mobile drawer overlay */}
+      {mobileDrawer && (
+        <div
+          className="mobile-drawer-overlay md:!hidden"
+          onClick={closeMobileDrawer}
+        />
+      )}
+
+      {/* Mobile Runs Drawer */}
+      <div
+        className={clsx(
+          "mobile-drawer md:!hidden",
+          mobileDrawer === "runs" ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        {/* Mobile repo selector in drawer */}
+        <div className="px-3 py-2.5 border-b border-[#1a1a1a] sm:hidden">
+          <RepoSelector
+            repos={repos}
+            activeRepo={activeRepoFilter}
+            onSelect={(repo) => { handleRepoSwitch(repo); closeMobileDrawer(); }}
+          />
+        </div>
         <RunList
           runs={runs}
           activeId={selectedRunId}
-          onSelect={(id: string) => { handleSelectRun(id); setActiveView("feed"); }}
+          onSelect={(id: string) => { handleSelectRun(id); setActiveView("feed"); closeMobileDrawer(); }}
           loading={runsLoading}
         />
+      </div>
+
+      {/* Mobile WorkTree Drawer */}
+      <div
+        className={clsx(
+          "mobile-drawer mobile-drawer-right md:!hidden",
+          mobileDrawer === "worktree" ? "translate-x-0" : "translate-x-full"
+        )}
+      >
+        <WorkTree events={allEvents} runId={selectedRunId} />
+      </div>
+
+      {/* Main Content */}
+      <div className="flex flex-1 min-h-0">
+        {/* Left sidebar - Run list (desktop only) */}
+        <div className="hidden md:block">
+          <RunList
+            runs={runs}
+            activeId={selectedRunId}
+            onSelect={(id: string) => { handleSelectRun(id); setActiveView("feed"); }}
+            loading={runsLoading}
+          />
+        </div>
 
         {activeView === "feed" ? (
           <>
             {/* Center - Event feed */}
             <main className="flex-1 flex flex-col min-h-0 min-w-0">
+              {/* Mobile control bar (below lg breakpoint) */}
+              {selectedRunId && (
+                <div className="flex lg:hidden items-center gap-1.5 px-3 py-2 border-b border-[#1a1a1a] bg-[#0a0a0a] overflow-x-auto">
+                  <ControlBar
+                    status={runStatus}
+                    onPause={() => parallelPause(selectedRunId)}
+                    onResume={() => parallelResume(selectedRunId)}
+                    onStop={() => parallelStop(selectedRunId)}
+                    onKill={() => parallelKill(selectedRunId)}
+                    onUnlock={() => parallelUnlock(selectedRunId)}
+                    onToggleInject={() => setInjectOpen(!injectOpen)}
+                    onResumeRun={() => parallelResume(selectedRunId)}
+                    busy={busy}
+                    sessionLocked={false}
+                    timeRemaining={null}
+                  />
+                </div>
+              )}
               <EventFeed events={allEvents} />
               <StatsBar run={selectedRun} connected={connected} events={allEvents} />
             </main>
 
-            {/* Right sidebar - WorkTree */}
-            <WorkTree events={allEvents} runId={selectedRunId} />
+            {/* Right sidebar - WorkTree (desktop only) */}
+            <div className="hidden md:block">
+              <WorkTree events={allEvents} runId={selectedRunId} />
+            </div>
           </>
         ) : (
           <main className="flex-1 flex flex-col min-h-0 min-w-0">

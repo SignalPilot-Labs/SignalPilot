@@ -17,7 +17,7 @@ export function RunList({
   loading: boolean;
 }) {
   return (
-    <aside className="w-[280px] flex-shrink-0 flex flex-col border-r border-[#1a1a1a] bg-[#030303]">
+    <aside className="w-full md:w-[280px] flex-shrink-0 flex flex-col md:border-r border-[#1a1a1a] bg-[#030303] h-full">
       <div className="px-4 py-3 border-b border-[#1a1a1a]">
         <div className="flex items-center gap-2">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#888" strokeWidth="1.5" strokeLinecap="round">

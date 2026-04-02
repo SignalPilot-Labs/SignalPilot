@@ -297,7 +297,7 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
   const totalRemoved = diffData?.total_removed || 0;
 
   return (
-    <div className={clsx("flex flex-col border-l border-[#1a1a1a] bg-[#030303] transition-all duration-200 mr-1", collapsed ? "w-[32px]" : "w-[280px]")}>
+    <div className={clsx("flex flex-col md:border-l border-[#1a1a1a] bg-[#030303] transition-all duration-200 md:mr-1 h-full", collapsed ? "w-[32px]" : "w-full md:w-[280px]")}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[#1a1a1a]">
         {!collapsed && (

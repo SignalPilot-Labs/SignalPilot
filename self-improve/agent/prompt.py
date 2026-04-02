@@ -74,17 +74,22 @@ def build_ceo_continuation(
         duration_str = "unlimited"
 
     template = _load("ceo-continuation")
+    # Escape braces in user-derived content to prevent KeyError when diffs/commits
+    # contain literal { or } characters (common in code snippets and JSON).
+    def _safe(val: str) -> str:
+        return val.replace("{", "{{").replace("}", "}}")
+
     return template.format(
         round_num=round_num,
         elapsed=elapsed_str,
         duration=duration_str,
         pct_complete=pct,
-        tool_summary=tool_summary or "none",
-        files_changed=files_changed or "none",
-        commits=commits or "none",
+        tool_summary=_safe(tool_summary or "none"),
+        files_changed=_safe(files_changed or "none"),
+        commits=_safe(commits or "none"),
         cost_so_far=f"{cost_so_far:.2f}",
-        round_summary=round_summary or "No summary available.",
-        original_prompt=original_prompt or "General self-improvement pass on the codebase.",
+        round_summary=_safe(round_summary or "No summary available."),
+        original_prompt=_safe(original_prompt or "General self-improvement pass on the codebase."),
     )
 
 

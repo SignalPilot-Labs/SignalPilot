@@ -331,6 +331,13 @@ async def _run_loop(
             elif sig == "unlock":
                 session_gate.force_unlock()
                 await db.log_audit(run_id, "session_unlocked", {})
+            elif sig == "stuck_recovery":
+                # Stuck recovery between rounds — just log and restart pulse checker.
+                # The stuck subagent already exited; no need to interrupt the main agent.
+                stuck_info = signal.get("payload", "[]")
+                print(f"[agent] STUCK RECOVERY (between rounds): {stuck_info}")
+                await db.log_audit(run_id, "stuck_recovery_between_rounds", {"stuck_info": stuck_info})
+                signals.start_pulse_checker(run_id)
 
         # --- Reset to worker role after CEO round completes ---
         if hooks._agent_role == "ceo":
@@ -619,6 +626,9 @@ async def run_agent(
 
     # --- Run ---
     final_status = "completed"
+    total_cost = 0.0
+    total_input = 0
+    total_output = 0
 
     try:
         async with ClaudeSDKClient(options=options) as client:
@@ -640,12 +650,10 @@ async def run_agent(
     except asyncio.CancelledError:
         print("[agent] Run KILLED by operator")
         final_status = "killed"
-        total_cost, total_input, total_output = 0, 0, 0
         await db.log_audit(run_id, "killed", {"elapsed_minutes": round(session_gate.elapsed_minutes(), 1)})
     except Exception as e:
         print(f"[agent] Fatal error: {e}")
         final_status = "error"
-        total_cost, total_input, total_output = 0, 0, 0
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
         signals.stop_pulse_checker()

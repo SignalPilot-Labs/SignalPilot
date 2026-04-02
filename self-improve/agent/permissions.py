@@ -143,8 +143,8 @@ def _check_repo_exploration(cmd: str) -> str | None:
     if cd_match:
         target = cd_match.group(1)
         if target.startswith("/") and not target.startswith("/workspace"):
-            # Allow common system paths needed for builds
-            allowed_system = ("/tmp", "/usr", "/var", "/etc/apt")
+            # Allow: repo clone dir, common system paths needed for builds
+            allowed_system = ("/home/agentuser/repo", "/tmp", "/usr", "/var", "/etc/apt")
             if not any(target.startswith(p) for p in allowed_system):
                 return f"Cannot cd to '{target}' — operations confined to /workspace"
 

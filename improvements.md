@@ -5,6 +5,72 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 10b: MSSQL/Trino Connectors, Error Hints UX, Query Templates (2026-04-02)
+
+**Summary:** 7 features — Two new database connectors (MSSQL, Trino), structured error hints in REST API + frontend display, DB-specific query templates dropdown, DDL semantic comments for Spider2.0, duplicate IP whitelist fix, shared errors module.
+
+**Key metrics:**
+- 11 database types supported (up from 9): PostgreSQL, MySQL, MSSQL, Snowflake, BigQuery, Redshift, ClickHouse, Databricks, Trino, DuckDB, SQLite
+- Now matches and exceeds HEX's connector coverage (HEX supports ~13 including Athena, MariaDB, Dremio)
+- 211 tests passing
+- All 4 live Docker databases verified: PostgreSQL, MySQL, ClickHouse, MSSQL
+- MSSQL tested end-to-end: connection, schema with FKs/indexes/comments, query with LIMIT→TOP translation
+- 6 git commits this sub-round
+
+### 1. MSSQL Connector (Tier 2)
+**File:** `gateway/connectors/mssql.py`
+- pymssql-backed, supports SQL Server 2016+, Azure SQL Database, Azure SQL Managed Instance
+- Full schema introspection: columns, PKs, FKs (sys.foreign_keys), indexes (sys.indexes), row counts (sys.partitions)
+- Column comments via extended properties (MS_Description)
+- Table comments via extended properties
+- Sample values with `SELECT DISTINCT TOP N` syntax
+- Connection URL parsing: `mssql://user:pass@host:port/db`
+- Health check fix: uses `SELECT 1 AS ok` to avoid `as_dict` error on unnamed columns
+
+### 2. Trino Connector (Tier 2)
+**File:** `gateway/connectors/trino.py`
+- trino Python client, supports Trino/PrestoSQL/Starburst for federated queries
+- Catalog/schema-based schema introspection via SHOW CATALOGS → SHOW SCHEMAS → SHOW TABLES → SHOW COLUMNS
+- Basic auth support for authenticated clusters
+- Connection URL: `trino://user@host:port/catalog/schema`
+- Frontend: catalog/schema fields, federated query note
+
+### 3. Structured Error Hints (REST API → Frontend)
+**Files:** `gateway/errors.py`, `gateway/main.py`, `web/app/query/page.tsx`
+- Extracted `query_error_hint()` into shared `errors.py` module (DRY: used by both REST API and MCP server)
+- `/api/query` endpoint now returns `{"error": "...", "hint": "..."}` on failure
+- Frontend parses structured errors and shows hint inline with Zap icon + warning style
+- 8 error patterns: column not found, table missing, ambiguous, syntax (DB-specific), type mismatch, division by zero, permission, timeout
+
+### 4. Query Templates Dropdown
+**File:** `web/app/query/page.tsx`
+- "Templates" button next to connection selector in query page
+- DB-specific starter queries per type: table listing, table sizes, running queries, index usage
+- Covers all 11 DB types with appropriate system catalog queries
+- Single-click inserts SQL into editor
+
+### 5. DDL Semantic Comments
+**File:** `gateway/main.py`
+- `/schema/ddl` and `/schema/link` endpoints now include:
+  - Table descriptions as `-- comment` before CREATE TABLE
+  - Column comments as inline `-- comment` after type definition
+- Helps LLM agents understand column/table semantics for text-to-SQL accuracy
+
+### 6. Duplicate IP Whitelist Fix
+**File:** `web/app/connections/page.tsx`
+- Removed duplicate IP whitelist section (was shown both inside and outside advanced options)
+- IP allowlist info now only appears once in the advanced options section
+
+### 7. HEX Research Findings
+- HEX uses individual fields (not URL) — SignalPilot supports both (better)
+- HEX supports OAuth for Snowflake/Databricks/BigQuery (Enterprise plan)
+- HEX has SSH tunneling, IP allowlisting, SSL — all already in SignalPilot
+- HEX has no visible "Test Connection" — SignalPilot ahead with 3-phase testing
+- SignalPilot now supports MSSQL + Trino which HEX also supports
+- Key differentiator: SignalPilot's schema linking + agent error hints are unique to the product
+
+---
+
 ## Round 10: Schema Linking, Agent Self-Correction, Industry Research (2026-04-02)
 
 **Summary:** 8 features — Smart schema linking endpoint (EDBT 2026 high-recall approach), MCP explain_query tool for pre-execution analysis, structured error hints for agent self-correction, pool manager bug fix, connection test diagnostics with tooltips, schema explorer enhancements (column comments, table descriptions, engine badges).

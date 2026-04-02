@@ -129,12 +129,13 @@ class DatabricksConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
+        effective_timeout = timeout or self._query_timeout
         try:
             cursor = self._conn.cursor()
             # Databricks SQL Warehouses support SET for query timeout
-            if timeout:
+            if effective_timeout:
                 try:
-                    cursor.execute(f"SET statement_timeout = {timeout}")
+                    cursor.execute(f"SET statement_timeout = {effective_timeout}")
                 except Exception:
                     pass  # Best-effort — not all Databricks runtimes support this
             cursor.execute(sql, params or ())

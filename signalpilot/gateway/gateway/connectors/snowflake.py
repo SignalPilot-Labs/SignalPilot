@@ -165,6 +165,23 @@ class SnowflakeConnector(BaseConnector):
         # Fallback: treat as account identifier (credential_extras will fill the rest)
         return {"account": conn_str, "user": "", "password": ""}
 
+    def _ensure_connected(self) -> None:
+        """Verify connection is alive; raise if lost."""
+        if self._conn is None:
+            raise RuntimeError("Not connected")
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            raise RuntimeError("Connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")

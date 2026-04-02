@@ -1474,13 +1474,15 @@ async def get_schema_ddl(
         pk_cols = []
         for col in table.get("columns", []):
             col_type = col.get("type", "TEXT").upper()
-            # Shorten common types for token efficiency
+            # Shorten common types for token efficiency (ReFoRCE: compression is critical)
             type_map = {
                 "CHARACTER VARYING": "VARCHAR",
                 "TIMESTAMP WITHOUT TIME ZONE": "TIMESTAMP",
                 "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
                 "DOUBLE PRECISION": "DOUBLE",
                 "BOOLEAN": "BOOL",
+                "INTEGER": "INT",
+                "REAL": "FLOAT",
             }
             col_type = type_map.get(col_type, col_type)
 
@@ -1819,6 +1821,8 @@ async def schema_link(
             type_map = {
                 "CHARACTER VARYING": "VARCHAR", "TIMESTAMP WITHOUT TIME ZONE": "TIMESTAMP",
                 "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ", "DOUBLE PRECISION": "DOUBLE",
+                "BOOLEAN": "BOOL", "INTEGER": "INT", "BIGINT": "BIGINT",
+                "SMALLINT": "SMALLINT", "REAL": "FLOAT",
             }
             ct = type_map.get(ct, ct)
             parts = [f"  {col['name']} {ct}"]

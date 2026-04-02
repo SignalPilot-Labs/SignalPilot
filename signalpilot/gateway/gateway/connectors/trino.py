@@ -128,6 +128,19 @@ class TrinoConnector(BaseConnector):
         # Fallback: treat as host
         return {"host": conn_str, "port": 8080, "username": "trino"}
 
+    def _ensure_connected(self) -> None:
+        """Verify connection is alive; raise if lost."""
+        if self._conn is None:
+            raise RuntimeError("Not connected")
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+        except Exception:
+            self._conn = None
+            raise RuntimeError("Connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
@@ -187,7 +200,7 @@ class TrinoConnector(BaseConnector):
         """Fast batch schema introspection via information_schema."""
         cursor = self._conn.cursor()
 
-        # Columns + table metadata in one query
+        # Columns + table metadata in one query (with column comment if available)
         col_sql = f"""
             SELECT
                 c.table_schema,
@@ -197,7 +210,8 @@ class TrinoConnector(BaseConnector):
                 c.is_nullable,
                 c.column_default,
                 c.ordinal_position,
-                t.table_type
+                t.table_type,
+                c.comment
             FROM {catalog}.information_schema.columns c
             JOIN {catalog}.information_schema.tables t
                 ON c.table_schema = t.table_schema
@@ -207,8 +221,31 @@ class TrinoConnector(BaseConnector):
             ORDER BY c.table_schema, c.table_name, c.ordinal_position
         """
 
-        cursor.execute(col_sql)
-        rows = cursor.fetchall()
+        try:
+            cursor.execute(col_sql)
+            rows = cursor.fetchall()
+        except Exception:
+            # Fallback without comment column (not all catalogs have it)
+            col_sql_no_comment = f"""
+                SELECT
+                    c.table_schema,
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    c.is_nullable,
+                    c.column_default,
+                    c.ordinal_position,
+                    t.table_type
+                FROM {catalog}.information_schema.columns c
+                JOIN {catalog}.information_schema.tables t
+                    ON c.table_schema = t.table_schema
+                    AND c.table_name = t.table_name
+                WHERE c.table_schema NOT IN ('information_schema')
+                    AND t.table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY c.table_schema, c.table_name, c.ordinal_position
+            """
+            cursor.execute(col_sql_no_comment)
+            rows = cursor.fetchall()
 
         # Try to get table constraints (primary keys, foreign keys)
         pk_set: set[str] = set()
@@ -262,7 +299,8 @@ class TrinoConnector(BaseConnector):
 
         schema: dict[str, Any] = {}
         for row in rows:
-            table_schema, table_name, col_name, data_type, nullable, default, ordinal, table_type = row
+            table_schema, table_name, col_name, data_type, nullable, default, ordinal, table_type = row[:8]
+            col_comment = row[8] if len(row) > 8 else ""
             key = f"{catalog}.{table_schema}.{table_name}"
             pk_key = f"{table_schema}.{table_name}.{col_name}"
 
@@ -280,7 +318,7 @@ class TrinoConnector(BaseConnector):
                 "nullable": nullable == "YES",
                 "primary_key": pk_key in pk_set,
                 "default": default,
-                "comment": "",
+                "comment": col_comment or "",
             })
 
         return schema

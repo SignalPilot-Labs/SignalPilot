@@ -100,6 +100,22 @@ class RedshiftConnector(BaseConnector):
 
         return kwargs
 
+    def _ensure_connected(self) -> None:
+        """Verify connection is alive; reconnect if stale."""
+        if self._conn is None:
+            raise RuntimeError("Not connected")
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            raise RuntimeError("Connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
@@ -198,6 +214,24 @@ class RedshiftConnector(BaseConnector):
             FROM pg_views
             WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_internal')
         """
+        # Column and table comments via pg_description (Redshift supports COMMENT ON)
+        comments_sql = """
+            SELECT
+                n.nspname AS table_schema,
+                c.relname AS table_name,
+                a.attname AS column_name,
+                d.description AS column_comment,
+                td.description AS table_comment
+            FROM pg_attribute a
+            JOIN pg_class c ON a.attrelid = c.oid
+            JOIN pg_namespace n ON c.relnamespace = n.oid
+            LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = a.attnum
+            LEFT JOIN pg_description td ON td.objoid = c.oid AND td.objsubid = 0
+            WHERE a.attnum > 0
+                AND NOT a.attisdropped
+                AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_internal')
+                AND (d.description IS NOT NULL OR td.description IS NOT NULL)
+        """
 
         import asyncio
 
@@ -211,12 +245,13 @@ class RedshiftConnector(BaseConnector):
                 logger.info("Redshift metadata query failed (%s): %s", label, e)
                 return []
 
-        rows, fk_rows_raw, table_info_raw, stats_raw, views_raw = await asyncio.gather(
+        rows, fk_rows_raw, table_info_raw, stats_raw, views_raw, comments_raw = await asyncio.gather(
             asyncio.to_thread(_fetch, sql, "columns"),
             asyncio.to_thread(_fetch, fk_sql, "foreign_keys"),
             asyncio.to_thread(_fetch, table_info_sql, "table_info"),
             asyncio.to_thread(_fetch, stats_sql, "stats"),
             asyncio.to_thread(_fetch, views_sql, "views"),
+            asyncio.to_thread(_fetch, comments_sql, "comments"),
         )
 
         # Build views set for type classification
@@ -249,6 +284,17 @@ class RedshiftConnector(BaseConnector):
                 "size_mb": r.get("size_mb", 0) or 0,
             }
 
+        # Build comments maps (column + table)
+        col_comments: dict[str, str] = {}
+        table_comments: dict[str, str] = {}
+        for r in comments_raw:
+            key = f"{r['table_schema']}.{r['table_name']}"
+            if r.get("table_comment") and key not in table_comments:
+                table_comments[key] = r["table_comment"]
+            if r.get("column_comment"):
+                col_key = f"{key}.{r['column_name']}"
+                col_comments[col_key] = r["column_comment"]
+
         # Build column stats map
         col_stats: dict[str, dict] = {}
         for r in stats_raw:
@@ -280,6 +326,7 @@ class RedshiftConnector(BaseConnector):
                     "size_mb": ti.get("size_mb", 0),
                     "diststyle": ti.get("diststyle", ""),
                     "sortkey": "",  # Will be filled from sort_key_cols
+                    "description": table_comments.get(key, ""),
                 }
 
             # Track sort key columns by position
@@ -289,12 +336,13 @@ class RedshiftConnector(BaseConnector):
                     sort_key_cols[key] = []
                 sort_key_cols[key].append((sk_pos, row["column_name"]))
 
+            col_comment_key = f"{key}.{row['column_name']}"
             col_entry: dict[str, Any] = {
                 "name": row["column_name"],
                 "type": row["data_type"],
                 "nullable": row["is_nullable"] == "YES",
                 "primary_key": bool(row.get("is_primary_key", False)),
-                "comment": "",
+                "comment": col_comments.get(col_comment_key, ""),
             }
             # Redshift column encoding (useful for query optimization)
             encoding = row.get("column_encoding", "")

@@ -161,9 +161,10 @@ class DuckDBConnector(BaseConnector):
 
         # Row counts — duckdb_tables().estimated_size IS the estimated row count
         row_counts: dict[str, int] = {}
+        table_comments: dict[str, str] = {}
         try:
             count_sql = """
-                SELECT schema_name, table_name, estimated_size
+                SELECT schema_name, table_name, estimated_size, comment
                 FROM duckdb_tables()
                 WHERE NOT internal
             """
@@ -171,6 +172,23 @@ class DuckDBConnector(BaseConnector):
             for row in count_result.fetchall():
                 key = f"{row[0]}.{row[1]}"
                 row_counts[key] = row[2] or 0
+                if row[3]:
+                    table_comments[key] = row[3]
+        except Exception:
+            pass
+
+        # Column comments via duckdb_columns()
+        col_comments: dict[str, str] = {}
+        try:
+            cc_sql = """
+                SELECT schema_name, table_name, column_name, comment
+                FROM duckdb_columns()
+                WHERE comment IS NOT NULL AND comment != ''
+            """
+            cc_result = self._conn.execute(cc_sql)
+            for row in cc_result.fetchall():
+                col_key = f"{row[0]}.{row[1]}.{row[2]}"
+                col_comments[col_key] = row[3]
         except Exception:
             pass
 
@@ -187,14 +205,16 @@ class DuckDBConnector(BaseConnector):
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
                     "row_count": row_counts.get(key, 0),
+                    "description": table_comments.get(key, ""),
                 }
+            col_comment_key = f"{table_schema}.{table_name}.{col_name}"
             schema[key]["columns"].append({
                 "name": col_name,
                 "type": data_type,
                 "nullable": is_nullable == "YES",
                 "default": col_default,
                 "primary_key": f"{table_schema}.{table_name}.{col_name}" in pk_cols,
-                "comment": "",
+                "comment": col_comments.get(col_comment_key, ""),
             })
         return schema
 

@@ -16,10 +16,22 @@ class SQLiteConnector(BaseConnector):
     async def connect(self, connection_string: str) -> None:
         # connection_string is the file path (or :memory:)
         self._db_path = connection_string
-        self._conn = sqlite3.connect(connection_string)
-        self._conn.row_factory = sqlite3.Row
-        # Enable foreign keys (required for FK-related schema queries)
-        self._conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            self._conn = sqlite3.connect(connection_string)
+            self._conn.row_factory = sqlite3.Row
+            # Enable foreign keys (required for FK-related schema queries)
+            self._conn.execute("PRAGMA foreign_keys = ON")
+        except sqlite3.OperationalError as e:
+            err_str = str(e).lower()
+            if "unable to open" in err_str:
+                raise RuntimeError(f"Cannot open database file: {connection_string}") from e
+            elif "not a database" in err_str or "file is not a database" in err_str:
+                raise RuntimeError(f"File is not a valid SQLite database: {connection_string}") from e
+            elif "readonly" in err_str or "read-only" in err_str:
+                raise RuntimeError(f"Database is read-only: {connection_string}") from e
+            raise RuntimeError(f"SQLite connection error: {e}") from e
+        except Exception as e:
+            raise RuntimeError(f"SQLite connection error: {e}") from e
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:

@@ -218,12 +218,13 @@ class MSSQLConnector(BaseConnector):
             ORDER BY s.name, o.name, c.column_id
         """
 
-        # Row counts from dm_db_partition_stats (accurate, no table scan)
+        # Row counts and table sizes from dm_db_partition_stats (accurate, no table scan)
         rowcount_sql = """
             SELECT
                 s.name AS table_schema,
                 t.name AS table_name,
-                SUM(p.row_count) AS row_count
+                SUM(p.row_count) AS row_count,
+                CAST(ROUND(SUM(p.used_page_count) * 8.0 / 1024.0, 2) AS FLOAT) AS size_mb
             FROM sys.dm_db_partition_stats p
             JOIN sys.tables t ON p.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -294,11 +295,13 @@ class MSSQLConnector(BaseConnector):
         idx_rows = _fetch(idx_sql)
         stat_rows = _fetch(stats_sql)
 
-        # Build row count map
+        # Build row count and table size maps
         row_counts: dict[str, int] = {}
+        table_sizes: dict[str, float] = {}
         for r in rowcount_rows:
             key = f"{r['table_schema']}.{r['table_name']}"
             row_counts[key] = r.get("row_count", 0) or 0
+            table_sizes[key] = r.get("size_mb", 0) or 0
 
         # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
@@ -345,6 +348,7 @@ class MSSQLConnector(BaseConnector):
                     "foreign_keys": foreign_keys.get(key, []),
                     "indexes": indexes.get(key, []),
                     "row_count": row_counts.get(key, 0),
+                    "size_mb": table_sizes.get(key, 0),
                     "description": str(row.get("table_comment", "") or ""),
                 }
 

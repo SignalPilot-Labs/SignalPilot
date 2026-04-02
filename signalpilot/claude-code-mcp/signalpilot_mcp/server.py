@@ -234,6 +234,39 @@ async def add_connection(
 
 
 @mcp.tool()
+async def add_connection_uri(
+    name: str,
+    connection_string: str,
+    db_type: str = "postgres",
+    description: str = "",
+) -> str:
+    """
+    Register a new database connection using a URI string.
+
+    This is a shortcut for add_connection when you have a full connection URI.
+
+    Args:
+        name: Unique connection name
+        connection_string: Full database URI (e.g. postgresql://user:pass@host:5432/db)
+        db_type: Database type (default: postgres)
+        description: Optional description
+
+    Returns:
+        Confirmation with connection details.
+    """
+    try:
+        result = await _get_client().create_connection({
+            "name": name,
+            "db_type": db_type,
+            "connection_string": connection_string,
+            "description": description,
+        })
+    except Exception as e:
+        return _err(e)
+    return f"Connection '{result.get('name', name)}' created ({result.get('db_type', db_type)})"
+
+
+@mcp.tool()
 async def remove_connection(name: str) -> str:
     """
     Remove a database connection from the SignalPilot gateway.

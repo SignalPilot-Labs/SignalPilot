@@ -294,6 +294,17 @@ async def explore_column_values(
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
+    # ── Validate table and column against schema cache to prevent SQL injection ──
+    cached = await get_or_fetch_schema(name, info)
+
+    table_info = cached.get(table)
+    if not table_info:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' not found in schema")
+
+    known_columns = {c["name"].lower() for c in table_info.get("columns", [])}
+    if column.lower() not in known_columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found in table '{table}'")
+
     db_type = info.db_type
     # Build exploration query with dialect-aware quoting
     quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino") else '`'
@@ -303,13 +314,17 @@ async def explore_column_values(
     else:
         close_quote = quote
 
-    q_col = f"{quote}{column}{close_quote}"
+    # Escape the column name by doubling the close-quote character inside the name
+    safe_col = column.replace(close_quote, close_quote + close_quote)
+    q_col = f"{quote}{safe_col}{close_quote}"
 
     # Construct safe exploration query
     parts = []
     if filter_pattern:
+        # Escape single quotes in filter pattern to prevent SQL injection
+        safe_pattern = filter_pattern.replace("'", "''")
         like_op = "ILIKE" if db_type in ("postgres", "redshift", "snowflake") else "LIKE"
-        parts.append(f"WHERE {q_col} {like_op} :pattern")
+        parts.append(f"WHERE {q_col} {like_op} '{safe_pattern}'")
 
     where_clause = parts[0] if parts else ""
 
@@ -348,8 +363,7 @@ FROM {table}
     try:
         extras = get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
-            # Replace :pattern placeholder with parameterized query
-            actual_sql = explore_sql.replace(":pattern", f"'{filter_pattern}'") if filter_pattern else explore_sql
+            actual_sql = explore_sql
 
             values_rows = await connector.execute(actual_sql, timeout=30)
             stats_rows = await connector.execute(null_sql, timeout=30)

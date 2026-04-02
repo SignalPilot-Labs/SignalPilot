@@ -227,7 +227,7 @@ export function EmptyState({
         />
       </div>
       <p className="text-xs text-[var(--color-text-muted)] mb-1.5 tracking-wider">{title}</p>
-      <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider max-w-xs leading-relaxed">{description}</p>
+      <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider max-w-xs leading-relaxed">{description}</p>
       {action && <div className="mt-5">{action}</div>}
     </div>
   );

@@ -6,13 +6,14 @@ import { getToolCategory, type ToolCategory } from "./types";
 export type GroupedEvent =
   | { type: "llm_message"; role: "worker" | "ceo"; text: string; thinking: string; ts: string }
   | { type: "tool_group"; category: ToolCategory; label: string; tools: ToolCall[]; ts: string; totalDuration: number }
-  | { type: "agent_run"; tool: ToolCall; ts: string }
+  | { type: "agent_run"; tool: ToolCall; childTools: ToolCall[]; finalText: string; ts: string }
   | { type: "edit_group"; tools: ToolCall[]; ts: string; totalDuration: number }
   | { type: "bash_group"; tools: ToolCall[]; ts: string; totalDuration: number }
   | { type: "playwright_group"; tools: ToolCall[]; ts: string; totalDuration: number }
   | { type: "single_tool"; tool: ToolCall; ts: string }
   | { type: "usage_tick"; data: { input_tokens: number; output_tokens: number; total_input: number; total_output: number; cache_read: number }; ts: string }
   | { type: "control"; text: string; ts: string }
+  | { type: "run_started"; model: string; branch: string; baseBranch: string; prompt: string; budget: number; duration: number; ts: string }
   | { type: "milestone"; label: string; detail: string; color: string; ts: string; event?: FeedEvent }
   | { type: "divider"; label: string; ts: string };
 
@@ -58,7 +59,7 @@ function milestoneFromAudit(event: FeedEvent): GroupedEvent | null {
 
   switch (event.data.event_type) {
     case "run_started":
-      return { type: "milestone", label: "Run Started", detail: `${d.model || "claude"} · ${d.branch || ""}`, color: "#88ccff", ts, event };
+      return { type: "run_started", model: String(d.model || "claude"), branch: String(d.branch || ""), baseBranch: String(d.base_branch || "main"), prompt: String(d.custom_prompt || ""), budget: d.max_budget_usd as number || 0, duration: d.duration_minutes as number || 0, ts };
     case "round_complete":
       return { type: "divider", label: `Round ${d.round} complete · ${(d.cost_usd as number)?.toFixed(3) || "?"} USD · ${d.turns} turns`, ts };
     case "pr_created":
@@ -92,12 +93,100 @@ function milestoneFromAudit(event: FeedEvent): GroupedEvent | null {
   }
 }
 
+// Usage dedup window — collapse all usage events within this window into one
+const USAGE_DEDUP_WINDOW = 5_000;
+
 export function groupEvents(events: FeedEvent[]): GroupedEvent[] {
+  // Pre-compute: deduplicate usage events. With parallel agents, usage ticks
+  // interleave with tool calls. We only need the last one per time window.
+  const usageSkipIndices = new Set<number>();
+  let lastUsageTs = 0;
+  let lastUsageIdx = -1;
+  for (let idx = 0; idx < events.length; idx++) {
+    const ev = events[idx];
+    if (ev._kind !== "usage") continue;
+    const ts = new Date(ev.data.ts).getTime();
+    if (ts - lastUsageTs < USAGE_DEDUP_WINDOW && lastUsageIdx >= 0) {
+      // Within window — skip the previous one, keep this (newer) one
+      usageSkipIndices.add(lastUsageIdx);
+    }
+    lastUsageTs = ts;
+    lastUsageIdx = idx;
+  }
+
+  // Pre-compute: group subagent tool calls by agent_id so we can attach them to their Agent card.
+  // Tools with agent_id != null are subagent tools and should NOT appear in the main feed.
+  const subagentTools = new Map<string, ToolCall[]>();
+  const subagentToolIds = new Set<number>(); // IDs to skip in main loop
+  for (const ev of events) {
+    if (ev._kind === "tool" && ev.data.agent_id) {
+      const aid = ev.data.agent_id;
+      if (!subagentTools.has(aid)) subagentTools.set(aid, []);
+      subagentTools.get(aid)!.push(ev.data);
+      subagentToolIds.add(ev.data.id);
+    }
+  }
+
+  // Map Agent tool calls to their subagent's tools via temporal matching.
+  // For each Agent tool_use_id, find the agent_id group whose first tool
+  // falls closest after the Agent call. Handles parallel agents correctly
+  // because each subagent has a unique agent_id.
+  const agentCallToChildren = new Map<string, ToolCall[]>();
+  const agentCalls: { toolUseId: string; ts: number }[] = [];
+  for (const ev of events) {
+    if (ev._kind === "tool" && getToolCategory(ev.data.tool_name) === AGENT_CATEGORY && ev.data.tool_use_id) {
+      agentCalls.push({ toolUseId: ev.data.tool_use_id, ts: new Date(ev.data.ts).getTime() });
+    }
+  }
+  // Sort agent calls by time
+  agentCalls.sort((a, b) => a.ts - b.ts);
+  const claimedAgentIds = new Set<string>();
+  for (const ac of agentCalls) {
+    let bestAid: string | null = null;
+    let bestDelta = Infinity;
+    for (const [aid, tools] of subagentTools) {
+      if (claimedAgentIds.has(aid)) continue;
+      const firstToolTs = new Date(tools[0].ts).getTime();
+      const delta = firstToolTs - ac.ts;
+      if (delta >= -2000 && delta < bestDelta) { // Allow 2s overlap for timing jitter
+        bestDelta = delta;
+        bestAid = aid;
+      }
+    }
+    if (bestAid) {
+      agentCallToChildren.set(ac.toolUseId, subagentTools.get(bestAid)!);
+      claimedAgentIds.add(bestAid);
+    }
+  }
+
+  // Pre-compute: collect subagent_complete audit events for final text display.
+  // Key by tool_use_id so we can attach to the right Agent card.
+  const subagentFinalTexts = new Map<string, string>();
+  for (const ev of events) {
+    if (ev._kind === "audit" && ev.data.event_type === "subagent_complete") {
+      const tuid = ev.data.details?.tool_use_id as string;
+      const text = ev.data.details?.final_text as string;
+      if (tuid && text) subagentFinalTexts.set(tuid, text);
+    }
+  }
+
   const result: GroupedEvent[] = [];
   let i = 0;
 
   while (i < events.length) {
     const ev = events[i];
+
+    // Skip subagent lifecycle audit events — consumed by agent card
+    if (ev._kind === "audit" && (ev.data.event_type === "subagent_start" || ev.data.event_type === "subagent_complete")) {
+      i++;
+      continue;
+    }
+
+    // Skip subagent tools — they're shown inside their Agent card
+    if (ev._kind === "tool" && subagentToolIds.has(ev.data.id)) {
+      i++;
+      continue;
+    }
 
     // ── LLM Text: Accumulate consecutive same-role text + thinking ──
     if (ev._kind === "llm_text" || ev._kind === "llm_thinking") {
@@ -125,12 +214,18 @@ export function groupEvents(events: FeedEvent[]): GroupedEvent[] {
       continue;
     }
 
-    // ── Usage: Collapse into a single tick (take the last one in a burst) ──
+    // ── Usage: Skip deduplicated ticks, collapse consecutive remainder ──
     if (ev._kind === "usage") {
+      if (usageSkipIndices.has(i)) {
+        i++;
+        continue;
+      }
       let lastUsage = ev.data;
       i++;
       while (i < events.length && events[i]._kind === "usage") {
-        lastUsage = (events[i] as { _kind: "usage"; data: typeof lastUsage }).data;
+        if (!usageSkipIndices.has(i)) {
+          lastUsage = (events[i] as { _kind: "usage"; data: typeof lastUsage }).data;
+        }
         i++;
       }
       result.push({
@@ -168,9 +263,11 @@ export function groupEvents(events: FeedEvent[]): GroupedEvent[] {
       const cat = getToolCategory(tc.tool_name);
       const tsMs = getTs(ev);
 
-      // Agent calls are always standalone
+      // Agent calls: attach their subagent's child tools and final text
       if (cat === AGENT_CATEGORY) {
-        result.push({ type: "agent_run", tool: tc, ts: tc.ts });
+        const children = (tc.tool_use_id && agentCallToChildren.get(tc.tool_use_id)) || [];
+        const finalText = (tc.tool_use_id && subagentFinalTexts.get(tc.tool_use_id)) || "";
+        result.push({ type: "agent_run", tool: tc, childTools: children, finalText, ts: tc.ts });
         i++;
         continue;
       }

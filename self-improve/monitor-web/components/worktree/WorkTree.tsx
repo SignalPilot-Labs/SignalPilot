@@ -265,9 +265,10 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
   const [diffData, setDiffData] = useState<DiffStats | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
 
-  // Fetch git diff when run changes
+  // Fetch git diff when run changes — clear stale data immediately
   useEffect(() => {
-    if (!runId) { setDiffData(null); return; }
+    setDiffData(null);
+    if (!runId) return;
     setDiffLoading(true);
     fetchRunDiff(runId).then(d => { setDiffData(d); setDiffLoading(false); }).catch(() => setDiffLoading(false));
   }, [runId]);

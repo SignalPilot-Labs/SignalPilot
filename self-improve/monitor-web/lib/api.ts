@@ -187,9 +187,10 @@ export async function fetchRunDiff(runId: string): Promise<DiffStats> {
   }
 }
 
-export async function fetchBranches(): Promise<string[]> {
+export async function fetchBranches(repo?: string): Promise<string[]> {
   try {
-    const res = await fetch(`${getApiBase()}/api/agent/branches`);
+    const params = repo ? `?repo=${encodeURIComponent(repo)}` : "";
+    const res = await fetch(`${getApiBase()}/api/agent/branches${params}`);
     if (!res.ok) return ["main"];
     return res.json();
   } catch {

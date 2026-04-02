@@ -18,8 +18,8 @@ import {
   Zap,
   BookOpen,
 } from "lucide-react";
-import { getConnections, executeQuery as apiExecuteQuery, getConnectionSchemaLink } from "@/lib/api";
-import type { ConnectionInfo } from "@/lib/types";
+import { executeQuery as apiExecuteQuery, getConnectionSchemaLink } from "@/lib/api";
+import { useConnection } from "@/lib/connection-context";
 import { EmptyQuery, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
@@ -130,8 +130,7 @@ const QUERY_TEMPLATES: Record<string, { label: string; sql: string }[]> = {
 
 export default function QueryExplorerPage() {
   const { toast } = useToast();
-  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
-  const [selectedConn, setSelectedConn] = useState<string>("");
+  const { connections, selectedConn, setSelectedConn } = useConnection();
   const [sql, setSql] = useState<string>("");
   const [rowLimit, setRowLimit] = useState<number>(1000);
   const [executing, setExecuting] = useState(false);
@@ -156,17 +155,6 @@ export default function QueryExplorerPage() {
       const stored = localStorage.getItem(HISTORY_KEY);
       if (stored) setHistory(JSON.parse(stored));
     } catch {}
-  }, []);
-
-  useEffect(() => {
-    getConnections()
-      .then((conns) => {
-        setConnections(conns);
-        if (conns.length > 0 && !selectedConn) {
-          setSelectedConn(conns[0].name);
-        }
-      })
-      .catch(() => {});
   }, []);
 
   const runQuery = useCallback(async () => {
@@ -311,7 +299,7 @@ export default function QueryExplorerPage() {
           actions={
             <div className="flex items-center gap-2 px-3 py-1.5 border border-[var(--color-success)]/20 bg-[var(--color-success)]/5">
               <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
-              <span className="text-[10px] text-[var(--color-success)] tracking-wider">
+              <span className="text-[12px] text-[var(--color-success)] tracking-wider">
                 read-only / ddl blocked / limit enforced
               </span>
             </div>
@@ -324,8 +312,8 @@ export default function QueryExplorerPage() {
         status={<StatusDot status={selectedConn ? "healthy" : "unknown"} size={4} pulse={executing} />}
       >
         <div className="flex items-center gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">history: <code className="text-[10px] text-[var(--color-text)]">{history.length}</code></span>
-          {result && <span className="text-[var(--color-success)]">rows: <code className="text-[10px]">{result.row_count}</code></span>}
+          <span className="text-[var(--color-text-dim)]">history: <code className="text-[12px] text-[var(--color-text)]">{history.length}</code></span>
+          {result && <span className="text-[var(--color-success)]">rows: <code className="text-[12px]">{result.row_count}</code></span>}
         </div>
       </TerminalBar>
 
@@ -351,7 +339,7 @@ export default function QueryExplorerPage() {
         </div>
 
         <div className="flex items-center gap-1.5 px-2 py-1 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-          <label className="text-[10px] text-[var(--color-text-dim)] tracking-wider">limit:</label>
+          <label className="text-[12px] text-[var(--color-text-dim)] tracking-wider">limit:</label>
           <input
             type="number"
             value={rowLimit}
@@ -367,7 +355,7 @@ export default function QueryExplorerPage() {
           <button
             onClick={() => setShowTemplates(!showTemplates)}
             disabled={!selectedConn}
-            className="flex items-center gap-1.5 px-2.5 py-2 border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-30"
+            className="flex items-center gap-1.5 px-2.5 py-2 border border-[var(--color-border)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-30"
           >
             <BookOpen className="w-3 h-3" strokeWidth={1.5} />
             templates
@@ -381,13 +369,13 @@ export default function QueryExplorerPage() {
                   const conn = connections.find(c => c.name === selectedConn);
                   const templates = conn ? QUERY_TEMPLATES[conn.db_type] || [] : [];
                   if (templates.length === 0) return (
-                    <div className="px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">no templates for this db type</div>
+                    <div className="px-3 py-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">no templates for this db type</div>
                   );
                   return templates.map((t, i) => (
                     <button
                       key={i}
                       onClick={() => { setSql(t.sql); setShowTemplates(false); }}
-                      className="w-full text-left px-3 py-2 text-[10px] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors tracking-wider border-b border-[var(--color-border)] last:border-b-0"
+                      className="w-full text-left px-3 py-2 text-[12px] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors tracking-wider border-b border-[var(--color-border)] last:border-b-0"
                     >
                       {t.label}
                     </button>
@@ -408,7 +396,7 @@ export default function QueryExplorerPage() {
           >
             {schemaLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Table2 className="w-3 h-3" strokeWidth={1.5} />}
             schema
-            {schemaLinked > 0 && <span className="text-[9px] px-1 py-0.5 border border-blue-500/20 text-blue-400 tabular-nums">{schemaLinked}</span>}
+            {schemaLinked > 0 && <span className="text-[11px] px-1 py-0.5 border border-blue-500/20 text-blue-400 tabular-nums">{schemaLinked}</span>}
           </button>
         </Tooltip>
 
@@ -423,7 +411,7 @@ export default function QueryExplorerPage() {
             <Play className="w-3.5 h-3.5" />
           )}
           execute
-          <kbd className="ml-1 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30">
+          <kbd className="ml-1 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[10px] opacity-60 border border-[var(--color-bg)]/30">
             ctrl+⏎
           </kbd>
         </button>
@@ -438,7 +426,7 @@ export default function QueryExplorerPage() {
           style={{ width: "3rem" }}
         >
           {Array.from({ length: lineCount }, (_, i) => (
-            <div key={i} className="text-[10px] text-[var(--color-text-dim)] text-right pr-2 leading-[1.65rem] tabular-nums opacity-50">
+            <div key={i} className="text-[12px] text-[var(--color-text-dim)] text-right pr-2 leading-[1.65rem] tabular-nums opacity-50">
               {i + 1}
             </div>
           ))}
@@ -456,7 +444,7 @@ export default function QueryExplorerPage() {
           className="flex-1 px-4 py-3 bg-transparent text-xs font-mono focus:outline-none resize-y placeholder:text-[var(--color-text-dim)] leading-[1.65rem] tracking-wide"
         />
         {/* Bottom info bar */}
-        <div className="absolute bottom-0 right-0 flex items-center gap-3 px-3 py-1.5 text-[9px] text-[var(--color-text-dim)] bg-[var(--color-bg-card)]">
+        <div className="absolute bottom-0 right-0 flex items-center gap-3 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] bg-[var(--color-bg-card)]">
           {sql.length > 0 && (
             <span className="tabular-nums">{sql.length} chars</span>
           )}
@@ -470,11 +458,11 @@ export default function QueryExplorerPage() {
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <Table2 className="w-3 h-3 text-blue-400" strokeWidth={1.5} />
-              <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider uppercase">
+              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider uppercase">
                 relevant schema
               </span>
               {schemaLinked > 0 && (
-                <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums">
+                <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">
                   {schemaLinked}/{schemaTotal} tables linked
                 </span>
               )}
@@ -482,13 +470,13 @@ export default function QueryExplorerPage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => navigator.clipboard.writeText(schemaContext)}
-                className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 copy
               </button>
               <button
                 onClick={() => setShowSchema(false)}
-                className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 close
               </button>
@@ -499,7 +487,7 @@ export default function QueryExplorerPage() {
               <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
             </div>
           ) : (
-            <pre className="px-4 py-3 text-[10px] text-[var(--color-text-muted)] overflow-x-auto font-mono leading-relaxed max-h-[200px] overflow-y-auto whitespace-pre">
+            <pre className="px-4 py-3 text-[12px] text-[var(--color-text-muted)] overflow-x-auto font-mono leading-relaxed max-h-[200px] overflow-y-auto whitespace-pre">
               {schemaContext}
             </pre>
           )}
@@ -512,11 +500,11 @@ export default function QueryExplorerPage() {
           <XCircle className="w-3.5 h-3.5 text-[var(--color-error)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
           <div>
             <p className="text-xs text-[var(--color-error)] mb-1 tracking-wider">query error</p>
-            <p className="text-[10px] text-[var(--color-text-muted)]">{error}</p>
+            <p className="text-[12px] text-[var(--color-text-muted)]">{error}</p>
             {errorHint && (
               <div className="mt-2 flex items-start gap-2 px-3 py-2 bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20">
                 <Zap className="w-3 h-3 text-[var(--color-warning)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
-                <p className="text-[10px] text-[var(--color-warning)]">{errorHint}</p>
+                <p className="text-[12px] text-[var(--color-warning)]">{errorHint}</p>
               </div>
             )}
           </div>
@@ -529,27 +517,27 @@ export default function QueryExplorerPage() {
           {/* Result header */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-success)] tracking-wider">
+              <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
                 <Table2 className="w-3 h-3" strokeWidth={1.5} />
                 {result.row_count.toLocaleString()} row{result.row_count !== 1 ? "s" : ""}
               </span>
-              <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+              <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] tracking-wider">
                 <Clock className="w-3 h-3" strokeWidth={1.5} />
                 {result.execution_ms.toFixed(0)}ms
               </span>
               {result.tables.length > 0 && (
-                <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] tracking-wider">
                   <Database className="w-3 h-3" strokeWidth={1.5} />
                   {result.tables.join(", ")}
                 </span>
               )}
               {result.cache_hit && (
-                <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 border badge-success tracking-wider uppercase">
+                <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 border badge-success tracking-wider uppercase">
                   <Zap className="w-2.5 h-2.5" /> cached
                 </span>
               )}
               {result.cost_estimate && (
-                <span className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 border tracking-wider ${
+                <span className={`flex items-center gap-1 text-[11px] px-1.5 py-0.5 border tracking-wider ${
                   result.cost_estimate.is_expensive ? "badge-error" : "border-[var(--color-border)] text-[var(--color-text-dim)]"
                 }`}>
                   <DollarSign className="w-2.5 h-2.5" />
@@ -557,7 +545,7 @@ export default function QueryExplorerPage() {
                 </span>
               )}
               {result.pii_redacted && result.pii_redacted.length > 0 && (
-                <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 border badge-warning tracking-wider uppercase">
+                <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 border badge-warning tracking-wider uppercase">
                   <Shield className="w-2.5 h-2.5" /> pii redacted ({result.pii_redacted.length})
                 </span>
               )}
@@ -565,20 +553,20 @@ export default function QueryExplorerPage() {
             <div className="flex items-center gap-1">
               <button
                 onClick={copyResults}
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 {copied ? <Check className="w-3 h-3 text-[var(--color-success)]" /> : <Copy className="w-3 h-3" />}
                 {copied ? "copied" : "copy"}
               </button>
               <button
                 onClick={exportCSV}
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 <Download className="w-3 h-3" /> csv
               </button>
               <button
                 onClick={exportJSON}
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 <Download className="w-3 h-3" /> json
               </button>
@@ -592,10 +580,10 @@ export default function QueryExplorerPage() {
                 query returned 0 rows
               </div>
             ) : (
-              <table className="w-full text-[11px] table-fixed-header">
+              <table className="w-full text-[13px] table-fixed-header">
                 <thead className="sticky top-0 bg-[var(--color-bg-card)]">
                   <tr className="border-b border-[var(--color-border)]">
-                    <th className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-10">
+                    <th className="px-3 py-2 text-left text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-10">
                       #
                     </th>
                     {Object.keys(result.rows[0]).map((col) => {
@@ -603,7 +591,7 @@ export default function QueryExplorerPage() {
                       return (
                         <th
                           key={col}
-                          className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]"
+                          className="px-3 py-2 text-left text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]"
                         >
                           <Tooltip content={`${colType.type}${result.pii_redacted?.includes(col) ? " · pii redacted" : ""}`} position="top">
                             <span className="inline-flex items-center gap-1.5 cursor-default">
@@ -622,7 +610,7 @@ export default function QueryExplorerPage() {
                 <tbody className="divide-y divide-[var(--color-border)]/30">
                   {result.rows.map((row, i) => (
                     <tr key={i} className="table-row-hover">
-                      <td className="px-3 py-1.5 text-[var(--color-text-dim)] tabular-nums text-[9px]">{i + 1}</td>
+                      <td className="px-3 py-1.5 text-[var(--color-text-dim)] tabular-nums text-[11px]">{i + 1}</td>
                       {Object.entries(row).map(([col, val], j) => (
                         <td
                           key={j}
@@ -645,16 +633,16 @@ export default function QueryExplorerPage() {
                               {String(val)}
                             </span>
                           ) : typeof val === "object" ? (
-                            <span className="text-orange-400/80 font-mono text-[10px]">{JSON.stringify(val).slice(0, 60)}</span>
+                            <span className="text-orange-400/80 font-mono text-[12px]">{JSON.stringify(val).slice(0, 60)}</span>
                           ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
                             <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
                           ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
-                            <span className="text-pink-400/70 font-mono text-[10px]">{String(val)}</span>
+                            <span className="text-pink-400/70 font-mono text-[12px]">{String(val)}</span>
                           ) : (
                             String(val)
                           )}
                           {/* Click-to-copy hint */}
-                          <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity text-[8px] text-[var(--color-text-dim)]">
+                          <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity text-[10px] text-[var(--color-text-dim)]">
                             <Copy className="w-2.5 h-2.5" />
                           </span>
                         </td>
@@ -671,11 +659,11 @@ export default function QueryExplorerPage() {
             <div className="px-4 py-2 border-t border-[var(--color-border)] flex-shrink-0">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-3 h-3 text-[var(--color-warning)]" strokeWidth={1.5} />
-                <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
                   governed sql (limit injected):
                 </span>
-                <span className="text-[10px] truncate">
-                  <SqlHighlight sql={result.sql_executed} className="text-[10px]" />
+                <span className="text-[12px] truncate">
+                  <SqlHighlight sql={result.sql_executed} className="text-[12px]" />
                 </span>
               </div>
             </div>
@@ -689,19 +677,19 @@ export default function QueryExplorerPage() {
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                 history ({history.length})
               </span>
             </div>
             <div className="flex items-center gap-3">
               {history.length >= 3 && (
-                <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
                   avg: {Math.round(history.reduce((s, h) => s + h.duration_ms, 0) / history.length)}ms
                 </span>
               )}
               <button
                 onClick={() => { setHistory([]); localStorage.removeItem(HISTORY_KEY); }}
-                className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors tracking-wider"
+                className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors tracking-wider"
               >
                 clear
               </button>
@@ -717,14 +705,14 @@ export default function QueryExplorerPage() {
                 }}
                 className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group flex items-start gap-3"
               >
-                <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-40 select-none">
+                <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-40 select-none">
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-[11px] block truncate overflow-hidden">
-                    <SqlHighlight sql={h.sql.slice(0, 100)} className="text-[11px]" />
+                  <div className="text-[13px] block truncate overflow-hidden">
+                    <SqlHighlight sql={h.sql.slice(0, 100)} className="text-[13px]" />
                   </div>
-                  <div className="flex items-center gap-3 mt-1 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                  <div className="flex items-center gap-3 mt-1 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                     <span className="flex items-center gap-1">
                       <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
                         <ellipse cx="4" cy="3" rx="3" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />

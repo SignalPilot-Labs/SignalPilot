@@ -12,6 +12,9 @@ export interface Run {
   error_message: string | null;
   rate_limit_resets_at: number | null;
   github_repo: string | null;
+  custom_prompt: string | null;
+  duration_minutes: number | null;
+  base_branch: string | null;
 }
 
 export interface RepoInfo {
@@ -42,6 +45,8 @@ export interface ToolCall {
   deny_reason: string | null;
   agent_role: "worker" | "ceo";
   tool_use_id: string | null;
+  session_id: string | null;
+  agent_id: string | null;
 }
 
 export interface AuditEvent {
@@ -237,7 +242,10 @@ export type AuditEventType =
   | "session_unlocked"
   | "fatal_error"
   | "rate_limit_paused"
-  | "stop_requested";
+  | "stop_requested"
+  | "subagent_start"
+  | "subagent_complete"
+  | "prompt_injected";
 
 export interface AuditEventMeta {
   label: string;

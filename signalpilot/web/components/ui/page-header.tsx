@@ -19,12 +19,12 @@ export function PageHeader({
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
+            <h1 className="text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
+            <span className="text-[12px] text-[var(--color-text-muted)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
               {subtitle}
             </span>
           </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">{description}</p>
+          <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
@@ -57,7 +57,7 @@ export function TerminalBar({
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
         </div>
         {/* Path */}
-        <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1">
+        <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider flex-1">
           <span className="text-[var(--color-success)]">$</span>
           <span className="text-[var(--color-text-dim)]"> signalpilot </span>
           <span className="text-[var(--color-text-muted)]">{path}</span>

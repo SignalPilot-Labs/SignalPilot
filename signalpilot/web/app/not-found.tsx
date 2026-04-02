@@ -66,7 +66,7 @@ export default function NotFound() {
           </Link>
         </div>
 
-        <p className="mt-8 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+        <p className="mt-8 text-[11px] text-[var(--color-text-dim)] tracking-wider">
           <code className="text-[var(--color-text-dim)]">signalpilot v0.1.0</code>
         </p>
       </div>

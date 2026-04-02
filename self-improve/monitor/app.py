@@ -63,7 +63,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     permitted INTEGER NOT NULL DEFAULT 1,
     deny_reason TEXT,
     agent_role TEXT NOT NULL DEFAULT 'worker',
-    tool_use_id TEXT
+    tool_use_id TEXT,
+    session_id TEXT,
+    agent_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -116,6 +118,13 @@ async def _get_db() -> aiosqlite.Connection:
         cols = {row[1] for row in await cursor.fetchall()}
         if "github_repo" not in cols:
             await db.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
+        # Migrate: add session_id and agent_id to tool_calls if missing
+        cursor = await db.execute("PRAGMA table_info(tool_calls)")
+        tc_cols = {row[1] for row in await cursor.fetchall()}
+        if "session_id" not in tc_cols:
+            await db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
+        if "agent_id" not in tc_cols:
+            await db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
         await db.commit()
     return db
 
@@ -430,7 +439,44 @@ async def start_agent_run(body: StartRunRequest = StartRunRequest()):
 
 
 @app.get("/api/agent/branches")
-async def list_branches():
+async def list_branches(repo: str | None = Query(None)):
+    """List branches. If repo is given, queries GitHub API directly (no agent needed).
+    Falls back to agent proxy, then to ["main"]."""
+    # If a specific repo was requested, use GitHub API with stored token
+    if repo:
+        try:
+            conn = await _get_db()
+            cursor = await conn.execute("SELECT value, encrypted FROM settings WHERE key = 'git_token'")
+            row = await cursor.fetchone()
+            if row:
+                token = crypto.decrypt(row["value"], MASTER_KEY_PATH) if row["encrypted"] else row["value"]
+                branches: list[str] = []
+                page = 1
+                async with httpx.AsyncClient(timeout=15) as client:
+                    while True:
+                        res = await client.get(
+                            f"https://api.github.com/repos/{repo}/branches",
+                            headers={
+                                "Authorization": f"token {token}",
+                                "Accept": "application/vnd.github.v3+json",
+                            },
+                            params={"per_page": 100, "page": page},
+                        )
+                        if res.status_code != 200:
+                            break
+                        data = res.json()
+                        if not data:
+                            break
+                        branches.extend(b["name"] for b in data)
+                        if len(data) < 100:
+                            break
+                        page += 1
+                if branches:
+                    return sorted(branches)
+        except Exception:
+            pass
+
+    # Fallback: proxy to agent
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.get(f"{AGENT_API_URL}/branches")

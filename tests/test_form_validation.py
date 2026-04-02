@@ -2,6 +2,7 @@
 
 Verifies that the frontend form validation catches common errors
 before submission, matching HEX-level UX for connection setup.
+Also tests URL-based DB type detection (HEX paste-and-detect pattern).
 """
 
 import pytest
@@ -151,3 +152,83 @@ class TestSSHValidation:
     def test_agent_auth_no_password_or_key_needed(self):
         errors = self._validate_ssh("bastion.example.com", "ubuntu", "agent", "", "")
         assert len(errors) == 0
+
+
+class TestDbTypeDetectionFromUrl:
+    """Test auto-detection of database type from connection URL scheme.
+
+    Mirrors the detectDbTypeFromUrl() function in the frontend.
+    """
+
+    def _detect(self, url: str) -> str | None:
+        """Detect DB type from connection URL scheme."""
+        lower = url.strip().lower()
+        if lower.startswith("postgresql://") or lower.startswith("postgres://"):
+            return "postgres"
+        if lower.startswith("mysql://") or lower.startswith("mysql+pymysql://") or lower.startswith("mariadb://"):
+            return "mysql"
+        if lower.startswith("redshift://"):
+            return "redshift"
+        if any(lower.startswith(p) for p in ("clickhouse://", "clickhouses://", "clickhouse+http://", "clickhouse+https://")):
+            return "clickhouse"
+        if lower.startswith("snowflake://"):
+            return "snowflake"
+        if any(lower.startswith(p) for p in ("mssql://", "mssql+pymssql://", "sqlserver://")):
+            return "mssql"
+        if lower.startswith("trino://") or lower.startswith("trino+https://"):
+            return "trino"
+        if lower.startswith("databricks://"):
+            return "databricks"
+        if lower.startswith("bigquery://"):
+            return "bigquery"
+        if lower.startswith("md:"):
+            return "duckdb"
+        return None
+
+    def test_postgres_urls(self):
+        assert self._detect("postgresql://user:pass@host:5432/db") == "postgres"
+        assert self._detect("postgres://user:pass@host/db") == "postgres"
+
+    def test_mysql_urls(self):
+        assert self._detect("mysql://user:pass@host:3306/db") == "mysql"
+        assert self._detect("mysql+pymysql://user:pass@host/db") == "mysql"
+        assert self._detect("mariadb://user:pass@host/db") == "mysql"
+
+    def test_redshift_url(self):
+        assert self._detect("redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/dev") == "redshift"
+
+    def test_clickhouse_urls(self):
+        assert self._detect("clickhouse://default:pass@host:9000/default") == "clickhouse"
+        assert self._detect("clickhouses://default:pass@host:9440/default") == "clickhouse"
+        assert self._detect("clickhouse+http://default@host:8123/default") == "clickhouse"
+        assert self._detect("clickhouse+https://default@host:8443/default") == "clickhouse"
+
+    def test_snowflake_url(self):
+        assert self._detect("snowflake://user:pass@account/db/schema?warehouse=WH") == "snowflake"
+
+    def test_mssql_urls(self):
+        assert self._detect("mssql://sa:pass@host:1433/db") == "mssql"
+        assert self._detect("mssql+pymssql://sa:pass@host/db") == "mssql"
+        assert self._detect("sqlserver://sa:pass@host/db") == "mssql"
+
+    def test_trino_urls(self):
+        assert self._detect("trino://user@host:8080/catalog/schema") == "trino"
+        assert self._detect("trino+https://user:pass@host:443/catalog") == "trino"
+
+    def test_databricks_url(self):
+        assert self._detect("databricks://token@host/sql/1.0/warehouses/abc") == "databricks"
+
+    def test_bigquery_url(self):
+        assert self._detect("bigquery://project/dataset") == "bigquery"
+
+    def test_motherduck_url(self):
+        assert self._detect("md:my_database") == "duckdb"
+
+    def test_unknown_url(self):
+        assert self._detect("http://not-a-db/path") is None
+        assert self._detect("") is None
+        assert self._detect("just-a-hostname") is None
+
+    def test_case_insensitive(self):
+        assert self._detect("POSTGRESQL://user:pass@host/db") == "postgres"
+        assert self._detect("MySQL://user:pass@host/db") == "mysql"

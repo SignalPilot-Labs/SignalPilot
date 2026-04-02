@@ -609,6 +609,22 @@ function buildConnectionPreview(form: FormState): string {
   }
 }
 
+/** Auto-detect DB type from URL scheme (HEX paste-and-detect pattern). */
+function detectDbTypeFromUrl(url: string): DBType | null {
+  const lower = url.trim().toLowerCase();
+  if (lower.startsWith("postgresql://") || lower.startsWith("postgres://")) return "postgres";
+  if (lower.startsWith("mysql://") || lower.startsWith("mysql+pymysql://") || lower.startsWith("mariadb://")) return "mysql";
+  if (lower.startsWith("redshift://")) return "redshift";
+  if (lower.startsWith("clickhouse://") || lower.startsWith("clickhouses://") || lower.startsWith("clickhouse+http://") || lower.startsWith("clickhouse+https://")) return "clickhouse";
+  if (lower.startsWith("snowflake://")) return "snowflake";
+  if (lower.startsWith("mssql://") || lower.startsWith("mssql+pymssql://") || lower.startsWith("sqlserver://")) return "mssql";
+  if (lower.startsWith("trino://") || lower.startsWith("trino+https://")) return "trino";
+  if (lower.startsWith("databricks://")) return "databricks";
+  if (lower.startsWith("bigquery://")) return "bigquery";
+  if (lower.startsWith("md:")) return "duckdb";
+  return null;
+}
+
 /** Parse a connection URL into form fields (URL → fields sync). */
 function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
   try {
@@ -924,10 +940,18 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         <FormInput
           label="connection string"
           value={form.connection_string}
-          onChange={(v) => setForm({ ...form, connection_string: v })}
+          onChange={(v) => {
+            const detected = detectDbTypeFromUrl(v);
+            if (detected && detected !== form.db_type) {
+              // Auto-switch DB type when URL scheme is recognized
+              setForm({ ...form, connection_string: v, db_type: detected, port: String(DB_CONFIGS[detected].defaultPort) });
+            } else {
+              setForm({ ...form, connection_string: v });
+            }
+          }}
           type="password"
-          placeholder={urlHints[form.db_type] || "connection string"}
-          hint={form.db_type === "clickhouse" ? "native: clickhouse://... | HTTP: clickhouse+http://..." : "full connection URL including credentials"}
+          placeholder={urlHints[form.db_type] || "paste any connection string — db type auto-detected"}
+          hint={form.db_type === "clickhouse" ? "native: clickhouse://... | HTTP: clickhouse+http://..." : "paste a URL — database type is auto-detected from the scheme"}
           className="col-span-2"
         />
         {hasValidUrl && (

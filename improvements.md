@@ -7,12 +7,13 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ## Round 21: Security, Auth Flexibility, Schema Enrichment (2026-04-02)
 
-**Summary:** 7 improvements — Trino SQL injection fix (security), Snowflake OAuth support, AWS IAM auth for PostgreSQL/MySQL, table size metadata for PG/MySQL, Trino row counts, configurable connection pool sizing, and comprehensive tests.
+**Summary:** 10 improvements — Trino SQL injection fix (security), Snowflake OAuth support, AWS IAM auth for PostgreSQL/MySQL, table size metadata for PG/MySQL/MSSQL, Trino row counts, configurable connection pool sizing, Spider2.0 cardinality hints in compact schema, DDL metadata headers, total_size_mb in schema overview, and comprehensive tests.
 
 **Key metrics:**
 - 330 tests passing (16 new tests this round)
-- 5 git commits this round
+- 10 git commits this round
 - Gateway and frontend deployed to Docker containers
+- Verified on live: PG (6.1GB, 28.5M rows), MySQL (0.02MB), MSSQL (0.04MB)
 - Verified size_mb on live PostgreSQL (0.34 MB) and MySQL (0.02 MB) schemas
 
 ### 1. Trino SQL Injection Fix (Security)
@@ -69,7 +70,32 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 - Default remains 1 min / 5 max
 - Frontend: Pool size controls in timeouts section (PostgreSQL only — the only asyncpg pool-capable connector)
 
-### 7. Industry Research (Spider2.0 & HEX 2026)
+### 7. MSSQL Table Size Metadata
+**Files:** `connectors/mssql.py`
+- Added `used_page_count * 8KB / 1024` to `sys.dm_db_partition_stats` query for `size_mb`
+- No additional query needed — piggybacks on existing row count query
+
+### 8. Cardinality Hints in Compact Schema
+**Files:** `main.py`
+- **Impact:** Spider2.0 agents can now identify unique vs. low-cardinality columns at a glance
+- Compact JSON: `"u": true` for unique columns, `"lc": N` for low-cardinality (≤10 distinct values)
+- Compact text: `!` suffix for unique (e.g., `id!`), `~N` suffix for low-cardinality (e.g., `status~5`)
+- Based on ReFoRCE's "iterative column exploration" principle
+- Verified: `id` → `{"pk": true, "u": true}`, `quantity` → `{"lc": 6}`
+
+### 9. DDL Metadata Headers
+**Files:** `main.py`
+- DDL table headers now include row count, table size, and engine type
+- Example: `-- Order history | 15.0M rows, 1.8GB | MergeTree`
+- Provides Spider2.0 agents with cost context before reading column details
+
+### 10. Schema Overview Total Size
+**Files:** `main.py`
+- Added `total_size_mb` aggregate to `/schema/overview` endpoint
+- Spider2.0 agents can now estimate database size before loading schemas
+- Verified: enterprise-pg = 6140.17 MB (6.1 GB total)
+
+### Industry Research (Spider2.0 & HEX 2026)
 - **Spider2.0 SOTA:** Genloop at 96.7% on Spider2-Lite (#1, March 2026), Databao Agent #1 on Spider2.0-DBT
 - **Key technique:** ReFoRCE — database info compression, format restriction, iterative column exploration
 - **HEX 2026:** OAuth data connections, ClickHouse/chDB 4 partnership, Claude Connector with reasoning display

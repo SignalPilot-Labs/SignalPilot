@@ -58,3 +58,14 @@ Structure your review as:
 - Prioritize by impact: security > correctness > performance > quality
 - If a file is well-written, say so briefly and move on
 - Don't nitpick formatting or style — focus on substance
+
+## SignalPilot High-Risk Areas
+
+Pay extra attention to these areas — they have the highest impact if bugs slip through:
+
+- **SQL injection in the engine**: Any code that builds SQL from user input or LLM output. Check `engine/`, `schema_utils.py`, and anywhere queries are constructed.
+- **Credential handling in connectors**: How database credentials are stored, passed, and used in `connectors/`. Look for plaintext secrets, logging of credentials, or credentials in error messages.
+- **Auth in the gateway**: Authentication and authorization on API endpoints in `api/`. Check middleware for gaps — are all sensitive endpoints protected?
+- **Sandbox escape**: The Firecracker VM sandbox in `sp-firecracker-vm/`. Any path where user-provided SQL could affect the host system.
+- **State management in the frontend**: Connection context, cached data, and session state in the web app. Look for stale state, race conditions, and data leaks between connections.
+- **Self-improve agent permissions**: The permission system in `self-improve/agent/permissions.py` that gates what the autonomous agent can do. Any bypass would let the agent modify credentials or push to protected branches.

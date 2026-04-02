@@ -1347,37 +1347,6 @@ export default function ConnectionsPage() {
               </div>
             )}
 
-            {/* IP Whitelist Info (HEX pattern) */}
-            {DB_CONFIGS[form.db_type].supportsSSH && (
-              <div className="mt-4 px-4 py-3 border border-[var(--color-border)] bg-[var(--color-bg)]/50">
-                <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] tracking-wider mb-2">
-                  <Shield className="w-3 h-3" strokeWidth={1.5} />
-                  firewall / ip whitelist
-                </div>
-                <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider opacity-70 mb-2">
-                  If your database is behind a firewall, add the following IP to your allowlist:
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="text-[10px] text-[var(--color-text)] bg-[var(--color-bg-input)] px-2 py-1 border border-[var(--color-border)] tracking-wider font-mono">
-                    {typeof window !== "undefined" ? window.location.hostname : "your-signalpilot-host"}
-                  </code>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(typeof window !== "undefined" ? window.location.hostname : "");
-                      toast("IP copied to clipboard", "success");
-                    }}
-                    className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-                    title="Copy to clipboard"
-                  >
-                    <Copy className="w-3 h-3" />
-                  </button>
-                </div>
-                <p className="text-[8px] text-[var(--color-text-dim)] tracking-wider opacity-50 mt-1.5">
-                  Alternatively, use an SSH tunnel to connect through a bastion host without exposing your database to the internet.
-                </p>
-              </div>
-            )}
-
             {/* Action buttons */}
             <div className="flex items-center gap-3 mt-5 pt-4 border-t border-[var(--color-border)]">
               <button onClick={handleCreate} disabled={saving || (!editingConnection && !form.name)} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">

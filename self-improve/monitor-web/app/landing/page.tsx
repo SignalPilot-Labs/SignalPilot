@@ -1057,10 +1057,19 @@ result = await ceo.run(
               <br />
               improve overnight.
             </h2>
-            <p className="text-[13px] text-[var(--color-text-muted)] mb-8 max-w-md mx-auto">
+            <p className="text-[13px] text-[var(--color-text-muted)] mb-6 max-w-md mx-auto">
               Deploy the self-improving agent. Wake up to pull requests
               that make your software better — every single day.
             </p>
+
+            {/* Live activity indicator */}
+            <div className="inline-flex items-center gap-2 mb-8 px-3 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[10px] text-[var(--color-text-dim)]">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-40" />
+                <span className="relative inline-flex h-1.5 w-1.5 bg-[var(--color-success)]" />
+              </span>
+              <span className="tracking-wider">Agent active — last PR shipped 4m ago</span>
+            </div>
 
             <div className="flex items-center justify-center gap-4">
               <a

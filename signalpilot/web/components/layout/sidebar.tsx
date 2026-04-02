@@ -4,84 +4,18 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
-
-/* Custom SVG nav icons — geometric, minimal, brutalism-lite */
-function NavIconDashboard({ active }: { active: boolean }) {
-  const s = active ? "currentColor" : "currentColor";
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="5" height="5" stroke={s} strokeWidth="1" />
-      <rect x="8" y="1" width="5" height="3" stroke={s} strokeWidth="1" />
-      <rect x="8" y="6" width="5" height="7" stroke={s} strokeWidth="1" />
-      <rect x="1" y="8" width="5" height="5" stroke={s} strokeWidth="1" />
-    </svg>
-  );
-}
-function NavIconQuery({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <path d="M10 8L12 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
-      {active && <circle cx="11" cy="9" r="1" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconSchema({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="1" y1="5" x2="13" y2="5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" strokeWidth="0.75" />
-    </svg>
-  );
-}
-function NavIconSandbox({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <path d="M4 5L6 7L4 9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <line x1="7" y1="9" x2="10" y2="9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconDatabase({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <ellipse cx="7" cy="3" rx="5" ry="2" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 3V11C2 12.1 4.24 13 7 13C9.76 13 12 12.1 12 11V3" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 7C2 8.1 4.24 9 7 9C9.76 9 12 8.1 12 7" stroke="currentColor" strokeWidth="0.75" />
-    </svg>
-  );
-}
-function NavIconHealth({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 7H3L5 3L7 11L9 5L11 7H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-      {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconAudit({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="9" x2="8" y2="9" stroke="currentColor" strokeWidth="0.75" />
-    </svg>
-  );
-}
-function NavIconSettings({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <circle cx="7" cy="7" r="2.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M7 1V3M7 11V13M1 7H3M11 7H13M2.5 2.5L4 4M10 10L11.5 11.5M11.5 2.5L10 4M4 10L2.5 11.5" stroke="currentColor" strokeWidth="0.75" strokeLinecap="square" />
-    </svg>
-  );
-}
-
-type NavIconComponent = React.FC<{ active: boolean }>;
+import {
+  NavIconDashboard,
+  NavIconQuery,
+  NavIconSchema,
+  NavIconSandbox,
+  NavIconDatabase,
+  NavIconHealth,
+  NavIconAudit,
+  NavIconSettings,
+  type NavIconComponent,
+} from "@/components/ui/nav-icons";
+import { SignalPilotLogo, SignalPilotLogoSmall } from "@/components/ui/signalpilot-logo";
 
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
@@ -96,56 +30,6 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
 
 /* Primary tabs shown in bottom nav on mobile (limit to 5 for thumb reach) */
 const mobileTabItems = [0, 1, 3, 4, 7]; // dashboard, query, sandboxes, connections, settings
-
-function SignalPilotLogo() {
-  return (
-    <div className="relative">
-      {/* Status ring */}
-      <svg width="38" height="38" viewBox="0 0 38 38" fill="none" className="absolute -inset-[3px]">
-        <circle cx="19" cy="19" r="17" stroke="var(--color-border)" strokeWidth="0.5" fill="none" />
-        <circle cx="19" cy="19" r="17" stroke="var(--color-success)" strokeWidth="1" fill="none"
-          strokeDasharray="80 27" strokeLinecap="square" opacity="0.3"
-          className="-rotate-90 origin-center"
-        >
-          <animateTransform attributeName="transform" type="rotate" from="0 19 19" to="360 19 19" dur="20s" repeatCount="indefinite" />
-        </circle>
-      </svg>
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        {/* Outer frame */}
-        <rect x="1" y="1" width="30" height="30" fill="white" />
-        <rect x="2" y="2" width="28" height="28" fill="black" />
-        {/* Terminal chevron */}
-        <path
-          d="M8 9L14 16L8 23"
-          stroke="white"
-          strokeWidth="2.5"
-          strokeLinecap="square"
-          strokeLinejoin="miter"
-        />
-        {/* Cursor line */}
-        <line x1="16" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2.5" strokeLinecap="square" />
-        {/* Signal dot with pulse */}
-        <circle cx="24" cy="9" r="3" fill="#00ff88" opacity="0.15">
-          <animate attributeName="r" values="3;5;3" dur="3s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.15;0;0.15" dur="3s" repeatCount="indefinite" />
-        </circle>
-        <circle cx="24" cy="9" r="2" fill="#00ff88" />
-      </svg>
-    </div>
-  );
-}
-
-function SignalPilotLogoSmall() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="1" y="1" width="30" height="30" fill="white" />
-      <rect x="2" y="2" width="28" height="28" fill="black" />
-      <path d="M8 9L14 16L8 23" stroke="white" strokeWidth="2.5" strokeLinecap="square" strokeLinejoin="miter" />
-      <line x1="16" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2.5" strokeLinecap="square" />
-      <circle cx="24" cy="9" r="2" fill="#00ff88" />
-    </svg>
-  );
-}
 
 function UptimeCounter() {
   const [elapsed, setElapsed] = useState(0);

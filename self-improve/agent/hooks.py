@@ -77,6 +77,10 @@ async def post_tool_use_hook(
     if tool_use_id and tool_use_id in _pre_tool_times:
         duration_ms = int((time.time() - _pre_tool_times.pop(tool_use_id)) * 1000)
 
+    # Prevent unbounded growth if post hooks are missed for some calls
+    if len(_pre_tool_times) > 100:
+        _pre_tool_times.clear()
+
     try:
         await db.log_tool_call(
             run_id=_run_id,

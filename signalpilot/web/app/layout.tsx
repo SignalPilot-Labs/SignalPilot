@@ -8,6 +8,7 @@ import { ToastProvider } from "@/components/ui/toast";
 import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
 import { NetworkStatus } from "@/components/ui/network-status";
+import { ScrollToTop } from "@/components/ui/scroll-to-top";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -52,6 +53,7 @@ export default function RootLayout({
             </ErrorBoundary>
             <KeyboardShortcuts />
             <CommandPalette />
+            <ScrollToTop />
           </main>
         </ToastProvider>
       </body>

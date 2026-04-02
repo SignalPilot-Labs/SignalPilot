@@ -125,6 +125,7 @@ interface StartRunModalProps {
   onStart: (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => void;
   busy: boolean;
   branches: string[];
+  mode?: "single" | "parallel";
 }
 
 const DURATION_PRESETS = [
@@ -168,6 +169,7 @@ export function StartRunModal({
   onStart,
   busy,
   branches,
+  mode = "single",
 }: StartRunModalProps) {
   const [customPrompt, setCustomPrompt] = useState("");
   const [budgetEnabled, setBudgetEnabled] = useState(false);
@@ -250,10 +252,10 @@ export function StartRunModal({
                   </div>
                   <div>
                     <h2 className="text-[12px] font-semibold text-[#e8e8e8]">
-                      Start Improvement Run
+                      {mode === "parallel" ? "Start Parallel Run" : "Start Improvement Run"}
                     </h2>
                     <p className="text-[9px] text-[#999] mt-0.5">
-                      Creates a branch, makes improvements, opens a PR
+                      {mode === "parallel" ? "Spawns an isolated container with its own sandbox" : "Creates a branch, makes improvements, opens a PR"}
                     </p>
                   </div>
                 </div>
@@ -419,7 +421,7 @@ export function StartRunModal({
                       </svg>
                     }
                   >
-                    {busy ? "Starting..." : "Start Run"}
+                    {busy ? "Starting..." : mode === "parallel" ? "Start Parallel Run" : "Start Run"}
                   </Button>
                 </div>
               </div>

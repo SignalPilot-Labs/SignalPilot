@@ -606,7 +606,7 @@ async def list_parallel_runs():
             res = await client.get(f"{AGENT_API_URL}/parallel/runs")
             return res.json()
     except Exception as e:
-        return []
+        return {"runs": [], "error": str(e)}
 
 
 @app.post("/api/parallel/start")

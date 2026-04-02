@@ -307,3 +307,24 @@ export interface Settings {
   github_repo?: string;
   max_budget_usd?: string;
 }
+
+/* ── Parallel Run Types ── */
+export interface ParallelRunSlot {
+  run_id: string | null;
+  container_id: string;
+  container_name: string;
+  status: "starting" | "running" | "completed" | "stopped" | "error" | "killed";
+  prompt: string | null;
+  max_budget_usd: number;
+  duration_minutes: number;
+  base_branch: string;
+  started_at: number;
+  error_message: string | null;
+}
+
+export interface ParallelStatus {
+  total_slots: number;
+  active: number;
+  max_concurrent: number;
+  slots: ParallelRunSlot[];
+}

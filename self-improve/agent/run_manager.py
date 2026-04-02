@@ -42,12 +42,17 @@ class RunSlot:
     base_branch: str = "main"
     started_at: float = field(default_factory=time.time)
     error_message: str | None = None
+    volume_name: str = ""  # per-worker repo volume for cleanup
+
+
+ALLOWED_CREDENTIAL_KEYS = {"claude_token", "git_token", "github_repo"}
 
 
 class RunManager:
     def __init__(self) -> None:
         self.slots: dict[str, RunSlot] = {}
         self._env_cache: dict[str, Any] | None = None
+        self._start_lock = asyncio.Lock()
 
     def _detect_environment(self) -> dict[str, Any]:
         """Auto-detect image, network, and mounts from the current container."""
@@ -146,6 +151,7 @@ class RunManager:
             "base_branch": slot.base_branch,
             "started_at": slot.started_at,
             "error_message": slot.error_message,
+            "volume_name": slot.volume_name,
         }
 
     async def start_run(
@@ -156,21 +162,45 @@ class RunManager:
         base_branch: str,
         credentials: dict[str, str],
     ) -> RunSlot:
-        if self.active_count() >= MAX_CONCURRENT:
-            raise RuntimeError(
-                f"[run_manager] Max concurrent runs ({MAX_CONCURRENT}) reached"
+        # Filter credentials to allowed keys only (prevent injection)
+        safe_creds = {k: v for k, v in credentials.items() if k in ALLOWED_CREDENTIAL_KEYS}
+
+        async with self._start_lock:
+            if self.active_count() >= MAX_CONCURRENT:
+                raise RuntimeError(
+                    f"[run_manager] Max concurrent runs ({MAX_CONCURRENT}) reached"
+                )
+
+            worker_id = uuid.uuid4().hex[:8]
+            container_name = f"improve-worker-{worker_id}"
+
+            # Reserve the slot immediately to prevent TOCTOU races
+            volume_name = f"improve-worker-repo-{worker_id}"
+            slot = RunSlot(
+                container_name=container_name,
+                status="starting",
+                prompt=prompt,
+                max_budget_usd=max_budget_usd,
+                duration_minutes=duration_minutes,
+                base_branch=base_branch,
+                volume_name=volume_name,
             )
+            self.slots[container_name] = slot
 
-        worker_id = uuid.uuid4().hex[:8]
-        container_name = f"improve-worker-{worker_id}"
         env = self._detect_environment()
-
         mount_flags = self._build_worker_mounts(worker_id)
 
+        # Pass credentials as env vars so they're available from container start
         env_flags: list[str] = [
             "-e", "GIT_TERMINAL_PROMPT=0",
             "-e", "DB_PATH=/data/improve.db",
         ]
+        if safe_creds.get("claude_token"):
+            env_flags += ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={safe_creds['claude_token']}"]
+        if safe_creds.get("git_token"):
+            env_flags += ["-e", f"GIT_TOKEN={safe_creds['git_token']}"]
+        if safe_creds.get("github_repo"):
+            env_flags += ["-e", f"GITHUB_REPO={safe_creds['github_repo']}"]
         for key in PASSTHROUGH_ENV_VARS:
             val = os.environ.get(key)
             if val:
@@ -187,29 +217,33 @@ class RunManager:
             + [env["image"]]
         )
 
-        container_id = self._run_docker(docker_args)
+        try:
+            container_id = self._run_docker(docker_args)
+        except Exception as e:
+            slot.status = "error"
+            slot.error_message = str(e)
+            raise
+        slot.container_id = container_id[:12]
         print(f"[run_manager] Started container {container_name} ({container_id[:12]})")
 
-        slot = RunSlot(
-            container_id=container_id,
-            container_name=container_name,
-            status="starting",
-            prompt=prompt,
-            max_budget_usd=max_budget_usd,
-            duration_minutes=duration_minutes,
-            base_branch=base_branch,
-        )
-        self.slots[container_name] = slot
+        try:
+            await self._wait_for_health(container_name)
+        except Exception as e:
+            slot.status = "error"
+            slot.error_message = f"Health check failed: {e}"
+            self.cleanup_container(container_name)
+            raise
 
-        await self._wait_for_health(container_name)
         slot.status = "running"
 
+        # Send start request — credentials also passed via env vars above,
+        # but the /start endpoint uses them from the POST body to set os.environ
         run_config = {
             "prompt": prompt,
             "max_budget_usd": max_budget_usd,
             "duration_minutes": duration_minutes,
             "base_branch": base_branch,
-            **credentials,
+            **safe_creds,
         }
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -283,7 +317,9 @@ class RunManager:
         signal: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        endpoint = SIGNAL_ENDPOINTS.get(signal, signal)
+        endpoint = SIGNAL_ENDPOINTS.get(signal)
+        if endpoint is None:
+            raise ValueError(f"Unknown signal: {signal!r}. Valid: {list(SIGNAL_ENDPOINTS)}")
         url = f"http://{container_name}:8500/{endpoint}"
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(url, json=payload or {})
@@ -329,7 +365,7 @@ class RunManager:
             resp.raise_for_status()
             return resp.json()
 
-    def cleanup_container(self, container_name: str) -> None:
+    def cleanup_container(self, container_name: str, remove_volume: bool = False) -> None:
         try:
             self._run_docker(["stop", "-t", "10", container_name], timeout=20)
         except Exception as e:
@@ -338,8 +374,20 @@ class RunManager:
             self._run_docker(["rm", "-f", container_name], timeout=10)
         except Exception as e:
             print(f"[run_manager] rm {container_name} (ignored): {e}")
+        if remove_volume:
+            slot = self.slots.get(container_name)
+            if slot and slot.volume_name:
+                try:
+                    self._run_docker(["volume", "rm", slot.volume_name], timeout=10)
+                    print(f"[run_manager] Removed volume {slot.volume_name}")
+                except Exception as e:
+                    print(f"[run_manager] volume rm {slot.volume_name} (ignored): {e}")
 
-    def cleanup_all_finished(self) -> None:
+    def cleanup_all_finished(self, remove_volumes: bool = False) -> int:
+        """Clean up containers for finished runs. Returns count cleaned."""
+        cleaned = 0
         for name, slot in list(self.slots.items()):
             if slot.status not in ("starting", "running"):
-                self.cleanup_container(name)
+                self.cleanup_container(name, remove_volume=remove_volumes)
+                cleaned += 1
+        return cleaned

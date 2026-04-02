@@ -1557,37 +1557,50 @@ export default function ConnectionsPage() {
                     )}
                   </div>
 
-                  {/* Test result */}
+                  {/* Test result — compact summary + expandable detail */}
                   {testResult[conn.name] && (
-                    <span className={`flex items-center gap-1 text-[10px] tracking-wider ${
-                      testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]"
-                      : testResult[conn.name].status === "warning" ? "text-[var(--color-warning)]"
-                      : "text-[var(--color-error)]"
-                    }`}>
-                      {testResult[conn.name].status === "healthy" ? <CheckCircle2 className="w-3 h-3" />
-                       : testResult[conn.name].status === "warning" ? <AlertTriangle className="w-3 h-3" />
-                       : <XCircle className="w-3 h-3" />}
-                      {testResult[conn.name].phases ? (
-                        <span className="flex items-center gap-1">
-                          {testResult[conn.name].phases!.map((p, i) => {
-                            const phaseLabel = p.phase === "ssh_tunnel" ? "SSH"
-                              : p.phase === "schema_access" ? "Schema"
-                              : "DB";
-                            const statusIcon = p.status === "ok" ? "\u2713" : p.status === "warning" ? "!" : "\u2717";
-                            const statusColor = p.status === "ok" ? "text-[var(--color-success)]"
-                              : p.status === "warning" ? "text-[var(--color-warning)]"
-                              : "text-[var(--color-error)]";
-                            return (
-                              <span key={i} className={statusColor}>
-                                {phaseLabel}{statusIcon}
-                                {p.duration_ms ? ` ${p.duration_ms}ms` : ""}
+                    <div className="flex flex-col gap-0.5">
+                      <span className={`flex items-center gap-1.5 text-[10px] tracking-wider ${
+                        testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]"
+                        : testResult[conn.name].status === "warning" ? "text-[var(--color-warning)]"
+                        : "text-[var(--color-error)]"
+                      }`}>
+                        {testResult[conn.name].status === "healthy" ? <CheckCircle2 className="w-3 h-3" />
+                         : testResult[conn.name].status === "warning" ? <AlertTriangle className="w-3 h-3" />
+                         : <XCircle className="w-3 h-3" />}
+                        {testResult[conn.name].phases ? (
+                          <span className="flex items-center gap-2">
+                            {testResult[conn.name].phases!.map((p, i) => {
+                              const phaseLabel = p.phase === "ssh_tunnel" ? "SSH"
+                                : p.phase === "schema_access" ? "Schema"
+                                : p.phase === "database" ? "Auth"
+                                : p.phase;
+                              const statusIcon = p.status === "ok" ? "\u2713" : p.status === "warning" ? "!" : "\u2717";
+                              const statusColor = p.status === "ok" ? "text-[var(--color-success)]"
+                                : p.status === "warning" ? "text-[var(--color-warning)]"
+                                : "text-[var(--color-error)]";
+                              return (
+                                <Tooltip key={i} content={p.message || phaseLabel} position="top">
+                                  <span className={`${statusColor} cursor-default tabular-nums`}>
+                                    {phaseLabel}{statusIcon}
+                                    {p.duration_ms ? ` ${p.duration_ms}ms` : ""}
+                                  </span>
+                                </Tooltip>
+                              );
+                            })}
+                            {testResult[conn.name].total_duration_ms != null && (
+                              <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums">
+                                total: {testResult[conn.name].total_duration_ms}ms
                               </span>
-                            );
-                          })}
-                          {testResult[conn.name].total_duration_ms ? ` (${testResult[conn.name].total_duration_ms}ms)` : ""}
-                        </span>
-                      ) : testResult[conn.name].message.slice(0, 40)}
-                    </span>
+                            )}
+                          </span>
+                        ) : (
+                          <Tooltip content={testResult[conn.name].message} position="top">
+                            <span className="cursor-default">{testResult[conn.name].message.slice(0, 50)}</span>
+                          </Tooltip>
+                        )}
+                      </span>
+                    </div>
                   )}
 
                   {/* Action buttons */}

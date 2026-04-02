@@ -623,7 +623,7 @@ export default function QueryExplorerPage() {
           <EmptyState
             icon={EmptyQuery}
             title="ready for queries"
-            description="write sql above and press ctrl+enter to execute governed queries"
+            description="write sql above and tap execute to run governed queries"
           />
         </div>
       )}

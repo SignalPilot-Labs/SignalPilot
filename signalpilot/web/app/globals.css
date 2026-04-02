@@ -953,8 +953,12 @@ kbd {
   /* Reduce vertical spacing in landscape */
   .mb-8 { margin-bottom: 0.75rem; }
   .space-y-4 > * + * { margin-top: 0.75rem; }
-  /* Tighter page padding */
+  /* Tighter page padding + safe area for side notch */
   .p-4 { padding: 0.5rem !important; }
+  .main-content {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════ */
@@ -976,10 +980,10 @@ kbd {
 
   /* Reduce bottom bar height for more content space */
   .mobile-bottombar {
-    height: 3rem;
+    height: calc(3rem + env(safe-area-inset-bottom, 0px));
   }
   .main-content {
-    padding-bottom: 3rem;
+    padding-bottom: calc(3rem + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -1017,6 +1021,27 @@ kbd {
   /* Keep spin on loading indicators but reduce visual noise */
   .animate-spin {
     animation: spin 2s linear infinite !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* PWA standalone mode — installed on home screen              */
+/* ═══════════════════════════════════════════════════════════ */
+@media (display-mode: standalone) {
+  /* Remove browser chrome margin — we control the full viewport */
+  body {
+    overscroll-behavior: none;
+  }
+
+  /* Disable pull-to-refresh browser gesture in standalone */
+  html {
+    overscroll-behavior-y: none;
+  }
+
+  /* Disable text selection on nav elements in app mode */
+  nav, header, footer {
+    -webkit-user-select: none;
+    user-select: none;
   }
 }
 

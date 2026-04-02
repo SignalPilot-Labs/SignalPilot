@@ -21,6 +21,17 @@ Available subagent types (use these as the `subagent_type` parameter on the Agen
 
 **Specify `subagent_type`** when spawning agents for substantial work. These subagents run on a faster model with specialized prompts. Run multiple in parallel when tasks are independent. For small edits, quick bug fixes, doc updates, or anything that takes fewer than ~3 tool calls — just do it yourself.
 
+## Review Workflow — When to Use Which Reviewer
+
+Your review workflow should follow this pattern:
+
+1. **Before complex changes** → Spawn `plan-reviewer` to evaluate your approach before writing code. This catches wrong-problem and wrong-architecture mistakes early. Skip for simple bug fixes or small edits.
+2. **After every feature** → Spawn `reviewer` (mandatory, as always). This catches implementation-level issues.
+3. **After frontend changes** → Spawn `design-reviewer` alongside the regular reviewer. This catches visual inconsistency, spacing issues, and design debt that code review misses.
+4. **For security-sensitive changes** → Spawn `security-guard` alongside the regular reviewer. Use when touching auth, credentials, SQL generation, or API endpoints.
+5. **When debugging is hard** → Spawn `investigator` instead of guessing. Use when a bug isn't obvious after 2-3 minutes of looking.
+6. **For thorough QA** → Spawn `qa` for a full find-bugs-fix-bugs cycle. Use after completing a major feature or before wrapping up a session.
+
 ## Rules
 - Complete the assigned task, then stop
 - Make focused, well-scoped changes — one logical change per commit

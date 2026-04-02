@@ -805,6 +805,30 @@ kbd {
     width: auto;
     height: 2px;
   }
+
+  /* ── Scroll shadow hints for horizontal overflow ── */
+  .overflow-x-auto {
+    background:
+      linear-gradient(to right, var(--color-bg-card) 30%, transparent) left center,
+      linear-gradient(to left, var(--color-bg-card) 30%, transparent) right center,
+      linear-gradient(to right, rgba(255,255,255,0.06), transparent) left center,
+      linear-gradient(to left, rgba(255,255,255,0.06), transparent) right center;
+    background-size: 20px 100%, 20px 100%, 10px 100%, 10px 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  /* ── Bottom bar frosted glass effect ── */
+  .mobile-bottombar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(3, 3, 3, 0.85);
+  }
+  .mobile-topbar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(3, 3, 3, 0.85);
+  }
 }
 
 /* ── Smooth page load ── */

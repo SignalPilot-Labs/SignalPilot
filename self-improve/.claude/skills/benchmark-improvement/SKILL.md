@@ -5,6 +5,7 @@ description: "Use when running Spider2 benchmarks, analyzing results, creating s
 # Spider2 Benchmark Workflow
 
 ## Quick Reference
+
 ```bash
 # From /workspace
 python -m benchmark setup              # One-time dataset setup
@@ -16,10 +17,12 @@ python -m benchmark compare <a> <b>    # Compare two runs
 ```
 
 ## Results Location
+
 - `/bench/results/<run_id>.json` — structured data
 - `/bench/results/<run_id>.md` — readable Markdown report
 
 ## Improvement Loop
+
 1. Run baseline: `python -m benchmark run`
 2. Read the `.md` report — understand failure categories
 3. Create skills or fix code based on failure patterns
@@ -27,13 +30,16 @@ python -m benchmark compare <a> <b>    # Compare two runs
 5. Compare: `python -m benchmark compare <old> <new>`
 
 ## Failure Categories
+
 - `governance_blocked` — SQL governance rejected a valid query (engine too strict)
 - `runtime_error` — Query ran but errored (syntax, missing table, etc.)
 - `wrong_result` — Query ran but returned wrong rows
 - `no_sql_produced` — Agent failed to produce SQL at all
 
 ## Creating Skills
+
 Skills are JSON files in `/bench/skills/` or `/workspace/benchmark/skills/`:
+
 ```json
 {
   "name": "handle_date_functions",
@@ -46,6 +52,7 @@ Skills are JSON files in `/bench/skills/` or `/workspace/benchmark/skills/`:
 ```
 
 ## Rules
+
 - Always start with `--limit 5` to verify setup
 - Never modify the gold dataset
 - Commit skill files separately from code changes

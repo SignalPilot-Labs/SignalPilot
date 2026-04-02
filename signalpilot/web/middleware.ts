@@ -9,7 +9,8 @@ export function middleware(request: NextRequest) {
   const response = NextResponse.next();
 
   // Content Security Policy — restrict loading to same-origin + gateway
-  const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+  const gatewayUrl =
+    process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
   response.headers.set(
     "Content-Security-Policy",
     [
@@ -22,7 +23,7 @@ export function middleware(request: NextRequest) {
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
-    ].join("; ")
+    ].join("; "),
   );
 
   // Prevent clickjacking
@@ -40,7 +41,7 @@ export function middleware(request: NextRequest) {
   // Permissions policy — disable unnecessary browser features
   response.headers.set(
     "Permissions-Policy",
-    "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+    "camera=(), microphone=(), geolocation=(), interest-cohort=()",
   );
 
   return response;

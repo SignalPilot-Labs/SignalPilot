@@ -4,9 +4,7 @@
  */
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return (
-    <div className={`animate-shimmer ${className}`} />
-  );
+  return <div className={`animate-shimmer ${className}`} />;
 }
 
 export function CardSkeleton() {
@@ -27,7 +25,9 @@ export function TableRowSkeleton({ columns = 5 }: { columns?: number }) {
     <tr className="border-b border-[var(--color-border)]/30">
       {Array.from({ length: columns }).map((_, i) => (
         <td key={i} className="px-4 py-3">
-          <Skeleton className={`h-2.5 ${i === 0 ? "w-20" : i === columns - 1 ? "w-12" : "w-28"}`} />
+          <Skeleton
+            className={`h-2.5 ${i === 0 ? "w-20" : i === columns - 1 ? "w-12" : "w-28"}`}
+          />
         </td>
       ))}
     </tr>
@@ -65,18 +65,18 @@ export function TerminalBarSkeleton() {
  */
 export function DashboardSkeleton() {
   return (
-    <div className="p-8 max-w-[1400px] animate-fade-in">
+    <div className="p-4 sm:p-8 max-w-[1400px] animate-fade-in">
       <PageHeaderSkeleton />
       <TerminalBarSkeleton />
 
       {/* Metric cards */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)]">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)]">
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
       </div>
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)]">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)]">
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
@@ -84,8 +84,8 @@ export function DashboardSkeleton() {
       </div>
 
       {/* Chart area */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+        <div className="sm:col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
           <div className="flex items-center gap-2 mb-3">
             <Skeleton className="w-3 h-3" />
             <Skeleton className="h-2 w-24" />
@@ -125,12 +125,15 @@ export function DashboardSkeleton() {
  */
 export function ConnectionsSkeleton() {
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeaderSkeleton />
       <TerminalBarSkeleton />
       <div className="space-y-2">
         {Array.from({ length: 3 }, (_, i) => (
-          <div key={i} className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+          <div
+            key={i}
+            className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4"
+          >
             <div className="flex items-center gap-4">
               <Skeleton className="w-3 h-3" />
               <div className="flex-1 space-y-1.5">

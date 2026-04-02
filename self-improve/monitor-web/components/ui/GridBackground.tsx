@@ -6,12 +6,32 @@ export function GridBackground() {
       <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
         <defs>
           {/* Small grid */}
-          <pattern id="grid-sm" width="24" height="24" patternUnits="userSpaceOnUse">
-            <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.02)" strokeWidth="0.5" />
+          <pattern
+            id="grid-sm"
+            width="24"
+            height="24"
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d="M 24 0 L 0 0 0 24"
+              fill="none"
+              stroke="rgba(255,255,255,0.02)"
+              strokeWidth="0.5"
+            />
           </pattern>
           {/* Large grid */}
-          <pattern id="grid-lg" width="96" height="96" patternUnits="userSpaceOnUse">
-            <path d="M 96 0 L 0 0 0 96" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="0.5" />
+          <pattern
+            id="grid-lg"
+            width="96"
+            height="96"
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d="M 96 0 L 0 0 0 96"
+              fill="none"
+              stroke="rgba(255,255,255,0.03)"
+              strokeWidth="0.5"
+            />
           </pattern>
           {/* Radial fade mask */}
           <radialGradient id="grid-fade" cx="50%" cy="50%" r="60%">
@@ -40,7 +60,9 @@ export function GridBackground() {
             cy={dot.cy}
             r="1"
             fill="rgba(0, 255, 136, 0.15)"
-            style={{ animation: `pulse-dot 6s ease-in-out ${dot.delay}s infinite` }}
+            style={{
+              animation: `pulse-dot 6s ease-in-out ${dot.delay}s infinite`,
+            }}
           />
         ))}
       </svg>

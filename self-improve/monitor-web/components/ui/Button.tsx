@@ -25,7 +25,10 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = "ghost", size = "sm", icon, children, className, ...props }, ref) => (
+  (
+    { variant = "ghost", size = "sm", icon, children, className, ...props },
+    ref,
+  ) => (
     <button
       ref={ref}
       className={clsx(
@@ -34,14 +37,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         "active:scale-[0.97]",
         variantStyles[variant],
         size === "sm" ? "px-2 py-1 text-[10px]" : "px-3 py-1.5 text-[11px]",
-        className
+        className,
       )}
       {...props}
     >
       {icon}
       {children}
     </button>
-  )
+  ),
 );
 
 Button.displayName = "Button";

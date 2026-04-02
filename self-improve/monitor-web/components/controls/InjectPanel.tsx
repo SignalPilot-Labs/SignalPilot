@@ -5,10 +5,22 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/Button";
 
 const PRESETS = [
-  { label: "Wrap up", text: "You're done for now \u2014 commit your progress, write a summary of what you did and what remains, then stop." },
-  { label: "Focus security", text: "Focus specifically on security issues next. Check the SECURITY_AUDIT.md and address the CRITICAL and HIGH findings." },
-  { label: "Run tests", text: "Stop making changes and run the full test suite. Report any failures." },
-  { label: "Add tests", text: "Focus on adding test coverage for the gateway module. Don't make any other changes." },
+  {
+    label: "Wrap up",
+    text: "You're done for now \u2014 commit your progress, write a summary of what you did and what remains, then stop.",
+  },
+  {
+    label: "Focus security",
+    text: "Focus specifically on security issues next. Check the SECURITY_AUDIT.md and address the CRITICAL and HIGH findings.",
+  },
+  {
+    label: "Run tests",
+    text: "Stop making changes and run the full test suite. Report any failures.",
+  },
+  {
+    label: "Add tests",
+    text: "Focus on adding test coverage for the gateway module. Don't make any other changes.",
+  },
 ];
 
 interface InjectPanelProps {
@@ -84,15 +96,25 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
             {/* Actions */}
             <div className="flex items-center justify-between mt-2.5">
               <span className="text-[9px] text-[#888]">
-                {text.length > 0 ? `${text.length} chars` : "Ctrl+Enter to send"}
+                {text.length > 0
+                  ? `${text.length} chars`
+                  : "Ctrl+Enter to send"}
               </span>
               <div className="flex gap-2">
                 <Button
                   variant="ghost"
                   onClick={onClose}
                   icon={
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <line x1="2" y1="2" x2="8" y2="8" /><line x1="8" y1="2" x2="2" y2="8" />
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 10 10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    >
+                      <line x1="2" y1="2" x2="8" y2="8" />
+                      <line x1="8" y1="2" x2="2" y2="8" />
                     </svg>
                   }
                 >
@@ -104,7 +126,15 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
                   onClick={handleSend}
                   disabled={!text.trim() || busy}
                   icon={
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 10 10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    >
                       <path d="M1 5h7M6 2l3 3-3 3" />
                     </svg>
                   }

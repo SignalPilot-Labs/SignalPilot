@@ -5,8 +5,23 @@ import { motion } from "framer-motion";
 import { clsx } from "clsx";
 import Image from "next/image";
 import Link from "next/link";
-import type { Run, FeedEvent, RunStatus, ToolCall, SettingsStatus, RepoInfo } from "@/lib/types";
-import { fetchToolCalls, fetchAuditLog, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo, fetchRuns } from "@/lib/api";
+import type {
+  Run,
+  FeedEvent,
+  RunStatus,
+  ToolCall,
+  SettingsStatus,
+  RepoInfo,
+} from "@/lib/types";
+import {
+  fetchToolCalls,
+  fetchAuditLog,
+  fetchAgentHealth,
+  fetchBranches,
+  fetchRepos,
+  setActiveRepo,
+  fetchRuns,
+} from "@/lib/api";
 import type { AgentHealth } from "@/lib/api";
 import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
@@ -27,11 +42,21 @@ import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 import { ParallelRunsView } from "@/components/parallel/ParallelRunsView";
 
 export default function MonitorPage() {
-  const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(() => {
-    try { return localStorage.getItem("sp_improve_active_repo") || null; } catch { return null; }
-  });
+  const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(
+    () => {
+      try {
+        return localStorage.getItem("sp_improve_active_repo") || null;
+      } catch {
+        return null;
+      }
+    },
+  );
   const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const { runs, loading: runsLoading, refresh: refreshRuns } = useRuns(activeRepoFilter);
+  const {
+    runs,
+    loading: runsLoading,
+    refresh: refreshRuns,
+  } = useRuns(activeRepoFilter);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [historyEvents, setHistoryEvents] = useState<FeedEvent[]>([]);
@@ -40,7 +65,9 @@ export default function MonitorPage() {
   const [startBusy, setStartBusy] = useState(false);
   const [agentHealth, setAgentHealth] = useState<AgentHealth | null>(null);
   const [branches, setBranches] = useState<string[]>(["main"]);
-  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
+  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(
+    null,
+  );
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
   const [activeView, setActiveView] = useState<"feed" | "bots">("bots");
@@ -68,19 +95,34 @@ export default function MonitorPage() {
     const merged = [...historyEvents];
     for (let i = 0; i < merged.length; i++) {
       const ev = merged[i];
-      if (ev._kind === "tool" && ev.data.phase === "pre" && !ev.data.output_data && ev.data.tool_use_id) {
+      if (
+        ev._kind === "tool" &&
+        ev.data.phase === "pre" &&
+        !ev.data.output_data &&
+        ev.data.tool_use_id
+      ) {
         preIndex.set(ev.data.tool_use_id, i);
       }
     }
     for (const ev of liveEvents) {
-      if (ev._kind === "tool" && ev.data.phase === "post" && ev.data.tool_use_id && preIndex.has(ev.data.tool_use_id)) {
+      if (
+        ev._kind === "tool" &&
+        ev.data.phase === "post" &&
+        ev.data.tool_use_id &&
+        preIndex.has(ev.data.tool_use_id)
+      ) {
         // Merge post into the matching pre in history
         const idx = preIndex.get(ev.data.tool_use_id)!;
         const pre = merged[idx];
         if (pre._kind === "tool") {
           merged[idx] = {
             _kind: "tool",
-            data: { ...pre.data, output_data: ev.data.output_data, duration_ms: ev.data.duration_ms, phase: "post" },
+            data: {
+              ...pre.data,
+              output_data: ev.data.output_data,
+              duration_ms: ev.data.duration_ms,
+              phase: "post",
+            },
           };
         }
         preIndex.delete(ev.data.tool_use_id);
@@ -122,7 +164,9 @@ export default function MonitorPage() {
           const withRuns = r.find((repo) => repo.run_count > 0);
           const picked = withRuns?.repo || r[0].repo;
           setActiveRepoFilter(picked);
-          try { localStorage.setItem("sp_improve_active_repo", picked); } catch {}
+          try {
+            localStorage.setItem("sp_improve_active_repo", picked);
+          } catch {}
           fetchBranches(picked).then(setBranches);
         } else {
           fetchBranches(stored).then(setBranches);
@@ -134,24 +178,30 @@ export default function MonitorPage() {
   // Handle repo switch — refresh everything that depends on the active repo
   // NOTE: do NOT call refreshRuns() here — it holds a stale closure with the old repo.
   // useRuns already auto-fetches when activeRepoFilter changes via its useEffect.
-  const handleRepoSwitch = useCallback(async (repo: string) => {
-    setSuppressAutoSelect(true);
-    setActiveRepoFilter(repo || null);
-    try { if (repo) localStorage.setItem("sp_improve_active_repo", repo); else localStorage.removeItem("sp_improve_active_repo"); } catch {}
-    setSelectedRunId(null);
-    setSelectedRun(null);
-    setHistoryEvents([]);
-    clearEvents();
-    if (repo) {
-      await setActiveRepo(repo);
-      // Re-fetch branches for the new repo (direct GitHub API, no agent needed)
-      fetchBranches(repo).then(setBranches);
-    } else {
-      setBranches(["main"]);
-    }
-    // Refresh repos list to get updated counts
-    fetchRepos().then(setRepos);
-  }, [clearEvents]);
+  const handleRepoSwitch = useCallback(
+    async (repo: string) => {
+      setSuppressAutoSelect(true);
+      setActiveRepoFilter(repo || null);
+      try {
+        if (repo) localStorage.setItem("sp_improve_active_repo", repo);
+        else localStorage.removeItem("sp_improve_active_repo");
+      } catch {}
+      setSelectedRunId(null);
+      setSelectedRun(null);
+      setHistoryEvents([]);
+      clearEvents();
+      if (repo) {
+        await setActiveRepo(repo);
+        // Re-fetch branches for the new repo (direct GitHub API, no agent needed)
+        fetchBranches(repo).then(setBranches);
+      } else {
+        setBranches(["main"]);
+      }
+      // Refresh repos list to get updated counts
+      fetchRepos().then(setRepos);
+    },
+    [clearEvents],
+  );
 
   // Keep selectedRun fresh
   useEffect(() => {
@@ -176,8 +226,12 @@ export default function MonitorPage() {
         ]);
 
         // API returns DESC order — sort ASC so pre comes before post
-        tools.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-        audits.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+        tools.sort(
+          (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+        );
+        audits.sort(
+          (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+        );
 
         // Merge pre/post tool call pairs.
         // Pre has input_data (no output), post has output_data (no input).
@@ -236,30 +290,30 @@ export default function MonitorPage() {
         }));
 
         const auditEvents: FeedEvent[] = audits
-          .filter(
-            (a) => !["llm_text", "llm_thinking"].includes(a.event_type)
-          )
+          .filter((a) => !["llm_text", "llm_thinking"].includes(a.event_type))
           .map((a) => ({
             _kind: "audit" as const,
             data: a,
           }));
 
         const getTs = (e: FeedEvent): string =>
-          e._kind === "tool" ? e.data.ts
-          : e._kind === "audit" ? e.data.ts
-          : e._kind === "usage" ? e.data.ts
-          : e.ts;
-        const merged = [...toolEvents, ...auditEvents].sort((a, b) =>
-          new Date(getTs(a)).getTime() - new Date(getTs(b)).getTime()
+          e._kind === "tool"
+            ? e.data.ts
+            : e._kind === "audit"
+              ? e.data.ts
+              : e._kind === "usage"
+                ? e.data.ts
+                : e.ts;
+        const merged = [...toolEvents, ...auditEvents].sort(
+          (a, b) => new Date(getTs(a)).getTime() - new Date(getTs(b)).getTime(),
         );
 
         setHistoryEvents(merged);
       } catch {
         // SSE will pick up live events
       }
-
     },
-    [clearEvents]
+    [clearEvents],
   );
 
   // Auto-select first running or latest run on initial load only
@@ -274,19 +328,26 @@ export default function MonitorPage() {
 
   // Start a new bot run (always spawns an isolated container)
   const handleStartRun = useCallback(
-    async (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => {
+    async (
+      prompt: string | undefined,
+      budget: number,
+      durationMinutes: number,
+      baseBranch: string,
+    ) => {
       // Close modal immediately — don't block on the API
       setStartModalOpen(false);
       const existingIds = new Set(runs.map((r) => r.id));
 
       // Fire API call in background
-      startParallelRun(prompt, budget, durationMinutes, baseBranch).catch((err) => {
-        addEvent({
-          _kind: "control",
-          text: `Failed to launch bot: ${err}`,
-          ts: new Date().toISOString(),
-        });
-      });
+      startParallelRun(prompt, budget, durationMinutes, baseBranch).catch(
+        (err) => {
+          addEvent({
+            _kind: "control",
+            text: `Failed to launch bot: ${err}`,
+            ts: new Date().toISOString(),
+          });
+        },
+      );
 
       addEvent({
         _kind: "control",
@@ -302,7 +363,7 @@ export default function MonitorPage() {
           const newRun = freshRuns.find((r) => !existingIds.has(r.id));
           if (newRun) {
             setSuppressAutoSelect(false);
-            refreshRuns();  // Update sidebar immediately
+            refreshRuns(); // Update sidebar immediately
             handleSelectRun(newRun.id);
             setActiveView("feed");
             return;
@@ -310,13 +371,14 @@ export default function MonitorPage() {
         } catch {}
       }
     },
-    [startParallelRun, addEvent, runs, activeRepoFilter, handleSelectRun]
+    [startParallelRun, addEvent, runs, activeRepoFilter, handleSelectRun],
   );
 
   const runStatus: RunStatus | null =
     (selectedRun?.status as RunStatus) || null;
   const agentIdle = agentHealth?.status === "idle";
-  const agentReachable = agentHealth != null && agentHealth.status !== "unreachable";
+  const agentReachable =
+    agentHealth != null && agentHealth.status !== "unreachable";
   const isConfigured = settingsStatus?.configured ?? false;
 
   return (
@@ -327,18 +389,39 @@ export default function MonitorPage() {
         <div className="flex items-center gap-2">
           <div className="relative flex items-center justify-center h-7 w-7">
             {/* Animated status ring */}
-            <svg width="28" height="28" viewBox="0 0 28 28" className="absolute">
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 28 28"
+              className="absolute"
+            >
               <circle
-                cx="14" cy="14" r="12"
+                cx="14"
+                cy="14"
+                r="12"
                 fill="none"
-                stroke={runStatus === "running" ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}
+                stroke={
+                  runStatus === "running"
+                    ? "rgba(0,255,136,0.2)"
+                    : "rgba(255,255,255,0.06)"
+                }
                 strokeWidth="1"
                 strokeDasharray="4 3"
-                style={runStatus === "running" ? { animation: "spin 8s linear infinite" } : undefined}
+                style={
+                  runStatus === "running"
+                    ? { animation: "spin 8s linear infinite" }
+                    : undefined
+                }
               />
             </svg>
             {/* Logo */}
-            <Image src="/logo.svg" alt="SignalPilot" width={18} height={18} className="relative z-[1]" />
+            <Image
+              src="/logo.svg"
+              alt="SignalPilot"
+              width={18}
+              height={18}
+              className="relative z-[1]"
+            />
           </div>
           <div>
             <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">
@@ -365,10 +448,7 @@ export default function MonitorPage() {
             className="flex items-center gap-2.5 ml-1"
           >
             <div className="w-px h-4 bg-[#1a1a1a]" />
-            <StatusBadge
-              status={selectedRun.status as RunStatus}
-              size="md"
-            />
+            <StatusBadge status={selectedRun.status as RunStatus} size="md" />
             <span className="text-[10px] text-[#888] font-medium">
               {selectedRun.branch_name.replace("improvements-round-", "")}
             </span>
@@ -385,7 +465,7 @@ export default function MonitorPage() {
               "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
               activeView === "bots"
                 ? "bg-white/[0.08] text-[#e8e8e8]"
-                : "text-[#666] hover:text-[#aaa]"
+                : "text-[#666] hover:text-[#aaa]",
             )}
           >
             Bots
@@ -401,7 +481,7 @@ export default function MonitorPage() {
               "px-2.5 py-1 rounded text-[10px] font-medium transition-all",
               activeView === "feed"
                 ? "bg-white/[0.08] text-[#e8e8e8]"
-                : "text-[#666] hover:text-[#aaa]"
+                : "text-[#666] hover:text-[#aaa]",
             )}
           >
             Event Feed
@@ -420,7 +500,11 @@ export default function MonitorPage() {
                   : "bg-[#00ff88]"
                 : "bg-[#ff4444]/60"
             }`}
-            style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
+            style={
+              !agentIdle && agentReachable
+                ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" }
+                : undefined
+            }
           />
           <span className="text-[10px] text-[#888]">
             {!agentReachable ? "Offline" : agentIdle ? "Idle" : "Active"}
@@ -433,7 +517,16 @@ export default function MonitorPage() {
           className="p-1.5 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors"
           title="Settings"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
@@ -448,9 +541,20 @@ export default function MonitorPage() {
             setStartModalOpen(true);
           }}
           disabled={!isConfigured}
-          title={!isConfigured ? "Configure credentials in Settings first" : undefined}
+          title={
+            !isConfigured
+              ? "Configure credentials in Settings first"
+              : undefined
+          }
           icon={
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <polygon points="3 2 8 5 3 8" />
             </svg>
           }
@@ -532,7 +636,10 @@ export default function MonitorPage() {
         <RunList
           runs={runs}
           activeId={selectedRunId}
-          onSelect={(id: string) => { handleSelectRun(id); setActiveView("feed"); }}
+          onSelect={(id: string) => {
+            handleSelectRun(id);
+            setActiveView("feed");
+          }}
           loading={runsLoading}
         />
 
@@ -541,7 +648,11 @@ export default function MonitorPage() {
             {/* Center - Event feed */}
             <main className="flex-1 flex flex-col min-h-0 min-w-0">
               <EventFeed events={allEvents} />
-              <StatsBar run={selectedRun} connected={connected} events={allEvents} />
+              <StatsBar
+                run={selectedRun}
+                connected={connected}
+                events={allEvents}
+              />
             </main>
 
             {/* Right sidebar - WorkTree */}

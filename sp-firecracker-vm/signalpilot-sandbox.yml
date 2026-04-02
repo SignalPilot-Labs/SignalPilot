@@ -7,7 +7,7 @@ sandbox:
   # "local"     — Auto-detect: Firecracker (Linux/KVM) or gVisor (macOS/no KVM)
   # "cloud"     — Firecracker on SignalPilot infrastructure (requires sp login)
   # "container" — Basic Docker containers (works everywhere, weakest isolation)
-  mode: container  # default: safest cross-platform option (change to "local" for auto-detect)
+  mode: container # default: safest cross-platform option (change to "local" for auto-detect)
 
   local:
     # Shared settings (apply to both Firecracker and gVisor)

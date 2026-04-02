@@ -25,14 +25,23 @@ export function Sparkline({
     y: height - ((v - min) / range) * height,
   }));
 
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  const linePath = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
+    .join(" ");
   const fillPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
   const lastPoint = points[points.length - 1];
 
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
       <path d={fillPath} fill={color} opacity={fillOpacity} />
-      <path d={linePath} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d={linePath}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
       <circle cx={lastPoint.x} cy={lastPoint.y} r="2" fill={color} />
     </svg>
   );
@@ -60,7 +69,12 @@ export function RingGauge({
   const offset = circumference * (1 - pct);
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: "rotate(-90deg)" }}>
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      style={{ transform: "rotate(-90deg)" }}
+    >
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -101,7 +115,11 @@ export function MiniBar({
 }) {
   const pct = Math.min(value / max, 1) * 100;
   return (
-    <div style={{ width, height }} className="rounded-full overflow-hidden" role="progressbar">
+    <div
+      style={{ width, height }}
+      className="rounded-full overflow-hidden"
+      role="progressbar"
+    >
       <div
         className="h-full rounded-full transition-all duration-500"
         style={{ width: `${pct}%`, background: color, opacity: 0.7 }}

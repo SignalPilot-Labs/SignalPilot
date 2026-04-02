@@ -2,7 +2,7 @@ import type { SettingsStatus, Settings } from "./types";
 
 function getApiBase(): string {
   if (typeof window === "undefined") return "http://localhost:3401";
-  return `${window.location.protocol}//${window.location.hostname}:3401`;
+  return "";
 }
 
 export async function fetchSettingsStatus(): Promise<SettingsStatus> {
@@ -11,7 +11,12 @@ export async function fetchSettingsStatus(): Promise<SettingsStatus> {
     if (!res.ok) throw new Error("Failed to fetch settings status");
     return res.json();
   } catch {
-    return { configured: false, has_claude_token: false, has_git_token: false, has_github_repo: false };
+    return {
+      configured: false,
+      has_claude_token: false,
+      has_git_token: false,
+      has_github_repo: false,
+    };
   }
 }
 
@@ -22,7 +27,7 @@ export async function fetchSettings(): Promise<Settings> {
 }
 
 export async function updateSettings(
-  settings: Partial<Settings>
+  settings: Partial<Settings>,
 ): Promise<{ ok: boolean; updated: string[] }> {
   const res = await fetch(`${getApiBase()}/api/settings`, {
     method: "PUT",

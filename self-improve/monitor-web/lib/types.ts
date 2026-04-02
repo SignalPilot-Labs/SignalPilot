@@ -70,8 +70,18 @@ export interface UsageEvent {
 export type FeedEvent =
   | { _kind: "tool"; data: ToolCall }
   | { _kind: "audit"; data: AuditEvent }
-  | { _kind: "llm_text"; text: string; ts: string; agent_role?: "worker" | "ceo" }
-  | { _kind: "llm_thinking"; text: string; ts: string; agent_role?: "worker" | "ceo" }
+  | {
+      _kind: "llm_text";
+      text: string;
+      ts: string;
+      agent_role?: "worker" | "ceo";
+    }
+  | {
+      _kind: "llm_thinking";
+      text: string;
+      ts: string;
+      agent_role?: "worker" | "ceo";
+    }
   | { _kind: "control"; text: string; ts: string }
   | { _kind: "usage"; data: UsageEvent };
 
@@ -182,10 +192,12 @@ export function getToolCategory(toolName: string): ToolCategory {
   if (name.includes("browser_take_screenshot")) return "playwright_screenshot";
   if (name.includes("browser_snapshot")) return "playwright_snapshot";
   if (name.includes("browser_click")) return "playwright_click";
-  if (name.includes("browser_fill_form") || name.includes("browser_type")) return "playwright_form";
+  if (name.includes("browser_fill_form") || name.includes("browser_type"))
+    return "playwright_form";
   if (name.includes("browser_evaluate")) return "playwright_evaluate";
   // MCP Session Gate
-  if (name.includes("end_session") || name.includes("session_gate")) return "session_gate";
+  if (name.includes("end_session") || name.includes("session_gate"))
+    return "session_gate";
   return "default";
 }
 
@@ -198,27 +210,153 @@ export interface ToolMeta {
 }
 
 export const TOOL_COLORS: Record<ToolCategory, ToolMeta> = {
-  bash:                  { label: "Bash",          border: "border-l-[#00ff88]",  bg: "bg-[#00ff88]/[0.03]",  text: "text-[#00ff88]",  iconColor: "#00ff88" },
-  read:                  { label: "Read",          border: "border-l-[#88ccff]",  bg: "bg-[#88ccff]/[0.03]",  text: "text-[#88ccff]",  iconColor: "#88ccff" },
-  write:                 { label: "Write",         border: "border-l-[#cc88ff]",  bg: "bg-[#cc88ff]/[0.03]",  text: "text-[#cc88ff]",  iconColor: "#cc88ff" },
-  edit:                  { label: "Edit",          border: "border-l-[#ffcc44]",  bg: "bg-[#ffcc44]/[0.03]",  text: "text-[#ffcc44]",  iconColor: "#ffcc44" },
-  glob:                  { label: "Glob",          border: "border-l-[#ff88aa]",  bg: "bg-[#ff88aa]/[0.03]",  text: "text-[#ff88aa]",  iconColor: "#ff88aa" },
-  grep:                  { label: "Grep",          border: "border-l-[#88ffcc]",  bg: "bg-[#88ffcc]/[0.03]",  text: "text-[#88ffcc]",  iconColor: "#88ffcc" },
-  agent:                 { label: "Agent",         border: "border-l-[#ff8844]",  bg: "bg-[#ff8844]/[0.03]",  text: "text-[#ff8844]",  iconColor: "#ff8844" },
-  web_search:            { label: "WebSearch",     border: "border-l-[#44aaff]",  bg: "bg-[#44aaff]/[0.03]",  text: "text-[#44aaff]",  iconColor: "#44aaff" },
-  web_fetch:             { label: "WebFetch",      border: "border-l-[#44ccdd]",  bg: "bg-[#44ccdd]/[0.03]",  text: "text-[#44ccdd]",  iconColor: "#44ccdd" },
-  todo:                  { label: "Todo",          border: "border-l-[#aabb44]",  bg: "bg-[#aabb44]/[0.03]",  text: "text-[#aabb44]",  iconColor: "#aabb44" },
-  tool_search:           { label: "ToolSearch",    border: "border-l-[#aa88ff]",  bg: "bg-[#aa88ff]/[0.03]",  text: "text-[#aa88ff]",  iconColor: "#aa88ff" },
-  skill:                 { label: "Skill",         border: "border-l-[#ff66cc]",  bg: "bg-[#ff66cc]/[0.03]",  text: "text-[#ff66cc]",  iconColor: "#ff66cc" },
-  playwright_navigate:   { label: "Navigate",      border: "border-l-[#66bbff]",  bg: "bg-[#66bbff]/[0.03]",  text: "text-[#66bbff]",  iconColor: "#66bbff" },
-  playwright_screenshot: { label: "Screenshot",    border: "border-l-[#ff99aa]",  bg: "bg-[#ff99aa]/[0.03]",  text: "text-[#ff99aa]",  iconColor: "#ff99aa" },
-  playwright_snapshot:   { label: "Snapshot",      border: "border-l-[#ddaa66]",  bg: "bg-[#ddaa66]/[0.03]",  text: "text-[#ddaa66]",  iconColor: "#ddaa66" },
-  playwright_click:      { label: "Click",         border: "border-l-[#ff7766]",  bg: "bg-[#ff7766]/[0.03]",  text: "text-[#ff7766]",  iconColor: "#ff7766" },
-  playwright_form:       { label: "Form Input",    border: "border-l-[#77ccaa]",  bg: "bg-[#77ccaa]/[0.03]",  text: "text-[#77ccaa]",  iconColor: "#77ccaa" },
-  playwright_type:       { label: "Type",          border: "border-l-[#77ccaa]",  bg: "bg-[#77ccaa]/[0.03]",  text: "text-[#77ccaa]",  iconColor: "#77ccaa" },
-  playwright_evaluate:   { label: "Evaluate",      border: "border-l-[#bbaa55]",  bg: "bg-[#bbaa55]/[0.03]",  text: "text-[#bbaa55]",  iconColor: "#bbaa55" },
-  session_gate:          { label: "Session",       border: "border-l-[#ffffff]",  bg: "bg-[#ffffff]/[0.03]",  text: "text-[#cccccc]",  iconColor: "#ffffff" },
-  default:               { label: "Tool",          border: "border-l-[#555]",     bg: "bg-[#555]/[0.03]",     text: "text-[#888]",     iconColor: "#888888" },
+  bash: {
+    label: "Bash",
+    border: "border-l-[#00ff88]",
+    bg: "bg-[#00ff88]/[0.03]",
+    text: "text-[#00ff88]",
+    iconColor: "#00ff88",
+  },
+  read: {
+    label: "Read",
+    border: "border-l-[#88ccff]",
+    bg: "bg-[#88ccff]/[0.03]",
+    text: "text-[#88ccff]",
+    iconColor: "#88ccff",
+  },
+  write: {
+    label: "Write",
+    border: "border-l-[#cc88ff]",
+    bg: "bg-[#cc88ff]/[0.03]",
+    text: "text-[#cc88ff]",
+    iconColor: "#cc88ff",
+  },
+  edit: {
+    label: "Edit",
+    border: "border-l-[#ffcc44]",
+    bg: "bg-[#ffcc44]/[0.03]",
+    text: "text-[#ffcc44]",
+    iconColor: "#ffcc44",
+  },
+  glob: {
+    label: "Glob",
+    border: "border-l-[#ff88aa]",
+    bg: "bg-[#ff88aa]/[0.03]",
+    text: "text-[#ff88aa]",
+    iconColor: "#ff88aa",
+  },
+  grep: {
+    label: "Grep",
+    border: "border-l-[#88ffcc]",
+    bg: "bg-[#88ffcc]/[0.03]",
+    text: "text-[#88ffcc]",
+    iconColor: "#88ffcc",
+  },
+  agent: {
+    label: "Agent",
+    border: "border-l-[#ff8844]",
+    bg: "bg-[#ff8844]/[0.03]",
+    text: "text-[#ff8844]",
+    iconColor: "#ff8844",
+  },
+  web_search: {
+    label: "WebSearch",
+    border: "border-l-[#44aaff]",
+    bg: "bg-[#44aaff]/[0.03]",
+    text: "text-[#44aaff]",
+    iconColor: "#44aaff",
+  },
+  web_fetch: {
+    label: "WebFetch",
+    border: "border-l-[#44ccdd]",
+    bg: "bg-[#44ccdd]/[0.03]",
+    text: "text-[#44ccdd]",
+    iconColor: "#44ccdd",
+  },
+  todo: {
+    label: "Todo",
+    border: "border-l-[#aabb44]",
+    bg: "bg-[#aabb44]/[0.03]",
+    text: "text-[#aabb44]",
+    iconColor: "#aabb44",
+  },
+  tool_search: {
+    label: "ToolSearch",
+    border: "border-l-[#aa88ff]",
+    bg: "bg-[#aa88ff]/[0.03]",
+    text: "text-[#aa88ff]",
+    iconColor: "#aa88ff",
+  },
+  skill: {
+    label: "Skill",
+    border: "border-l-[#ff66cc]",
+    bg: "bg-[#ff66cc]/[0.03]",
+    text: "text-[#ff66cc]",
+    iconColor: "#ff66cc",
+  },
+  playwright_navigate: {
+    label: "Navigate",
+    border: "border-l-[#66bbff]",
+    bg: "bg-[#66bbff]/[0.03]",
+    text: "text-[#66bbff]",
+    iconColor: "#66bbff",
+  },
+  playwright_screenshot: {
+    label: "Screenshot",
+    border: "border-l-[#ff99aa]",
+    bg: "bg-[#ff99aa]/[0.03]",
+    text: "text-[#ff99aa]",
+    iconColor: "#ff99aa",
+  },
+  playwright_snapshot: {
+    label: "Snapshot",
+    border: "border-l-[#ddaa66]",
+    bg: "bg-[#ddaa66]/[0.03]",
+    text: "text-[#ddaa66]",
+    iconColor: "#ddaa66",
+  },
+  playwright_click: {
+    label: "Click",
+    border: "border-l-[#ff7766]",
+    bg: "bg-[#ff7766]/[0.03]",
+    text: "text-[#ff7766]",
+    iconColor: "#ff7766",
+  },
+  playwright_form: {
+    label: "Form Input",
+    border: "border-l-[#77ccaa]",
+    bg: "bg-[#77ccaa]/[0.03]",
+    text: "text-[#77ccaa]",
+    iconColor: "#77ccaa",
+  },
+  playwright_type: {
+    label: "Type",
+    border: "border-l-[#77ccaa]",
+    bg: "bg-[#77ccaa]/[0.03]",
+    text: "text-[#77ccaa]",
+    iconColor: "#77ccaa",
+  },
+  playwright_evaluate: {
+    label: "Evaluate",
+    border: "border-l-[#bbaa55]",
+    bg: "bg-[#bbaa55]/[0.03]",
+    text: "text-[#bbaa55]",
+    iconColor: "#bbaa55",
+  },
+  session_gate: {
+    label: "Session",
+    border: "border-l-[#ffffff]",
+    bg: "bg-[#ffffff]/[0.03]",
+    text: "text-[#cccccc]",
+    iconColor: "#ffffff",
+  },
+  default: {
+    label: "Tool",
+    border: "border-l-[#555]",
+    bg: "bg-[#555]/[0.03]",
+    text: "text-[#888]",
+    iconColor: "#888888",
+  },
 };
 
 /* ── Audit Event Types ── */
@@ -255,28 +393,116 @@ export interface AuditEventMeta {
 }
 
 export const AUDIT_EVENT_META: Record<string, AuditEventMeta> = {
-  round_complete:      { label: "Round Complete",    color: "text-[#00ff88]",  bg: "bg-[#00ff88]/[0.04]", iconColor: "#00ff88" },
-  rate_limit:          { label: "Rate Limit",        color: "text-[#ffaa00]",  bg: "bg-[#ffaa00]/[0.04]", iconColor: "#ffaa00" },
-  run_started:         { label: "Run Started",       color: "text-[#88ccff]",  bg: "bg-[#88ccff]/[0.04]", iconColor: "#88ccff" },
-  sdk_config:          { label: "SDK Config",        color: "text-[#777]",     bg: "bg-[#777]/[0.04]",    iconColor: "#777777" },
-  agent_stop:          { label: "Agent Stopped",     color: "text-[#ff8844]",  bg: "bg-[#ff8844]/[0.04]", iconColor: "#ff8844" },
-  pr_failed:           { label: "PR Failed",         color: "text-[#ff4444]",  bg: "bg-[#ff4444]/[0.04]", iconColor: "#ff4444" },
-  session_ended:       { label: "Session Ended",     color: "text-[#88ccff]",  bg: "bg-[#88ccff]/[0.04]", iconColor: "#88ccff" },
-  pr_created:          { label: "PR Created",        color: "text-[#00ff88]",  bg: "bg-[#00ff88]/[0.04]", iconColor: "#00ff88" },
-  killed:              { label: "Killed",            color: "text-[#ff4444]",  bg: "bg-[#ff4444]/[0.04]", iconColor: "#ff4444" },
-  ceo_continuation:    { label: "CEO Continuation",  color: "text-[#ff8844]",  bg: "bg-[#ff8844]/[0.04]", iconColor: "#ff8844" },
-  end_session_denied:  { label: "Session Denied",    color: "text-[#ffaa00]",  bg: "bg-[#ffaa00]/[0.04]", iconColor: "#ffaa00" },
-  worker_assignment:   { label: "Worker Assignment", color: "text-[#cc88ff]",  bg: "bg-[#cc88ff]/[0.04]", iconColor: "#cc88ff" },
-  session_unlocked:    { label: "Session Unlocked",  color: "text-[#00ff88]",  bg: "bg-[#00ff88]/[0.04]", iconColor: "#00ff88" },
-  fatal_error:         { label: "Fatal Error",       color: "text-[#ff4444]",  bg: "bg-[#ff4444]/[0.04]", iconColor: "#ff4444" },
-  rate_limit_paused:   { label: "Rate Limit Paused", color: "text-[#ffaa00]",  bg: "bg-[#ffaa00]/[0.04]", iconColor: "#ffaa00" },
-  stop_requested:      { label: "Stop Requested",    color: "text-[#ff8844]",  bg: "bg-[#ff8844]/[0.04]", iconColor: "#ff8844" },
+  round_complete: {
+    label: "Round Complete",
+    color: "text-[#00ff88]",
+    bg: "bg-[#00ff88]/[0.04]",
+    iconColor: "#00ff88",
+  },
+  rate_limit: {
+    label: "Rate Limit",
+    color: "text-[#ffaa00]",
+    bg: "bg-[#ffaa00]/[0.04]",
+    iconColor: "#ffaa00",
+  },
+  run_started: {
+    label: "Run Started",
+    color: "text-[#88ccff]",
+    bg: "bg-[#88ccff]/[0.04]",
+    iconColor: "#88ccff",
+  },
+  sdk_config: {
+    label: "SDK Config",
+    color: "text-[#777]",
+    bg: "bg-[#777]/[0.04]",
+    iconColor: "#777777",
+  },
+  agent_stop: {
+    label: "Agent Stopped",
+    color: "text-[#ff8844]",
+    bg: "bg-[#ff8844]/[0.04]",
+    iconColor: "#ff8844",
+  },
+  pr_failed: {
+    label: "PR Failed",
+    color: "text-[#ff4444]",
+    bg: "bg-[#ff4444]/[0.04]",
+    iconColor: "#ff4444",
+  },
+  session_ended: {
+    label: "Session Ended",
+    color: "text-[#88ccff]",
+    bg: "bg-[#88ccff]/[0.04]",
+    iconColor: "#88ccff",
+  },
+  pr_created: {
+    label: "PR Created",
+    color: "text-[#00ff88]",
+    bg: "bg-[#00ff88]/[0.04]",
+    iconColor: "#00ff88",
+  },
+  killed: {
+    label: "Killed",
+    color: "text-[#ff4444]",
+    bg: "bg-[#ff4444]/[0.04]",
+    iconColor: "#ff4444",
+  },
+  ceo_continuation: {
+    label: "CEO Continuation",
+    color: "text-[#ff8844]",
+    bg: "bg-[#ff8844]/[0.04]",
+    iconColor: "#ff8844",
+  },
+  end_session_denied: {
+    label: "Session Denied",
+    color: "text-[#ffaa00]",
+    bg: "bg-[#ffaa00]/[0.04]",
+    iconColor: "#ffaa00",
+  },
+  worker_assignment: {
+    label: "Worker Assignment",
+    color: "text-[#cc88ff]",
+    bg: "bg-[#cc88ff]/[0.04]",
+    iconColor: "#cc88ff",
+  },
+  session_unlocked: {
+    label: "Session Unlocked",
+    color: "text-[#00ff88]",
+    bg: "bg-[#00ff88]/[0.04]",
+    iconColor: "#00ff88",
+  },
+  fatal_error: {
+    label: "Fatal Error",
+    color: "text-[#ff4444]",
+    bg: "bg-[#ff4444]/[0.04]",
+    iconColor: "#ff4444",
+  },
+  rate_limit_paused: {
+    label: "Rate Limit Paused",
+    color: "text-[#ffaa00]",
+    bg: "bg-[#ffaa00]/[0.04]",
+    iconColor: "#ffaa00",
+  },
+  stop_requested: {
+    label: "Stop Requested",
+    color: "text-[#ff8844]",
+    bg: "bg-[#ff8844]/[0.04]",
+    iconColor: "#ff8844",
+  },
 };
 
 /* ── WorkTree Types ── */
 export interface FileChange {
   path: string;
-  action: "read" | "write" | "edit" | "create" | "delete" | "exec" | "navigate" | "search";
+  action:
+    | "read"
+    | "write"
+    | "edit"
+    | "create"
+    | "delete"
+    | "exec"
+    | "navigate"
+    | "search";
   linesAdded?: number;
   linesRemoved?: number;
   timestamp: string;

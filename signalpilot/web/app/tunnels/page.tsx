@@ -35,7 +35,7 @@ const PORT_PRESETS = [
 
 function formatUptime(startedAt: number | null): string {
   if (!startedAt) return "--";
-  const sec = Math.floor((Date.now() / 1000) - startedAt);
+  const sec = Math.floor(Date.now() / 1000 - startedAt);
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
   const h = Math.floor(sec / 3600);
@@ -55,7 +55,9 @@ export default function TunnelsPage() {
   const [form, setForm] = useState({ port: "3200", label: "", customPort: "" });
 
   const refresh = useCallback(() => {
-    getTunnels().then(setTunnels).catch(() => {});
+    getTunnels()
+      .then(setTunnels)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -64,7 +66,10 @@ export default function TunnelsPage() {
     return () => clearInterval(i);
   }, [refresh]);
 
-  const selectedPort = form.port === "custom" ? parseInt(form.customPort) || 0 : parseInt(form.port);
+  const selectedPort =
+    form.port === "custom"
+      ? parseInt(form.customPort) || 0
+      : parseInt(form.port);
 
   async function handleCreate() {
     if (!selectedPort || selectedPort < 1 || selectedPort > 65535) {
@@ -73,7 +78,10 @@ export default function TunnelsPage() {
     }
     setCreating(true);
     try {
-      const t = await createTunnel({ local_port: selectedPort, label: form.label || undefined });
+      const t = await createTunnel({
+        local_port: selectedPort,
+        label: form.label || undefined,
+      });
       if (t.status === "error") {
         toast(t.error_message || "tunnel failed to start", "error");
       } else {
@@ -157,14 +165,22 @@ export default function TunnelsPage() {
 
       <TerminalBar
         path="tunnels --list"
-        status={<StatusDot status={running > 0 ? "healthy" : "unknown"} size={4} />}
+        status={
+          <StatusDot status={running > 0 ? "healthy" : "unknown"} size={4} />
+        }
       >
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
-            total: <code className="text-[10px] text-[var(--color-text)]">{tunnels.length}</code>
+            total:{" "}
+            <code className="text-[10px] text-[var(--color-text)]">
+              {tunnels.length}
+            </code>
           </span>
           <span className="text-[var(--color-text-dim)]">
-            active: <code className="text-[10px] text-[var(--color-success)]">{running}</code>
+            active:{" "}
+            <code className="text-[10px] text-[var(--color-success)]">
+              {running}
+            </code>
           </span>
         </div>
       </TerminalBar>
@@ -173,13 +189,20 @@ export default function TunnelsPage() {
       {showForm && (
         <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
           <div className="px-6 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
-            <Globe className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">new tunnel</span>
+            <Globe
+              className="w-3.5 h-3.5 text-[var(--color-text-dim)]"
+              strokeWidth={1.5}
+            />
+            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+              new tunnel
+            </span>
           </div>
           <div className="p-6">
             <div className="grid grid-cols-3 gap-4 mb-5">
               <div>
-                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">service</label>
+                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                  service
+                </label>
                 <select
                   value={form.port}
                   onChange={(e) => setForm({ ...form, port: e.target.value })}
@@ -195,20 +218,26 @@ export default function TunnelsPage() {
               </div>
               {form.port === "custom" && (
                 <div>
-                  <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">port</label>
+                  <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                    port
+                  </label>
                   <input
                     type="number"
                     min={1}
                     max={65535}
                     placeholder="8080"
                     value={form.customPort}
-                    onChange={(e) => setForm({ ...form, customPort: e.target.value })}
+                    onChange={(e) =>
+                      setForm({ ...form, customPort: e.target.value })
+                    }
                     className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                   />
                 </div>
               )}
               <div>
-                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">label (optional)</label>
+                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                  label (optional)
+                </label>
                 <input
                   type="text"
                   placeholder="my-tunnel"
@@ -265,9 +294,13 @@ export default function TunnelsPage() {
                 <div className="flex-shrink-0">
                   <StatusDot
                     status={
-                      tunnel.status === "running" ? "healthy" :
-                      tunnel.status === "starting" ? "warning" :
-                      tunnel.status === "error" ? "error" : "unknown"
+                      tunnel.status === "running"
+                        ? "healthy"
+                        : tunnel.status === "starting"
+                          ? "warning"
+                          : tunnel.status === "error"
+                            ? "error"
+                            : "unknown"
                     }
                     size={5}
                     pulse={tunnel.status === "running"}
@@ -277,16 +310,23 @@ export default function TunnelsPage() {
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-[var(--color-text)]">{tunnel.label}</span>
+                    <span className="text-xs text-[var(--color-text)]">
+                      {tunnel.label}
+                    </span>
                     <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
                       cf
                     </span>
-                    <span className={`text-[10px] tracking-wider ${
-                      tunnel.status === "running" ? "text-[var(--color-success)]" :
-                      tunnel.status === "error" ? "text-[var(--color-error)]" :
-                      tunnel.status === "starting" ? "text-[var(--color-warning)]" :
-                      "text-[var(--color-text-dim)]"
-                    }`}>
+                    <span
+                      className={`text-[10px] tracking-wider ${
+                        tunnel.status === "running"
+                          ? "text-[var(--color-success)]"
+                          : tunnel.status === "error"
+                            ? "text-[var(--color-error)]"
+                            : tunnel.status === "starting"
+                              ? "text-[var(--color-warning)]"
+                              : "text-[var(--color-text-dim)]"
+                      }`}
+                    >
                       {tunnel.status}
                     </span>
                   </div>
@@ -297,12 +337,16 @@ export default function TunnelsPage() {
                     </span>
                     {tunnel.public_url && (
                       <>
-                        <span className="text-[10px] text-[var(--color-text-dim)]">&rarr;</span>
+                        <span className="text-[10px] text-[var(--color-text-dim)]">
+                          &rarr;
+                        </span>
                         <button
                           onClick={() => copyUrl(tunnel.public_url!)}
                           className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors tracking-wider group"
                         >
-                          <span className="truncate max-w-[300px]">{tunnel.public_url}</span>
+                          <span className="truncate max-w-[300px]">
+                            {tunnel.public_url}
+                          </span>
                           {copied === tunnel.public_url ? (
                             <Check className="w-3 h-3 text-[var(--color-success)] flex-shrink-0" />
                           ) : (
@@ -352,10 +396,13 @@ export default function TunnelsPage() {
                   ) : (
                     <button
                       onClick={() => handleStart(tunnel.id)}
-                      disabled={starting === tunnel.id || tunnel.status === "starting"}
+                      disabled={
+                        starting === tunnel.id || tunnel.status === "starting"
+                      }
                       className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-success)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider"
                     >
-                      {starting === tunnel.id || tunnel.status === "starting" ? (
+                      {starting === tunnel.id ||
+                      tunnel.status === "starting" ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
                       ) : (
                         <Play className="w-3 h-3" strokeWidth={1.5} />

@@ -11,6 +11,7 @@ services:
     environment:
       - SP_DATA_DIR=/data
       - SP_SANDBOX_MANAGER_URL=http://sandbox:8080
+      - SP_SANDBOX_API_KEY=${SP_SANDBOX_API_KEY:-}
     volumes:
       - sp-data:/data
     command: ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]
@@ -46,6 +47,7 @@ services:
       - SP_MAX_VMS=10
       - SP_VM_MEMORY_MB=512
       - SP_VM_VCPUS=1
+      - SP_SANDBOX_API_KEY=${SP_SANDBOX_API_KEY:-}
     restart: unless-stopped
 
   postgres:

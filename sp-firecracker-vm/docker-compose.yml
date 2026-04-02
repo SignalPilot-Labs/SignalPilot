@@ -27,6 +27,7 @@ services:
       - SP_VM_MEMORY_MB=512
       - SP_VM_TIMEOUT_SEC=300
       - SP_LOG_LEVEL=info
+      - SP_SANDBOX_API_KEY=${SP_SANDBOX_API_KEY:-}
     profiles: ["gvisor", "default"]
     restart: unless-stopped
 
@@ -49,6 +50,7 @@ services:
       - SP_VM_VCPUS=1
       - SP_VM_TIMEOUT_SEC=300
       - SP_LOG_LEVEL=info
+      - SP_SANDBOX_API_KEY=${SP_SANDBOX_API_KEY:-}
     volumes:
       - sandbox-overlays:/opt/signalpilot/overlays
     profiles: ["firecracker"]

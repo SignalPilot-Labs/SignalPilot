@@ -10,6 +10,7 @@ regardless of which backend is active.
 """
 
 import asyncio
+import hmac
 import logging
 import os
 
@@ -24,6 +25,7 @@ VM_MEMORY_MB = int(os.getenv("SP_VM_MEMORY_MB", "512"))
 VM_VCPUS = int(os.getenv("SP_VM_VCPUS", "1"))
 VM_TIMEOUT_SEC = int(os.getenv("SP_VM_TIMEOUT_SEC", "300"))
 LOG_LEVEL = os.getenv("SP_LOG_LEVEL", "info").upper()
+SANDBOX_API_KEY = os.getenv("SP_SANDBOX_API_KEY", "")
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL))
 log = logging.getLogger("sandbox_manager")
@@ -41,6 +43,21 @@ def _detect_executor() -> ExecutorBase:
     from executor_gvisor import GVisorExecutor
     log.info("No KVM — using gVisor backend")
     return GVisorExecutor(MAX_VMS, VM_TIMEOUT_SEC)
+
+
+# ─── Auth middleware ─────────────────────────────────────────────────────────
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    """Require Bearer token on all endpoints except /health."""
+    if request.path == "/health" or not SANDBOX_API_KEY:
+        return await handler(request)
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], SANDBOX_API_KEY):
+        return web.json_response({"error": "Unauthorized"}, status=401)
+
+    return await handler(request)
 
 
 # ─── HTTP handlers ───────────────────────────────────────────────────────────
@@ -112,7 +129,7 @@ async def on_shutdown(app: web.Application) -> None:
 
 
 def main() -> None:
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 

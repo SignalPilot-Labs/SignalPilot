@@ -32,9 +32,9 @@ from claude_agent_sdk import (
     ToolUseBlock,
     ToolResultBlock,
 )
-from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher, AgentDefinition
+from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher
 
-from agent import db, hooks, git_ops, permissions, prompt, session_gate
+from agent import db, hooks, git_ops, permissions, prompt, session_gate, subagents
 
 
 # =============================================================================
@@ -267,39 +267,8 @@ async def run_agent(
     else:
         print(f"[agent] Skipping skill copy — target repo differs from workspace")
 
-    # --- Subagents for parallel work (prompts loaded from prompts/agent-*.md) ---
-    subagents = {
-        "code-writer": AgentDefinition(
-            description="Use for writing new files, generating boilerplate, creating components, or implementing straightforward features. Delegates code generation so the main agent can continue planning.",
-            prompt=prompt.load_agent_prompt("code-writer"),
-            model="sonnet",
-            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-        ),
-        "test-writer": AgentDefinition(
-            description="Use for writing tests, running test suites, and verifying code works correctly. Delegates test creation and execution.",
-            prompt=prompt.load_agent_prompt("test-writer"),
-            model="sonnet",
-            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-        ),
-        "researcher": AgentDefinition(
-            description="Use for researching the codebase, finding patterns, understanding architecture, or looking up documentation. Returns findings without making changes.",
-            prompt=prompt.load_agent_prompt("researcher"),
-            model="sonnet",
-            tools=["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"],
-        ),
-        "frontend-builder": AgentDefinition(
-            description="Use for building React/Next.js components, pages, layouts, and styling. Handles TSX, CSS, Tailwind, and frontend-specific code generation.",
-            prompt=prompt.load_agent_prompt("frontend-builder"),
-            model="sonnet",
-            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-        ),
-        "reviewer": AgentDefinition(
-            description="MUST be called after completing each feature or significant change. Reviews recent commits for security vulnerabilities, performance issues, duplicated code, god files, and code quality problems. Runs on Opus for thorough analysis. Returns a structured review with critical issues, warnings, and files that need splitting.",
-            prompt=prompt.load_agent_prompt("reviewer"),
-            model="opus",
-            tools=["Read", "Glob", "Grep", "Bash"],
-        ),
-    }
+    # --- Subagents for parallel work (defined in subagents.py) ---
+    agent_defs = subagents.build_subagent_definitions()
 
     # --- SDK options ---
     options = ClaudeAgentOptions(
@@ -318,7 +287,7 @@ async def run_agent(
         max_budget_usd=max_budget if max_budget > 0 else None,
         include_partial_messages=True,
         mcp_servers={"session_gate": session_mcp},
-        agents=subagents,
+        agents=agent_defs,
         hooks={
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],

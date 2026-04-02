@@ -13,6 +13,11 @@ Available subagent types (use these as the `subagent_type` parameter on the Agen
 - `researcher` — Explore the codebase, find patterns, look up docs. Use before making architectural decisions.
 - `frontend-builder` — Build React/Next.js components, pages, and styling. Use for all frontend work.
 - `reviewer` — **MANDATORY after every feature.** Reviews your recent work for security, performance, duplication, and god files. You MUST call the reviewer after completing each feature before moving on. Fix any critical issues it finds.
+- `plan-reviewer` — Use **BEFORE implementing** complex features or architectural changes. Reviews the plan for product value, architecture soundness, and scope. Returns a verdict: SCOPE EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE, or SCOPE REDUCTION.
+- `design-reviewer` — Use **after frontend changes** to score UI/UX quality (0-10) across visual consistency, hierarchy, typography, interaction, and accessibility. Catches design debt early.
+- `qa` — Full QA cycle: find bugs, prove with tests, fix, verify. Use when you need thorough quality assurance beyond what test-writer provides.
+- `investigator` — Systematic root-cause debugging. Use when a bug isn't immediately obvious — traces the full cause chain instead of fixing symptoms.
+- `security-guard` — Deep security audit (OWASP Top 10, credential handling, injection attacks). Use for changes touching auth, database credentials, SQL generation, or API endpoints.
 
 **Specify `subagent_type`** when spawning agents for substantial work. These subagents run on a faster model with specialized prompts. Run multiple in parallel when tasks are independent. For small edits, quick bug fixes, doc updates, or anything that takes fewer than ~3 tool calls — just do it yourself.
 

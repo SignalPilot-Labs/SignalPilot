@@ -53,11 +53,12 @@ import {
   getSchemaRefreshStatus,
   getConnectionSchemaDiff,
   exploreColumns,
+  getConnectionHealthHistory,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot, MiniBar } from "@/components/ui/data-viz";
+import { StatusDot, MiniBar, Sparkline } from "@/components/ui/data-viz";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -1737,13 +1738,27 @@ export default function ConnectionsPage() {
   const [schemaDiff, setSchemaDiff] = useState<Record<string, { has_changes: boolean; added_tables: string[]; removed_tables: string[]; modified_tables: unknown[] } | null>>({});
   const [exploringTable, setExploringTable] = useState<string | null>(null);
   const [exploredData, setExploredData] = useState<Record<string, { columns: { name: string; type: string; sample_values?: string[]; value_stats?: { min: unknown; max: unknown; avg: number | null } }[] }>>({});
+  const [healthHistory, setHealthHistory] = useState<Record<string, number[]>>({});
 
   // Real-time form validation — computed on every form change
   const formErrors = showForm ? validateForm(form) : {};
   const hasFormErrors = Object.keys(formErrors).length > 0;
 
   const refresh = useCallback(() => {
-    getConnections().then(setConnections).catch(() => {});
+    getConnections().then((conns) => {
+      setConnections(conns);
+      // Fetch latency sparkline history for each connection (background)
+      for (const conn of conns) {
+        getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
+          const latencies = res.buckets
+            .map((b) => b.avg_latency_ms)
+            .filter((v): v is number => v !== null);
+          if (latencies.length >= 2) {
+            setHealthHistory((prev) => ({ ...prev, [conn.name]: latencies }));
+          }
+        }).catch(() => {});
+      }
+    }).catch(() => {});
     getConnectionsHealth()
       .then((res) => {
         const map: Record<string, ConnectionHealthStats> = {};
@@ -2779,6 +2794,19 @@ export default function ConnectionsPage() {
                           <span className="flex items-center gap-1 tabular-nums">
                             p95: {health.latency_p95_ms.toFixed(0)}ms
                           </span>
+                        )}
+                        {healthHistory[conn.name] && healthHistory[conn.name].length >= 2 && (
+                          <Tooltip content="latency trend (1h)" position="top">
+                            <span className="cursor-default">
+                              <Sparkline
+                                values={healthHistory[conn.name]}
+                                width={48}
+                                height={12}
+                                color={health.latency_p50_ms != null && health.latency_p50_ms < 50 ? "var(--color-success)" : health.latency_p50_ms != null && health.latency_p50_ms < 150 ? "var(--color-warning)" : "var(--color-text-dim)"}
+                                fillOpacity={0.1}
+                              />
+                            </span>
+                          </Tooltip>
                         )}
                       </div>
                     )}

@@ -1662,6 +1662,28 @@ async def get_connection_health(name: str, window: int = Query(default=300, ge=6
     return stats
 
 
+@app.get("/api/connections/{name}/health/history")
+async def get_connection_health_history(
+    name: str,
+    window: int = Query(default=3600, ge=300, le=86400, description="History window in seconds"),
+    bucket: int = Query(default=60, ge=10, le=3600, description="Bucket size in seconds"),
+):
+    """Get time-bucketed health history for sparkline/chart rendering.
+
+    HEX pattern: connections list shows a latency sparkline per connection.
+    Returns time-series buckets with avg/max latency and success/failure counts.
+    """
+    history = health_monitor.connection_history(name, window, bucket)
+    if history is None:
+        raise HTTPException(status_code=404, detail=f"No health data for connection '{name}'")
+    return {
+        "connection_name": name,
+        "window_seconds": window,
+        "bucket_seconds": bucket,
+        "buckets": history,
+    }
+
+
 # ─── Network Diagnostics (HEX pattern — IP whitelist guidance) ────────────────
 
 @app.get("/api/network/info")
@@ -3926,7 +3948,48 @@ async def schema_link(
         except Exception:
             pass  # Best-effort — don't fail the schema_link response
 
-    return {
+    # ── Join path hints (Spider2.0 optimization) ────────────────────────
+    # Show the agent exactly how linked tables connect via FKs and inferred
+    # joins, so it doesn't hallucinate join conditions.
+    join_hints: list[str] = []
+    _seen_joins: set[tuple] = set()
+
+    # Explicit FK paths between linked tables
+    for key in linked_keys:
+        if key not in filtered:
+            continue
+        t = filtered[key]
+        for fk in t.get("foreign_keys", []):
+            ref_table = fk.get("references_table", "")
+            ref_col = fk.get("references_column", "")
+            fk_col = fk.get("column", "")
+            # Check if the referenced table is also in linked tables
+            for ref_key in linked_keys:
+                if filtered.get(ref_key, {}).get("name", "") == ref_table:
+                    pair = tuple(sorted([key, ref_key]))
+                    if pair not in _seen_joins:
+                        _seen_joins.add(pair)
+                        join_hints.append(
+                            f"{t['name']}.{fk_col} = {ref_table}.{ref_col}"
+                        )
+                    break
+
+    # Inferred joins between linked tables (name-pattern based)
+    inferred = _infer_implicit_joins(filtered)
+    for ij in inferred:
+        from_name = ij.get("from_table", "")
+        to_name = ij.get("to_table", "")
+        from_col = ij.get("from_column", "")
+        to_col = ij.get("to_column", "")
+        # Only include if both tables are in linked set
+        from_in = any(filtered.get(k, {}).get("name", "") == from_name for k in linked_keys)
+        to_in = any(filtered.get(k, {}).get("name", "") == to_name for k in linked_keys)
+        if from_in and to_in:
+            hint = f"{from_name}.{from_col} = {to_name}.{to_col} (inferred)"
+            if hint not in join_hints:
+                join_hints.append(hint)
+
+    result: dict[str, Any] = {
         "connection_name": name,
         "question": question,
         "format": "ddl",
@@ -3936,6 +3999,9 @@ async def schema_link(
         "scores": {k: round(table_scores.get(k, 0), 1) for k in sorted(linked_keys) if table_scores.get(k, 0) > 0},
         "ddl": ddl_text,
     }
+    if join_hints:
+        result["join_hints"] = join_hints
+    return result
 
 
 @app.post("/api/connections/{name}/schema/refine")

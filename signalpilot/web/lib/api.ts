@@ -244,6 +244,8 @@ export const getConnectionsHealth = () =>
   request<{ connections: import("./types").ConnectionHealthStats[] }>("/api/connections/health");
 export const getConnectionHealth = (name: string) =>
   request<import("./types").ConnectionHealthStats>(`/api/connections/${name}/health`);
+export const getConnectionHealthHistory = (name: string, window: number = 3600, bucket: number = 60) =>
+  request<{ connection_name: string; window_seconds: number; bucket_seconds: number; buckets: { timestamp: number; avg_latency_ms: number | null; max_latency_ms: number | null; successes: number; failures: number; total: number }[] }>(`/api/connections/${name}/health/history?window=${window}&bucket=${bucket}`);
 
 // Cache
 export const getCacheStats = () =>

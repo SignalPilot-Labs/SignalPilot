@@ -529,9 +529,12 @@ async def _auto_schema_refresh(name: str, db_type: str):
 
     HEX automatically kicks off a schema refresh on new connections.
     This ensures the schema is cached and ready for AI agents immediately.
+    Small delay to avoid racing with immediate user requests (pymssql/FreeTDS
+    is not thread-safe for concurrent connection access).
     """
     import logging
     logger = logging.getLogger(__name__)
+    await asyncio.sleep(2)  # Brief delay to avoid concurrent access races
     try:
         conn_str = get_connection_string(name)
         if not conn_str:

@@ -263,6 +263,9 @@ class MSSQLConnector(BaseConnector):
                 ON ep_t.major_id = o.object_id AND ep_t.minor_id = 0 AND ep_t.name = 'MS_Description'
             WHERE o.type IN ('U', 'V')
                 AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest')
+                AND o.name NOT LIKE 'spt[_]%'
+                AND o.name NOT IN ('MSreplication_options', 'MSmerge_altsyncpartners')
+                AND OBJECTPROPERTY(o.object_id, 'IsMSShipped') = 0
             ORDER BY s.name, o.name, c.column_id
         """
 

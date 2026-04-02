@@ -29,6 +29,7 @@ import {
 import type { ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
@@ -181,6 +182,7 @@ export default function ConnectionsPage() {
   }
 
   return (
+    <PullToRefreshWrapper onRefresh={refresh}>
     <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="connections"
@@ -496,5 +498,6 @@ export default function ConnectionsPage() {
         onCancel={() => setDeleteTarget(null)}
       />
     </div>
+    </PullToRefreshWrapper>
   );
 }

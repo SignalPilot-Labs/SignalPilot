@@ -19,6 +19,7 @@ import { getSandboxes, createSandbox, deleteSandbox, getConnections } from "@/li
 import type { SandboxInfo, ConnectionInfo } from "@/lib/types";
 import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 import { TimeAgo } from "@/components/ui/time-ago";
@@ -70,6 +71,7 @@ export default function SandboxesPage() {
   }
 
   return (
+    <PullToRefreshWrapper onRefresh={refresh}>
     <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="sandboxes"
@@ -267,5 +269,6 @@ export default function SandboxesPage() {
         </div>
       )}
     </div>
+    </PullToRefreshWrapper>
   );
 }

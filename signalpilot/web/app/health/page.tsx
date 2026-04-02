@@ -27,6 +27,7 @@ import {
 import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
 import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { RingGauge, StatusDot, Sparkline, MiniBar } from "@/components/ui/data-viz";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TimeAgo } from "@/components/ui/time-ago";
@@ -144,6 +145,7 @@ export default function HealthPage() {
     : null;
 
   return (
+    <PullToRefreshWrapper onRefresh={refresh}>
     <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="health"
@@ -423,5 +425,6 @@ export default function HealthPage() {
         </div>
       )}
     </div>
+    </PullToRefreshWrapper>
   );
 }

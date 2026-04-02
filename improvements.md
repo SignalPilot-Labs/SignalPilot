@@ -5,6 +5,52 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 19: BigQuery Cost Controls, Trino SSH, Schema Optimization (2026-04-02)
+
+**Summary:** 5 improvements — added BigQuery cost safety controls (maximum_bytes_billed, location, job stats), enabled Trino SSH tunnel support, updated BQ pricing to 2026 rates, added frontend fields for new BQ features, added 9 new tests.
+
+**Key metrics:**
+- 273 tests passing (9 new tests for BigQuery cost controls)
+- All 4 live Docker databases verified (PostgreSQL, MySQL, ClickHouse, MSSQL)
+- 4 git commits this round
+
+### 1. BigQuery maximum_bytes_billed Safety Limit
+**Files:** `connectors/bigquery.py`, `models.py`, `store.py`
+- **Impact:** Prevents runaway query costs — query fails before execution if estimated scan exceeds the configured limit (no charge)
+- Configured per-connection via `maximum_bytes_billed` field (e.g., 10GB = 10737418240 for dev)
+- Error message includes human-readable byte count and configured limit
+- Exposed in frontend form with preset hint (10GB for dev, 100GB for prod)
+
+### 2. BigQuery Location Parameter
+**Files:** `connectors/bigquery.py`, `models.py`
+- Supports regional datasets (US, EU, us-east1, europe-west1, etc.)
+- Location passed to BigQuery Client constructor for proper routing
+- Frontend input field with location examples
+
+### 3. BigQuery Query Cost Tracking (Job Stats)
+**Files:** `connectors/bigquery.py`, `main.py`, `governance/cost_estimator.py`
+- After each query execution, captures: bytes processed, bytes billed, cache hit, estimated cost in USD, slot millis, job ID
+- Exposed in governed query response as `bigquery_stats` object
+- `dry_run()` method for zero-cost pre-execution cost estimation
+- Updated BigQuery pricing to $6.25/TB (2026 on-demand pricing, was $5/TB)
+- Cost estimator now uses connector's dry_run() method with location awareness
+
+### 4. Trino SSH Tunnel Support
+**Files:** `connectors/pool_manager.py`, `main.py`, frontend `page.tsx`
+- Trino uses host:port TCP connections — SSH tunnels work naturally
+- Added 'trino' to `_TUNNEL_CAPABLE_DB_TYPES`, `_DEFAULT_PORTS`, `_URI_SCHEMES`
+- Handles `trino+https://` scheme in connection string rewrite and extraction
+- Updated validation and test_connection to allow SSH for Trino
+- Frontend: Trino now shows SSH tunnel section in advanced options
+
+### 5. Frontend BigQuery Fields
+**Files:** `page.tsx`, `types.ts`
+- Added `location` input with region examples
+- Added `maximum_bytes_billed` input with safety limit hint and 2026 pricing info
+- Updated ConnectionInfo type and edit form population
+
+---
+
 ## Round 18: ReFoRCE Schema Compression, Column Exploration, Connection Export/Import (2026-04-02)
 
 **Summary:** 8 improvements — implemented ReFoRCE SOTA schema compression (date-partitioned table deduplication), added column exploration endpoint for iterative schema linking, added connection export/import (HEX pattern), fixed mssql SSH tunnel validation and SQL dialect bugs, added 13 new tests.

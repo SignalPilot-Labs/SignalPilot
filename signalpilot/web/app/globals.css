@@ -910,6 +910,13 @@ kbd {
   .mobile-bottombar {
     height: 2.75rem;
   }
+  /* Hide tab labels in landscape — icons only */
+  .mobile-bottombar a span:last-child {
+    display: none;
+  }
+  .mobile-bottombar a {
+    gap: 0;
+  }
   .main-content {
     padding-top: 2.5rem;
     padding-bottom: 2.75rem;
@@ -917,6 +924,8 @@ kbd {
   /* Reduce vertical spacing in landscape */
   .mb-8 { margin-bottom: 0.75rem; }
   .space-y-4 > * + * { margin-top: 0.75rem; }
+  /* Tighter page padding */
+  .p-4 { padding: 0.5rem !important; }
 }
 
 /* ═══════════════════════════════════════════════════════════ */

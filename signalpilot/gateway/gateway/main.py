@@ -1397,10 +1397,9 @@ async def get_schema_ddl(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-        cached = await connector.get_schema()
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            cached = await connector.get_schema()
         schema_cache.put(name, cached)
-        await pool_manager.release(info.db_type, conn_str)
 
     filtered = apply_endorsement_filter(name, cached)
 
@@ -1459,6 +1458,21 @@ async def get_schema_ddl(
                 annotations.append("DISTKEY")
             if col.get("sort_key_position"):
                 annotations.append(f"SORTKEY#{col['sort_key_position']}")
+            # ClickHouse: low cardinality columns
+            if col.get("low_cardinality"):
+                annotations.append("LOW_CARDINALITY")
+            # Cardinality hint for query planning
+            stats = col.get("stats", {})
+            if stats.get("distinct_count") is not None and stats["distinct_count"] > 0:
+                dc = stats["distinct_count"]
+                if dc <= 10:
+                    annotations.append(f"~{dc} values")
+            elif stats.get("distinct_fraction") is not None:
+                frac = abs(stats["distinct_fraction"])
+                if frac == 1.0:
+                    annotations.append("UNIQUE")
+                elif frac > 0 and frac <= 0.01:
+                    annotations.append("low_cardinality")
             if annotations:
                 parts.append(f"-- {'; '.join(annotations)}")
             col_lines.append(" ".join(parts))

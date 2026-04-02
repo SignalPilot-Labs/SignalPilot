@@ -74,3 +74,4 @@ Run the full test suite. If anything regressed:
 - If you can't reproduce a suspected bug, move on
 - Commit fixes individually with clear messages
 - For SignalPilot: pay special attention to SQL generation, connector behavior, and benchmark accuracy
+- Test runners: `pytest` for Python (gateway, agent), `vitest` or `npm test` for TypeScript (web, monitor)

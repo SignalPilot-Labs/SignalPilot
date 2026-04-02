@@ -73,3 +73,4 @@ Once you've identified the root cause:
 - Don't add defensive code to mask bugs — fix the actual problem
 - If you find the issue is environmental (not code), document it clearly
 - For SignalPilot: common root causes include SQL generation edge cases, connector timeout handling, and schema introspection failures
+- Test runners: `pytest` for Python (gateway, agent), `vitest` or `npm test` for TypeScript (web, monitor)

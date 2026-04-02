@@ -39,6 +39,7 @@ You look at every input as an attack vector, every output as a potential leak, a
 - **SQL engine**: Can crafted natural language prompts cause harmful SQL generation? (DROP TABLE, data exfiltration)
 - **Sandbox**: Is the Firecracker VM sandbox properly isolating SQL execution?
 - **API gateway**: Rate limiting, CORS, input size limits, authentication on all routes
+- **Self-improve agent permissions**: `self-improve/agent/permissions.py` gates all tool access — any bypass would let the agent modify credentials, push to protected branches, or escape the repo. Audit path confinement, git push restrictions, and credential path detection.
 
 ## Severity Levels
 - **CRITICAL**: Exploitable now, data loss or unauthorized access possible

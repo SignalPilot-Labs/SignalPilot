@@ -57,6 +57,12 @@ export default function LandingLayout({
           background: rgba(0, 255, 136, 0.2);
           color: white;
         }
+
+        /* Ensure content is visible even before framer-motion hydrates */
+        @media (prefers-reduced-motion: reduce) {
+          [style*="opacity: 0"] { opacity: 1 !important; }
+          [style*="transform"] { transform: none !important; }
+        }
       `}</style>
       {children}
     </div>

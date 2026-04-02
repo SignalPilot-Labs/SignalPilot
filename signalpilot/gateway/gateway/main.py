@@ -364,6 +364,45 @@ async def edit_connection(name: str, update: ConnectionUpdate):
     return result
 
 
+@app.post("/api/connections/{name}/clone")
+async def clone_connection(name: str, new_name: str = Query(..., min_length=1, max_length=64)):
+    """Clone an existing connection with a new name.
+
+    Copies all settings including credentials. Useful for creating staging/dev
+    variants of production connections.
+    """
+    existing = get_connection(name)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    # Check new name doesn't exist
+    if get_connection(new_name):
+        raise HTTPException(status_code=409, detail=f"Connection '{new_name}' already exists")
+
+    # Build a ConnectionCreate from existing connection data
+    clone_desc = f"Clone of {name}" if not existing.description else f"{existing.description} (clone)"
+    create_data: dict = {
+        "name": new_name,
+        "db_type": existing.db_type,
+        "description": clone_desc,
+    }
+    # Copy all non-None fields
+    for field in ("host", "port", "database", "username", "account", "warehouse",
+                   "schema_name", "role", "project", "dataset", "http_path", "catalog"):
+        val = getattr(existing, field, None)
+        if val is not None:
+            create_data[field] = val
+
+    # Use the original connection string as-is (preserves password)
+    conn_str = get_connection_string(name)
+    if conn_str:
+        create_data["connection_string"] = conn_str
+
+    conn = ConnectionCreate(**create_data)
+    result = create_connection(conn)
+    return result
+
+
 @app.post("/api/connections/{name}/schema/refresh")
 async def refresh_connection_schema(name: str):
     """Force-refresh the cached schema for a connection.

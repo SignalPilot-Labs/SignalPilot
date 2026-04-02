@@ -363,20 +363,20 @@ export default function QueryExplorerPage() {
             <div className="flex items-center gap-1">
               <button
                 onClick={copyResults}
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]"
               >
                 {copied ? <Check className="w-3 h-3 text-[var(--color-success)]" /> : <Copy className="w-3 h-3" />}
                 {copied ? "copied" : "copy"}
               </button>
               <button
                 onClick={exportCSV}
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]"
               >
                 <Download className="w-3 h-3" /> csv
               </button>
               <button
                 onClick={exportJSON}
-                className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]"
               >
                 <Download className="w-3 h-3" /> json
               </button>
@@ -404,9 +404,9 @@ export default function QueryExplorerPage() {
                               toast(`row ${i + 1} copied`, "info");
                             }).catch(() => {});
                           }}
-                          className="text-[9px] text-[var(--color-text-dim)] tracking-wider flex items-center gap-1"
+                          className="text-[9px] text-[var(--color-text-dim)] tracking-wider flex items-center gap-1 p-1.5 -m-1.5 active:text-[var(--color-text)]"
                         >
-                          <Copy className="w-2.5 h-2.5" /> copy
+                          <Copy className="w-3 h-3" /> copy
                         </button>
                       </div>
                       <div className="space-y-1.5">

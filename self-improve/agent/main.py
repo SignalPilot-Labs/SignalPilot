@@ -677,6 +677,9 @@ async def run_agent(
         try:
             current = git_ops.get_current_branch()
             if current == branch_name:
+                if git_ops.has_changes():
+                    git_ops.commit_changes(f"[Self-Improve] {branch_name}")
+                    print("[agent] Committed uncommitted changes as safety net")
                 git_ops.push_branch(branch_name)
                 pr_url = git_ops.create_pr(branch_name, run_id, base_branch=base_branch)
                 print(f"[agent] PR created: {pr_url}")
@@ -992,6 +995,9 @@ async def resume_agent(run_id: str, max_budget: float = 0):
         try:
             current = git_ops.get_current_branch()
             if current == branch_name:
+                if git_ops.has_changes():
+                    git_ops.commit_changes(f"[Self-Improve] {branch_name}")
+                    print("[agent] Committed uncommitted changes as safety net")
                 git_ops.push_branch(branch_name)
                 pr_url = git_ops.create_pr(branch_name, run_id, base_branch=base_branch)
                 await db.log_audit(run_id, "pr_created", {"url": pr_url})

@@ -202,6 +202,16 @@ def _get_default_branch() -> str:
                 return "main"
 
 
+def commit_changes(message: str = "Self-improvement changes") -> bool:
+    """Stage and commit all changes. Returns True if a commit was created."""
+    _ensure_repo()
+    if not has_changes():
+        return False
+    _run_git(["add", "-A"])
+    _run_git(["commit", "-m", message])
+    return True
+
+
 def push_branch(branch_name: str) -> None:
     """Push the current branch to origin."""
     _run_git(["push", "-u", "origin", branch_name])

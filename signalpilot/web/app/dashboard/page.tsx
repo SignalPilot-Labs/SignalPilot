@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, getConnectionsHealth } from "@/lib/api";
 import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -109,38 +110,42 @@ export default function DashboardPage() {
   } | null>(null);
   const [connHealth, setConnHealth] = useState<Record<string, ConnectionHealthStats>>({});
 
+  async function fetchData() {
+    await Promise.all([
+      getAudit({ limit: 50 })
+        .then((res) => {
+          setRecentAudit(res.entries);
+          const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
+          for (const e of res.entries) {
+            if (e.event_type === "query") stats.queries++;
+            else if (e.event_type === "execute") stats.executions++;
+            if (e.blocked) stats.blocks++;
+          }
+          setAuditStats(stats);
+        })
+        .catch(() => {}),
+      getBudgets().then(setBudgetData).catch(() => {}),
+      getConnections().then(setConnections).catch(() => {}),
+      getCacheStats().then(setCacheStats).catch(() => {}),
+      getConnectionsHealth()
+        .then((res) => {
+          const map: Record<string, ConnectionHealthStats> = {};
+          for (const h of res.connections) {
+            map[h.connection_name] = h;
+          }
+          setConnHealth(map);
+        })
+        .catch(() => {}),
+    ]);
+  }
+
   useEffect(() => {
     const unsub = subscribeMetrics((data) => {
       setMetrics(data);
     });
-
-    getAudit({ limit: 50 })
-      .then((res) => {
-        setRecentAudit(res.entries);
-        const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
-        for (const e of res.entries) {
-          if (e.event_type === "query") stats.queries++;
-          else if (e.event_type === "execute") stats.executions++;
-          if (e.blocked) stats.blocks++;
-        }
-        setAuditStats(stats);
-      })
-      .catch(() => {});
-
-    getBudgets().then(setBudgetData).catch(() => {});
-    getConnections().then(setConnections).catch(() => {});
-    getCacheStats().then(setCacheStats).catch(() => {});
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) {
-          map[h.connection_name] = h;
-        }
-        setConnHealth(map);
-      })
-      .catch(() => {});
-
+    fetchData();
     return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const latencyValues = recentAudit
@@ -150,6 +155,7 @@ export default function DashboardPage() {
     .reverse();
 
   return (
+    <PullToRefreshWrapper onRefresh={fetchData}>
     <div className="p-4 sm:p-8 max-w-[1400px] animate-fade-in mx-auto">
       <PageHeader
         title="dashboard"
@@ -567,5 +573,6 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+    </PullToRefreshWrapper>
   );
 }

@@ -490,7 +490,7 @@ export default function Sidebar() {
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           {/* Menu panel */}
           <div
-            className="absolute top-12 right-0 bottom-0 w-72 bg-[var(--color-sidebar)] border-l border-[var(--color-border)] flex flex-col animate-slide-in-right overflow-auto"
+            className="absolute top-[calc(3rem+env(safe-area-inset-top,0px))] right-0 bottom-0 w-72 bg-[var(--color-sidebar)] border-l border-[var(--color-border)] flex flex-col animate-slide-in-right overflow-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Full nav list */}

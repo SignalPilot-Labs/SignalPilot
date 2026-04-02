@@ -61,7 +61,7 @@ export function NetworkStatus() {
   if (!offline || dismissed) return null;
 
   return (
-    <div className="sm:hidden fixed top-12 left-0 right-0 z-[45] animate-fade-in">
+    <div className="sm:hidden fixed top-[calc(3rem+env(safe-area-inset-top,0px))] left-0 right-0 z-[45] animate-fade-in">
       <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20">
         <div className="flex items-center gap-2">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">

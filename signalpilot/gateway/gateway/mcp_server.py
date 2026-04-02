@@ -1216,101 +1216,78 @@ async def explore_columns(
         return err
 
     try:
-        # Get schema
+        # Use the deep column exploration endpoint (single API call)
         gw = _gateway_url()
+        body: dict = {
+            "table": table,
+            "include_stats": include_stats,
+            "include_values": include_samples,
+            "value_limit": 10,
+        }
+        if columns:
+            body["columns"] = columns
+
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{gw}/api/connections/{connection_name}/schema")
+            resp = await client.post(
+                f"{gw}/api/connections/{connection_name}/schema/explore-columns",
+                json=body,
+            )
+        if resp.status_code == 404:
+            return f"Table '{table}' not found. Check the table name with schema_link first."
         if resp.status_code != 200:
             return f"Error: {resp.text}"
-        schema_data = resp.json()
-        tables = schema_data.get("tables", {})
 
-        # Find the table
-        table_info = tables.get(table)
-        if not table_info:
-            # Try fuzzy match
-            for k in tables:
-                if table.lower() in k.lower() or tables[k].get("name", "").lower() == table.lower():
-                    table_info = tables[k]
-                    table = k
-                    break
-            if not table_info:
-                available = list(tables.keys())[:10]
-                return f"Table '{table}' not found. Available: {', '.join(available)}"
-
-        all_columns = table_info.get("columns", [])
-        if columns:
-            col_set = {c.lower() for c in columns}
-            selected = [c for c in all_columns if c["name"].lower() in col_set]
-            missing = col_set - {c["name"].lower() for c in selected}
-            if missing:
-                available = [c["name"] for c in all_columns]
-                return f"Columns not found: {', '.join(missing)}. Available: {', '.join(available)}"
-        else:
-            selected = all_columns
+        data = resp.json()
+        explored_cols = data.get("columns", [])
 
         # Build response
-        lines = [f"Table: {table} ({table_info.get('row_count', '?')} rows)"]
-        if table_info.get("description"):
-            lines.append(f"Description: {table_info['description']}")
+        table_type = data.get("table_type", "table")
+        rc = data.get("row_count", "?")
+        lines = [f"{'View' if table_type == 'view' else 'Table'}: {table} ({rc:,} rows)" if isinstance(rc, int) else f"Table: {table} ({rc} rows)"]
         lines.append("")
 
-        for col in selected:
+        for col in explored_cols:
             parts = [f"  {col['name']}: {col.get('type', 'unknown')}"]
             flags = []
             if col.get("primary_key"):
                 flags.append("PK")
             if not col.get("nullable", True):
                 flags.append("NOT NULL")
-            if col.get("identity"):
-                flags.append("AUTO_INCREMENT")
-            if col.get("low_cardinality"):
-                flags.append("LOW_CARD")
-            if col.get("dist_key"):
-                flags.append("DISTKEY")
-            if col.get("sort_key_position"):
-                flags.append(f"SORTKEY#{col['sort_key_position']}")
-            if col.get("encoding"):
-                flags.append(f"ENC={col['encoding']}")
             if flags:
                 parts.append(f"[{', '.join(flags)}]")
             if col.get("comment"):
                 parts.append(f"-- {col['comment']}")
             lines.append(" ".join(parts))
 
-            if include_stats and col.get("stats"):
-                stats = col["stats"]
+            # Schema statistics (distinct count, cardinality)
+            if include_stats and col.get("schema_stats"):
+                stats = col["schema_stats"]
                 stat_parts = []
                 if stats.get("distinct_count"):
                     stat_parts.append(f"distinct={stats['distinct_count']}")
                 if stats.get("distinct_fraction"):
                     frac = abs(stats["distinct_fraction"])
                     stat_parts.append(f"uniqueness={frac:.2f}")
-                if stats.get("data_bytes"):
-                    mb = stats["data_bytes"] / (1024 * 1024)
-                    stat_parts.append(f"size={mb:.1f}MB")
                 if stat_parts:
                     lines.append(f"    stats: {', '.join(stat_parts)}")
 
-        # Get sample values if requested
-        if include_samples:
-            try:
-                col_names = [c["name"] for c in selected[:10]]
-                async with httpx.AsyncClient(timeout=30) as client:
-                    sample_resp = await client.get(
-                        f"{gw}/api/connections/{connection_name}/schema/sample-values",
-                        params={"table": table, "columns": ",".join(col_names), "limit": "5"},
-                    )
-                if sample_resp.status_code == 200:
-                    sample_data = sample_resp.json()
-                    samples = sample_data.get("values", {})
-                    if samples:
-                        lines.append("")
-                        lines.append("Sample values:")
-                        for col_name, vals in samples.items():
-                            lines.append(f"  {col_name}: {', '.join(str(v) for v in vals[:5])}")
-            except Exception:
-                pass
+            # Numeric value stats (min/max/avg)
+            if include_stats and col.get("value_stats"):
+                vs = col["value_stats"]
+                vs_parts = []
+                if vs.get("min") is not None:
+                    vs_parts.append(f"min={vs['min']}")
+                if vs.get("max") is not None:
+                    vs_parts.append(f"max={vs['max']}")
+                if vs.get("avg") is not None:
+                    vs_parts.append(f"avg={vs['avg']}")
+                if vs_parts:
+                    lines.append(f"    range: {', '.join(vs_parts)}")
+
+            # Sample values
+            if include_samples and col.get("sample_values"):
+                vals = col["sample_values"][:10]
+                lines.append(f"    values: {', '.join(repr(v) for v in vals)}")
 
         return "\n".join(lines)
 

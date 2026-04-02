@@ -1471,17 +1471,30 @@ function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState
               onChange={(e) => setForm({ ...form, ssl_mode: e.target.value })}
               className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
             >
-              <option value="require">require</option>
-              <option value="verify-ca">verify-ca</option>
-              <option value="verify-full">verify-full</option>
-              <option value="prefer">prefer</option>
-              <option value="allow">allow</option>
+              <option value="require">require — encrypt, skip cert verification</option>
+              <option value="verify-ca">verify-ca — encrypt + verify CA</option>
+              <option value="verify-full">verify-full — encrypt + verify CA + hostname</option>
+              <option value="prefer">prefer — encrypt if server supports</option>
+              <option value="allow">allow — no encryption preference</option>
+              <option value="disable">disable — no encryption</option>
             </select>
+            <p className="text-[8px] text-[var(--color-text-dim)] tracking-wider mt-1 opacity-60">
+              {form.ssl_mode === "require" && "encrypts traffic but does not verify the server certificate. good for cloud databases with trusted networks."}
+              {form.ssl_mode === "verify-ca" && "verifies the server cert is signed by a trusted CA. requires CA certificate below."}
+              {form.ssl_mode === "verify-full" && "strongest security: verifies CA + server hostname matches the cert. recommended for production."}
+              {form.ssl_mode === "prefer" && "uses encryption if the server supports it, falls back to plaintext otherwise."}
+              {form.ssl_mode === "allow" && "connects without preference — server decides. not recommended for production."}
+              {form.ssl_mode === "disable" && "no encryption. only use for local development or trusted private networks."}
+            </p>
           </div>
           <div />
-          <FormTextArea label="ca certificate (pem)" value={form.ssl_ca_cert} onChange={(v) => setForm({ ...form, ssl_ca_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint="root CA certificate for server verification" rows={3} />
-          <FormTextArea label="client certificate (pem)" value={form.ssl_client_cert} onChange={(v) => setForm({ ...form, ssl_client_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint="optional — for mutual TLS" rows={3} />
-          <FormTextArea label="client key (pem)" value={form.ssl_client_key} onChange={(v) => setForm({ ...form, ssl_client_key: v })} placeholder="-----BEGIN PRIVATE KEY-----" hint="optional — for mutual TLS" rows={3} className="col-span-2" />
+          {form.ssl_mode !== "disable" && (
+            <>
+              <FormTextArea label="ca certificate (pem)" value={form.ssl_ca_cert} onChange={(v) => setForm({ ...form, ssl_ca_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint={form.ssl_mode.startsWith("verify") ? "required for certificate verification" : "optional — root CA for server verification"} rows={3} />
+              <FormTextArea label="client certificate (pem)" value={form.ssl_client_cert} onChange={(v) => setForm({ ...form, ssl_client_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint="optional — for mutual TLS (mTLS) authentication" rows={3} />
+              <FormTextArea label="client key (pem)" value={form.ssl_client_key} onChange={(v) => setForm({ ...form, ssl_client_key: v })} placeholder="-----BEGIN PRIVATE KEY-----" hint="required when using client certificate" rows={3} className="col-span-2" />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -1489,7 +1502,7 @@ function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState
 }
 
 /* ── SSH Tunnel Section ── */
-function SSHSection({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+function SSHSection({ form, setForm, serverIp }: { form: FormState; setForm: (f: FormState) => void; serverIp?: string | null }) {
   const config = DB_CONFIGS[form.db_type];
   if (!config.supportsSSH) return null;
 
@@ -1519,19 +1532,33 @@ function SSHSection({ form, setForm }: { form: FormState; setForm: (f: FormState
             >
               <option value="password">password</option>
               <option value="key">private key</option>
+              <option value="agent">ssh-agent (forwarded key)</option>
             </select>
           </div>
-          {form.ssh_auth_method === "password" ? (
+          {form.ssh_auth_method === "password" && (
             <FormInput label="ssh password" value={form.ssh_password} onChange={(v) => setForm({ ...form, ssh_password: v })} type="password" className="col-span-2" />
-          ) : (
+          )}
+          {form.ssh_auth_method === "key" && (
             <>
               <FormTextArea label="private key (pem)" value={form.ssh_private_key} onChange={(v) => setForm({ ...form, ssh_private_key: v })} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" rows={4} className="col-span-2" />
               <FormInput label="key passphrase" value={form.ssh_key_passphrase} onChange={(v) => setForm({ ...form, ssh_key_passphrase: v })} type="password" hint="leave empty if key is not encrypted" className="col-span-2" />
             </>
           )}
-          <div className="col-span-2">
-            <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider opacity-60">
-              signalpilot will create an on-demand ssh tunnel to your database through this bastion host. whitelist our ip: <code className="text-[var(--color-text-muted)]">your-signalpilot-ip</code>
+          {form.ssh_auth_method === "agent" && (
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
+              <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                uses the ssh-agent running on the signalpilot server. ensure <code className="text-[var(--color-text-muted)]">SSH_AUTH_SOCK</code> is set and your key is loaded with <code className="text-[var(--color-text-muted)]">ssh-add</code>.
+              </p>
+            </div>
+          )}
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
+            <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+              signalpilot creates an on-demand ssh tunnel to your database through this bastion host.
+              {serverIp ? (
+                <> whitelist <code className="text-[var(--color-text-muted)]">{serverIp}/32</code> on your bastion.</>
+              ) : (
+                <> whitelist our server ip on your bastion.</>
+              )}
             </p>
           </div>
         </div>
@@ -2175,7 +2202,7 @@ export default function ConnectionsPage() {
                     {advancedTab === "security" && (
                       <div className="animate-fade-in">
                     <SSLSection form={form} setForm={setForm} />
-                    <SSHSection form={form} setForm={setForm} />
+                    <SSHSection form={form} setForm={setForm} serverIp={serverIp} />
                     {/* Connection Scope + Read-only (HEX pattern) */}
                     <div className="border-t border-[var(--color-border)] pt-4 mt-4">
                       <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] tracking-wider mb-3">

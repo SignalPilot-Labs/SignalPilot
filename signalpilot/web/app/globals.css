@@ -701,8 +701,8 @@ kbd {
 
   .main-content {
     margin-left: 0;
-    padding-top: 3rem; /* space for top bar (48px) */
-    padding-bottom: 3.5rem; /* space for bottom bar (56px) */
+    padding-top: calc(3rem + env(safe-area-inset-top, 0px)); /* space for top bar + notch */
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px)); /* space for bottom bar + home indicator */
   }
 
   .mobile-negate-offset {
@@ -878,6 +878,8 @@ kbd {
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     background: rgba(3, 3, 3, 0.88);
+    padding-top: env(safe-area-inset-top, 0px);
+    height: calc(3rem + env(safe-area-inset-top, 0px));
   }
 
   /* ── Bottom tab active press feedback ── */
@@ -932,10 +934,10 @@ kbd {
 /* ═══════════════════════════════════════════════════════════ */
 @media (max-width: 768px) and (orientation: landscape) {
   .mobile-topbar {
-    height: 2.5rem;
+    height: calc(2.5rem + env(safe-area-inset-top, 0px));
   }
   .mobile-bottombar {
-    height: 2.75rem;
+    height: calc(2.75rem + env(safe-area-inset-bottom, 0px));
   }
   /* Hide tab labels in landscape — icons only */
   .mobile-bottombar a span:last-child {
@@ -945,8 +947,8 @@ kbd {
     gap: 0;
   }
   .main-content {
-    padding-top: 2.5rem;
-    padding-bottom: 2.75rem;
+    padding-top: calc(2.5rem + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(2.75rem + env(safe-area-inset-bottom, 0px));
   }
   /* Reduce vertical spacing in landscape */
   .mb-8 { margin-bottom: 0.75rem; }

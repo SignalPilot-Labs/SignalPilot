@@ -876,7 +876,24 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         />
         {hasValidUrl && (
           <div className="col-span-2 -mt-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">parsed components:</span>
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">parsed components:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  // Switch to fields mode with parsed values pre-filled
+                  setForm({
+                    ...form,
+                    connectionMode: "fields",
+                    connection_string: "",
+                    ...(parsed as Partial<FormState>),
+                  });
+                }}
+                className="text-[9px] tracking-wider text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors"
+              >
+                switch to fields &rarr;
+              </button>
+            </div>
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1">
               {parsed.host && <span className="text-[9px] tracking-wider"><span className="text-[var(--color-text-dim)]">host:</span> <span className="text-[var(--color-text)]">{parsed.host}</span></span>}
               {parsed.port && <span className="text-[9px] tracking-wider"><span className="text-[var(--color-text-dim)]">port:</span> <span className="text-[var(--color-text)]">{parsed.port}</span></span>}

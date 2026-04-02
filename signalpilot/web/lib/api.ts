@@ -265,6 +265,13 @@ export const testCredentials = (payload: Record<string, unknown>) =>
     total_duration_ms?: number;
   }>("/api/connections/test-credentials", { method: "POST", body: JSON.stringify(payload) });
 
+// Parse Connection URL into credential fields (HEX paste-and-parse pattern)
+export const parseConnectionUrl = (url: string, db_type?: string) =>
+  request<Record<string, string | number | boolean>>(
+    "/api/connections/parse-url",
+    { method: "POST", body: JSON.stringify({ url, db_type }) },
+  );
+
 // Connector Capabilities
 export const getConnectorCapabilities = (dbType?: string) =>
   request<{

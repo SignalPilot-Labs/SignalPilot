@@ -106,7 +106,7 @@ async def test_check_shows_config(mock_clients, capsys):
     assert "Gateway URL:" in out
     assert "Monitor URL:" in out
     assert "Tools:" in out
-    assert "37" in out  # current tool count
+    assert str(len(server.mcp._tool_manager._tools)) in out
 
 
 def test_version_flag(capsys):

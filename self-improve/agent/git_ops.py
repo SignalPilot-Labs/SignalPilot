@@ -127,6 +127,15 @@ def create_branch(branch_name: str, base_branch: str = "main") -> str:
         except RuntimeError:
             print(f"[git] Warning: could not checkout {base_branch}, using current HEAD")
 
+    # Clean all untracked files and directories from previous runs
+    # so the new branch starts from a pristine state
+    try:
+        _run_git(["clean", "-fd"])
+        _run_git(["checkout", "--", "."])
+        print("[git] Cleaned working directory to match base branch")
+    except RuntimeError as e:
+        print(f"[git] Warning: clean failed: {e}")
+
     _run_git(["checkout", "-b", branch_name])
     print(f"[git] Created branch: {branch_name} (from {base_branch})")
     return branch_name

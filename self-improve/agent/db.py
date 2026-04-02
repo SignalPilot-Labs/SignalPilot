@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     permitted INTEGER NOT NULL DEFAULT 1,
     deny_reason TEXT,
     agent_role TEXT NOT NULL DEFAULT 'worker',
-    tool_use_id TEXT
+    tool_use_id TEXT,
+    session_id TEXT,
+    agent_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -96,6 +98,13 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
     cols = {row[1] for row in await cursor.fetchall()}
     if "github_repo" not in cols:
         await _db.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
+    # Migrate: add session_id and agent_id to tool_calls if missing
+    cursor = await _db.execute("PRAGMA table_info(tool_calls)")
+    tc_cols = {row[1] for row in await cursor.fetchall()}
+    if "session_id" not in tc_cols:
+        await _db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
+    if "agent_id" not in tc_cols:
+        await _db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
     await _db.commit()
     return _db
 
@@ -233,13 +242,15 @@ async def log_tool_call(
     deny_reason: str | None = None,
     agent_role: str = "worker",
     tool_use_id: str | None = None,
+    session_id: str | None = None,
+    agent_id: str | None = None,
 ) -> int:
     """Log a tool call. Returns the row id."""
     conn = get_db()
     cursor = await conn.execute(
         """INSERT INTO tool_calls
-            (run_id, phase, tool_name, input_data, output_data, duration_ms, permitted, deny_reason, agent_role, tool_use_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, phase, tool_name, input_data, output_data, duration_ms, permitted, deny_reason, agent_role, tool_use_id, session_id, agent_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             run_id,
             phase,
@@ -251,6 +262,8 @@ async def log_tool_call(
             deny_reason,
             agent_role,
             tool_use_id,
+            session_id,
+            agent_id,
         ),
     )
     await conn.commit()

@@ -12,7 +12,7 @@ export function Breadcrumb({
   items: { label: string; href?: string }[];
 }) {
   return (
-    <nav className="flex items-center gap-1.5 text-[10px] tracking-wider mb-4">
+    <nav className="flex items-center gap-1.5 text-[12px] tracking-wider mb-4">
       {items.map((item, i) => (
         <span key={i} className="flex items-center gap-1.5">
           {i > 0 && (

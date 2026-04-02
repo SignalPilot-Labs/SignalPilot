@@ -15,8 +15,9 @@ import {
   Database,
   ArrowRight,
 } from "lucide-react";
-import { getSandboxes, createSandbox, deleteSandbox, getConnections } from "@/lib/api";
-import type { SandboxInfo, ConnectionInfo } from "@/lib/types";
+import { getSandboxes, createSandbox, deleteSandbox } from "@/lib/api";
+import type { SandboxInfo } from "@/lib/types";
+import { useConnection } from "@/lib/connection-context";
 import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
@@ -34,7 +35,7 @@ const statusConfig: Record<string, { indicator: string; label: string }> = {
 export default function SandboxesPage() {
   const { toast } = useToast();
   const [sandboxes, setSandboxes] = useState<SandboxInfo[]>([]);
-  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
+  const { connections } = useConnection();
   const [creating, setCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ label: "", connection_name: "" });
@@ -45,7 +46,6 @@ export default function SandboxesPage() {
 
   useEffect(() => {
     refresh();
-    getConnections().then(setConnections).catch(() => {});
     const i = setInterval(refresh, 5000);
     return () => clearInterval(i);
   }, [refresh]);
@@ -90,8 +90,8 @@ export default function SandboxesPage() {
         status={<StatusDot status={sandboxes.some(s => s.status === "running") ? "healthy" : sandboxes.length > 0 ? "warning" : "unknown"} size={4} pulse={sandboxes.some(s => s.status === "running")} />}
       >
         <div className="flex items-center gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">total: <code className="text-[10px] text-[var(--color-text)]">{sandboxes.length}</code></span>
-          <span className="text-[var(--color-text-dim)]">running: <code className="text-[10px] text-[var(--color-success)]">{sandboxes.filter(s => s.status === "running").length}</code></span>
+          <span className="text-[var(--color-text-dim)]">total: <code className="text-[12px] text-[var(--color-text)]">{sandboxes.length}</code></span>
+          <span className="text-[var(--color-text-dim)]">running: <code className="text-[12px] text-[var(--color-success)]">{sandboxes.filter(s => s.status === "running").length}</code></span>
         </div>
       </TerminalBar>
 
@@ -100,12 +100,12 @@ export default function SandboxesPage() {
         <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
           <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
             <Terminal className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">create sandbox</span>
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">create sandbox</span>
           </div>
           <div className="p-5">
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">label</label>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">label</label>
                 <input
                   type="text"
                   placeholder="my-analysis"
@@ -115,7 +115,7 @@ export default function SandboxesPage() {
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection (optional)</label>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection (optional)</label>
                 <select
                   value={form.connection_name}
                   onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
@@ -182,7 +182,7 @@ export default function SandboxesPage() {
                     <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-20" />
                     <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
                   </div>
-                  <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{status.label}</span>
+                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{status.label}</span>
                   <div className="flex items-center gap-1">
                     <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
                     <button
@@ -211,12 +211,12 @@ export default function SandboxesPage() {
                       </span>
                     </div>
                     {sb.vm_id && (
-                      <code className="text-[9px] text-[var(--color-text-dim)] tracking-wider mt-0.5 block pl-5">{sb.vm_id}</code>
+                      <code className="text-[11px] text-[var(--color-text-dim)] tracking-wider mt-0.5 block pl-5">{sb.vm_id}</code>
                     )}
                   </div>
 
                   {/* Info grid */}
-                  <div className="grid grid-cols-2 gap-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                  <div className="grid grid-cols-2 gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">
                     {sb.connection_name && (
                       <div className="flex items-center gap-1.5">
                         <Database className="w-3 h-3" strokeWidth={1.5} />
@@ -255,7 +255,7 @@ export default function SandboxesPage() {
                       </div>
                     )}
                     {sb.boot_ms != null && (
-                      <span className="px-1.5 py-0.5 border badge-success text-[9px] tracking-wider flex-shrink-0">
+                      <span className="px-1.5 py-0.5 border badge-success text-[11px] tracking-wider flex-shrink-0">
                         boot: {sb.boot_ms.toFixed(0)}ms
                       </span>
                     )}

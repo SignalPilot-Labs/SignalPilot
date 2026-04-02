@@ -129,7 +129,7 @@ export default function SettingsPage() {
       <section className="mb-8">
         <SectionHeader icon={Key} title="browser authentication" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-4">
+          <div className="p-4 sm:p-6 space-y-4">
             <div className="flex items-start gap-3 p-3 border border-[var(--color-border)] bg-[var(--color-bg)]">
               <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
               <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
@@ -171,7 +171,7 @@ export default function SettingsPage() {
       <section className="mb-8">
         <SectionHeader icon={Server} title="firecracker sandbox (byof)" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-4">
+          <div className="p-4 sm:p-6 space-y-4">
             <p className="text-[10px] text-[var(--color-text-dim)] -mt-1 mb-2 tracking-wider">
               bring your own firecracker — point to any sandbox manager endpoint.
             </p>
@@ -243,7 +243,7 @@ export default function SettingsPage() {
       <section className="mb-8">
         <SectionHeader icon={Shield} title="governance defaults" iconColor="text-[var(--color-success)]" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6">
+          <div className="p-4 sm:p-6">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
                 { label: "default row limit", key: "default_row_limit", desc: "max rows per query", type: "number" },
@@ -332,7 +332,7 @@ export default function SettingsPage() {
       <section className="mb-8">
         <SectionHeader icon={SettingsIcon} title="gateway" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-4">
+          <div className="p-4 sm:p-6 space-y-4">
             <div>
               <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway url</label>
               <input type="text" value={settings.gateway_url}
@@ -378,7 +378,7 @@ export default function SettingsPage() {
       <section className="mb-8">
         <SectionHeader icon={Cpu} title="mcp integration" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-5">
+          <div className="p-4 sm:p-6 space-y-5">
             <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
               connect claude code or any mcp client to signalpilot:
             </p>
@@ -439,9 +439,9 @@ export default function SettingsPage() {
       </section>
 
       {/* Save button */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         <button onClick={handleSave} disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
+          className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           save gateway settings
           <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30 hidden sm:inline">

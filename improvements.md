@@ -5,6 +5,85 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 14: Views, Schema Filtering, Column Exploration, Connector Reliability (2026-04-01)
+
+**Summary:** 8 major improvements — added views to schema introspection across all 11 connectors, implemented HEX-style schema filtering, added ReFoRCE-inspired column exploration endpoint, fixed connector reliability issues, and improved error messages.
+
+**Key metrics:**
+- 353 tests passing, 1 skipped
+- All 4 live Docker databases verified: PostgreSQL, MySQL, ClickHouse, MSSQL
+- Views now included in schema output (MSSQL found 1 view automatically)
+- Column exploration returns min/max/avg stats + sample values in 1 API call
+- 7 new query error hint patterns for agent self-correction
+- 7 git commits this round
+
+### Industry Research (Spider2.0 & HEX, April 2026)
+- **Spider2.0 leaderboard**: ReFoRCE leads at 35.83% on Snow, 36.56% on Lite (up from 31/30%). Key insight: "database information compression is the most critical component" and "column exploration significantly enhances EX@8".
+- **HEX April 2026**: Data Discovery Subagent finds right connections/tables before analysis. Schema filtering recommended (exclude staging/dev/raw). Endorsed statuses prioritize tables for AI. Vector embeddings for semantic search on table/column metadata.
+- **SignalPilot positioning**: Now implements all key ReFoRCE patterns (self-refinement via query error hints, column exploration endpoint, schema linking with synonym expansion). Schema filtering matches HEX's recommendation. Views in DDL output gives agent better understanding of data model.
+
+### 1. Views in Schema Introspection (All 11 Connectors)
+**Files:** All `connectors/*.py`
+- All connectors now include views alongside tables in schema output
+- New `"type": "view" | "table"` field in schema entries
+- DDL output uses `CREATE VIEW` for view objects (all 4 DDL paths updated)
+- Critical for Spider2.0 — many analytics setups use views
+
+### 2. PostgreSQL Batched Sample Values
+**File:** `connectors/postgres.py`
+- Replaced N per-column `SELECT DISTINCT` queries with single `UNION ALL` query
+- Uses base class `_build_sample_union_sql()` + `_parse_sample_union_result()`
+- Performance: N round trips → 1 round trip
+
+### 3. ClickHouse Error Message Parsing
+**File:** `connectors/clickhouse.py`
+- Extracts human-readable message from `DB::Exception` instead of showing "Code: 516."
+- New `_classify_connect_error()` method categorizes auth/connection/database errors
+- Before: "Authentication failed: Code: 516."
+- After: "Authentication failed: default: Authentication failed: password is incorrect, or there is no user with such name"
+
+### 4. MSSQL Reconnection Logic
+**File:** `connectors/mssql.py`
+- Added `_ensure_connected()` pattern matching MySQL's implementation
+- Ping + auto-reconnect on stale connections
+- Applied to execute(), get_schema(), get_sample_values(), health_check()
+- Uses sys.objects instead of sys.tables to include views (type IN ('U', 'V'))
+
+### 5. Schema Filtering (HEX Pattern)
+**Files:** `models.py`, `main.py`, `store.py`, `web/app/connections/page.tsx`
+- New `schema_filter_include` and `schema_filter_exclude` fields per connection
+- Glob patterns supported (e.g., `staging*`, `dev*`, `_dbt_*`)
+- Applied to DDL and schema_link endpoints (AI-facing)
+- Frontend UI: comma-separated input fields in Advanced section
+- Follows HEX recommendation to filter out staging/dev/raw schemas
+
+### 6. Deep Column Exploration (ReFoRCE Pattern)
+**File:** `main.py`
+- New endpoint: `POST /api/connections/{name}/schema/explore-columns`
+- Returns: column types, schema stats, numeric value stats (min/max/avg), sample values
+- Single API call replaces multiple round trips
+- Configurable: columns, include_stats, include_values, value_limit
+- ReFoRCE research: "column exploration significantly enhances EX@8 by promoting diverse candidate generation"
+
+### 7. MCP explore_columns Upgrade
+**File:** `mcp_server.py`
+- Upgraded from 2 API calls (schema + sample-values) to 1 (explore-columns)
+- Now returns numeric value stats (min/max/avg) and view type
+- Net reduction of 23 lines while adding functionality
+
+### 8. Query Error Hints Enhancement
+**File:** `errors.py`
+- Added 7 new error hint patterns for agent self-correction:
+  - GROUP BY aggregate errors
+  - Scalar subquery multiple rows
+  - JOIN condition errors
+  - DISTINCT + ORDER BY conflicts
+  - MSSQL LIMIT → TOP conversion
+  - ILIKE compatibility (MySQL, MSSQL, ClickHouse)
+  - Aggregate in WHERE → HAVING
+
+---
+
 ## Round 13 (continued): Connector Bug Fixes, Schema Linking Recall, Inline Sample Values (2026-04-02)
 
 **Summary:** 18 improvements total this round — fixed critical bugs across DuckDB/Databricks/SQLite/Redshift connectors, eliminated all remaining pool release leaks (~15 endpoints), improved schema linking recall via synonym expansion, and added inline sample values to DDL for Spider2.0 accuracy.

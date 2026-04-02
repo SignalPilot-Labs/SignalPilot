@@ -9,6 +9,7 @@ class RunResponse(BaseModel):
     started_at: datetime
     ended_at: datetime | None = None
     branch_name: str
+    name: str | None = None
     status: str
     pr_url: str | None = None
     total_tool_calls: int

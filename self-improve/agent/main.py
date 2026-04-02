@@ -35,6 +35,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher
 
 from agent import db, hooks, git_ops, permissions, prompt, session_gate
+from agent.naming import generate_run_name
 
 import asyncpg
 
@@ -47,6 +48,17 @@ _current_task: asyncio.Task | None = None
 _signal_queue: asyncio.Queue | None = None  # Instant control signal delivery
 _listener_task: asyncio.Task | None = None
 _listener_conn: asyncpg.Connection | None = None
+
+
+async def _auto_name_run(run_id: str, context: str) -> None:
+    """Generate a short descriptive name for a run using Haiku, then save it."""
+    try:
+        name = await generate_run_name(context)
+        if name:
+            await db.update_run_name(run_id, name)
+            print(f"[agent] Run auto-named: {name}")
+    except Exception as e:
+        print(f"[agent] Auto-naming failed (non-fatal): {e}")
 
 
 # =============================================================================
@@ -251,6 +263,10 @@ async def run_agent(
     print(f"[agent] ========================", flush=True)
     await db.log_audit(run_id, "sdk_config", debug_params)
 
+    # --- Auto-name the run ---
+    if custom_prompt:
+        asyncio.create_task(_auto_name_run(run_id, custom_prompt))
+
     # --- Run ---
     total_cost = 0.0
     total_input_tokens = 0
@@ -258,6 +274,7 @@ async def run_agent(
     pr_url = None
     final_status = "completed"
     max_rounds = 500
+    _run_named = bool(custom_prompt)  # Track whether we've generated a name yet
 
     try:
         async with ClaudeSDKClient(options=options) as client:
@@ -420,6 +437,14 @@ async def run_agent(
                             "cost_usd": message.total_cost_usd,
                             "elapsed_minutes": round(session_gate.elapsed_minutes(), 1),
                         })
+
+                        # Auto-name after first round if no custom prompt
+                        if not _run_named and round_num == 0:
+                            _run_named = True
+                            summary = "\n".join(round_text_chunks)[:1000]
+                            tools_used = ", ".join(set(round_tools))
+                            context = f"Tools used: {tools_used}\nAgent output:\n{summary}"
+                            asyncio.create_task(_auto_name_run(run_id, context))
 
                 if should_stop:
                     break

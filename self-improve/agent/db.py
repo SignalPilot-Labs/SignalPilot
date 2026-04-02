@@ -43,6 +43,16 @@ async def create_run(
     return str(row["id"])
 
 
+async def update_run_name(run_id: str, name: str) -> None:
+    """Set the auto-generated descriptive name for a run."""
+    pool = get_pool()
+    await pool.execute(
+        "UPDATE runs SET name = $2 WHERE id = $1",
+        uuid.UUID(run_id),
+        name,
+    )
+
+
 async def save_rate_limit_reset(run_id: str, resets_at: int) -> None:
     """Save the rate limit reset timestamp."""
     pool = get_pool()

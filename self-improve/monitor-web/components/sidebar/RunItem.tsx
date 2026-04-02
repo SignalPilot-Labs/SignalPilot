@@ -35,6 +35,7 @@ export function RunItem({
   onClick: () => void;
 }) {
   const branchShort = run.branch_name.replace("improvements-round-", "").slice(0, 20);
+  const displayName = run.name || branchShort;
 
   return (
     <motion.button
@@ -60,7 +61,7 @@ export function RunItem({
           "text-[11px] font-medium truncate flex-1",
           active ? "text-[#e8e8e8]" : "text-[#aaa]"
         )}>
-          {branchShort}
+          {displayName}
         </span>
         <StatusBadge status={run.status} />
       </div>

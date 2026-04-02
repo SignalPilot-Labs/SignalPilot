@@ -7,6 +7,7 @@ CREATE TABLE runs (
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at TIMESTAMPTZ,
     branch_name TEXT NOT NULL,
+    name TEXT,  -- auto-generated descriptive name for the run
     status TEXT NOT NULL DEFAULT 'running',
     pr_url TEXT,
     total_tool_calls INT DEFAULT 0,

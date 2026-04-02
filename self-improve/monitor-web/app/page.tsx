@@ -252,7 +252,7 @@ export default function MonitorPage() {
               size="md"
             />
             <span className="text-[10px] text-[#888] font-medium">
-              {selectedRun.branch_name.replace("improvements-round-", "")}
+              {selectedRun.name || selectedRun.branch_name.replace("improvements-round-", "")}
             </span>
           </motion.div>
         )}

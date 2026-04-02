@@ -3,6 +3,7 @@ export interface Run {
   started_at: string;
   ended_at: string | null;
   branch_name: string;
+  name: string | null;
   status: RunStatus;
   pr_url: string | null;
   total_tool_calls: number;

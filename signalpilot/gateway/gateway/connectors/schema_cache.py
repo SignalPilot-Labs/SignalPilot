@@ -22,6 +22,38 @@ from threading import Lock
 from typing import Any
 
 
+def _normalize_schema(schema: dict[str, Any]) -> None:
+    """Normalize schema in-place to ensure consistent structure across all connectors.
+
+    Fills missing baseline fields so downstream consumers (DDL generation,
+    schema linking, Spider2.0 agent context) don't need per-DB special casing.
+    """
+    for table_key, table_data in schema.items():
+        # Table-level defaults
+        table_data.setdefault("schema", "")
+        table_data.setdefault("name", table_key.rsplit(".", 1)[-1])
+        table_data.setdefault("type", "table")
+        table_data.setdefault("columns", [])
+        table_data.setdefault("foreign_keys", [])
+        table_data.setdefault("row_count", 0)
+        table_data.setdefault("description", "")
+
+        # Normalize size: BigQuery uses size_bytes, others use size_mb
+        if "size_bytes" in table_data and "size_mb" not in table_data:
+            try:
+                table_data["size_mb"] = round(int(table_data["size_bytes"]) / (1024 * 1024), 2)
+            except (ValueError, TypeError):
+                pass
+
+        # Column-level defaults
+        for col in table_data["columns"]:
+            col.setdefault("name", "")
+            col.setdefault("type", "unknown")
+            col.setdefault("nullable", True)
+            col.setdefault("primary_key", False)
+            col.setdefault("comment", "")
+
+
 def _schema_fingerprint(schema: dict[str, Any]) -> str:
     """Compute a fast structural fingerprint of a schema.
 
@@ -114,6 +146,9 @@ class SchemaCache:
     def put(self, connection_name: str, schema: dict[str, Any], track_diff: bool = False) -> dict[str, Any] | None:
         """Cache schema data for a connection.
 
+        Automatically normalizes schema structure (fills missing defaults)
+        so downstream consumers get consistent fields regardless of DB type.
+
         Args:
             connection_name: Connection identifier.
             schema: Schema data dict.
@@ -122,6 +157,8 @@ class SchemaCache:
         Returns:
             Diff dict if track_diff=True and changes were detected, else None.
         """
+        # Normalize: ensure consistent baseline fields across all connector types
+        _normalize_schema(schema)
         new_fp = _schema_fingerprint(schema)
         diff_result = None
         with self._lock:

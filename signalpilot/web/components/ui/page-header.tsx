@@ -29,7 +29,7 @@ export function PageHeader({
         {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
       </div>
       {/* Gradient accent line */}
-      <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
+      <div className="mt-3 sm:mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
     </div>
   );
 }
@@ -59,7 +59,8 @@ export function TerminalBar({
         {/* Path */}
         <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1 whitespace-nowrap min-w-0 truncate">
           <span className="text-[var(--color-success)]">$</span>
-          <span className="text-[var(--color-text-dim)]"> signalpilot </span>
+          <span className="text-[var(--color-text-dim)] hidden sm:inline"> signalpilot </span>
+          <span className="text-[var(--color-text-dim)] sm:hidden"> </span>
           <span className="text-[var(--color-text-muted)]">{path}</span>
         </code>
         {status && <span className="flex-shrink-0">{status}</span>}

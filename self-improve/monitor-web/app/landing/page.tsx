@@ -241,9 +241,9 @@ export default function LandingPage() {
             <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] ml-1">Self-Improve</span>
           </div>
           <div className="flex items-center gap-6">
-            <a href="#agents" className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Agents</a>
-            <a href="#features" className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Features</a>
-            <a href="#stack" className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Stack</a>
+            <a href="#agents" className="hidden md:block text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Agents</a>
+            <a href="#features" className="hidden md:block text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Features</a>
+            <a href="#stack" className="hidden md:block text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Stack</a>
             <a
               href="/"
               className="text-[11px] px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[var(--color-accent)] transition-all hover:bg-[var(--color-bg-hover)]"
@@ -325,14 +325,14 @@ export default function LandingPage() {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.4 }}
-            className="border border-[var(--color-border)] bg-[rgba(0,0,0,0.5)] max-w-2xl"
+            className="terminal-glow border border-[var(--color-border)] bg-[rgba(0,0,0,0.5)] max-w-2xl shadow-[0_0_60px_-15px_rgba(0,255,136,0.08)]"
           >
             {/* Terminal header */}
-            <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)]">
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[rgba(0,0,0,0.3)]">
               <div className="flex gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-[#ff5f57]" />
-                <div className="w-2 h-2 rounded-full bg-[#febc2e]" />
-                <div className="w-2 h-2 rounded-full bg-[#28c840]" />
+                <div className="w-2 h-2 rounded-full bg-[#ff5f57] opacity-70" />
+                <div className="w-2 h-2 rounded-full bg-[#febc2e] opacity-70" />
+                <div className="w-2 h-2 rounded-full bg-[#28c840] opacity-70" />
               </div>
               <span className="text-[9px] text-[var(--color-text-dim)] ml-2 uppercase tracking-wider">self-improve — agent loop</span>
             </div>
@@ -480,7 +480,7 @@ export default function LandingPage() {
             whileInView={{ opacity: 1 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6, delay: 0.3 }}
-            className="mt-12 flex items-center justify-center gap-3 text-[11px] text-[var(--color-text-dim)]"
+            className="mt-12 hidden md:flex items-center justify-center gap-3 text-[11px] text-[var(--color-text-dim)]"
           >
             {["Analyze", "Plan", "Implement", "Test", "Ship", "Review"].map((step, i) => (
               <div key={step} className="flex items-center gap-3">

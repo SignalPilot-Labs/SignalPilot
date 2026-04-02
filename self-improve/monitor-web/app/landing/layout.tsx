@@ -7,6 +7,42 @@ export default function LandingLayout({
     <div className="!overflow-auto" style={{ height: "auto", overflow: "auto" }}>
       <style>{`
         html, body { height: auto !important; overflow: auto !important; }
+
+        /* Animated gradient border for terminal blocks */
+        .terminal-glow {
+          position: relative;
+        }
+        .terminal-glow::before {
+          content: "";
+          position: absolute;
+          inset: -1px;
+          background: linear-gradient(
+            var(--angle, 0deg),
+            transparent 40%,
+            rgba(0, 255, 136, 0.15) 50%,
+            transparent 60%
+          );
+          z-index: -1;
+          animation: rotate-gradient 6s linear infinite;
+        }
+        @keyframes rotate-gradient {
+          0% { --angle: 0deg; }
+          100% { --angle: 360deg; }
+        }
+        @property --angle {
+          syntax: "<angle>";
+          initial-value: 0deg;
+          inherits: false;
+        }
+
+        /* Smooth scroll */
+        html { scroll-behavior: smooth; }
+
+        /* Selection color */
+        ::selection {
+          background: rgba(0, 255, 136, 0.2);
+          color: white;
+        }
       `}</style>
       {children}
     </div>

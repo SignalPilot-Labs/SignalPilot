@@ -192,12 +192,15 @@ async def query_database(req: DirectQueryRequest):
         "cache_hit": False,
         "pii_redacted": pii_redactor.last_redacted_columns if pii_redactor.last_redacted_columns else None,
     }
-    if cost_estimate and not cost_estimate.warning:
-        response["cost_estimate"] = {
+    if cost_estimate:
+        estimate_data = {
             "estimated_rows": cost_estimate.estimated_rows,
             "estimated_usd": round(cost_estimate.estimated_usd, 8),
             "is_expensive": cost_estimate.is_expensive,
         }
+        if cost_estimate.warning:
+            estimate_data["warning"] = cost_estimate.warning
+        response["cost_estimate"] = estimate_data
     # BigQuery: include actual job stats (bytes billed, cost, cache hit)
     if info.db_type == "bigquery":
         try:

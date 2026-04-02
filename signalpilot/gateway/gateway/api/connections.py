@@ -418,9 +418,17 @@ async def get_connections_stats():
 
 @router.get("/connections/export")
 async def export_connections(
+    request: Request,
     include_credentials: bool = Query(default=False, description="Include passwords and secrets (security risk)"),
 ):
     """Export all connections as a portable JSON manifest."""
+    if include_credentials:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(
+            "Credential export requested from %s — includes_credentials=True, "
+            "all connection strings and SSL/SSH secrets will be returned",
+            client_ip,
+        )
     all_conns = list_connections()
     exported = []
     for conn in all_conns:

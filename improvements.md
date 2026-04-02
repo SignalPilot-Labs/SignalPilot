@@ -5,16 +5,18 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
-## Round 7: Schema Refresh, Filtering, Sample Caching, Cost Estimation (2026-04-02)
+## Round 7: Schema Refresh, Filtering, Caching, Connector Fixes, MCP (2026-04-02)
 
-**Summary:** 6 features — scheduled schema refresh (HEX pattern), schema filtering by prefix, sample values caching, compact schema endpoint, improved cost estimation for ClickHouse/Databricks, frontend schema refresh UI.
+**Summary:** 15 features — scheduled schema refresh, schema filtering, sample values caching, compact schema, cost estimation improvements, connector bug fixes (MySQL SSL, ClickHouse HTTP SSL, DuckDB PKs, SQLite FKs), URL-format connection strings for Snowflake/Databricks, BigQuery partitioning metadata, MCP list_tables tool, pool manager stats, schema refresh UI.
 
 **Key metrics:**
-- 248 unit tests passing (up from 230)
+- 254 unit tests passing (up from 230)
 - All 3 Docker databases tested E2E (PostgreSQL, MySQL, ClickHouse)
-- Compact schema: 10 PostgreSQL tables in ~340 tokens, 6 MySQL tables in ~126 tokens
-- Sample values caching with 2x TTL for stable schema linking
-- Cost estimation now uses EXPLAIN ESTIMATE + PLAN for ClickHouse, EXPLAIN FORMATTED for Databricks
+- Compact schema: 10 PostgreSQL tables in ~749 tokens with full FK/PK/type info
+- 9 commits this round, 15 total features
+- MCP list_tables tool for schema linking — compact table overview for AI agent
+- 4 connector bugs fixed (MySQL SSL, ClickHouse HTTP TLS, DuckDB PKs, SQLite FKs)
+- Snowflake/Databricks connection strings upgraded from pipe-delimited to URL format
 
 ### 1. Scheduled Schema Refresh (HEX Pattern)
 
@@ -72,7 +74,46 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 **Databricks:** Now uses `EXPLAIN FORMATTED` and parses `rowCount=N` from Statistics or `numOutputRows` from plan output, instead of using a hardcoded 10K default.
 
-### 6. Industry Research — Spider 2.0 & HEX 2026 Updates
+### 6. Connector Bug Fixes
+
+- **MySQL:** Fixed malformed SSL dict — `{"ssl": True}` was redundant/incorrect for pymysql. Changed to `{"check_hostname": False}` for basic SSL without cert verification.
+- **ClickHouse HTTP:** SSL params (secure, verify, ca_cert, client_cert, client_cert_key) now passed to `clickhouse-connect` HTTP fallback client. Previously HTTP mode had no TLS support.
+- **DuckDB:** Added primary key detection via `information_schema.table_constraints` and row count estimation via `duckdb_tables()`. Critical for compact schema PKs.
+- **SQLite:** Added `PRAGMA foreign_keys = ON` at connect time — without this, FK-related schema queries return empty results.
+
+### 7. URL-Format Connection Strings
+
+- **Snowflake:** Upgraded from pipe-delimited (`account|user|pass|db|wh|schema|role`) to URL format (`snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE`). Properly URL-encodes special characters.
+- **Databricks:** Upgraded from pipe-delimited to URL format (`databricks://token@host/http_path?catalog=CAT&schema=SCH`).
+- Both connectors already parsed URL format, so backwards compatible.
+
+### 8. BigQuery Improvements
+
+- **JSON validation:** `set_credentials()` now catches `json.JSONDecodeError` and validates the JSON has a `type` field (required for service account keys).
+- **Partitioning metadata:** Schema now includes `partitioning` (field + type) and `clustering_fields` for BigQuery tables — critical for cost estimation since partition pruning can reduce scan costs by orders of magnitude.
+
+### 9. MCP list_tables Tool
+
+**What:** New MCP tool `list_tables` that returns a compact one-line-per-table overview of all tables in a database.
+
+**Why:** The Spider2.0 agent needs to do schema linking before generating SQL. `list_tables` gives the agent a complete overview in minimal tokens, then it can use `describe_table` for details on relevant tables.
+
+**Output format:**
+```
+Database: enterprise-pg (postgres)
+Tables: 10
+
+public.customers (2.0M rows): id*, customer_uuid, first_name, ...
+public.orders (5.0M rows): id*, customer_id→customers.id, ...
+```
+
+### 10. Connection Pool Stats
+
+- `PoolManager.stats()` returns active pools with db_type, idle time, connector type
+- `GET /api/pool/stats` endpoint for monitoring pool health
+- Schema page now shows "refreshed: HH:MM:SS (every Xm)" for connections with scheduled refresh
+
+### 11. Industry Research — Spider 2.0 & HEX 2026 Updates
 
 **Spider 2.0 state of the art (April 2026):**
 - BAR-SQL: 91.48% average accuracy, outperforms Claude 4.5 Sonnet and GPT-5

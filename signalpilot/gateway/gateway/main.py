@@ -78,6 +78,9 @@ from .store import (
     save_settings,
     update_connection,
     upsert_sandbox,
+    get_schema_endorsements,
+    set_schema_endorsements,
+    apply_endorsement_filter,
 )
 
 # ─── Error Sanitization (HIGH-06) ────────────────────────────────────────────
@@ -240,7 +243,34 @@ async def add_connection(conn: ConnectionCreate):
         info = create_connection(conn)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+    # Auto-refresh schema in background (like HEX's automatic schema fetch on new connections)
+    asyncio.create_task(_auto_schema_refresh(info.name, info.db_type))
+
     return info
+
+
+async def _auto_schema_refresh(name: str, db_type: str):
+    """Background task: fetch schema for newly created connections.
+
+    HEX automatically kicks off a schema refresh on new connections.
+    This ensures the schema is cached and ready for AI agents immediately.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            return
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(db_type, conn_str, credential_extras=extras)
+        schema = await connector.get_schema()
+        await pool_manager.release(db_type, conn_str)
+        # Cache the schema
+        schema_cache.put(name, schema)
+        logger.info("Auto-refreshed schema for new connection '%s': %d tables", name, len(schema))
+    except Exception as e:
+        logger.warning("Auto-schema-refresh failed for '%s': %s", name, e)
 
 
 def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
@@ -594,12 +624,14 @@ async def get_connection_schema(
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
 
-    # Apply table name filter if provided
-    filtered = cached
+    # Apply endorsement filter (HEX Data Browser pattern — curate tables for AI agents)
+    filtered = apply_endorsement_filter(name, cached)
+
+    # Apply table name filter if provided (additional narrowing)
     if filter:
         patterns = [p.strip().lower() for p in filter.split(",") if p.strip()]
         filtered = {
-            k: v for k, v in cached.items()
+            k: v for k, v in filtered.items()
             if any(pat in k.lower() or pat in v.get("name", "").lower() for pat in patterns)
         }
 
@@ -1132,6 +1164,39 @@ async def search_schema(
         "total_tables": len(cached),
         "tables": results,
     }
+
+
+# ─── Schema Endorsements (HEX Data Browser pattern) ────────────────────────
+# Curating which tables the AI agent sees improves SQL accuracy from 82% to 96%
+# (per HEX's internal testing). Two modes:
+#   - "all" (default): show all tables except hidden ones
+#   - "endorsed_only": show only explicitly endorsed tables
+
+@app.get("/api/connections/{name}/schema/endorsements")
+async def get_endorsements(name: str):
+    """Get schema endorsement config for a connection."""
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+    return get_schema_endorsements(name)
+
+
+@app.put("/api/connections/{name}/schema/endorsements")
+async def update_endorsements(name: str, body: dict):
+    """Set schema endorsement config for a connection.
+
+    Body: {"endorsed": ["schema.table", ...], "hidden": ["schema.table", ...], "mode": "all|endorsed_only"}
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+    mode = body.get("mode", "all")
+    if mode not in ("all", "endorsed_only"):
+        raise HTTPException(status_code=422, detail="mode must be 'all' or 'endorsed_only'")
+    result = set_schema_endorsements(name, body)
+    # Invalidate schema cache so next fetch applies the new filter
+    schema_cache.invalidate(name)
+    return result
 
 
 # ─── Sandboxes ───────────────────────────────────────────────────────────────

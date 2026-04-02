@@ -41,11 +41,14 @@ CREDENTIALS_FILE = DATA_DIR / "credentials.enc"
 SANDBOXES_FILE = DATA_DIR / "sandboxes.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 AUDIT_FILE = DATA_DIR / "audit.jsonl"
+SCHEMA_ENDORSEMENTS_FILE = DATA_DIR / "schema_endorsements.json"
 
 # In-memory vault for raw credentials (cache — authoritative source is encrypted file)
 _credential_vault: dict[str, str] = {}
 # Extra structured credential data (service account JSON, SSH keys, etc.)
 _credential_extras: dict[str, dict] = {}
+# Schema endorsements — controls which tables/schemas are visible to AI agents
+_schema_endorsements: dict[str, dict] = {}  # connection_name -> {endorsed: [...], hidden: [...]}
 
 
 def _get_encryption_key() -> bytes:
@@ -526,3 +529,76 @@ async def read_audit(
     # Most recent first
     entries.sort(key=lambda e: e.timestamp, reverse=True)
     return entries[offset : offset + limit]
+
+
+# ── Schema Endorsements (HEX Data Browser pattern) ─────────────────────────
+
+def _load_endorsements():
+    """Load endorsements from disk on startup."""
+    global _schema_endorsements
+    _schema_endorsements = _load_json(SCHEMA_ENDORSEMENTS_FILE, {})
+
+
+def _save_endorsements():
+    """Persist endorsements to disk."""
+    _save_json(SCHEMA_ENDORSEMENTS_FILE, _schema_endorsements)
+
+
+def get_schema_endorsements(name: str) -> dict:
+    """Get endorsement config for a connection.
+
+    Returns: {"endorsed": ["schema.table", ...], "hidden": ["schema.table", ...], "mode": "all|endorsed_only"}
+    """
+    return _schema_endorsements.get(name, {"endorsed": [], "hidden": [], "mode": "all"})
+
+
+def set_schema_endorsements(name: str, endorsements: dict) -> dict:
+    """Set endorsement config for a connection.
+
+    Args:
+        endorsements: {"endorsed": [...], "hidden": [...], "mode": "all|endorsed_only"}
+            - mode="all": show all tables except hidden ones (default)
+            - mode="endorsed_only": show only endorsed tables
+    """
+    _schema_endorsements[name] = {
+        "endorsed": endorsements.get("endorsed", []),
+        "hidden": endorsements.get("hidden", []),
+        "mode": endorsements.get("mode", "all"),
+    }
+    _save_endorsements()
+    return _schema_endorsements[name]
+
+
+def delete_schema_endorsements(name: str):
+    """Remove all endorsements for a connection."""
+    _schema_endorsements.pop(name, None)
+    _save_endorsements()
+
+
+def apply_endorsement_filter(name: str, schema: dict) -> dict:
+    """Filter schema tables based on endorsement settings.
+
+    This is the key feature that improved HEX's AI SQL accuracy from 82% to 96%:
+    by curating which tables the AI agent sees, you eliminate noise and improve
+    schema linking accuracy.
+    """
+    config = get_schema_endorsements(name)
+    mode = config.get("mode", "all")
+    endorsed = set(config.get("endorsed", []))
+    hidden = set(config.get("hidden", []))
+
+    if mode == "endorsed_only" and endorsed:
+        # Only show endorsed tables
+        return {k: v for k, v in schema.items() if k in endorsed}
+    elif hidden:
+        # Show all except hidden
+        return {k: v for k, v in schema.items() if k not in hidden}
+
+    return schema
+
+
+# Load endorsements on module import
+try:
+    _load_endorsements()
+except Exception:
+    pass

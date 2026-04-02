@@ -125,6 +125,10 @@ class MSSQLConnector(BaseConnector):
 
         try:
             self._conn = pymssql.connect(**connect_kwargs)
+            # Enforce read-only at database level (defense-in-depth)
+            cursor = self._conn.cursor()
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            cursor.close()
         except pymssql.OperationalError as e:
             err_str = str(e).lower()
             if "login failed" in err_str:

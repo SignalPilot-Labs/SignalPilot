@@ -141,6 +141,9 @@ class MySQLConnector(BaseConnector):
 
         try:
             self._conn = pymysql.connect(**connect_kwargs)
+            # Enforce read-only mode at session level (defense-in-depth)
+            with self._conn.cursor() as cur:
+                cur.execute("SET SESSION TRANSACTION READ ONLY")
         except pymysql.err.OperationalError as e:
             code = e.args[0] if e.args else 0
             if code == 1045:
@@ -373,6 +376,8 @@ class MySQLConnector(BaseConnector):
         if self._conn is None:
             if self._connect_kwargs:
                 self._conn = pymysql.connect(**self._connect_kwargs)
+                with self._conn.cursor() as cur:
+                    cur.execute("SET SESSION TRANSACTION READ ONLY")
             else:
                 raise RuntimeError("Not connected")
             return
@@ -386,6 +391,8 @@ class MySQLConnector(BaseConnector):
                 pass
             if self._connect_kwargs:
                 self._conn = pymysql.connect(**self._connect_kwargs)
+                with self._conn.cursor() as cur:
+                    cur.execute("SET SESSION TRANSACTION READ ONLY")
             else:
                 raise RuntimeError("Connection lost and cannot reconnect")
 

@@ -77,6 +77,17 @@ class BigQueryConnector(BaseConnector):
                 dataset=extras.get("dataset", self._dataset),
             )
 
+    async def _ensure_connected(self) -> None:
+        """Verify BigQuery client can reach the API; raise RuntimeError if not."""
+        if self._client is None:
+            raise RuntimeError("Not connected")
+        try:
+            import asyncio
+            await asyncio.to_thread(lambda: list(self._client.query("SELECT 1", timeout=10).result(timeout=10)))
+        except Exception:
+            self._client = None
+            raise RuntimeError("BigQuery connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._client is None:
             raise RuntimeError("Not connected")

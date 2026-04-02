@@ -109,6 +109,21 @@ class PostgresConnector(BaseConnector):
 
         return ctx
 
+    async def _ensure_connected(self) -> None:
+        """Verify connection is alive; raise RuntimeError if lost."""
+        if self._pool is None:
+            raise RuntimeError("Not connected")
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+        except Exception:
+            try:
+                await self._pool.close()
+            except Exception:
+                pass
+            self._pool = None
+            raise RuntimeError("Connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._pool is None:
             raise RuntimeError("Not connected")

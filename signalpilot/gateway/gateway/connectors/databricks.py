@@ -109,6 +109,23 @@ class DatabricksConnector(BaseConnector):
             }
         return {"host": conn_str, "http_path": "", "access_token": ""}
 
+    def _ensure_connected(self) -> None:
+        """Verify Databricks connection is alive; raise RuntimeError if lost."""
+        if self._conn is None:
+            raise RuntimeError("Not connected")
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            raise RuntimeError("Connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")

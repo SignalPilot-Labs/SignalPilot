@@ -1,7 +1,7 @@
 """Connection pool manager — reuses connector instances instead of recreating per query.
 
 Fixes MED-06: Connection pool recreated per query causing resource leaks.
-Now with SSH tunnel support for bastion-host connections.
+Now with SSH tunnel support for bastion-host connections and retry logic.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import re
+import random
 import time
 from typing import Any, AsyncIterator
 from urllib.parse import urlparse, urlunparse
@@ -121,22 +121,55 @@ class PoolManager:
     def __init__(self, idle_timeout_sec: int = 300):
         self._pools: dict[str, tuple[BaseConnector, float]] = {}
         self._tunnels: dict[str, SSHTunnel] = {}  # key -> active tunnel
+        self._keepalive_intervals: dict[str, int] = {}  # key -> interval seconds
+        self._last_keepalive: dict[str, float] = {}  # key -> last keepalive time
         self._idle_timeout = idle_timeout_sec
         self._lock = asyncio.Lock()
+        self._keepalive_task: asyncio.Task | None = None
+
+    # Error substrings that indicate non-transient failures (don't retry these)
+    _NON_TRANSIENT_ERRORS = (
+        "authentication failed", "auth", "password",
+        "database not found", "does not exist",
+        "invalid catalog", "permission denied", "access denied",
+        "not installed", "no module", "import error",
+        "invalid connection string", "invalid dsn",
+        "certificate", "ssl", "tls",
+    )
+
+    @staticmethod
+    def _is_transient(error: Exception) -> bool:
+        """Determine if an error is transient and worth retrying."""
+        err_lower = str(error).lower()
+        for keyword in PoolManager._NON_TRANSIENT_ERRORS:
+            if keyword in err_lower:
+                return False
+        # OSError, TimeoutError, ConnectionError are always transient
+        if isinstance(error, (OSError, asyncio.TimeoutError, ConnectionError, ConnectionRefusedError)):
+            return True
+        # RuntimeError wrapping transient causes
+        if isinstance(error, RuntimeError):
+            return "timeout" in err_lower or "unreachable" in err_lower or "connection refused" in err_lower or "connection lost" in err_lower
+        return False
 
     async def acquire(
         self,
         db_type: str,
         connection_string: str,
         credential_extras: dict | None = None,
+        max_retries: int = 3,
     ) -> BaseConnector:
         """Get or create a connected connector for the given connection.
+
+        Retries transient failures (network timeouts, connection refused) with
+        exponential backoff + jitter. Auth/config errors fail immediately.
 
         Args:
             db_type: Database type string (e.g., "postgres", "bigquery").
             connection_string: Connection string for the database.
             credential_extras: Optional structured credential data (service account JSON,
                 SSH tunnel config, etc.) for connectors that need more than a connection string.
+            max_retries: Maximum retry attempts for transient failures (default 3).
         """
         key = f"{db_type}:{connection_string}"
         async with self._lock:
@@ -197,9 +230,93 @@ class PoolManager:
                 self._tunnels[key] = tunnel
                 logger.info("SSH tunnel active for %s, connecting via %s:%d", key, local_host, local_port)
 
-            await connector.connect(actual_conn_str)
-            self._pools[key] = (connector, time.monotonic())
-            return connector
+            # Track keepalive interval if provided
+            keepalive = (
+                credential_extras.get("keepalive_interval", 0)
+                if credential_extras else 0
+            )
+
+            # Connect with retry logic (exponential backoff + jitter)
+            last_error: Exception | None = None
+            for attempt in range(max_retries + 1):
+                try:
+                    await connector.connect(actual_conn_str)
+                    now = time.monotonic()
+                    self._pools[key] = (connector, now)
+                    if keepalive and keepalive > 0:
+                        self._keepalive_intervals[key] = keepalive
+                        self._last_keepalive[key] = now
+                        self._ensure_keepalive_running()
+                    if attempt > 0:
+                        logger.info("Connection succeeded on attempt %d for %s", attempt + 1, db_type)
+                    return connector
+                except Exception as e:
+                    last_error = e
+                    if attempt >= max_retries or not self._is_transient(e):
+                        # Non-transient or exhausted retries — fail now
+                        if key in self._tunnels:
+                            self._tunnels[key].stop()
+                            del self._tunnels[key]
+                        raise
+                    # Exponential backoff: 0.5s, 1s, 2s + jitter
+                    backoff = (0.5 * (2 ** attempt)) + random.uniform(0, 0.5)
+                    logger.warning(
+                        "Transient connection error for %s (attempt %d/%d), retrying in %.1fs: %s",
+                        db_type, attempt + 1, max_retries, backoff, e,
+                    )
+                    await asyncio.sleep(backoff)
+                    # Re-create connector for fresh state
+                    connector = get_connector(db_type)
+                    if credential_extras:
+                        connector.set_credential_extras(credential_extras)
+
+            # Should never reach here, but safety net
+            raise last_error or RuntimeError("Connection failed after retries")
+
+    def _ensure_keepalive_running(self) -> None:
+        """Start the keepalive background task if not already running."""
+        if self._keepalive_task is None or self._keepalive_task.done():
+            self._keepalive_task = asyncio.ensure_future(self._keepalive_loop())
+
+    async def _keepalive_loop(self) -> None:
+        """Periodically ping connections that have a keepalive interval configured."""
+        while True:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            if not self._keepalive_intervals:
+                break  # No more keepalive connections, stop the loop
+            now = time.monotonic()
+            async with self._lock:
+                for key in list(self._keepalive_intervals):
+                    if key not in self._pools:
+                        # Connection was removed
+                        self._keepalive_intervals.pop(key, None)
+                        self._last_keepalive.pop(key, None)
+                        continue
+                    interval = self._keepalive_intervals[key]
+                    last = self._last_keepalive.get(key, 0)
+                    if now - last < interval:
+                        continue
+                    connector, last_used = self._pools[key]
+                    try:
+                        healthy = await connector.health_check()
+                        if healthy:
+                            self._last_keepalive[key] = now
+                            logger.debug("Keepalive ping OK for %s", key[:40])
+                        else:
+                            logger.warning("Keepalive ping failed for %s — removing from pool", key[:40])
+                            try:
+                                await connector.close()
+                            except Exception:
+                                pass
+                            del self._pools[key]
+                            self._keepalive_intervals.pop(key, None)
+                            self._last_keepalive.pop(key, None)
+                            if key in self._tunnels:
+                                self._tunnels[key].stop()
+                                del self._tunnels[key]
+                    except Exception as e:
+                        logger.warning("Keepalive error for %s: %s", key[:40], e)
+                        self._last_keepalive[key] = now  # Don't spam retries
 
     async def release(self, db_type: str, connection_string: str) -> None:
         """Mark a connector as available (updates last-used time)."""
@@ -247,11 +364,17 @@ class PoolManager:
                 if key in self._tunnels:
                     self._tunnels[key].stop()
                     del self._tunnels[key]
+                # Clean up keepalive tracking
+                self._keepalive_intervals.pop(key, None)
+                self._last_keepalive.pop(key, None)
                 closed += 1
         return closed
 
     async def close_all(self) -> None:
-        """Close all managed connectors and tunnels."""
+        """Close all managed connectors, tunnels, and the keepalive task."""
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         async with self._lock:
             for connector, _ in self._pools.values():
                 try:
@@ -263,6 +386,8 @@ class PoolManager:
             for tunnel in self._tunnels.values():
                 tunnel.stop()
             self._tunnels.clear()
+            self._keepalive_intervals.clear()
+            self._last_keepalive.clear()
 
     async def close_pool(self, key_substring: str) -> int:
         """Close pools whose key contains the given substring.
@@ -283,6 +408,8 @@ class PoolManager:
                 if key in self._tunnels:
                     self._tunnels[key].stop()
                     del self._tunnels[key]
+                self._keepalive_intervals.pop(key, None)
+                self._last_keepalive.pop(key, None)
                 closed += 1
         return closed
 
@@ -302,12 +429,15 @@ class PoolManager:
             # Extract db_type from key
             parts = key.split(":", 1)
             db_type = parts[0] if parts else "unknown"
-            pools.append({
+            pool_info: dict[str, Any] = {
                 "key": key[:80],  # Truncate for security
                 "db_type": db_type,
                 "idle_seconds": round(now - last_used, 1),
                 "connector_type": type(connector).__name__,
-            })
+            }
+            if key in self._keepalive_intervals:
+                pool_info["keepalive_interval"] = self._keepalive_intervals[key]
+            pools.append(pool_info)
         tunnels = []
         for key, tunnel in self._tunnels.items():
             tunnels.append({

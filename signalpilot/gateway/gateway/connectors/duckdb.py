@@ -54,6 +54,20 @@ class DuckDBConnector(BaseConnector):
                 raise RuntimeError(f"MotherDuck authentication failed: {e}") from e
             raise RuntimeError(f"DuckDB connection error: {e}") from e
 
+    def _ensure_connected(self) -> None:
+        """Verify DuckDB connection is alive; raise RuntimeError if lost."""
+        if self._conn is None:
+            raise RuntimeError("Not connected")
+        try:
+            self._conn.execute("SELECT 1")
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            raise RuntimeError("Connection lost — please reconnect")
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")

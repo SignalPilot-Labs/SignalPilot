@@ -7,14 +7,18 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ## Round 8: Join Path Discovery, Schema Exploration, Connection Test Phase 3 (2026-04-02)
 
-**Summary:** 7 features — schema relationships endpoint (3 formats), join path discovery (BFS multi-hop), connection test Phase 3 (schema access verification), ReFoRCE-style table exploration, ClickHouse protocol UI selector, MCP tools for join/explore/relationships.
+**Summary:** 11 features — schema relationships endpoint (3 formats), join path discovery (BFS multi-hop), connection test Phase 3 (schema access verification), ReFoRCE-style table exploration, ClickHouse protocol UI selector, schema overview, DB-specific error hints, Databricks schema optimization, ClickHouse protocol field, MCP tools for join/explore/relationships/overview.
 
 **Key metrics:**
-- 166 unit tests passing (up from 154)
+- 175 unit tests passing (up from 154 in Round 7)
 - All 3 Docker databases tested E2E with Phase 3 (PostgreSQL 10 tables, MySQL 6 tables, ClickHouse 2 tables)
 - Join path discovery: found 4 paths between payments→employees with 2-4 hops
 - Table exploration: full column details + reverse FKs + sample values in single call
-- 4 new MCP tools: find_join_path, get_relationships, explore_table (+ existing list_tables)
+- Schema overview: 10 tables, 136 columns, 28.5M rows in enterprise-pg
+- 5 new MCP tools: find_join_path, get_relationships, explore_table, schema_overview (+ existing list_tables)
+- DB error hints: 5 categories (connection refused, auth, timeout, SSL, not found) × DB-specific advice
+- Databricks schema pull: single information_schema query instead of N+1 DESCRIBE TABLE
+- 10 git commits this round
 
 ### 1. Schema Relationships Endpoint (ERD Summary)
 
@@ -99,6 +103,40 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 - Phase labels: SSH, DB, Schema (instead of just SSH/DB)
 - Warning status shown with amber triangle icon
 - Status colors: green (ok), amber (warning), red (error)
+
+### 8. Schema Overview Endpoint
+
+**What:** `GET /api/connections/{name}/schema/overview` — quick database stats.
+
+**Returns:** table count, total columns, total rows, FK density, largest tables, and a schema format recommendation (compact/enriched/full based on column count).
+
+**MCP tool:** `schema_overview(connection_name)` — agent's first step to understand DB complexity.
+
+### 9. DB-Specific Error Troubleshooting Hints
+
+**What:** `_sanitize_db_error()` now appends actionable hints based on error type and DB type.
+
+**Categories:**
+- Connection refused → check host/port, firewall rules
+- Auth failed (Snowflake) → verify account identifier
+- Auth failed (Databricks) → check PAT validity
+- Timeout → check VPN, firewall allowlist
+- SSL errors → check CA certificate configuration
+
+### 10. Databricks Schema Pull Optimization
+
+**What:** Uses `information_schema.columns` (single query) instead of `SHOW TABLES` + `DESCRIBE TABLE` per table (N+1 queries).
+
+**Impact:** Orders of magnitude faster on large Unity Catalog deployments with hundreds of tables. Falls back to legacy approach for Hive metastore compatibility.
+
+### 11. ClickHouse Protocol Field
+
+**What:** Backend `ConnectionCreate.protocol` field ("native" or "http") for correct connection string generation.
+
+**Details:**
+- Frontend protocol selector sends `protocol: "http"` to backend
+- Connection string builder uses correct scheme/port: `clickhouse+http://:8123` vs `clickhouse://:9000`
+- TLS variants: `clickhouse+https://:8443` vs `clickhouses://:9440`
 
 ---
 

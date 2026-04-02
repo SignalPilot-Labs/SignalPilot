@@ -96,6 +96,12 @@ class DatabricksConnector(BaseConnector):
             raise RuntimeError("Not connected")
         try:
             cursor = self._conn.cursor()
+            # Databricks SQL Warehouses support SET for query timeout
+            if timeout:
+                try:
+                    cursor.execute(f"SET statement_timeout = {timeout}")
+                except Exception:
+                    pass  # Best-effort — not all Databricks runtimes support this
             cursor.execute(sql, params or ())
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()

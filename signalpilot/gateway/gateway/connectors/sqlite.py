@@ -22,10 +22,29 @@ class SQLiteConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        cursor = self._conn.execute(sql, params or [])
-        columns = [desc[0] for desc in cursor.description] if cursor.description else []
-        rows = cursor.fetchall()
-        return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+
+        # SQLite timeout via progress handler — cancels after N seconds
+        if timeout:
+            import time
+            start = time.monotonic()
+            def _timeout_handler():
+                if time.monotonic() - start > timeout:
+                    return 1  # Non-zero cancels the operation
+                return 0
+            self._conn.set_progress_handler(_timeout_handler, 1000)
+
+        try:
+            cursor = self._conn.execute(sql, params or [])
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+            return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+        except sqlite3.OperationalError as e:
+            if "interrupted" in str(e).lower():
+                raise RuntimeError(f"SQLite query timed out after {timeout}s") from e
+            raise RuntimeError(f"SQLite query error: {e}") from e
+        finally:
+            if timeout:
+                self._conn.set_progress_handler(None, 0)
 
     async def get_schema(self) -> dict[str, Any]:
         if self._conn is None:

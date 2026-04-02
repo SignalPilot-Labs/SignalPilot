@@ -36,6 +36,9 @@ class DuckDBConnector(BaseConnector):
         if self._conn is None:
             raise RuntimeError("Not connected")
         try:
+            # DuckDB supports PRAGMA to limit execution time (seconds)
+            if timeout:
+                self._conn.execute(f"SET timeout = '{timeout}s'")
             if params:
                 result = self._conn.execute(sql, params)
             else:

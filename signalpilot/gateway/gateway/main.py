@@ -19,6 +19,13 @@ Endpoints:
 
   POST /api/query              governed SQL query (direct DB)
 
+  GET  /api/tunnels            list tunnels
+  POST /api/tunnels            create + start tunnel
+  GET  /api/tunnels/{id}       tunnel details
+  DELETE /api/tunnels/{id}     stop + delete tunnel
+  POST /api/tunnels/{id}/stop  stop without deleting
+  POST /api/tunnels/{id}/start (re)start a stopped tunnel
+
   GET  /api/audit              audit log
   GET  /api/metrics            SSE live metrics stream
 """
@@ -31,9 +38,9 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .engine import inject_limit, validate_sql
 from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
@@ -43,25 +50,34 @@ from .models import (
     ExecuteRequest,
     GatewaySettings,
     SandboxCreate,
+    TunnelCreate,
+    TunnelInfo,
+    TunnelStatus,
 )
 from .connectors.pool_manager import pool_manager
 from .connectors.health_monitor import health_monitor
 from .connectors.schema_cache import schema_cache
 from .sandbox_client import SandboxClient
+from .tunnel_manager import TunnelManager
 from .store import (
     append_audit,
     create_connection,
     delete_connection,
     delete_sandbox,
+    delete_tunnel,
     get_connection,
     get_connection_string,
     get_sandbox,
+    get_tunnel,
     list_connections,
     list_sandboxes,
+    list_tunnels,
     load_settings,
+    load_tunnels,
     read_audit,
     save_settings,
     upsert_sandbox,
+    upsert_tunnel,
 )
 
 # ─── Error Sanitization (HIGH-06) ────────────────────────────────────────────
@@ -110,10 +126,18 @@ def _reset_sandbox_client():
     _sandbox_client = None
 
 
+# ─── Tunnel Manager ─────────────────────────────────────────────────────────
+
+_tunnel_manager = TunnelManager()
+
+
 # ─── App ─────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Load persisted tunnels (all as stopped)
+    load_tunnels()
+
     # Start background pool cleanup task
     async def _pool_cleanup_loop():
         while True:
@@ -125,6 +149,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         cleanup_task.cancel()
+        await _tunnel_manager.stop_all()
         await pool_manager.close_all()
         if _sandbox_client:
             await _sandbox_client.close()
@@ -137,26 +162,58 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — restrict to known origins instead of wildcard (CRIT-02 fix)
-_ALLOWED_ORIGINS = [
+# CORS — dynamic origin allowlist (CRIT-02 fix + tunnel support)
+import os as _os
+
+_ALLOWED_ORIGINS: set[str] = {
     "http://localhost:3200",
     "http://localhost:3000",
     "http://127.0.0.1:3200",
     "http://127.0.0.1:3000",
-]
-# Allow override via env var for production deployments
-import os as _os
+}
 _extra_origins = _os.getenv("SP_ALLOWED_ORIGINS", "")
 if _extra_origins:
-    _ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
+    _ALLOWED_ORIGINS.update(o.strip() for o in _extra_origins.split(",") if o.strip())
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
-    allow_credentials=True,
-)
+_CORS_METHODS = "GET, POST, PUT, DELETE, OPTIONS"
+_CORS_HEADERS = "Content-Type, Authorization, X-API-Key"
+
+
+def add_tunnel_origin(url: str):
+    _ALLOWED_ORIGINS.add(url.rstrip("/"))
+
+
+def remove_tunnel_origin(url: str):
+    _ALLOWED_ORIGINS.discard(url.rstrip("/"))
+
+
+class DynamicCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        origin = request.headers.get("origin", "")
+
+        # Handle preflight
+        if request.method == "OPTIONS" and origin in _ALLOWED_ORIGINS:
+            return Response(
+                status_code=204,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Methods": _CORS_METHODS,
+                    "Access-Control-Allow-Headers": _CORS_HEADERS,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "600",
+                },
+            )
+
+        response = await call_next(request)
+
+        if origin in _ALLOWED_ORIGINS:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+
+        return response
+
+
+app.add_middleware(DynamicCORSMiddleware)
 
 # Security middleware stack (order matters: outermost runs first)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -861,3 +918,116 @@ async def metrics_stream():
             await asyncio.sleep(5)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ─── Tunnels ────────────────────────────────────────────────────────────────
+
+@app.get("/api/tunnels")
+async def get_tunnels():
+    return list_tunnels()
+
+
+@app.post("/api/tunnels", status_code=201)
+async def create_tunnel_endpoint(req: TunnelCreate):
+    # Check for duplicate port
+    for t in list_tunnels():
+        if t.local_port == req.local_port and t.status in (TunnelStatus.running, TunnelStatus.starting):
+            raise HTTPException(status_code=409, detail=f"Port {req.local_port} is already tunneled")
+
+    tunnel = TunnelInfo(
+        id=str(uuid.uuid4()),
+        label=req.label or f"port-{req.local_port}",
+        local_port=req.local_port,
+        status=TunnelStatus.starting,
+        created_at=time.time(),
+    )
+    upsert_tunnel(tunnel)
+
+    tunnel = await _tunnel_manager.start_tunnel(tunnel)
+
+    # Add tunnel URL to CORS allowlist
+    if tunnel.public_url:
+        add_tunnel_origin(tunnel.public_url)
+
+    await append_audit(AuditEntry(
+        id=str(uuid.uuid4()),
+        timestamp=time.time(),
+        event_type="tunnel",
+        metadata={
+            "action": "create",
+            "tunnel_id": tunnel.id,
+            "local_port": tunnel.local_port,
+            "public_url": tunnel.public_url,
+            "status": tunnel.status,
+        },
+    ))
+
+    return tunnel
+
+
+@app.get("/api/tunnels/{tunnel_id}")
+async def get_tunnel_detail(tunnel_id: str):
+    tunnel = get_tunnel(tunnel_id)
+    if not tunnel:
+        raise HTTPException(status_code=404, detail="Tunnel not found")
+    return tunnel
+
+
+@app.delete("/api/tunnels/{tunnel_id}", status_code=204)
+async def remove_tunnel(tunnel_id: str):
+    tunnel = get_tunnel(tunnel_id)
+    if not tunnel:
+        raise HTTPException(status_code=404, detail="Tunnel not found")
+
+    if tunnel.public_url:
+        remove_tunnel_origin(tunnel.public_url)
+
+    await _tunnel_manager.stop_tunnel(tunnel_id)
+    delete_tunnel(tunnel_id)
+
+    await append_audit(AuditEntry(
+        id=str(uuid.uuid4()),
+        timestamp=time.time(),
+        event_type="tunnel",
+        metadata={"action": "delete", "tunnel_id": tunnel_id, "local_port": tunnel.local_port},
+    ))
+
+
+@app.post("/api/tunnels/{tunnel_id}/stop")
+async def stop_tunnel_endpoint(tunnel_id: str):
+    tunnel = get_tunnel(tunnel_id)
+    if not tunnel:
+        raise HTTPException(status_code=404, detail="Tunnel not found")
+
+    if tunnel.public_url:
+        remove_tunnel_origin(tunnel.public_url)
+
+    await _tunnel_manager.stop_tunnel(tunnel_id)
+    tunnel.status = TunnelStatus.stopped
+    tunnel.pid = None
+    tunnel.public_url = None
+    tunnel.started_at = None
+    upsert_tunnel(tunnel)
+    return tunnel
+
+
+@app.post("/api/tunnels/{tunnel_id}/start")
+async def start_tunnel_endpoint(tunnel_id: str):
+    tunnel = get_tunnel(tunnel_id)
+    if not tunnel:
+        raise HTTPException(status_code=404, detail="Tunnel not found")
+
+    if tunnel.status == TunnelStatus.running:
+        raise HTTPException(status_code=409, detail="Tunnel is already running")
+
+    # Check for duplicate port
+    for t in list_tunnels():
+        if t.id != tunnel_id and t.local_port == tunnel.local_port and t.status in (TunnelStatus.running, TunnelStatus.starting):
+            raise HTTPException(status_code=409, detail=f"Port {tunnel.local_port} is already tunneled by another tunnel")
+
+    tunnel = await _tunnel_manager.start_tunnel(tunnel)
+
+    if tunnel.public_url:
+        add_tunnel_origin(tunnel.public_url)
+
+    return tunnel

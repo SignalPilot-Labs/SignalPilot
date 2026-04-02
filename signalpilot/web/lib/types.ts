@@ -65,6 +65,18 @@ export interface AuditEntry {
   metadata: Record<string, unknown>;
 }
 
+export interface TunnelInfo {
+  id: string;
+  label: string;
+  local_port: number;
+  public_url: string | null;
+  status: "starting" | "running" | "stopped" | "error";
+  error_message: string | null;
+  created_at: number;
+  started_at: number | null;
+  pid: number | null;
+}
+
 export interface ConnectionHealthStats {
   connection_name: string;
   db_type: string;

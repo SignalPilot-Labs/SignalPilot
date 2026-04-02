@@ -1,10 +1,16 @@
 import type { Run, ToolCall, AuditEvent } from "./types";
 
-// FastAPI backend runs on port 3401 (same host)
-// SSE and all API calls go directly to FastAPI, not through Next.js rewrite
+// FastAPI backend runs on port 3401.
+// On localhost: call port 3401 directly.
+// Via tunnel/remote: use relative URLs so Next.js rewrites proxy to the backend.
 function getApiBase(): string {
   if (typeof window === "undefined") return "http://localhost:3401";
-  return `${window.location.protocol}//${window.location.hostname}:3401`;
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return `${window.location.protocol}//${host}:3401`;
+  }
+  // Remote access — use relative URL, Next.js rewrite proxies to backend
+  return "";
 }
 
 export async function fetchRuns(): Promise<Run[]> {

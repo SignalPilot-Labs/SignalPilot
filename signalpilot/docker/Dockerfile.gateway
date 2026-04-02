@@ -2,6 +2,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install cloudflared for tunnel management (auto-detect arch)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then \
+      CF_ARCH="arm64"; \
+    else \
+      CF_ARCH="amd64"; \
+    fi && \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}" \
+      -o /usr/local/bin/cloudflared && \
+    chmod +x /usr/local/bin/cloudflared && \
+    apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 # Copy source first so pip can find the package
 COPY pyproject.toml .
 COPY gateway/ gateway/

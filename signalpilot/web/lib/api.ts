@@ -1,4 +1,18 @@
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+function getGatewayUrl(): string {
+  // Server-side (SSR): always use the env var or Docker internal URL
+  if (typeof window === "undefined") {
+    return process.env.NEXT_PUBLIC_GATEWAY_URL || "http://gateway:3300";
+  }
+  // Client-side on localhost: call gateway directly
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+  }
+  // Client-side via tunnel/remote: use relative URL so Next.js rewrites proxy to gateway
+  return "";
+}
+
+const GATEWAY_URL = getGatewayUrl();
 
 function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
@@ -138,6 +152,15 @@ export const getSchemaCache = () =>
   request<{ cached_connections: number; total_entries: number; ttl_seconds: number }>("/api/schema-cache/stats");
 export const invalidateSchemaCache = (name?: string) =>
   request<{ invalidated: number }>(`/api/schema-cache/invalidate${name ? `?connection_name=${encodeURIComponent(name)}` : ""}`, { method: "POST" });
+
+// Tunnels
+export const getTunnels = () => request<import("./types").TunnelInfo[]>("/api/tunnels");
+export const createTunnel = (t: { local_port: number; label?: string }) =>
+  request<import("./types").TunnelInfo>("/api/tunnels", { method: "POST", body: JSON.stringify(t) });
+export const getTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}`);
+export const deleteTunnel = (id: string) => request<void>(`/api/tunnels/${id}`, { method: "DELETE" });
+export const stopTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}/stop`, { method: "POST" });
+export const startTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}/start`, { method: "POST" });
 
 // Metrics SSE
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {

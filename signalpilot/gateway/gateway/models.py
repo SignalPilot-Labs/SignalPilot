@@ -129,6 +129,32 @@ class AuditEntry(BaseModel):
     metadata: dict[str, Any] = {}
 
 
+# ─── Tunnels ─────────────────────────────────────────────────────────────────
+
+class TunnelStatus(str, Enum):
+    starting = "starting"
+    running = "running"
+    stopped = "stopped"
+    error = "error"
+
+
+class TunnelCreate(BaseModel):
+    label: str = Field(default="", max_length=128)
+    local_port: int = Field(..., ge=1, le=65535)
+
+
+class TunnelInfo(BaseModel):
+    id: str
+    label: str = ""
+    local_port: int
+    public_url: str | None = None
+    status: TunnelStatus = TunnelStatus.stopped
+    error_message: str | None = None
+    created_at: float = Field(default_factory=time.time)
+    started_at: float | None = None
+    pid: int | None = None
+
+
 # ─── MCP ─────────────────────────────────────────────────────────────────────
 
 class MCPToolCall(BaseModel):

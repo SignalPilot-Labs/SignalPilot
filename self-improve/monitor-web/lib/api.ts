@@ -1,9 +1,14 @@
 import type { Run, ToolCall, AuditEvent } from "./types";
 
-// FastAPI backend runs on port 3401 (same host)
-// SSE and all API calls go directly to FastAPI, not through Next.js rewrite
+// FastAPI backend runs on port 3401 (same host) by default.
+// For Cloudflare/remote deployments, set NEXT_PUBLIC_API_URL to the full URL.
 function getApiBase(): string {
-  if (typeof window === "undefined") return "http://localhost:3401";
+  if (typeof window === "undefined") {
+    return process.env.NEXT_PUBLIC_API_URL || "http://localhost:3401";
+  }
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
   return `${window.location.protocol}//${window.location.hostname}:3401`;
 }
 

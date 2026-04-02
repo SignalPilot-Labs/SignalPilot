@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
@@ -92,11 +92,14 @@ export default function MonitorPage() {
     fetchRepos().then(setRepos);
   }, [clearEvents]);
 
-  // Auto-select first running or latest run
+  // Auto-select first running or latest run (placeholder — actual load below)
+  const autoSelectIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selectedRunId && runs.length > 0) {
       const running = runs.find((r) => r.status === "running");
-      setSelectedRunId(running?.id || runs[0].id);
+      const id = running?.id || runs[0].id;
+      autoSelectIdRef.current = id;
+      setSelectedRunId(id);
     }
   }, [runs, selectedRunId]);
 
@@ -185,10 +188,19 @@ export default function MonitorPage() {
           .filter(
             (a) => !["llm_text", "llm_thinking"].includes(a.event_type)
           )
-          .map((a) => ({
-            _kind: "audit" as const,
-            data: a,
-          }));
+          .map((a): FeedEvent => {
+            if (a.event_type === "usage") {
+              const details =
+                typeof a.details === "string"
+                  ? JSON.parse(a.details)
+                  : a.details || {};
+              return {
+                _kind: "usage" as const,
+                data: { ...details, ts: a.ts },
+              };
+            }
+            return { _kind: "audit" as const, data: a };
+          });
 
         const getTs = (e: FeedEvent): string =>
           e._kind === "tool" ? e.data.ts
@@ -208,6 +220,15 @@ export default function MonitorPage() {
     },
     [clearEvents, refreshRuns]
   );
+
+  // Load history for auto-selected run
+  useEffect(() => {
+    if (autoSelectIdRef.current) {
+      const id = autoSelectIdRef.current;
+      autoSelectIdRef.current = null;
+      handleSelectRun(id);
+    }
+  }, [handleSelectRun]);
 
   // Start a new run
   const handleStartRun = useCallback(

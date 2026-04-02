@@ -65,6 +65,57 @@ mcp = FastMCP(
 )
 
 
+def _query_error_hint(error: str, db_type: str) -> str | None:
+    """Return actionable feedback for common SQL errors to help agents self-correct.
+
+    Based on Spider2.0 SOTA finding: structured error feedback enables
+    multi-turn self-correction, the key technique behind top leaderboard systems.
+    """
+    err_lower = error.lower()
+
+    # Column not found
+    if "column" in err_lower and ("not found" in err_lower or "does not exist" in err_lower or "unknown" in err_lower):
+        return "Column name may be misspelled or from the wrong table. Use schema_link or compact_schema to verify exact column names."
+
+    # Table not found
+    if "table" in err_lower and ("not found" in err_lower or "does not exist" in err_lower or "doesn't exist" in err_lower):
+        return "Table may not exist or needs schema prefix. Use schema_link to find the correct table name (e.g., schema.table_name)."
+
+    # Ambiguous column
+    if "ambiguous" in err_lower:
+        return "Column reference is ambiguous — qualify it with the table name or alias (e.g., t.column_name)."
+
+    # Syntax error
+    if "syntax error" in err_lower or "parse error" in err_lower:
+        if db_type == "bigquery":
+            return "BigQuery uses backticks for identifiers and has different function names (e.g., SAFE_DIVIDE, FORMAT_TIMESTAMP). Check BigQuery SQL syntax."
+        elif db_type == "snowflake":
+            return "Snowflake uses double-quotes for case-sensitive identifiers. Column/table names from schema are uppercase by default."
+        elif db_type == "clickhouse":
+            return "ClickHouse SQL differs from standard SQL — e.g., use toDate(), formatDateTime(), arrayJoin(). Check ClickHouse function reference."
+        return "Check SQL syntax — consider quoting identifiers and verifying function names for this database dialect."
+
+    # Type mismatch
+    if "type mismatch" in err_lower or "cannot be cast" in err_lower or "invalid input syntax" in err_lower:
+        return "Data type mismatch. Use CAST(column AS type) or type-specific conversion functions."
+
+    # Division by zero
+    if "division by zero" in err_lower:
+        if db_type == "bigquery":
+            return "Use SAFE_DIVIDE(a, b) or NULLIF(b, 0) to handle division by zero."
+        return "Use NULLIF(divisor, 0) to avoid division by zero: a / NULLIF(b, 0)."
+
+    # Permission
+    if "permission" in err_lower or "access denied" in err_lower or "not authorized" in err_lower:
+        return "Insufficient permissions. Try a different table or contact the database administrator."
+
+    # Timeout
+    if "timeout" in err_lower or "timed out" in err_lower:
+        return "Query timed out. Try adding WHERE filters, reducing the date range, or using LIMIT to reduce data scanned."
+
+    return None
+
+
 def _get_sandbox_url() -> str:
     settings = load_settings()
     return settings.sandbox_manager_url
@@ -233,7 +284,10 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
-            return f"Query error: {e}"
+            # Structured error feedback for agent self-correction (Spider2.0 SOTA pattern)
+            err_str = str(e)
+            hint = _query_error_hint(err_str, conn_info.db_type)
+            return f"Query error: {err_str}" + (f"\n\nHint: {hint}" if hint else "")
 
         elapsed_ms = (time.monotonic() - start) * 1000
         health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)

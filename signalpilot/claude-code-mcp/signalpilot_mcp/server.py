@@ -875,10 +875,12 @@ async def start_improvement_run(
     except Exception as e:
         return _err(e)
 
-    run_id = data.get("run_id", "?")
-    lines = [f"Improvement run started!"]
-    if run_id and run_id != "?":
+    run_id = data.get("run_id")
+    lines = ["Improvement run started!"]
+    if run_id:
         lines.append(f"Run ID: {run_id[:12]}")
+    else:
+        lines.append("Run is initializing... use agent_health or list_improvement_runs to check status.")
     if data.get("prompt"):
         lines.append(f"Prompt: {data['prompt']}")
     lines.append(f"Duration: {duration_minutes}m")
@@ -911,6 +913,45 @@ async def resume_improvement_run(run_id: str, max_budget_usd: float = 0) -> str:
 
 
 @mcp.tool()
+async def resume_latest_run(max_budget_usd: float = 0) -> str:
+    """
+    Resume the most recent stopped or rate-limited improvement run.
+
+    Automatically finds the latest resumable run (status: stopped or
+    rate_limited) and resumes it. Use this when you want to continue
+    the last run without looking up its ID.
+
+    Args:
+        max_budget_usd: Additional budget for the resumed run (0 = server default)
+
+    Returns:
+        Confirmation with the run ID, or an error if no resumable run exists.
+    """
+    try:
+        runs = await _get_agent_client().list_runs()
+    except Exception as e:
+        return _err(e)
+
+    resumable = [r for r in runs if r.get("status") in ("stopped", "rate_limited")]
+    if not resumable:
+        statuses = set(r.get("status", "?") for r in runs[:5])
+        return f"No resumable runs found. Recent run statuses: {', '.join(statuses)}"
+
+    target = resumable[0]  # Most recent (list is ordered by started_at DESC)
+    run_id = target["id"]
+
+    try:
+        await _get_agent_client().resume_run(run_id, max_budget_usd)
+    except Exception as e:
+        return _err(e)
+
+    prompt_preview = target.get("custom_prompt", "")
+    if prompt_preview:
+        prompt_preview = f' — "{prompt_preview[:80]}"'
+    return f"Resumed run {run_id[:12]} (was {target['status']}){prompt_preview}"
+
+
+@mcp.tool()
 async def stop_improvement_run(run_id: str = "", reason: str = "") -> str:
     """
     Gracefully stop the current improvement run.
@@ -920,7 +961,7 @@ async def stop_improvement_run(run_id: str = "", reason: str = "") -> str:
 
     If run_id is provided, sends the stop signal through the control
     channel (allows the agent to wrap up). If omitted, sends an instant
-    stop to whatever is currently running.
+    stop to whatever is currently running. Errors if no run is active.
 
     Args:
         run_id: Specific run to stop (optional — defaults to current run)

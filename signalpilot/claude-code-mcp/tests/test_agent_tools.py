@@ -250,3 +250,86 @@ async def test_list_agent_branches_empty(mock_agent_client):
     mock_agent_client.list_branches.return_value = []
     result = await server.list_agent_branches()
     assert "No branches" in result
+
+
+# ── Edge cases ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_run_null_run_id(mock_agent_client):
+    """When the agent hasn't initialized yet, run_id is None."""
+    mock_agent_client.start_run.return_value = {
+        "ok": True,
+        "run_id": None,
+        "prompt": "test",
+        "max_budget_usd": 0,
+        "duration_minutes": 30,
+        "base_branch": "main",
+    }
+    result = await server.start_improvement_run(prompt="test")
+    assert "started" in result
+    assert "initializing" in result
+    assert "agent_health" in result
+
+
+@pytest.mark.asyncio
+async def test_start_run_missing_run_id(mock_agent_client):
+    """When run_id key is absent entirely."""
+    mock_agent_client.start_run.return_value = {"ok": True}
+    result = await server.start_improvement_run()
+    assert "initializing" in result
+
+
+@pytest.mark.asyncio
+async def test_resume_latest_run_finds_stopped(mock_agent_client):
+    mock_agent_client.list_runs.return_value = [
+        {"id": "run-3", "status": "running"},
+        {"id": "run-2", "status": "stopped", "custom_prompt": "fix tests"},
+        {"id": "run-1", "status": "completed"},
+    ]
+    mock_agent_client.resume_run.return_value = {"ok": True}
+    result = await server.resume_latest_run()
+    assert "run-2" in result
+    assert "stopped" in result
+    assert "fix tests" in result
+    mock_agent_client.resume_run.assert_called_once_with("run-2", 0)
+
+
+@pytest.mark.asyncio
+async def test_resume_latest_run_finds_rate_limited(mock_agent_client):
+    mock_agent_client.list_runs.return_value = [
+        {"id": "run-5", "status": "rate_limited", "custom_prompt": ""},
+        {"id": "run-4", "status": "completed"},
+    ]
+    mock_agent_client.resume_run.return_value = {"ok": True}
+    result = await server.resume_latest_run()
+    assert "run-5" in result
+    assert "rate_limited" in result
+
+
+@pytest.mark.asyncio
+async def test_resume_latest_run_no_resumable(mock_agent_client):
+    mock_agent_client.list_runs.return_value = [
+        {"id": "run-1", "status": "completed"},
+        {"id": "run-2", "status": "error"},
+    ]
+    result = await server.resume_latest_run()
+    assert "No resumable runs" in result
+    assert "completed" in result
+
+
+@pytest.mark.asyncio
+async def test_resume_latest_run_empty(mock_agent_client):
+    mock_agent_client.list_runs.return_value = []
+    result = await server.resume_latest_run()
+    assert "No resumable runs" in result
+
+
+@pytest.mark.asyncio
+async def test_resume_latest_run_with_budget(mock_agent_client):
+    mock_agent_client.list_runs.return_value = [
+        {"id": "run-7", "status": "stopped"},
+    ]
+    mock_agent_client.resume_run.return_value = {"ok": True}
+    result = await server.resume_latest_run(max_budget_usd=10.0)
+    mock_agent_client.resume_run.assert_called_once_with("run-7", 10.0)

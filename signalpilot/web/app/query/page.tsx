@@ -582,7 +582,7 @@ export default function QueryExplorerPage() {
                   setSql(h.sql);
                   setSelectedConn(h.connection);
                 }}
-                className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group flex items-start gap-3"
+                className="w-full text-left px-4 py-3.5 sm:py-2.5 hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-hover)] transition-colors group flex items-start gap-3"
               >
                 <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-40 select-none">
                   {String(i + 1).padStart(2, "0")}

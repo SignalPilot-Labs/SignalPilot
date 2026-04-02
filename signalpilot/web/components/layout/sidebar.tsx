@@ -392,7 +392,14 @@ export default function Sidebar() {
             SignalPilot
           </span>
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {/* Connection health compact indicator */}
+          {connHealth.total > 0 && (
+            <span className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] tracking-wider mr-1">
+              <span className={`w-1.5 h-1.5 ${connHealth.healthy === connHealth.total ? "bg-[var(--color-success)]" : "bg-[var(--color-warning)]"}`} />
+              {connHealth.healthy}/{connHealth.total}
+            </span>
+          )}
           {/* Governance status dot */}
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
@@ -507,13 +514,13 @@ export default function Sidebar() {
               }`}
             >
               {active && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-[3px] bg-[var(--color-success)]" />
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-[3px] bg-[var(--color-success)] tab-active-indicator" />
               )}
-              <span className="relative">
+              <span className={`relative transition-transform duration-150 ${active ? "scale-110" : ""}`}>
                 <Icon active={active} />
                 {badge > 0 && <MobileNavBadge count={badge} />}
               </span>
-              <span className="text-[9px] tracking-[0.1em] uppercase">{label}</span>
+              <span className={`text-[9px] tracking-[0.1em] uppercase transition-colors duration-150 ${active ? "text-[var(--color-text)]" : ""}`}>{label}</span>
             </Link>
           );
         })}

@@ -54,6 +54,19 @@ pip install -e ".[dev]" 2>/dev/null || pip install pytest pytest-asyncio
 python -m pytest tests/ -v
 ```
 
+## Completeness Principle
+
+With AI-assisted development, the marginal cost of comprehensive test coverage is near-zero.
+Always write the complete test suite rather than a few representative cases:
+
+- **Every code path** — happy path, error path, edge cases
+- **Every boundary** — empty input, max values, unicode, special characters
+- **Every branch** — if/else, try/except, switch cases
+- **Regression tests** — every bug fix MUST include a test that reproduces the original failure
+
+When fixing a bug, write the regression test FIRST (verify it fails), then fix the code
+(verify it passes). This ensures the test actually catches the bug.
+
 ## Rules
 - Each test file tests ONE module
 - Use descriptive test names: `test_blocks_sql_injection_via_union`

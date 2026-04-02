@@ -1051,6 +1051,64 @@ async def explain_query(connection_name: str, sql: str) -> str:
 
 
 @mcp.tool()
+async def validate_sql(connection_name: str, sql: str) -> str:
+    """
+    Validate SQL syntax and semantics without executing the query.
+
+    Uses EXPLAIN to check if the SQL is valid against the actual database schema.
+    Returns validation result: OK with plan summary, or error with specific
+    line/position information and a fix suggestion.
+
+    This is the "format restriction" step in the ReFoRCE self-refinement loop:
+    generate SQL → validate → fix errors → execute.
+
+    Args:
+        connection_name: Name of the database connection
+        sql: SQL query to validate
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+    if err := _validate_sql(sql):
+        return f"Error: {err}"
+
+    # First: basic local checks
+    sql_stripped = sql.strip().rstrip(";")
+    issues = []
+    sql_upper = sql_stripped.upper()
+    if not any(sql_upper.startswith(kw) for kw in ("SELECT", "WITH", "EXPLAIN", "SHOW", "DESCRIBE")):
+        issues.append("Query should start with SELECT, WITH, SHOW, or DESCRIBE for read-only execution.")
+
+    # Try EXPLAIN to validate against actual schema
+    gw = _gateway_url()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{gw}/api/query/explain",
+                json={"connection_name": connection_name, "sql": sql},
+            )
+        if r.status_code == 200:
+            data = r.json()
+            parts = ["VALID ✓"]
+            if data.get("estimated_rows"):
+                parts.append(f"Estimated rows: {data['estimated_rows']:,}")
+            if data.get("is_expensive"):
+                parts.append("Warning: query may be expensive")
+            if issues:
+                parts.append(f"Local checks: {'; '.join(issues)}")
+            return "\n".join(parts)
+        else:
+            # Extract error details
+            error_text = r.text[:500]
+            hint = query_error_hint(error_text, "")
+            parts = [f"INVALID ✗\n{error_text}"]
+            if hint:
+                parts.append(f"\nSuggested fix: {hint}")
+            return "\n".join(parts)
+    except Exception as e:
+        return f"Validation error: {e}"
+
+
+@mcp.tool()
 async def query_history(connection_name: str, limit: int = 10) -> str:
     """
     Get recent successful queries for a database connection.

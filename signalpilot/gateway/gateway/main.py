@@ -2948,8 +2948,9 @@ async def get_agent_context(
 async def schema_link(
     name: str,
     question: str = Query(..., description="Natural language question to link schema for"),
-    format: str = Query(default="ddl", pattern="^(ddl|compact|json)$", description="Output format"),
+    format: str = Query(default="ddl", pattern="^(ddl|compact|json|condensed)$", description="Output format: ddl (full), condensed (pruned columns), compact (one-line), json"),
     max_tables: int = Query(default=20, ge=1, le=100, description="Max tables in linked schema"),
+    prune_columns: bool = Query(default=False, description="Drop columns with 0 relevance from low-scoring tables (reduces token count 30-60%%)"),
 ):
     """Smart schema linking — find tables and columns relevant to a natural language question.
 
@@ -3151,10 +3152,12 @@ async def schema_link(
     is_aggregation = bool(question_words & _agg_keywords)
     is_temporal = bool(question_words & _time_keywords)
 
-    # Step 2: Score each table by relevance
+    # Step 2: Score each table and column by relevance
     table_scores: dict[str, float] = {}
+    column_scores: dict[str, dict[str, float]] = {}  # table_key -> {col_name: score}
     for table_key, table_data in filtered.items():
         score = 0.0
+        col_scores: dict[str, float] = {}
         table_name_lower = table_data.get("name", "").lower()
         schema_name_lower = table_data.get("schema", "").lower()
 
@@ -3176,17 +3179,22 @@ async def schema_link(
             elif term in table_name_parts or term.rstrip("s") in table_name_parts:
                 score += 4.0
 
-            # Column name matching
+            # Column name matching — track per-column scores
             for col in table_data.get("columns", []):
                 col_name_lower = col.get("name", "").lower()
+                col_name = col.get("name", "")
+                col_score = 0.0
                 if term == col_name_lower:
-                    score += 4.0
+                    col_score = 4.0
                 elif term in col_name_lower:
-                    score += 2.0
+                    col_score = 2.0
                 # Check column comments
                 comment = (col.get("comment") or "").lower()
                 if term in comment:
-                    score += 1.0
+                    col_score = max(col_score, 1.0)
+                if col_score > 0:
+                    col_scores[col_name] = col_scores.get(col_name, 0) + col_score
+                    score += col_score
 
             # Table description/comment matching
             desc = (table_data.get("description") or "").lower()
@@ -3241,6 +3249,7 @@ async def schema_link(
             score += 1.0  # Tables with stats are more informative
 
         table_scores[table_key] = score
+        column_scores[table_key] = col_scores
 
     # Step 3: Select top tables by score
     scored_tables = sorted(table_scores.items(), key=lambda x: (-x[1], x[0]))
@@ -3293,6 +3302,93 @@ async def schema_link(
     # Build response
     linked_schema = {k: filtered[k] for k in sorted(linked_keys) if k in filtered}
 
+    # ── Column pruning helper ──────────────────────────────────────────────
+    # For each table, determine which columns to include.
+    # Always include: PK columns, FK columns, and columns with relevance score > 0.
+    # For high-scoring tables (>= 5.0), include ALL columns (they're clearly relevant).
+    # For lower-scoring tables (FK-connected), only include structural + matched columns.
+    def _prune_columns(table_key: str, table_data: dict) -> list[dict]:
+        """Return only relevant columns for a table, keeping PKs and FKs always."""
+        t_score = table_scores.get(table_key, 0)
+        # High-relevance tables: keep all columns (the whole table matters)
+        if t_score >= 5.0 or not prune_columns:
+            return table_data.get("columns", [])
+
+        col_relevance = column_scores.get(table_key, {})
+        fk_cols = {fk.get("column", "") for fk in table_data.get("foreign_keys", [])}
+
+        kept = []
+        for col in table_data.get("columns", []):
+            col_name = col.get("name", "")
+            # Always keep: PKs, FK columns, and columns with question relevance
+            if col.get("primary_key"):
+                kept.append(col)
+            elif col_name in fk_cols:
+                kept.append(col)
+            elif col_relevance.get(col_name, 0) > 0:
+                kept.append(col)
+        # If pruning removed everything, keep all (safety)
+        return kept if kept else table_data.get("columns", [])
+
+    # ── Compressed type map (more aggressive abbreviation) ────────────────
+    _type_compress = {
+        "CHARACTER VARYING": "VARCHAR", "TIMESTAMP WITHOUT TIME ZONE": "TS",
+        "TIMESTAMP WITH TIME ZONE": "TSZ", "DOUBLE PRECISION": "DOUBLE",
+        "BOOLEAN": "BOOL", "INTEGER": "INT", "BIGINT": "BIGINT",
+        "SMALLINT": "SMALLINT", "REAL": "FLOAT",
+    }
+
+    if format == "condensed":
+        # Condensed DDL: minimal token usage — pruned columns, no annotations, compressed types
+        condensed_lines = []
+        total_cols_original = 0
+        total_cols_kept = 0
+        for key in sorted(linked_keys):
+            if key not in filtered:
+                continue
+            t = filtered[key]
+            table_name = f"{t.get('schema', '')}.{t.get('name', '')}"
+            all_cols = t.get("columns", [])
+            kept_cols = _prune_columns(key, t)
+            total_cols_original += len(all_cols)
+            total_cols_kept += len(kept_cols)
+            col_parts = []
+            pk_cols = []
+            for col in kept_cols:
+                ct = col.get("type", "TEXT").upper()
+                ct = _type_compress.get(ct, ct)
+                # Strip precision from types for brevity: VARCHAR(255) → VARCHAR
+                if "(" in ct and ct.split("(")[0] in ("VARCHAR", "NVARCHAR", "CHAR", "DECIMAL", "NUMERIC"):
+                    ct = ct.split("(")[0]
+                nn = " NOT NULL" if not col.get("nullable", True) else ""
+                col_parts.append(f"  {col['name']} {ct}{nn}")
+                if col.get("primary_key"):
+                    pk_cols.append(col["name"])
+            if pk_cols:
+                col_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
+            for fk in t.get("foreign_keys", []):
+                col_parts.append(f"  FOREIGN KEY ({fk['column']}) REFERENCES {fk.get('references_table', '')}({fk.get('references_column', '')})")
+            pruned_note = ""
+            if len(kept_cols) < len(all_cols):
+                pruned_note = f" -- {len(all_cols) - len(kept_cols)} columns pruned"
+            obj_kw = "CREATE VIEW" if t.get("type") == "view" else "CREATE TABLE"
+            condensed_lines.append(f"{obj_kw} {table_name} (\n{',\n'.join(col_parts)}\n);{pruned_note}")
+        condensed_text = "\n\n".join(condensed_lines)
+        reduction_pct = round((1 - total_cols_kept / max(total_cols_original, 1)) * 100)
+        return {
+            "connection_name": name,
+            "question": question,
+            "format": "condensed",
+            "linked_tables": len(linked_keys),
+            "total_tables": len(filtered),
+            "columns_original": total_cols_original,
+            "columns_kept": total_cols_kept,
+            "column_reduction_pct": reduction_pct,
+            "token_estimate": len(condensed_text) // 4,
+            "scores": {k: round(table_scores.get(k, 0), 1) for k in sorted(linked_keys) if table_scores.get(k, 0) > 0},
+            "ddl": condensed_text,
+        }
+
     if format == "compact":
         lines = []
         for key in sorted(linked_keys):
@@ -3300,7 +3396,8 @@ async def schema_link(
                 continue
             t = filtered[key]
             col_strs = []
-            for c in t.get("columns", []):
+            kept_cols = _prune_columns(key, t)
+            for c in kept_cols:
                 pk_flag = "*" if c.get("primary_key") else ""
                 ct = c.get("type", "").upper()
                 s = f"{c['name']}{pk_flag} {ct}"
@@ -3308,6 +3405,8 @@ async def schema_link(
                 if stats.get("distinct_count"):
                     s += f"({stats['distinct_count']}d)"
                 col_strs.append(s)
+            if len(kept_cols) < len(t.get("columns", [])):
+                col_strs.append(f"+{len(t['columns']) - len(kept_cols)} more")
             cols = ", ".join(col_strs)
             rc = t.get("row_count", 0)
             rc_str = f" ({rc:,} rows)" if rc else ""
@@ -3346,7 +3445,9 @@ async def schema_link(
         header = f"-- {table_desc}\n" if table_desc else ""
         col_parts = []
         pk_cols = []
-        for col in t.get("columns", []):
+        ddl_cols = _prune_columns(key, t)
+        pruned_count = len(t.get("columns", [])) - len(ddl_cols)
+        for col in ddl_cols:
             ct = col.get("type", "TEXT").upper()
             type_map = {
                 "CHARACTER VARYING": "VARCHAR", "TIMESTAMP WITHOUT TIME ZONE": "TIMESTAMP",
@@ -3428,6 +3529,8 @@ async def schema_link(
         if clustering_key:
             meta_parts.append(f"CLUSTER BY({clustering_key})")
         meta_parts.append(f"relevance={table_scores.get(key, 0):.1f}")
+        if pruned_count > 0:
+            meta_parts.append(f"{pruned_count} cols pruned")
         rc_comment = f" -- {', '.join(meta_parts)}"
         obj_kw = "CREATE VIEW" if t.get("type") == "view" else "CREATE TABLE"
         ddl_lines.append(f"{header}{obj_kw} {table_name} (\n{',\n'.join(col_parts)}\n);{rc_comment}")

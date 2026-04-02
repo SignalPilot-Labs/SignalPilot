@@ -482,7 +482,10 @@ export default function MonitorPage() {
       <InjectPanel
         open={injectOpen}
         onClose={() => setInjectOpen(false)}
-        onSend={(prompt: string) => { if (selectedRunId) parallelInject(selectedRunId, prompt); }}
+        onSend={(prompt: string) => {
+          if (!selectedRunId) { addEvent({ _kind: "control", text: "No run selected", ts: new Date().toISOString() }); return; }
+          parallelInject(selectedRunId, prompt);
+        }}
         busy={parallelBusy}
       />
 

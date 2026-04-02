@@ -26,7 +26,6 @@ from .store import (
     update_connection,
 )
 from .api import register_routers
-from .api.deps import get_sandbox_client, reset_sandbox_client, _sandbox_client
 
 logger = logging.getLogger(__name__)
 

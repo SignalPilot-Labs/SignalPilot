@@ -318,6 +318,15 @@ async def explore_column_values(
     safe_col = column.replace(close_quote, close_quote + close_quote)
     q_col = f"{quote}{safe_col}{close_quote}"
 
+    # Quote the table name — handle schema.table notation (e.g. "public"."users")
+    if "." in table:
+        q_table = ".".join(
+            f"{quote}{part.replace(close_quote, close_quote + close_quote)}{close_quote}"
+            for part in table.split(".", 1)
+        )
+    else:
+        q_table = f"{quote}{table.replace(close_quote, close_quote + close_quote)}{close_quote}"
+
     # Construct safe exploration query
     parts = []
     if filter_pattern:
@@ -334,7 +343,7 @@ async def explore_column_values(
 SELECT TOP {limit}
     {q_col} AS value,
     COUNT(*) AS [count]
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY [count] DESC
@@ -344,7 +353,7 @@ ORDER BY [count] DESC
 SELECT
     {q_col} AS value,
     COUNT(*) AS count
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY count DESC
@@ -357,7 +366,7 @@ SELECT
     COUNT(*) AS total_rows,
     SUM(CASE WHEN {q_col} IS NULL THEN 1 ELSE 0 END) AS null_count,
     COUNT(DISTINCT {q_col}) AS distinct_count
-FROM {table}
+FROM {q_table}
 """
 
     try:
@@ -3301,9 +3310,14 @@ async def explore_columns_deep(name: str, body: dict):
                     stat_parts.append(f"MAX({qo}{safe}{qc})")
                     stat_parts.append(f"AVG(CAST({qo}{safe}{qc} AS FLOAT))")
                 try:
-                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {table_key}"
+                    # Quote the table name to prevent SQL injection from cache-poisoned table names
+                    safe_table = table_key.replace(qc, qc + qc)
+                    q_table = f"{qo}{safe_table}{qc}" if "." not in table_key else ".".join(
+                        f"{qo}{part.replace(qc, qc + qc)}{qc}" for part in table_key.split(".", 1)
+                    )
+                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {q_table}"
                     if db_type == "mssql":
-                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {table_key}"
+                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {q_table}"
                     rows = await connector.execute(stat_sql, timeout=15)
                     if rows:
                         row = rows[0]

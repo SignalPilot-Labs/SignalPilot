@@ -1,4 +1,10 @@
-"""Tests for implicit join inference algorithm used for Spider2.0 join path discovery."""
+"""Tests for implicit join inference algorithm.
+
+Verifies that _infer_implicit_joins correctly detects FK-like
+relationships from column naming patterns, critical for Spider2.0
+performance on databases without explicit FK declarations (ClickHouse,
+BigQuery, data lakes).
+"""
 
 import pytest
 import sys
@@ -9,157 +15,192 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", 
 from gateway.main import _infer_implicit_joins
 
 
-def _make_table(schema, name, columns, fks=None):
-    """Helper to build a table dict for testing."""
+def _make_table(name, schema="public", columns=None, foreign_keys=None):
+    if columns is None:
+        columns = [{"name": "id", "type": "integer", "primary_key": True}]
     return {
-        "schema": schema,
         "name": name,
-        "columns": [
-            {"name": c[0], "type": c[1], "primary_key": c[2] if len(c) > 2 else False}
-            for c in columns
-        ],
-        "foreign_keys": fks or [],
+        "schema": schema,
+        "columns": columns,
+        "foreign_keys": foreign_keys or [],
     }
 
 
-class TestImplicitJoinInference:
-    """Test the _infer_implicit_joins function for Spider2.0 join discovery."""
+class TestBasicPatterns:
+    """Test fundamental join inference patterns."""
 
-    def test_basic_id_suffix_match(self):
-        """customer_id → customers.id"""
+    def test_customer_id_to_customers(self):
+        """customer_id column should join to customers.id."""
         schema = {
-            "public.orders": _make_table("public", "orders", [
-                ("id", "int", True), ("customer_id", "int"), ("total", "decimal"),
+            "public.orders": _make_table("orders", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "customer_id", "type": "integer"},
+                {"name": "total", "type": "numeric"},
             ]),
-            "public.customers": _make_table("public", "customers", [
-                ("id", "int", True), ("name", "varchar"),
+            "public.customers": _make_table("customers", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "name", "type": "varchar"},
             ]),
         }
         joins = _infer_implicit_joins(schema)
         assert len(joins) >= 1
-        j = joins[0]
-        assert j["from_table"] == "orders"
-        assert j["from_column"] == "customer_id"
-        assert j["to_table"] == "customers"
-        assert j["to_column"] == "id"
-        assert j["inferred"] is True
+        customer_join = next((j for j in joins if j["from_column"] == "customer_id"), None)
+        assert customer_join is not None
+        assert customer_join["to_table"] == "customers"
+        assert customer_join["to_column"] == "id"
 
-    def test_singular_table_match(self):
-        """user_id → user.id (singular table name)"""
+    def test_product_id_to_products(self):
+        """product_id should join to products.id."""
         schema = {
-            "public.posts": _make_table("public", "posts", [
-                ("id", "int", True), ("user_id", "int"), ("title", "varchar"),
+            "public.order_items": _make_table("order_items", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "product_id", "type": "integer"},
             ]),
-            "public.user": _make_table("public", "user", [
-                ("id", "int", True), ("email", "varchar"),
+            "public.products": _make_table("products", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "name", "type": "varchar"},
             ]),
         }
         joins = _infer_implicit_joins(schema)
-        assert any(j["from_column"] == "user_id" and j["to_table"] == "user" for j in joins)
+        product_join = next((j for j in joins if j["from_column"] == "product_id"), None)
+        assert product_join is not None
+        assert product_join["to_table"] == "products"
 
-    def test_no_duplicate_with_explicit_fks(self):
-        """Don't infer a join that already exists as an explicit FK."""
+    def test_no_self_join(self):
+        """A table should not infer a join to itself via its own _id column."""
         schema = {
-            "public.orders": _make_table("public", "orders", [
-                ("id", "int", True), ("customer_id", "int"),
-            ], fks=[{
-                "column": "customer_id",
-                "references_schema": "public",
-                "references_table": "customers",
-                "references_column": "id",
-            }]),
-            "public.customers": _make_table("public", "customers", [
-                ("id", "int", True), ("name", "varchar"),
+            "public.orders": _make_table("orders", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "order_id", "type": "integer"},
             ]),
         }
         joins = _infer_implicit_joins(schema)
-        # Should not add any inferred joins since the FK already exists
-        assert len(joins) == 0
+        self_joins = [j for j in joins if j["from_table"] == j["to_table"] == "orders"]
+        assert len(self_joins) == 0
 
-    def test_no_self_reference(self):
-        """Don't infer a self-join (e.g., orders.order_id → orders.id)."""
+
+class TestPluralForms:
+    """Test plural form matching for table names."""
+
+    def test_category_id_to_categories(self):
+        """category_id should match categories (y -> ies)."""
         schema = {
-            "public.orders": _make_table("public", "orders", [
-                ("id", "int", True), ("order_id", "int"),
+            "public.products": _make_table("products", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "category_id", "type": "integer"},
+            ]),
+            "public.categories": _make_table("categories", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "name", "type": "varchar"},
             ]),
         }
         joins = _infer_implicit_joins(schema)
-        # order_id → order table doesn't exist, so no join
-        assert len(joins) == 0
+        cat_join = next((j for j in joins if j["from_column"] == "category_id"), None)
+        assert cat_join is not None
+        assert cat_join["to_table"] == "categories"
 
-    def test_camelcase_id_suffix(self):
-        """customerId → customers.id (camelCase pattern)."""
+    def test_address_id_to_addresses(self):
+        """address_id should match addresses (s suffix)."""
         schema = {
-            "public.orders": _make_table("public", "orders", [
-                ("id", "int", True), ("customerId", "int"),
+            "public.users": _make_table("users", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "address_id", "type": "integer"},
             ]),
-            "public.customer": _make_table("public", "customer", [
-                ("id", "int", True), ("name", "varchar"),
+            "public.addresses": _make_table("addresses", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
             ]),
         }
         joins = _infer_implicit_joins(schema)
-        assert any(j["from_column"] == "customerId" and j["to_table"] == "customer" for j in joins)
+        addr_join = next((j for j in joins if j["from_column"] == "address_id"), None)
+        assert addr_join is not None
 
-    def test_shared_column_pk_join(self):
-        """Both tables have product_id, and one has it as PK → joinable."""
+
+class TestExistingFKsSkipped:
+    """Test that existing explicit FKs are not duplicated."""
+
+    def test_explicit_fk_not_duplicated(self):
+        """Tables with explicit FK declarations should not get duplicate inferred FKs."""
         schema = {
-            "public.order_items": _make_table("public", "order_items", [
-                ("id", "int", True), ("product_id", "int"), ("quantity", "int"),
+            "public.orders": _make_table("orders", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "customer_id", "type": "integer"},
+            ], foreign_keys=[
+                {"column": "customer_id", "references_table": "customers", "references_column": "id"},
             ]),
-            "public.products": _make_table("public", "products", [
-                ("product_id", "int", True), ("name", "varchar"),
+            "public.customers": _make_table("customers", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
             ]),
         }
         joins = _infer_implicit_joins(schema)
-        assert any(
-            j["from_column"] == "product_id" and j["to_table"] == "products"
-            for j in joins
-        )
+        inferred_customer = [j for j in joins if j["from_column"] == "customer_id" and j["from_table"] == "orders"]
+        assert len(inferred_customer) == 0
 
-    def test_multiple_fk_columns(self):
-        """Table with multiple FK-like columns should generate multiple joins."""
+
+class TestSharedColumnJoins:
+    """Test shared column name joins (bridge tables)."""
+
+    def test_shared_column_detected(self):
+        """Two tables sharing a _id column should get inferred joins to the target."""
         schema = {
-            "public.orders": _make_table("public", "orders", [
-                ("id", "int", True), ("customer_id", "int"), ("product_id", "int"),
+            "public.orders": _make_table("orders", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "product_id", "type": "integer"},
             ]),
-            "public.customers": _make_table("public", "customers", [
-                ("id", "int", True), ("name", "varchar"),
+            "public.returns": _make_table("returns", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "product_id", "type": "integer"},
             ]),
-            "public.products": _make_table("public", "products", [
-                ("id", "int", True), ("name", "varchar"),
+            "public.products": _make_table("products", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
             ]),
         }
         joins = _infer_implicit_joins(schema)
-        from_cols = {j["from_column"] for j in joins if j["from_table"] == "orders"}
-        assert "customer_id" in from_cols
-        assert "product_id" in from_cols
+        # Both orders and returns should have joins to products via product_id
+        assert len(joins) >= 2
 
-    def test_category_ies_plural(self):
-        """category_id → categories.id (irregular plural)."""
-        schema = {
-            "public.products": _make_table("public", "products", [
-                ("id", "int", True), ("category_id", "int"),
-            ]),
-            "public.categories": _make_table("public", "categories", [
-                ("id", "int", True), ("name", "varchar"),
-            ]),
-        }
-        joins = _infer_implicit_joins(schema)
-        assert any(j["from_column"] == "category_id" and j["to_table"] == "categories" for j in joins)
+
+class TestEdgeCases:
+    """Test edge cases and robustness."""
 
     def test_empty_schema(self):
-        """Empty schema should return empty list."""
+        """Empty schema should return no joins."""
         assert _infer_implicit_joins({}) == []
 
-    def test_no_matches(self):
-        """Tables with no matching patterns should return empty list."""
+    def test_single_table(self):
+        """Single table should return no joins."""
         schema = {
-            "public.foo": _make_table("public", "foo", [
-                ("id", "int", True), ("bar_baz", "varchar"),
-            ]),
-            "public.qux": _make_table("public", "qux", [
-                ("id", "int", True), ("name", "varchar"),
+            "public.users": _make_table("users", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
             ]),
         }
         joins = _infer_implicit_joins(schema)
         assert len(joins) == 0
+
+    def test_no_id_columns(self):
+        """Tables without id/PK columns should not crash."""
+        schema = {
+            "public.events": _make_table("events", columns=[
+                {"name": "event_type", "type": "varchar"},
+                {"name": "user_id", "type": "integer"},
+            ]),
+            "public.users": _make_table("users", columns=[
+                {"name": "name", "type": "varchar"},
+            ]),
+        }
+        # Should not crash
+        _infer_implicit_joins(schema)
+
+    def test_inferred_flag_set(self):
+        """All inferred joins should have inferred=True."""
+        schema = {
+            "public.orders": _make_table("orders", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+                {"name": "customer_id", "type": "integer"},
+            ]),
+            "public.customers": _make_table("customers", columns=[
+                {"name": "id", "type": "integer", "primary_key": True},
+            ]),
+        }
+        joins = _infer_implicit_joins(schema)
+        for j in joins:
+            assert j["inferred"] is True

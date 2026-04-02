@@ -1416,11 +1416,15 @@ async def get_schema_ddl(
         # Use schema-qualified name
         table_name = f"{table.get('schema', '')}.{table.get('name', '')}"
 
+        # Table-level comment (helps agent understand table purpose)
+        table_desc = table.get("description", "")
+        table_header = f"-- {table_desc}\n" if table_desc else ""
+
         col_lines = []
         pk_cols = []
         for col in table.get("columns", []):
             col_type = col.get("type", "TEXT").upper()
-            # Shorten common types
+            # Shorten common types for token efficiency
             type_map = {
                 "CHARACTER VARYING": "VARCHAR",
                 "TIMESTAMP WITHOUT TIME ZONE": "TIMESTAMP",
@@ -1433,6 +1437,10 @@ async def get_schema_ddl(
             parts = [f"  {col['name']} {col_type}"]
             if not col.get("nullable", True):
                 parts.append("NOT NULL")
+            # Inline column comment (semantic hint for agent)
+            col_comment = col.get("comment", "")
+            if col_comment:
+                parts.append(f"-- {col_comment}")
             col_lines.append(" ".join(parts))
             if col.get("primary_key"):
                 pk_cols.append(col["name"])
@@ -1453,7 +1461,7 @@ async def get_schema_ddl(
         if rc:
             row_comment = f" -- {rc:,} rows" if rc < 1_000_000 else f" -- {rc/1_000_000:.1f}M rows"
 
-        ddl = f"CREATE TABLE {table_name} (\n{',\n'.join(col_lines)}\n);{row_comment}"
+        ddl = f"{table_header}CREATE TABLE {table_name} (\n{',\n'.join(col_lines)}\n);{row_comment}"
         ddl_statements.append(ddl)
 
     ddl_text = "\n\n".join(ddl_statements)
@@ -1643,6 +1651,9 @@ async def schema_link(
             continue
         t = filtered[key]
         table_name = f"{t.get('schema', '')}.{t.get('name', '')}"
+        # Table description as comment (semantic context for agent)
+        table_desc = t.get("description", "")
+        header = f"-- {table_desc}\n" if table_desc else ""
         col_parts = []
         pk_cols = []
         for col in t.get("columns", []):
@@ -1655,6 +1666,9 @@ async def schema_link(
             parts = [f"  {col['name']} {ct}"]
             if not col.get("nullable", True):
                 parts.append("NOT NULL")
+            col_comment = col.get("comment", "")
+            if col_comment:
+                parts.append(f"-- {col_comment}")
             col_parts.append(" ".join(parts))
             if col.get("primary_key"):
                 pk_cols.append(col["name"])
@@ -1664,7 +1678,7 @@ async def schema_link(
             col_parts.append(f"  FOREIGN KEY ({fk['column']}) REFERENCES {fk.get('references_table', '')}({fk.get('references_column', '')})")
         rc = t.get("row_count", 0)
         rc_comment = f" -- {rc:,} rows, relevance={table_scores.get(key, 0):.1f}" if rc else f" -- relevance={table_scores.get(key, 0):.1f}"
-        ddl_lines.append(f"CREATE TABLE {table_name} (\n{',\n'.join(col_parts)}\n);{rc_comment}")
+        ddl_lines.append(f"{header}CREATE TABLE {table_name} (\n{',\n'.join(col_parts)}\n);{rc_comment}")
 
     ddl_text = "\n\n".join(ddl_lines)
     return {

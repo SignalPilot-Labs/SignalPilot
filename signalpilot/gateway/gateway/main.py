@@ -2855,6 +2855,51 @@ async def schema_link(
     question_lower = question.lower()
     terms = [w for w in _re_link.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question_lower) if len(w) >= 3 and w not in stopwords]
 
+    # N-gram extraction: combine adjacent terms into compound matches
+    # "order items" should match "order_items" table, "customer address" → "customer_address"
+    raw_terms = [w for w in _re_link.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question_lower) if len(w) >= 2 and w not in stopwords]
+    ngram_terms: list[str] = []
+    for i in range(len(raw_terms) - 1):
+        bigram = f"{raw_terms[i]}_{raw_terms[i + 1]}"
+        ngram_terms.append(bigram)
+        if i + 2 < len(raw_terms):
+            trigram = f"{raw_terms[i]}_{raw_terms[i + 1]}_{raw_terms[i + 2]}"
+            ngram_terms.append(trigram)
+
+    # Abbreviation expansion (common DB naming abbreviations → full words)
+    _abbreviations: dict[str, list[str]] = {
+        "cust": ["customer", "client"],
+        "prod": ["product", "production"],
+        "cat": ["category"],
+        "qty": ["quantity"],
+        "amt": ["amount"],
+        "txn": ["transaction"],
+        "inv": ["inventory", "invoice"],
+        "dept": ["department"],
+        "emp": ["employee"],
+        "mgr": ["manager"],
+        "addr": ["address"],
+        "desc": ["description"],
+        "num": ["number"],
+        "dt": ["date"],
+        "ts": ["timestamp"],
+        "cnt": ["count"],
+        "pct": ["percent", "percentage"],
+        "avg": ["average"],
+        "tot": ["total"],
+        "bal": ["balance"],
+        "acct": ["account"],
+        "org": ["organization"],
+        "loc": ["location"],
+        "sku": ["product", "item"],
+        "ref": ["reference"],
+        "seq": ["sequence"],
+        "idx": ["index"],
+        "dim": ["dimension"],
+        "fct": ["fact"],
+        "stg": ["staging"],
+    }
+
     # Expand terms with semantic synonyms (improves recall for Spider2.0)
     expanded_terms = list(terms)
     for term in terms:
@@ -2862,7 +2907,58 @@ async def schema_link(
             for syn in _synonyms[term]:
                 if syn not in expanded_terms:
                     expanded_terms.append(syn)
+        # Abbreviation expansion
+        if term in _abbreviations:
+            for full_word in _abbreviations[term]:
+                if full_word not in expanded_terms:
+                    expanded_terms.append(full_word)
+    # Add n-gram compound terms
+    for ng in ngram_terms:
+        if ng not in expanded_terms:
+            expanded_terms.append(ng)
     terms = expanded_terms
+
+    # Simple lemmatization for common suffixes (improves recall without NLTK dependency)
+    def _lemmatize(word: str) -> str:
+        """Reduce common English inflections to base form."""
+        if word.endswith("ies") and len(word) > 4:
+            return word[:-3] + "y"  # categories → category
+        if word.endswith("ves") and len(word) > 4:
+            return word[:-3] + "f"  # shelves → shelf
+        if word.endswith("ses") and len(word) > 4:
+            return word[:-2]  # addresses → address
+        if word.endswith("es") and len(word) > 3:
+            return word[:-2]  # taxes → tax
+        if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+            return word[:-1]  # orders → order
+        if word.endswith("ing") and len(word) > 5:
+            return word[:-3]  # shipping → ship
+        if word.endswith("ed") and len(word) > 4:
+            return word[:-2]  # created → creat
+        return word
+
+    # Add lemmatized forms for better matching
+    lemma_additions = []
+    for term in terms:
+        lemma = _lemmatize(term)
+        if lemma != term and lemma not in terms and len(lemma) >= 3:
+            lemma_additions.append(lemma)
+    terms.extend(lemma_additions)
+
+    # Question-type detection: boost relevant column types
+    # Aggregation questions → boost numeric columns
+    # Time questions → boost date/timestamp columns
+    _agg_keywords = {"average", "avg", "sum", "total", "count", "max", "maximum", "min", "minimum",
+                     "mean", "median", "aggregate", "top", "bottom", "highest", "lowest", "most", "least"}
+    _time_keywords = {"when", "date", "year", "month", "week", "day", "quarter", "recent",
+                      "latest", "oldest", "between", "before", "after", "during", "period"}
+    _numeric_types = {"int", "integer", "bigint", "smallint", "float", "double", "decimal",
+                      "numeric", "real", "number", "money"}
+    _time_types = {"date", "datetime", "timestamp", "timestamptz", "time"}
+
+    question_words = set(question_lower.split())
+    is_aggregation = bool(question_words & _agg_keywords)
+    is_temporal = bool(question_words & _time_keywords)
 
     # Step 2: Score each table by relevance
     table_scores: dict[str, float] = {}
@@ -2905,6 +3001,33 @@ async def schema_link(
             desc = (table_data.get("description") or "").lower()
             if term in desc:
                 score += 2.0
+
+        # N-gram matching: "order_items" bigram matches the table name directly
+        # This catches compound terms like "customer address" → "customer_address"
+        full_table_key_lower = f"{schema_name_lower}.{table_name_lower}"
+        for ng in ngram_terms:
+            if ng == table_name_lower:
+                score += 12.0  # Exact compound match is very strong
+            elif ng in table_name_lower:
+                score += 6.0
+
+        # Question-type boosting: prefer tables with relevant column types
+        if is_aggregation and score > 0:
+            numeric_cols = sum(
+                1 for c in table_data.get("columns", [])
+                if c.get("type", "").lower().split("(")[0] in _numeric_types
+            )
+            if numeric_cols > 0:
+                score += min(numeric_cols * 0.5, 3.0)
+
+        if is_temporal and score > 0:
+            time_cols = sum(
+                1 for c in table_data.get("columns", [])
+                if c.get("type", "").lower().split("(")[0] in _time_types
+                or any(kw in c.get("name", "").lower() for kw in ("date", "time", "created", "updated"))
+            )
+            if time_cols > 0:
+                score += min(time_cols * 0.5, 2.0)
 
         # Check cached sample values for value-based linking (RSL-SQL bidirectional approach)
         cached_samples = schema_cache.get_sample_values(name, table_key)
@@ -3005,6 +3128,7 @@ async def schema_link(
             "format": "compact",
             "linked_tables": len(linked_keys),
             "total_tables": len(filtered),
+            "scores": {k: round(table_scores.get(k, 0), 1) for k in sorted(linked_keys) if table_scores.get(k, 0) > 0},
             "schema": "\n".join(lines),
         }
 
@@ -3161,6 +3285,7 @@ async def schema_link(
         "linked_tables": len(linked_keys),
         "total_tables": len(filtered),
         "token_estimate": len(ddl_text) // 4,
+        "scores": {k: round(table_scores.get(k, 0), 1) for k in sorted(linked_keys) if table_scores.get(k, 0) > 0},
         "ddl": ddl_text,
     }
 

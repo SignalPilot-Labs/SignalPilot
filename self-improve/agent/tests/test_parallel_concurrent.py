@@ -156,7 +156,11 @@ class TestConcurrentStartRuns:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.upsert_worker = AsyncMock()
+            mock_db.update_worker_status = AsyncMock()
+            mock_db.update_worker_run_id = AsyncMock()
             # Start 3 runs concurrently
             results = await asyncio.gather(
                 mgr.start_run("task 1", 10.0, 30, "main", CREDS),
@@ -216,7 +220,11 @@ class TestConcurrentStartRuns:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.upsert_worker = AsyncMock()
+            mock_db.update_worker_status = AsyncMock()
+            mock_db.update_worker_run_id = AsyncMock()
             slot = await mgr.start_run("fresh start", 5.0, 60, "main", CREDS)
 
         assert slot.status == "running"
@@ -245,7 +253,9 @@ class TestConcurrentSignals:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.update_worker_status = AsyncMock()
             await mgr.stop_run("w-1", "test stop")
 
         assert mgr.slots["w-0"].status == "running"
@@ -280,7 +290,9 @@ class TestConcurrentSignals:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.update_worker_status = AsyncMock()
             await mgr.kill_run("w-1")
 
         assert mgr.slots["w-1"].status == "killed"

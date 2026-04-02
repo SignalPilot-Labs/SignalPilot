@@ -292,7 +292,11 @@ class TestTOCTOU:
         with patch.object(mgr, "_run_docker", side_effect=fake_run_docker), \
              patch.object(mgr, "_wait_for_health", new=fake_wait_health), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("asyncio.create_task"):
+             patch("asyncio.create_task"), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.upsert_worker = AsyncMock()
+            mock_db.update_worker_status = AsyncMock()
+            mock_db.update_worker_run_id = AsyncMock()
             await mgr.start_run("prompt", 1.0, 10.0, "main", {})
 
         assert len(slot_names_at_docker_call) == 1, "slot must be reserved before docker run"
@@ -478,7 +482,9 @@ class TestKillRun:
         mock_client.post = AsyncMock(return_value=mock_resp)
 
         with patch("httpx.AsyncClient", return_value=mock_client), \
-             patch.object(mgr, "cleanup_container") as mock_cleanup:
+             patch.object(mgr, "cleanup_container") as mock_cleanup, \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.update_worker_status = AsyncMock()
             result = await mgr.kill_run("improve-worker-x")
 
         assert result == {"ok": True}
@@ -514,7 +520,11 @@ class TestStartRun:
         with patch.object(mgr, "_run_docker", return_value="abc123def456") as mock_docker, \
              patch.object(mgr, "_wait_for_health", new=fake_wait_health), \
              patch("httpx.AsyncClient", return_value=mock_client), \
-             patch("asyncio.create_task"):
+             patch("asyncio.create_task"), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.upsert_worker = AsyncMock()
+            mock_db.update_worker_status = AsyncMock()
+            mock_db.update_worker_run_id = AsyncMock()
             slot = await mgr.start_run("do stuff", 2.0, 15.0, "main",
                                        {"claude_token": "tok"})
 
@@ -539,7 +549,10 @@ class TestStartRun:
 
         with patch.object(mgr, "_run_docker", return_value="abc123def456"), \
              patch.object(mgr, "_wait_for_health", new=fake_wait_health_timeout), \
-             patch.object(mgr, "cleanup_container"):
+             patch.object(mgr, "cleanup_container"), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.upsert_worker = AsyncMock()
+            mock_db.update_worker_status = AsyncMock()
             with pytest.raises(TimeoutError, match="did not become healthy"):
                 await mgr.start_run("prompt", 1.0, 10.0, "main", {})
 
@@ -556,7 +569,10 @@ class TestStartRun:
         def fail_docker(args, timeout=30):
             raise RuntimeError("docker: image not found")
 
-        with patch.object(mgr, "_run_docker", side_effect=fail_docker):
+        with patch.object(mgr, "_run_docker", side_effect=fail_docker), \
+             patch("agent.run_manager.db") as mock_db:
+            mock_db.upsert_worker = AsyncMock()
+            mock_db.update_worker_status = AsyncMock()
             with pytest.raises(RuntimeError, match="image not found"):
                 await mgr.start_run("prompt", 1.0, 10.0, "main", {})
 

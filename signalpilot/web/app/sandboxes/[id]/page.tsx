@@ -542,7 +542,8 @@ export default function SandboxDetailPage() {
           <div className="flex-1 relative">
             {/* Input prompt indicator */}
             <div className="absolute left-3 top-3 text-[10px] text-[var(--color-success)] tracking-wider pointer-events-none select-none">
-              In [{inputCount + 1}]:
+              <span className="hidden sm:inline">In [{inputCount + 1}]:</span>
+              <span className="sm:hidden">[{inputCount + 1}]</span>
             </div>
             <textarea
               ref={textareaRef}
@@ -552,7 +553,7 @@ export default function SandboxDetailPage() {
               placeholder="python3"
               rows={expanded ? 12 : 4}
               spellCheck={false}
-              className="w-full pl-16 sm:pl-20 pr-4 py-3 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
+              className="w-full pl-12 sm:pl-20 pr-4 py-3 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
               autoFocus
             />
           </div>

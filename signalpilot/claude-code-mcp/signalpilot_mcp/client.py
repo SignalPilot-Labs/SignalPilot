@@ -70,7 +70,8 @@ class SignalPilotClient:
     async def get_all_health(self) -> list[dict[str, Any]]:
         r = await self._client.get("/api/connections/health")
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        return data.get("connections", data) if isinstance(data, dict) else data
 
     # ── queries ──────────────────────────────────────────────────────────────
 

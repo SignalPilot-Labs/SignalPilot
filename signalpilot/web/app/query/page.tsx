@@ -307,7 +307,7 @@ export default function QueryExplorerPage() {
           {sql.length > 0 && (
             <span className="tabular-nums">{sql.length} chars</span>
           )}
-          <span className="tracking-wider opacity-60">ctrl+enter</span>
+          <span className="tracking-wider opacity-60 hidden sm:inline">ctrl+enter</span>
         </div>
       </div>
 

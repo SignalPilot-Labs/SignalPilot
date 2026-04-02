@@ -779,6 +779,32 @@ kbd {
 
   /* ── Scrollbar: wider for touch ── */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
+
+  /* ── Prevent text selection on interactive elements ── */
+  nav, .mobile-bottombar, .mobile-topbar {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ── Tap highlight color for dark theme ── */
+  * {
+    -webkit-tap-highlight-color: rgba(0, 255, 136, 0.08);
+  }
+
+  /* ── Smooth momentum scrolling ── */
+  .overflow-auto, .overflow-x-auto, .overflow-y-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Active nav indicator: top bar instead of left bar on mobile ── */
+  .nav-active::before {
+    left: 6px;
+    right: 6px;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 2px;
+  }
 }
 
 /* ── Smooth page load ── */

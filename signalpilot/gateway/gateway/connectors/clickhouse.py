@@ -33,15 +33,21 @@ class ClickHouseConnector(BaseConnector):
         self._database: str = "default"
         self._ssl_config: dict | None = None
         self._temp_files: list[str] = []
+        self._connection_timeout: int = 10
+        self._query_timeout: int = 30
 
     def set_ssl_config(self, ssl_config: dict) -> None:
         """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
         self._ssl_config = ssl_config
 
     def set_credential_extras(self, extras: dict) -> None:
-        """Extract SSL config from credential extras."""
+        """Extract SSL config and timeout settings from credential extras."""
         if extras.get("ssl_config"):
             self.set_ssl_config(extras["ssl_config"])
+        if extras.get("connection_timeout"):
+            self._connection_timeout = extras["connection_timeout"]
+        if extras.get("query_timeout"):
+            self._query_timeout = extras["query_timeout"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_CLICKHOUSE:
@@ -58,8 +64,8 @@ class ClickHouseConnector(BaseConnector):
             "user": params.get("user", "default"),
             "password": params.get("password", ""),
             "database": self._database,
-            "connect_timeout": 10,
-            "send_receive_timeout": 30,
+            "connect_timeout": self._connection_timeout,
+            "send_receive_timeout": self._query_timeout,
         }
 
         # SSL support — from connection string or explicit ssl_config
@@ -133,7 +139,7 @@ class ClickHouseConnector(BaseConnector):
                     "username": connect_args.get("user", "default"),
                     "password": connect_args.get("password", ""),
                     "database": connect_args.get("database", "default"),
-                    "connect_timeout": 10,
+                    "connect_timeout": self._connection_timeout,
                 }
                 # Pass SSL settings to HTTP client
                 if connect_args.get("secure"):

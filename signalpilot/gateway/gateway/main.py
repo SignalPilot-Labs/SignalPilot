@@ -1549,10 +1549,9 @@ async def schema_link(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-        cached = await connector.get_schema()
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            cached = await connector.get_schema()
         schema_cache.put(name, cached)
-        await pool_manager.release(info.db_type, conn_str)
 
     filtered = apply_endorsement_filter(name, cached)
 

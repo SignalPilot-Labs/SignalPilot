@@ -35,7 +35,7 @@ export function RepoSelector({ repos, activeRepo, onSelect }: RepoSelectorProps)
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-white/[0.04] transition-colors group"
+        className="flex items-center gap-1.5 px-2 py-1.5 md:py-1 rounded hover:bg-white/[0.04] transition-colors group min-h-[32px]"
       >
         {/* Repo icon */}
         <svg

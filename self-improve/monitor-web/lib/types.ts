@@ -163,6 +163,7 @@ export type ToolCategory =
   | "default";
 
 export function getToolCategory(toolName: string): ToolCategory {
+  if (!toolName) return "default";
   const name = toolName.toLowerCase();
   // Exact matches first
   if (name === "bash") return "bash";

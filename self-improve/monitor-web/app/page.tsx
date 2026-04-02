@@ -405,7 +405,7 @@ export default function MonitorPage() {
           <button
             onClick={() => setActiveView("bots")}
             className={clsx(
-              "px-2 md:px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
+              "px-2.5 py-1.5 md:py-1 min-h-[32px] rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
               activeView === "bots"
                 ? "bg-white/[0.08] text-[#e8e8e8]"
                 : "text-[#666] hover:text-[#aaa]"
@@ -421,7 +421,7 @@ export default function MonitorPage() {
           <button
             onClick={() => setActiveView("feed")}
             className={clsx(
-              "px-2 md:px-2.5 py-1 rounded text-[10px] font-medium transition-all",
+              "px-2.5 py-1.5 md:py-1 min-h-[32px] rounded text-[10px] font-medium transition-all",
               activeView === "feed"
                 ? "bg-white/[0.08] text-[#e8e8e8]"
                 : "text-[#666] hover:text-[#aaa]"
@@ -453,7 +453,7 @@ export default function MonitorPage() {
         {/* Settings link */}
         <Link
           href="/settings"
-          className="p-1.5 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors"
+          className="p-2 md:p-1.5 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
           title="Settings"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

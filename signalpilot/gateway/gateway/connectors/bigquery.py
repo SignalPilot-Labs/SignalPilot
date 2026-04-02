@@ -99,6 +99,23 @@ class BigQueryConnector(BaseConnector):
 
         return schema
 
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Get sample distinct values for schema linking optimization."""
+        if self._client is None:
+            return {}
+        result: dict[str, list] = {}
+        for col in columns[:20]:
+            try:
+                query = f"SELECT DISTINCT `{col}` FROM `{table}` WHERE `{col}` IS NOT NULL LIMIT {limit}"
+                job = self._client.query(query, timeout=10)
+                rows = list(job.result(timeout=10))
+                values = [str(row[col]) for row in rows if row[col] is not None]
+                if values:
+                    result[col] = values
+            except Exception:
+                continue
+        return result
+
     async def health_check(self) -> bool:
         if self._client is None:
             return False

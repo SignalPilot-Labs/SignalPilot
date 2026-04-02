@@ -249,12 +249,12 @@ export default function ConnectionsPage() {
                 </div>
               ))}
             </div>
-            <div className="flex items-center gap-3">
-              <button onClick={handleCreate} disabled={saving || !form.name} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <button onClick={handleCreate} disabled={saving || !form.name} className="flex items-center justify-center gap-2 px-4 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 save
               </button>
-              <button onClick={() => setShowForm(false)} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={() => setShowForm(false)} className="px-4 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 cancel
               </button>
             </div>

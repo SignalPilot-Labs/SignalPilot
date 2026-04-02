@@ -222,6 +222,71 @@ const CATEGORY_LABELS: Record<string, string> = {
   embedded: "embedded databases",
 };
 
+/* ── Connection presets (HEX quick-start pattern) ── */
+interface ConnectionPreset {
+  label: string;
+  db_type: DBType;
+  icon: string;
+  defaults: Partial<FormState>;
+}
+
+const CONNECTION_PRESETS: ConnectionPreset[] = [
+  {
+    label: "AWS RDS PostgreSQL",
+    db_type: "postgres",
+    icon: "🐘",
+    defaults: { port: "5432", ssl_enabled: true, ssl_mode: "require", description: "AWS RDS PostgreSQL instance" },
+  },
+  {
+    label: "AWS RDS MySQL",
+    db_type: "mysql",
+    icon: "🐬",
+    defaults: { port: "3306", ssl_enabled: true, ssl_mode: "require", description: "AWS RDS MySQL instance" },
+  },
+  {
+    label: "Azure SQL Database",
+    db_type: "mssql",
+    icon: "🔷",
+    defaults: { port: "1433", ssl_enabled: true, azure_ad_auth: true, description: "Azure SQL with Entra ID auth" },
+  },
+  {
+    label: "Snowflake (Key Pair)",
+    db_type: "snowflake",
+    icon: "❄️",
+    defaults: { snowflake_auth_method: "key_pair", description: "Snowflake with RSA key-pair auth" },
+  },
+  {
+    label: "BigQuery (Service Account)",
+    db_type: "bigquery",
+    icon: "📊",
+    defaults: { bq_auth_method: "service_account", description: "Google BigQuery with service account" },
+  },
+  {
+    label: "Databricks (OAuth)",
+    db_type: "databricks",
+    icon: "🧱",
+    defaults: { databricks_auth_method: "oauth_m2m", description: "Databricks with OAuth M2M service principal" },
+  },
+  {
+    label: "Starburst Galaxy (Trino)",
+    db_type: "trino",
+    icon: "⭐",
+    defaults: { trino_https: true, port: "443", trino_auth_method: "password", description: "Starburst Galaxy / Trino HTTPS" },
+  },
+  {
+    label: "ClickHouse Cloud",
+    db_type: "clickhouse",
+    icon: "⚡",
+    defaults: { ch_protocol: "http", ssl_enabled: true, port: "8443", description: "ClickHouse Cloud (HTTPS)" },
+  },
+  {
+    label: "SSH Tunnel (any DB)",
+    db_type: "postgres",
+    icon: "🔒",
+    defaults: { ssh_enabled: true, ssh_port: "22", description: "Database behind SSH bastion" },
+  },
+];
+
 const dbTypeLabels: Record<string, string> = Object.fromEntries(
   Object.entries(DB_CONFIGS).map(([k, v]) => [k, v.shortLabel])
 );
@@ -1878,6 +1943,29 @@ export default function ConnectionsPage() {
                 })}
               </div>
             </div>
+
+            {/* Quick-start presets (HEX pattern) — only show for new connections */}
+            {!editingConnection && (
+              <div className="mb-4">
+                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider opacity-60">quick start</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {CONNECTION_PRESETS.filter(p => p.db_type === form.db_type || form.db_type === "postgres").slice(0, 6).map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => {
+                        const updates = { ...defaultForm, ...preset.defaults, db_type: preset.db_type, port: preset.defaults.port || String(DB_CONFIGS[preset.db_type].defaultPort) };
+                        setForm({ ...form, ...updates } as FormState);
+                      }}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-[9px] tracking-wider border border-dashed border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all"
+                    >
+                      <span>{preset.icon}</span>
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Name + Description */}
             <div className="grid grid-cols-2 gap-4 mb-4">

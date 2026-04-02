@@ -214,18 +214,30 @@ class MSSQLConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        try:
+
+        effective_timeout = timeout or self._query_timeout
+
+        def _run():
             self._ensure_connected()
             cursor = self._conn.cursor(as_dict=True)
-            if timeout:
-                # SET LOCK_TIMEOUT for blocking waits + query governor for CPU time
-                cursor.execute(f"SET LOCK_TIMEOUT {timeout * 1000}")
+            if effective_timeout:
+                # SET LOCK_TIMEOUT limits blocking waits (deadlock/lock contention)
+                cursor.execute(f"SET LOCK_TIMEOUT {effective_timeout * 1000}")
             cursor.execute(sql, tuple(params) if params else None)
             if cursor.description is None:
                 return []
             rows = cursor.fetchall()
             cursor.close()
             return list(rows) if rows else []
+
+        import asyncio
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run),
+                timeout=effective_timeout + 5 if effective_timeout else None,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"SQL Server query timed out after {effective_timeout}s")
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
 

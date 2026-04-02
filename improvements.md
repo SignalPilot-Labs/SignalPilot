@@ -5,6 +5,55 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 26: Schema Linking Enhancement, Pre-Save Testing, Connection Presets (2026-04-01)
+
+**Summary:** 4 improvements — Enhanced schema linking with n-gram matching and question-type scoring (targets 27.6% of Spider2.0 errors), HEX-style pre-save connection testing (test before commit), connection preset templates, and scores in all schema link response formats.
+
+**Key metrics:**
+- 400 tests passing (no regressions)
+- 3 git commits this round
+- Pre-save test: PostgreSQL 2.6s, MySQL 19ms, MSSQL 57ms, ClickHouse 22ms (3 phases: network → auth → schema)
+- Schema linking: n-gram matching gives `order_items` score 49.0 for query "customer order items"
+- Spider2.0 SOTA: Genloop Sentinel v2 Pro at 96.7% (Snow), Databao Agent 69.7% (Lite), DDL format confirmed dominant
+
+### 1. Enhanced Schema Linking (Spider2.0 Optimization)
+**Files:** `gateway/main.py`
+- **Impact:** Directly targets the #1 error source in Spider2.0 (27.6% of failures are schema linking)
+- N-gram extraction: "order items" → matches `order_items` table with compound term matching
+- Abbreviation expansion: 30+ common DB abbreviations (cust→customer, qty→quantity, dept→department, etc.)
+- Simple lemmatization: categories→category, shipped→ship, addresses→address (no NLTK dependency)
+- Question-type detection: aggregation Qs boost numeric columns, temporal Qs boost date/timestamp columns
+- Scores now included in DDL and compact format responses (previously only in JSON format)
+- Research-backed: EDBT 2026 finding that high recall > high precision for schema linking
+
+### 2. Pre-Save Connection Testing (HEX Pattern)
+**Files:** `gateway/main.py`, `web/app/connections/page.tsx`, `web/lib/api.ts`
+- **Impact:** Test credentials without saving — HEX's pre-commit validation UX
+- New endpoint: POST `/api/connections/test-credentials` — same payload as creation, tests only
+- 3-phase testing: network (TCP connectivity) → authentication (DB login) → schema access (metadata query)
+- Error hints per phase (e.g., "Check hostname, port, firewall rules, and VPN/SSH tunnel settings")
+- Frontend "Test Connection" button with inline phase-by-phase results before form submission
+- All 5 DB types verified: PostgreSQL, MySQL, MSSQL, ClickHouse (Snowflake/BigQuery/Databricks untestable locally)
+
+### 3. Connection Preset Templates (HEX Quick-Start)
+**Files:** `web/app/connections/page.tsx`
+- **Impact:** 9 one-click presets that pre-fill form fields for common deployment patterns
+- AWS RDS PostgreSQL/MySQL (SSL enabled, port pre-filled)
+- Azure SQL Database (Entra ID auth enabled)
+- Snowflake Key Pair (RSA key pair auth pre-selected)
+- BigQuery Service Account (SA auth pre-selected)
+- Databricks OAuth M2M (service principal pre-selected)
+- Starburst Galaxy Trino (HTTPS + password auth)
+- ClickHouse Cloud (HTTPS HTTP protocol, port 8443)
+- SSH Tunnel template (any DB behind bastion)
+
+### 4. Industry Research Update
+- **Spider2.0 leaderboard (Apr 2026):** Genloop Sentinel v2 Pro leads Snow at 96.7%, Databao Agent leads Lite at 69.7%. Multi-agent architectures dominate. Schema linking is 27.6% of errors — our primary optimization target.
+- **HEX patterns verified:** 16 supported databases, on-demand SSH tunnels, static outbound IPs, per-user OAuth, scheduled schema refresh. Our implementation now covers most patterns.
+- **Industry trends:** Fivetran+dbt merged (late 2025), Airbyte at 600+ connectors. Declarative connector config and hybrid control/data plane architecture emerging as standards.
+
+---
+
 ## Round 25: Auth Flexibility, Progressive Disclosure, Schema Warmup (2026-04-01)
 
 **Summary:** 6 improvements — Trino JWT/certificate/Kerberos auth, BigQuery OAuth/ADC/impersonation, HEX-style progressive disclosure tabs in advanced settings, parallel schema warmup endpoint, Trino auth tests, and all 5 Docker databases verified (34 total tables).

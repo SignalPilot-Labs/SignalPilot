@@ -20,7 +20,7 @@ from .ssh_tunnel import SSHTunnel
 logger = logging.getLogger(__name__)
 
 # DB types that use host:port connections and can benefit from SSH tunnels
-_TUNNEL_CAPABLE_DB_TYPES = {"postgres", "mysql", "redshift", "clickhouse"}
+_TUNNEL_CAPABLE_DB_TYPES = {"postgres", "mysql", "redshift", "clickhouse", "mssql"}
 
 # Default ports per DB type (for connection string rewriting)
 _DEFAULT_PORTS: dict[str, int] = {
@@ -28,6 +28,7 @@ _DEFAULT_PORTS: dict[str, int] = {
     "mysql": 3306,
     "redshift": 5439,
     "clickhouse": 9000,
+    "mssql": 1433,
 }
 
 # URI scheme prefixes per DB type
@@ -36,6 +37,7 @@ _URI_SCHEMES: dict[str, list[str]] = {
     "mysql": ["mysql://", "mysql+pymysql://"],
     "redshift": ["redshift://", "postgresql://"],
     "clickhouse": ["clickhouse://"],
+    "mssql": ["mssql://", "mssql+pymssql://", "sqlserver://"],
 }
 
 

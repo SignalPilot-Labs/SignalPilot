@@ -41,6 +41,8 @@ _COST_PER_ROW = {
     "databricks": 0.000_001_0,     # Similar to Snowflake pricing model
     "duckdb": 0.0,                 # Local/free
     "sqlite": 0.0,                 # Local/free
+    "mssql": 0.000_000_4,          # ~$0.10-0.20/hr, SQL Server/Azure SQL
+    "trino": 0.000_000_2,          # Self-hosted federated engine
 }
 
 
@@ -307,6 +309,71 @@ class CostEstimator:
             return CostEstimate(warning=f"Cost estimation failed: {e}")
 
     @staticmethod
+    async def estimate_mssql(connector: BaseConnector, sql: str) -> CostEstimate:
+        """Use SET SHOWPLAN_ALL to estimate SQL Server query cost."""
+        try:
+            # Enable showplan mode, get plan, then disable
+            await connector.execute("SET SHOWPLAN_ALL ON")
+            try:
+                rows = await connector.execute(sql)
+            finally:
+                await connector.execute("SET SHOWPLAN_ALL OFF")
+
+            if not rows:
+                return CostEstimate(warning="SHOWPLAN returned no data")
+
+            estimated_rows = 0
+            total_cost = 0.0
+            plan_lines = []
+            for row in rows:
+                est = row.get("EstimateRows", 0)
+                if est and isinstance(est, (int, float)):
+                    estimated_rows = max(estimated_rows, int(est))
+                cost = row.get("TotalSubtreeCost", 0)
+                if cost and isinstance(cost, (int, float)):
+                    total_cost = max(total_cost, float(cost))
+                stmt = row.get("StmtText", "")
+                if stmt:
+                    plan_lines.append(str(stmt))
+
+            # SQL Server on-premises is ~$0.10/hr, Azure SQL ~$0.20/hr
+            estimated_usd = estimated_rows * 0.000_000_4
+            return CostEstimate(
+                estimated_rows=estimated_rows,
+                estimated_cost=total_cost,
+                estimated_usd=estimated_usd,
+                raw_plan="\n".join(plan_lines)[:2000],
+            )
+        except Exception as e:
+            return CostEstimate(warning=f"Cost estimation failed: {e}")
+
+    @staticmethod
+    async def estimate_trino(connector: BaseConnector, sql: str) -> CostEstimate:
+        """Use EXPLAIN to estimate Trino query cost."""
+        try:
+            explain_sql = f"EXPLAIN {sql}"
+            rows = await connector.execute(explain_sql)
+            plan_text = "\n".join(str(list(r.values())[0]) for r in rows) if rows else ""
+
+            estimated_rows = 0
+            if plan_text:
+                import re
+                # Trino EXPLAIN shows "rows: N" or "est. N rows"
+                for match in re.finditer(r"(?:rows|est\.?)\s*[:=]?\s*(\d+)", plan_text, re.IGNORECASE):
+                    estimated_rows = max(estimated_rows, int(match.group(1)))
+
+            # Trino is typically self-hosted, low cost
+            estimated_usd = estimated_rows * 0.000_000_2
+            return CostEstimate(
+                estimated_rows=estimated_rows,
+                estimated_cost=0,
+                estimated_usd=estimated_usd,
+                raw_plan=plan_text[:2000],
+            )
+        except Exception as e:
+            return CostEstimate(warning=f"Cost estimation failed: {e}")
+
+    @staticmethod
     async def estimate(connector: BaseConnector, sql: str, db_type: str) -> CostEstimate:
         """Route to the appropriate estimator based on db type."""
         estimators = {
@@ -318,6 +385,8 @@ class CostEstimator:
             "clickhouse": CostEstimator.estimate_clickhouse,
             "databricks": CostEstimator.estimate_databricks,
             "duckdb": CostEstimator.estimate_duckdb,
+            "mssql": CostEstimator.estimate_mssql,
+            "trino": CostEstimator.estimate_trino,
         }
         estimator = estimators.get(db_type)
         if estimator:

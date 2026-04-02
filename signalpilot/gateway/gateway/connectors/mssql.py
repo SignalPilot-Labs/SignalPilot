@@ -2,6 +2,10 @@
 
 Supports SQL Server 2016+, Azure SQL Database, Azure SQL Managed Instance.
 Uses pymssql for synchronous operations wrapped in async context.
+
+Schema introspection uses sys.* catalog views for comprehensive metadata
+including row counts (sys.dm_db_partition_stats), column statistics,
+extended properties for comments, and index definitions.
 """
 
 from __future__ import annotations
@@ -92,6 +96,7 @@ class MSSQLConnector(BaseConnector):
         try:
             cursor = self._conn.cursor(as_dict=True)
             if timeout:
+                # SET LOCK_TIMEOUT for blocking waits + query governor for CPU time
                 cursor.execute(f"SET LOCK_TIMEOUT {timeout * 1000}")
             cursor.execute(sql, tuple(params) if params else None)
             if cursor.description is None:
@@ -106,19 +111,22 @@ class MSSQLConnector(BaseConnector):
         if self._conn is None:
             raise RuntimeError("Not connected")
 
-        # Columns + primary keys in one query
+        # Columns + primary keys + row counts from dm_db_partition_stats (accurate)
         col_sql = """
             SELECT
                 s.name AS table_schema,
                 t.name AS table_name,
                 c.name AS column_name,
                 tp.name AS data_type,
+                c.max_length,
+                c.precision,
+                c.scale,
                 c.is_nullable,
+                c.is_identity,
                 OBJECT_DEFINITION(c.default_object_id) AS column_default,
                 CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
                 ep.value AS column_comment,
-                ep_t.value AS table_comment,
-                p.rows AS row_count
+                ep_t.value AS table_comment
             FROM sys.tables t
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             JOIN sys.columns c ON t.object_id = c.object_id
@@ -133,9 +141,22 @@ class MSSQLConnector(BaseConnector):
                 ON ep.major_id = c.object_id AND ep.minor_id = c.column_id AND ep.name = 'MS_Description'
             LEFT JOIN sys.extended_properties ep_t
                 ON ep_t.major_id = t.object_id AND ep_t.minor_id = 0 AND ep_t.name = 'MS_Description'
-            LEFT JOIN sys.partitions p ON t.object_id = p.object_id AND p.index_id IN (0, 1)
             WHERE s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest')
             ORDER BY s.name, t.name, c.column_id
+        """
+
+        # Row counts from dm_db_partition_stats (accurate, no table scan)
+        rowcount_sql = """
+            SELECT
+                s.name AS table_schema,
+                t.name AS table_name,
+                SUM(p.row_count) AS row_count
+            FROM sys.dm_db_partition_stats p
+            JOIN sys.tables t ON p.object_id = t.object_id
+            JOIN sys.schemas s ON t.schema_id = s.schema_id
+            WHERE p.index_id IN (0, 1)
+                AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest')
+            GROUP BY s.name, t.name
         """
 
         # Foreign keys
@@ -151,20 +172,37 @@ class MSSQLConnector(BaseConnector):
             JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
         """
 
-        # Indexes
+        # Indexes with included columns
         idx_sql = """
             SELECT
                 OBJECT_SCHEMA_NAME(i.object_id) AS table_schema,
                 OBJECT_NAME(i.object_id) AS table_name,
                 i.name AS index_name,
                 i.is_unique,
+                i.type_desc AS index_type,
                 STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) AS columns
             FROM sys.indexes i
             JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
             JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
             WHERE i.name IS NOT NULL
+                AND ic.is_included_column = 0
                 AND OBJECT_SCHEMA_NAME(i.object_id) NOT IN ('sys', 'INFORMATION_SCHEMA')
-            GROUP BY i.object_id, i.name, i.is_unique
+            GROUP BY i.object_id, i.name, i.is_unique, i.type_desc
+        """
+
+        # Column statistics — helps Spider2.0 understand selectivity
+        stats_sql = """
+            SELECT
+                OBJECT_SCHEMA_NAME(s.object_id) AS table_schema,
+                OBJECT_NAME(s.object_id) AS table_name,
+                c.name AS column_name,
+                s.name AS stat_name,
+                STATS_DATE(s.object_id, s.stats_id) AS last_updated
+            FROM sys.stats s
+            JOIN sys.stats_columns sc ON s.object_id = sc.object_id AND s.stats_id = sc.stats_id
+            JOIN sys.columns c ON sc.object_id = c.object_id AND sc.column_id = c.column_id
+            WHERE sc.stats_column_id = 1
+                AND OBJECT_SCHEMA_NAME(s.object_id) NOT IN ('sys', 'INFORMATION_SCHEMA')
         """
 
         def _fetch(query: str) -> list:
@@ -178,8 +216,16 @@ class MSSQLConnector(BaseConnector):
                 return []
 
         rows = _fetch(col_sql)
+        rowcount_rows = _fetch(rowcount_sql)
         fk_rows = _fetch(fk_sql)
         idx_rows = _fetch(idx_sql)
+        stat_rows = _fetch(stats_sql)
+
+        # Build row count map
+        row_counts: dict[str, int] = {}
+        for r in rowcount_rows:
+            key = f"{r['table_schema']}.{r['table_name']}"
+            row_counts[key] = r.get("row_count", 0) or 0
 
         # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
@@ -204,7 +250,14 @@ class MSSQLConnector(BaseConnector):
                 "name": r["index_name"],
                 "columns": r["columns"],
                 "unique": bool(r["is_unique"]),
+                "type": r.get("index_type", ""),
             })
+
+        # Build stats map (column → has_statistics flag)
+        col_has_stats: set[str] = set()
+        for r in stat_rows:
+            stat_key = f"{r['table_schema']}.{r['table_name']}.{r['column_name']}"
+            col_has_stats.add(stat_key)
 
         schema: dict[str, Any] = {}
         for row in rows:
@@ -216,17 +269,38 @@ class MSSQLConnector(BaseConnector):
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
                     "indexes": indexes.get(key, []),
-                    "row_count": row.get("row_count", 0) or 0,
+                    "row_count": row_counts.get(key, 0),
                     "description": str(row.get("table_comment", "") or ""),
                 }
-            schema[key]["columns"].append({
+
+            # Build data type string with precision info
+            data_type = row["data_type"]
+            if data_type in ("nvarchar", "varchar", "char", "nchar", "binary", "varbinary"):
+                max_len = row.get("max_length", -1)
+                if max_len == -1:
+                    data_type = f"{data_type}(max)"
+                elif data_type.startswith("n"):
+                    data_type = f"{data_type}({max_len // 2})"
+                else:
+                    data_type = f"{data_type}({max_len})"
+            elif data_type in ("decimal", "numeric"):
+                data_type = f"{data_type}({row.get('precision', 18)},{row.get('scale', 0)})"
+
+            stat_key = f"{row['table_schema']}.{row['table_name']}.{row['column_name']}"
+            col_entry: dict[str, Any] = {
                 "name": row["column_name"],
-                "type": row["data_type"],
+                "type": data_type,
                 "nullable": bool(row["is_nullable"]),
                 "primary_key": bool(row["is_primary_key"]),
                 "default": row.get("column_default"),
                 "comment": str(row.get("column_comment", "") or ""),
-            })
+            }
+            if bool(row.get("is_identity")):
+                col_entry["identity"] = True
+            if stat_key in col_has_stats:
+                col_entry["has_statistics"] = True
+
+            schema[key]["columns"].append(col_entry)
         return schema
 
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:

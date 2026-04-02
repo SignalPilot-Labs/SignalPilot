@@ -22,8 +22,10 @@ except ImportError:
 class MySQLConnector(BaseConnector):
     def __init__(self):
         self._conn: pymysql.Connection | None = None
+        self._connect_kwargs: dict = {}
         self._connect_params: dict = {}
         self._ssl_config: dict | None = None
+        self._temp_files: list[str] = []
 
     def set_ssl_config(self, ssl_config: dict) -> None:
         """Set SSL configuration for the connection."""
@@ -69,22 +71,28 @@ class MySQLConnector(BaseConnector):
                 ca_file.write(self._ssl_config["ca_cert"].encode())
                 ca_file.close()
                 ssl_dict["ca"] = ca_file.name
+                self._temp_files.append(ca_file.name)
             if self._ssl_config.get("client_cert"):
                 cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
                 cert_file.write(self._ssl_config["client_cert"].encode())
                 cert_file.close()
                 ssl_dict["cert"] = cert_file.name
+                self._temp_files.append(cert_file.name)
             if self._ssl_config.get("client_key"):
                 key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
                 key_file.write(self._ssl_config["client_key"].encode())
                 key_file.close()
                 ssl_dict["key"] = key_file.name
+                self._temp_files.append(key_file.name)
 
             if ssl_dict:
                 connect_kwargs["ssl"] = ssl_dict
             else:
                 # SSL enabled but no certs — enforce SSL with no cert verification
                 connect_kwargs["ssl"] = {"check_hostname": False}
+
+        # Store kwargs for reconnection
+        self._connect_kwargs = connect_kwargs
 
         try:
             self._conn = pymysql.connect(**connect_kwargs)
@@ -122,7 +130,7 @@ class MySQLConnector(BaseConnector):
         if self._conn is None:
             raise RuntimeError("Not connected")
         try:
-            self._conn.ping(reconnect=True)
+            self._ensure_connected()
             with self._conn.cursor() as cursor:
                 if timeout:
                     cursor.execute(f"SET SESSION max_execution_time = {timeout * 1000}")
@@ -189,7 +197,7 @@ class MySQLConnector(BaseConnector):
 
         def _fetch(query: str) -> list:
             try:
-                self._conn.ping(reconnect=True)
+                self._ensure_connected()
                 with self._conn.cursor() as cursor:
                     cursor.execute(query)
                     return cursor.fetchall()
@@ -268,7 +276,7 @@ class MySQLConnector(BaseConnector):
         if self._conn is None:
             return {}
         result: dict[str, list] = {}
-        self._conn.ping(reconnect=True)
+        self._ensure_connected()
         for col in columns[:20]:
             try:
                 with self._conn.cursor() as cursor:
@@ -287,14 +295,43 @@ class MySQLConnector(BaseConnector):
         if self._conn is None:
             return False
         try:
-            self._conn.ping(reconnect=True)
+            self._ensure_connected()
             with self._conn.cursor() as cursor:
                 cursor.execute("SELECT 1")
             return True
         except Exception:
             return False
 
+    def _ensure_connected(self) -> None:
+        """Ensure connection is alive, reconnect if needed."""
+        if self._conn is None:
+            if self._connect_kwargs:
+                self._conn = pymysql.connect(**self._connect_kwargs)
+            else:
+                raise RuntimeError("Not connected")
+            return
+        try:
+            self._conn.ping(reconnect=True)
+        except Exception:
+            # Connection truly dead — reconnect from scratch
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            if self._connect_kwargs:
+                self._conn = pymysql.connect(**self._connect_kwargs)
+            else:
+                raise RuntimeError("Connection lost and cannot reconnect")
+
     async def close(self) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None
+        # Cleanup temp SSL cert files
+        import os
+        for f in self._temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        self._temp_files.clear()

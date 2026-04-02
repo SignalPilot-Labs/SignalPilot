@@ -62,13 +62,27 @@ async def wait_for_signal(timeout: float = 2.0) -> dict | None:
         return None
 
 
+MAX_PAUSE_MINUTES = 30  # Auto-resume after 30 minutes if no signal arrives
+
+
 async def handle_pause(run_id: str) -> str | None:
-    """Block until resume, inject, or stop signal arrives via the instant queue."""
+    """Block until resume, inject, or stop signal arrives via the instant queue.
+    Auto-resumes after MAX_PAUSE_MINUTES to prevent indefinite blocking."""
+    import time as _time
+    pause_start = _time.time()
     print("[agent] PAUSED — waiting for signal...")
     await db.update_run_status(run_id, "paused")
     await db.log_audit(run_id, "paused", {})
 
     while True:
+        # Auto-resume if paused too long
+        elapsed = _time.time() - pause_start
+        if elapsed > MAX_PAUSE_MINUTES * 60:
+            print(f"[agent] AUTO-RESUMED after {MAX_PAUSE_MINUTES}m pause timeout")
+            await db.update_run_status(run_id, "running")
+            await db.log_audit(run_id, "auto_resumed", {"pause_minutes": round(elapsed / 60, 1)})
+            return "resume"
+
         signal = await wait_for_signal(timeout=5.0)
         if signal:
             sig = signal["signal"]

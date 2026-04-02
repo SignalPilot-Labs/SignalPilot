@@ -4,6 +4,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "SignalPilot \u00B7 Self-Improve Monitor",
   description: "Real-time monitoring dashboard for the self-improvement agent",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

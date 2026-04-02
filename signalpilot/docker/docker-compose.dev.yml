@@ -36,8 +36,8 @@ services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_PASSWORD: testpass
-      POSTGRES_DB: testdb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-testpass}
+      POSTGRES_DB: ${POSTGRES_DB:-testdb}
     ports:
       - "5600:5432"
     volumes:

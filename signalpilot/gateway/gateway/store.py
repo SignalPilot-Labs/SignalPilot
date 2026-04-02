@@ -31,6 +31,8 @@ from .models import (
     SandboxInfo,
     SSHTunnelConfig,
     SSLConfig,
+    TunnelInfo,
+    TunnelStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ SANDBOXES_FILE = DATA_DIR / "sandboxes.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 AUDIT_FILE = DATA_DIR / "audit.jsonl"
 SCHEMA_ENDORSEMENTS_FILE = DATA_DIR / "schema_endorsements.json"
+TUNNELS_FILE = DATA_DIR / "tunnels.json"
 
 # In-memory vault for raw credentials (cache — authoritative source is encrypted file)
 _credential_vault: dict[str, str] = {}
@@ -670,3 +673,50 @@ try:
     _load_endorsements()
 except Exception:
     pass
+
+
+# ─── Tunnels ────────────────────────────────────────────────────────────────
+
+_tunnels: dict[str, TunnelInfo] = {}
+
+
+def load_tunnels():
+    """Load persisted tunnels from disk. All reset to stopped (no live process)."""
+    global _tunnels
+    data = _load_json(TUNNELS_FILE, {})
+    _tunnels = {}
+    for tid, raw in data.items():
+        t = TunnelInfo(**raw)
+        t.status = TunnelStatus.stopped
+        t.pid = None
+        t.public_url = None
+        t.started_at = None
+        t.error_message = None
+        _tunnels[tid] = t
+
+
+def list_tunnels() -> list[TunnelInfo]:
+    return list(_tunnels.values())
+
+
+def get_tunnel(tunnel_id: str) -> TunnelInfo | None:
+    return _tunnels.get(tunnel_id)
+
+
+def upsert_tunnel(tunnel: TunnelInfo):
+    _tunnels[tunnel.id] = tunnel
+    _persist_tunnels()
+
+
+def delete_tunnel(tunnel_id: str) -> bool:
+    if tunnel_id not in _tunnels:
+        return False
+    del _tunnels[tunnel_id]
+    _persist_tunnels()
+    return True
+
+
+def _persist_tunnels():
+    """Write tunnel configs to disk (runtime state like pid is included but reset on load)."""
+    data = {tid: t.model_dump() for tid, t in _tunnels.items()}
+    _save_json(TUNNELS_FILE, data)

@@ -1,4 +1,15 @@
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+function getGatewayUrl(): string {
+  if (typeof window === "undefined") {
+    return process.env.NEXT_PUBLIC_GATEWAY_URL || "http://gateway:3300";
+  }
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+  }
+  return "";
+}
+
+const GATEWAY_URL = getGatewayUrl();
 
 function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
@@ -377,6 +388,15 @@ export const getConnectionSchemaLink = (name: string, question: string, format =
     token_estimate?: number; ddl?: string; schema?: string;
     scores?: Record<string, number>; tables?: Record<string, unknown>;
   }>(`/api/connections/${name}/schema/link?question=${encodeURIComponent(question)}&format=${format}&max_tables=${maxTables}`);
+
+// Tunnels
+export const getTunnels = () => request<import("./types").TunnelInfo[]>("/api/tunnels");
+export const createTunnel = (t: { local_port: number; label?: string }) =>
+  request<import("./types").TunnelInfo>("/api/tunnels", { method: "POST", body: JSON.stringify(t) });
+export const getTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}`);
+export const deleteTunnel = (id: string) => request<void>(`/api/tunnels/${id}`, { method: "DELETE" });
+export const stopTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}/stop`, { method: "POST" });
+export const startTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}/start`, { method: "POST" });
 
 // Metrics SSE
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {

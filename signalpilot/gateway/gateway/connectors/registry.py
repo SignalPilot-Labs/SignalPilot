@@ -8,6 +8,7 @@ from .bigquery import BigQueryConnector
 from .clickhouse import ClickHouseConnector
 from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
+from .mssql import MSSQLConnector
 from .mysql import MySQLConnector
 from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
@@ -24,6 +25,7 @@ _REGISTRY: dict[str, type[BaseConnector]] = {
     DBType.redshift: RedshiftConnector,
     DBType.clickhouse: ClickHouseConnector,
     DBType.databricks: DatabricksConnector,
+    DBType.mssql: MSSQLConnector,
     DBType.sqlite: SQLiteConnector,
 }
 

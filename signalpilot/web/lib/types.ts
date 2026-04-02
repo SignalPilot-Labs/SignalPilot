@@ -20,6 +20,7 @@ export type DBType =
   | "redshift"
   | "clickhouse"
   | "databricks"
+  | "mssql"
   | "sqlite";
 
 export interface SSHTunnelConfig {

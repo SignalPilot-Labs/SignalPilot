@@ -3,6 +3,7 @@ from .bigquery import BigQueryConnector
 from .clickhouse import ClickHouseConnector
 from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
+from .mssql import MSSQLConnector
 from .mysql import MySQLConnector
 from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
@@ -16,6 +17,7 @@ __all__ = [
     "ClickHouseConnector",
     "DatabricksConnector",
     "DuckDBConnector",
+    "MSSQLConnector",
     "MySQLConnector",
     "PostgresConnector",
     "RedshiftConnector",

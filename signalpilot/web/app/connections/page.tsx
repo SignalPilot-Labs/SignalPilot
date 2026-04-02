@@ -141,6 +141,17 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     fields: ["host", "http_path", "access_token", "catalog", "schema_name"],
     description: "Unified analytics platform",
   },
+  mssql: {
+    label: "SQL Server",
+    shortLabel: "mssql",
+    defaultPort: 1433,
+    category: "relational",
+    supportsSSH: true,
+    supportsSSL: true,
+    connectionModes: ["fields", "url"],
+    fields: ["host", "port", "database", "username", "password"],
+    description: "Microsoft SQL Server / Azure SQL",
+  },
   duckdb: {
     label: "DuckDB",
     shortLabel: "duck",
@@ -166,7 +177,7 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
 };
 
 const DB_TYPE_ORDER: DBType[] = [
-  "postgres", "mysql", "redshift", "snowflake", "bigquery",
+  "postgres", "mysql", "mssql", "redshift", "snowflake", "bigquery",
   "clickhouse", "databricks", "duckdb", "sqlite",
 ];
 
@@ -176,6 +187,7 @@ const CONNECTOR_TIERS: Record<DBType, { tier: number; label: string; color: stri
   mysql:      { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   snowflake:  { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   bigquery:   { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
+  mssql:      { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   redshift:   { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   clickhouse: { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   databricks: { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
@@ -262,6 +274,13 @@ function DbTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
           <path d="M6 1L11 3.5L6 6L1 3.5L6 1Z" stroke="currentColor" strokeWidth="0.75" fill="none" />
           <path d="M1 6L6 8.5L11 6" stroke="currentColor" strokeWidth="0.75" fill="none" />
           <path d="M1 8.5L6 11L11 8.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
+        </svg>
+      );
+    case "mssql":
+      return (
+        <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <rect x="1.5" y="2" width="9" height="8" rx="1" stroke="currentColor" strokeWidth="0.75" fill="none" />
+          <path d="M3.5 5L5 7L8.5 4" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
         </svg>
       );
     case "sqlite":
@@ -422,6 +441,8 @@ function buildConnectionPreview(form: FormState): string {
       return `bigquery://${form.project || "project"}/${form.dataset || "dataset"}`;
     case "databricks":
       return `databricks://****@${form.host || "host"}/${form.http_path || "sql/..."}${form.catalog ? `?catalog=${form.catalog}` : ""}`;
+    case "mssql":
+      return `mssql://${form.username || "sa"}:****@${form.host || "host"}:${form.port || "1433"}/${form.database || "master"}`;
     case "duckdb":
     case "sqlite":
       return form.database || ":memory:";
@@ -433,8 +454,8 @@ function buildConnectionPreview(form: FormState): string {
 /** Parse a connection URL into form fields (URL → fields sync). */
 function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
   try {
-    if (dbType === "postgres" || dbType === "mysql" || dbType === "redshift" || dbType === "clickhouse") {
-      const parsed = new URL(url.replace(/^(postgresql|redshift|clickhouse|mysql\+pymysql):/, "http:"));
+    if (dbType === "postgres" || dbType === "mysql" || dbType === "redshift" || dbType === "clickhouse" || dbType === "mssql") {
+      const parsed = new URL(url.replace(/^(postgresql|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver):/, "http:"));
       return {
         host: parsed.hostname || "",
         port: parsed.port || String(DB_CONFIGS[dbType].defaultPort),
@@ -574,6 +595,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
       clickhouse: "clickhouse://user:pass@host:9000/default  (or clickhouse+http:// for HTTP)",
       snowflake: "snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE",
       databricks: "databricks://token@host.databricks.com/sql/1.0/warehouses/abc?catalog=main",
+      mssql: "mssql://sa:password@host:1433/mydb",
     };
     const parsed = form.connection_string ? parseConnectionUrl(form.connection_string, form.db_type) : null;
     const hasValidUrl = parsed && Object.values(parsed).some(v => v);

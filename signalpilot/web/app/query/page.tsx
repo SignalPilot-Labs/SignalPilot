@@ -107,6 +107,11 @@ const QUERY_TEMPLATES: Record<string, { label: string; sql: string }[]> = {
     { label: "List tables", sql: "SELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE table_schema NOT IN ('information_schema')\nORDER BY table_schema, table_name;" },
     { label: "Describe table", sql: "DESCRIBE TABLE EXTENDED your_schema.your_table;" },
   ],
+  mssql: [
+    { label: "List tables", sql: "SELECT s.name AS [schema], t.name AS [table],\n  p.rows AS row_count\nFROM sys.tables t\nJOIN sys.schemas s ON t.schema_id = s.schema_id\nLEFT JOIN sys.partitions p ON t.object_id = p.object_id AND p.index_id IN (0, 1)\nWHERE s.name NOT IN ('sys')\nORDER BY p.rows DESC;" },
+    { label: "Table sizes", sql: "SELECT s.name + '.' + t.name AS [table],\n  SUM(a.total_pages) * 8 / 1024 AS total_mb,\n  SUM(a.used_pages) * 8 / 1024 AS used_mb,\n  p.rows\nFROM sys.tables t\nJOIN sys.schemas s ON t.schema_id = s.schema_id\nJOIN sys.indexes i ON t.object_id = i.object_id\nJOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id\nJOIN sys.allocation_units a ON p.partition_id = a.container_id\nGROUP BY s.name, t.name, p.rows\nORDER BY SUM(a.total_pages) DESC;" },
+    { label: "Running queries", sql: "SELECT r.session_id, r.status, r.command,\n  r.cpu_time, r.total_elapsed_time / 1000 AS elapsed_sec,\n  LEFT(t.text, 100) AS query\nFROM sys.dm_exec_requests r\nCROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t\nWHERE r.status != 'background'\nORDER BY r.total_elapsed_time DESC;" },
+  ],
   duckdb: [
     { label: "List tables", sql: "SELECT table_schema, table_name\nFROM information_schema.tables\nORDER BY table_schema, table_name;" },
     { label: "System info", sql: "SELECT * FROM duckdb_settings()\nWHERE name IN ('threads', 'memory_limit', 'max_memory');" },

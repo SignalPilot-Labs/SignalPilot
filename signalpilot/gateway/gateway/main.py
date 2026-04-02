@@ -46,6 +46,7 @@ _SQLGLOT_DIALECTS: dict[str, str] = {
     "redshift": "redshift",
     "clickhouse": "clickhouse",
     "databricks": "databricks",
+    "mssql": "tsql",
     "duckdb": "duckdb",
     "sqlite": "sqlite",
 }
@@ -705,6 +706,7 @@ async def test_connection(name: str):
                 "redshift": "SELECT version()",
                 "clickhouse": "SELECT version()",
                 "snowflake": "SELECT CURRENT_VERSION()",
+                "mssql": "SELECT @@VERSION",
                 "duckdb": "SELECT version()",
                 "sqlite": "SELECT sqlite_version()",
             }
@@ -3323,6 +3325,18 @@ _CONNECTOR_TIERS = {
             "query_timeout": True, "cost_estimation": False,
             "connection_pooling": False, "parallel_schema": False,
             "unity_catalog": True, "pat_auth": True,
+        },
+    },
+    "mssql": {
+        "tier": 2,
+        "label": "Tier 2 — Stable",
+        "features": {
+            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
+            "foreign_keys": True, "indexes": True, "row_counts": True,
+            "column_stats": False, "primary_keys": True, "comments": True,
+            "sample_values": True, "read_only_transactions": False,
+            "query_timeout": True, "cost_estimation": False,
+            "connection_pooling": False, "parallel_schema": False,
         },
     },
     "duckdb": {

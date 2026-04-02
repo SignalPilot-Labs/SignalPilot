@@ -47,6 +47,7 @@ class DBType(str, Enum):
     redshift = "redshift"
     clickhouse = "clickhouse"
     databricks = "databricks"
+    mssql = "mssql"
     sqlite = "sqlite"
 
 

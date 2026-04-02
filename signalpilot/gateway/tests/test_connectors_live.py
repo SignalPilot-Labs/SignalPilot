@@ -2184,7 +2184,7 @@ class TestConnectorTierClassification:
         assert "tier_1" in result
         assert "tier_2" in result
         assert "tier_3" in result
-        assert result["total_connectors"] == 9
+        assert result["total_connectors"] == 10
         # Tier 1 has postgres, mysql, snowflake, bigquery
         tier1_types = [c["db_type"] for c in result["tier_1"]]
         assert "postgres" in tier1_types

@@ -34,10 +34,10 @@ export function CodeBlock({
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-20" />
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
         </div>
-        <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{language}</span>
+        <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{language}</span>
         <button
           onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider flex items-center gap-1"
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider flex items-center gap-1"
         >
           {copied ? (
             <>
@@ -64,13 +64,13 @@ export function CodeBlock({
           {showLineNumbers && (
             <div className="flex-shrink-0 py-3 pl-3 pr-0 select-none border-r border-[var(--color-border)]">
               {lines.map((_, i) => (
-                <div key={i} className="text-[10px] text-[var(--color-text-dim)] text-right pr-3 leading-[1.65rem] tabular-nums opacity-40">
+                <div key={i} className="text-[12px] text-[var(--color-text-dim)] text-right pr-3 leading-[1.65rem] tabular-nums opacity-40">
                   {i + 1}
                 </div>
               ))}
             </div>
           )}
-          <pre className="flex-1 p-3 text-[11px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto">
+          <pre className="flex-1 p-3 text-[13px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto">
             <code>{code}</code>
           </pre>
         </div>

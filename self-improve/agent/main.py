@@ -151,6 +151,46 @@ async def handle_pause(run_id: str) -> str | None:
                 return "resume"
 
 
+_pulse_task: asyncio.Task | None = None
+
+
+async def _subagent_pulse_checker(run_id: str) -> None:
+    """Background task that checks for stuck subagents every 30s.
+    When a subagent is idle > 10 min, pushes a stuck_recovery signal
+    which the main loop handles by interrupting + continuing."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            stuck = hooks.get_stuck_subagents()
+            if stuck:
+                descriptions = ", ".join(
+                    f"agent_id={s['agent_id']} (idle {s['idle_seconds']}s, total {s['total_seconds']}s)"
+                    for s in stuck
+                )
+                print(f"[pulse] STUCK SUBAGENTS DETECTED: {descriptions}")
+                await db.log_audit(run_id, "subagent_stuck", {
+                    "stuck_agents": stuck,
+                    "action": "interrupt_and_recover",
+                })
+                _push_signal("stuck_recovery", _json.dumps(stuck))
+                # Only fire once per detection — wait for recovery to clear things
+                return
+        except Exception as e:
+            print(f"[pulse] Error in pulse checker: {e}")
+
+
+def _start_pulse_checker(run_id: str) -> None:
+    global _pulse_task
+    _pulse_task = asyncio.create_task(_subagent_pulse_checker(run_id))
+
+
+def _stop_pulse_checker() -> None:
+    global _pulse_task
+    if _pulse_task and not _pulse_task.done():
+        _pulse_task.cancel()
+    _pulse_task = None
+
+
 # =============================================================================
 # Main agent run
 # =============================================================================
@@ -192,6 +232,7 @@ async def run_agent(
 
     # --- Start instant signal queue ---
     _init_signal_queue()
+    _start_pulse_checker(run_id)
 
     duration_str = f"{duration_minutes}m" if duration_minutes > 0 else "unlimited"
     print(f"[agent] Duration: {duration_str}")
@@ -202,7 +243,7 @@ async def run_agent(
         "model": model,
         "max_budget_usd": max_budget,
         "duration_minutes": duration_minutes,
-        "custom_prompt": custom_prompt[:200] if custom_prompt else None,
+        "custom_prompt": custom_prompt if custom_prompt else None,
     })
 
     # --- Copy skills into cloned repo (only if they belong to this repo) ---
@@ -282,6 +323,8 @@ async def run_agent(
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],
             "Stop": [HookMatcher(hooks=[hooks.stop_hook])],
+            "SubagentStart": [HookMatcher(hooks=[hooks.subagent_start_hook])],
+            "SubagentStop": [HookMatcher(hooks=[hooks.subagent_stop_hook])],
         },
     )
 
@@ -370,6 +413,26 @@ async def run_agent(
                             # Queue for delivery after current round completes
                             _pending_inject = signal.get("payload", "")
                             await db.log_audit(run_id, "prompt_injected", {"prompt": _pending_inject, "delivery": "queued"})
+                        elif sig == "stuck_recovery":
+                            # Subagent(s) stuck — interrupt and continue with recovery prompt
+                            stuck_info = signal.get("payload", "[]")
+                            print(f"[agent] STUCK RECOVERY: interrupting for stuck subagents")
+                            await client.interrupt()
+                            async for _ in client.receive_response():
+                                pass
+                            recovery_prompt = (
+                                "IMPORTANT: One or more subagents got stuck and had to be killed. "
+                                f"Stuck agent details: {stuck_info}\n\n"
+                                "Please manually achieve what those subagents were supposed to do, "
+                                "or break the task into smaller, simpler parts. "
+                                "Do NOT re-spawn the same agent with the same task — instead, "
+                                "do the work directly or split it into multiple smaller agent calls."
+                            )
+                            await db.log_audit(run_id, "stuck_recovery", {"stuck_info": stuck_info, "recovery_prompt": recovery_prompt})
+                            await client.query(recovery_prompt)
+                            # Restart pulse checker for the new round
+                            _start_pulse_checker(run_id)
+                            break
 
                     # --- StreamEvent ---
                     if isinstance(message, StreamEvent):
@@ -379,12 +442,12 @@ async def run_agent(
                             dtype = delta.get("type", "")
                             if dtype == "text_delta" and delta.get("text"):
                                 try:
-                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                             elif dtype == "thinking_delta" and delta.get("thinking"):
                                 try:
-                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                         continue
@@ -612,12 +675,12 @@ async def run_agent(
                                 dtype = delta.get("type", "")
                                 if dtype == "text_delta" and delta.get("text"):
                                     try:
-                                        await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": "ceo"})
+                                        await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": "ceo"})
                                     except Exception:
                                         pass
                                 elif dtype == "thinking_delta" and delta.get("thinking"):
                                     try:
-                                        await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": "ceo"})
+                                        await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": "ceo"})
                                     except Exception:
                                         pass
                             continue
@@ -670,6 +733,7 @@ async def run_agent(
         final_status = "error"
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
+        _stop_pulse_checker()
         _teardown_signal_queue()
 
     # --- Post-run: push and create PR ---
@@ -788,7 +852,7 @@ async def start_run(body: StartRequest = StartRequest()):
     return {
         "ok": True,
         "run_id": _current_run_id,
-        "prompt": body.prompt[:200] if body.prompt else None,
+        "prompt": body.prompt if body.prompt else None,
         "max_budget_usd": budget,
         "duration_minutes": body.duration_minutes,
         "base_branch": body.base_branch,
@@ -844,6 +908,7 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     session_mcp = session_gate.create_session_mcp_server()
 
     _init_signal_queue()
+    _start_pulse_checker(run_id)
     await db.update_run_status(run_id, "running")
     await db.log_audit(run_id, "session_resumed", {
         "sdk_session_id": session_id[:20] if session_id else None,
@@ -881,6 +946,8 @@ async def resume_agent(run_id: str, max_budget: float = 0):
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],
             "Stop": [HookMatcher(hooks=[hooks.stop_hook])],
+            "SubagentStart": [HookMatcher(hooks=[hooks.subagent_start_hook])],
+            "SubagentStop": [HookMatcher(hooks=[hooks.subagent_stop_hook])],
         },
     )
 
@@ -933,12 +1000,12 @@ async def resume_agent(run_id: str, max_budget: float = 0):
                             dtype = delta.get("type", "")
                             if dtype == "text_delta" and delta.get("text"):
                                 try:
-                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                             elif dtype == "thinking_delta" and delta.get("thinking"):
                                 try:
-                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                         continue
@@ -986,6 +1053,7 @@ async def resume_agent(run_id: str, max_budget: float = 0):
         final_status = "error"
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
+        _stop_pulse_checker()
         _teardown_signal_queue()
 
     if final_status != "killed":

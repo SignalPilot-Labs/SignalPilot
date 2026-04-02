@@ -6,12 +6,12 @@
   --color-bg-hover: #111111;
   --color-bg-input: #080808;
   --color-bg-elevated: #0d0d0d;
-  --color-border: #1a1a1a;
-  --color-border-hover: #2a2a2a;
-  --color-border-active: #3a3a3a;
-  --color-text: #e8e8e8;
-  --color-text-muted: #777777;
-  --color-text-dim: #444444;
+  --color-border: #222222;
+  --color-border-hover: #333333;
+  --color-border-active: #444444;
+  --color-text: #eeeeee;
+  --color-text-muted: #999999;
+  --color-text-dim: #666666;
   --color-accent: #ffffff;
   --color-accent-hover: #cccccc;
   --color-success: #00ff88;
@@ -382,7 +382,7 @@ input:focus::placeholder {
   top: 0;
   right: 0;
   padding: 2px 8px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--color-text-dim);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -483,7 +483,7 @@ input:focus::placeholder {
   padding: 6px 10px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--color-text-muted);
   white-space: nowrap;
   pointer-events: none;

@@ -19,7 +19,9 @@ export function useRuns(repo?: string | null, pollInterval = 8000) {
     }
   }, [repo]);
 
+  // Clear stale runs immediately when repo changes, then fetch fresh data
   useEffect(() => {
+    setRuns([]);
     setLoading(true);
     refresh();
     const id = setInterval(refresh, pollInterval);

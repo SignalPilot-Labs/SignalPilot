@@ -49,7 +49,7 @@ export function Tooltip({
       {children}
       {visible && (
         <span
-          className={`absolute z-50 ${positionClasses[position]} px-2 py-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)] whitespace-nowrap tracking-wider animate-fade-in pointer-events-none`}
+          className={`absolute z-50 ${positionClasses[position]} px-2 py-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[12px] text-[var(--color-text-muted)] whitespace-nowrap tracking-wider animate-fade-in pointer-events-none`}
         >
           {content}
         </span>

@@ -159,37 +159,37 @@ export function GovernancePipeline() {
   }, []);
 
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden" style={{ overflow: "hidden" }}>
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
         <div className="flex items-center gap-3">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M2 8h3l2-4 2 8 2-4h3" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="text-[10px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
+          <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
             governance pipeline
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[9px] text-[var(--color-success)] tracking-wider">
+          <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-success)] tracking-wider">
             <span className="relative flex h-1.5 w-1.5">
               <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-40" />
               <span className="relative inline-flex h-1.5 w-1.5 bg-[var(--color-success)]" />
             </span>
             active
           </span>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider px-2 py-0.5 border border-[var(--color-border)]">
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-2 py-0.5 border border-[var(--color-border)]">
             6 stages
           </span>
         </div>
       </div>
 
       {/* Pipeline visualization */}
-      <div className="px-4 py-5">
-        <div className="flex items-center justify-between overflow-x-auto">
+      <div className="px-4 py-5 overflow-hidden">
+        <div className="flex items-center justify-between overflow-hidden">
           {/* Input indicator */}
           <div className="flex items-center gap-1.5 flex-shrink-0 mr-1">
-            <div className={`transition-all duration-300 ${activeStage === 0 ? "scale-110" : "scale-100"}`}>
+            <div className="transition-all duration-300">
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <rect x="1" y="1" width="18" height="18" stroke={activeStage === 0 ? "var(--color-success)" : "var(--color-border-hover)"} strokeWidth="1" fill="none">
                   {activeStage === 0 && (
@@ -210,9 +210,7 @@ export function GovernancePipeline() {
             return (
               <div key={step.id} className="flex items-center flex-shrink-0">
                 <div
-                  className={`relative group cursor-default transition-all duration-200 ${
-                    hoveredStep === step.id || isActive ? "transform -translate-y-0.5" : ""
-                  }`}
+                  className="relative group cursor-default transition-all duration-200"
                   onMouseEnter={() => setHoveredStep(step.id)}
                   onMouseLeave={() => setHoveredStep(null)}
                 >
@@ -226,8 +224,8 @@ export function GovernancePipeline() {
                   }`}>
                     {/* Active glow */}
                     {isActive && (
-                      <div className="absolute inset-0 pointer-events-none">
-                        <div className="absolute inset-0 border border-[var(--color-success)]/20 animate-ping" style={{ animationDuration: "2s" }} />
+                      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                        <div className="absolute inset-0 border border-[var(--color-success)]/20 animate-pulse" style={{ animationDuration: "2s" }} />
                       </div>
                     )}
 
@@ -238,7 +236,7 @@ export function GovernancePipeline() {
                       }`}>
                         {step.icon}
                       </span>
-                      <span className={`text-[9px] tabular-nums tracking-wider transition-colors duration-300 ${
+                      <span className={`text-[11px] tabular-nums tracking-wider transition-colors duration-300 ${
                         isActive ? "text-[var(--color-success)]" : hoveredStep === step.id ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-dim)]"
                       }`}>
                         {String(i + 1).padStart(2, "0")}
@@ -251,14 +249,14 @@ export function GovernancePipeline() {
                     </div>
 
                     {/* Step label */}
-                    <div className={`text-[10px] font-medium tracking-wide transition-colors duration-300 ${
+                    <div className={`text-[12px] font-medium tracking-wide transition-colors duration-300 ${
                       isActive ? "text-[var(--color-text)] glow-text" : hoveredStep === step.id ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"
                     }`}>
                       {step.label}
                     </div>
 
                     {/* Description */}
-                    <div className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider max-w-[140px]">
+                    <div className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider max-w-[140px]">
                       {step.description}
                     </div>
                   </div>
@@ -266,7 +264,7 @@ export function GovernancePipeline() {
                   {/* Hover tooltip with detail */}
                   {hoveredStep === step.id && (
                     <div className="absolute top-full left-0 right-0 mt-1 p-2.5 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] z-10 animate-fade-in">
-                      <p className="text-[9px] text-[var(--color-text-muted)] tracking-wider leading-relaxed">
+                      <p className="text-[11px] text-[var(--color-text-muted)] tracking-wider leading-relaxed">
                         {step.detail}
                       </p>
                     </div>
@@ -286,7 +284,7 @@ export function GovernancePipeline() {
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="flex-shrink-0">
               <path d="M3 8H13M10 5L13 8L10 11" stroke="var(--color-border-hover)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <div className={`transition-all duration-300 ${activeStage >= PIPELINE_STEPS.length + 1 ? "scale-110" : "scale-100"}`}>
+            <div className="transition-all duration-300">
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <rect x="1" y="1" width="18" height="18"
                   stroke={activeStage >= PIPELINE_STEPS.length + 1 ? "var(--color-success)" : "var(--color-border-hover)"}
@@ -307,10 +305,10 @@ export function GovernancePipeline() {
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M6 1v10M1 6h10" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" />
           </svg>
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
             every query passes through all 6 stages before results reach the agent
           </span>
-          <span className="ml-auto text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+          <span className="ml-auto text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
             ~2ms overhead
           </span>
         </div>

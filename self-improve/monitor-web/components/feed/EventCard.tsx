@@ -471,9 +471,21 @@ function AuditCard({ event }: { event: AuditEvent }) {
           {meta.label}
         </span>
 
-        <span className="text-[10px] text-[#999] truncate min-w-0 flex-1">
-          {preview}
-        </span>
+        {event.event_type === "pr_created" && event.details.url ? (
+          <a
+            href={String(event.details.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] text-[#88ccff] hover:text-[#aaddff] underline underline-offset-2 truncate min-w-0 flex-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            PR #{String(event.details.url).split("/").pop()}
+          </a>
+        ) : (
+          <span className="text-[10px] text-[#999] truncate min-w-0 flex-1">
+            {preview}
+          </span>
+        )}
 
         <svg
           width="10"

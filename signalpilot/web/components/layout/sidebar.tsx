@@ -153,7 +153,7 @@ function NavBadge({ count, color = "var(--color-success)" }: { count: number; co
   if (count <= 0) return null;
   return (
     <span
-      className="flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[8px] tabular-nums tracking-wider"
+      className="flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[10px] tabular-nums tracking-wider"
       style={{ backgroundColor: color, color: "var(--color-bg)" }}
     >
       {count}
@@ -220,10 +220,10 @@ export default function Sidebar() {
             <SignalPilotLogo />
           </div>
           <div>
-            <h1 className="text-[11px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
+            <h1 className="text-[13px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
               SignalPilot
             </h1>
-            <p className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mt-0.5">
+            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mt-0.5">
               governed infra
             </p>
           </div>
@@ -233,7 +233,7 @@ export default function Sidebar() {
       {/* Command palette hint */}
       <div className="px-3 pt-4 pb-2">
         <button
-          className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
+          className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
           onClick={() => {
             window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
           }}
@@ -243,7 +243,7 @@ export default function Sidebar() {
             <path d="M8 8L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
           </svg>
           <span className="flex-1 text-left">search</span>
-          <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono">
+          <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono">
             ctrl+K
           </kbd>
         </button>
@@ -258,7 +258,7 @@ export default function Sidebar() {
             <Link
               key={href}
               href={href}
-              className={`group flex items-center gap-3 px-3 py-2 text-xs transition-all ${
+              className={`group flex items-center gap-3 px-3 py-2 text-sm transition-all ${
                 active
                   ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
                   : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -269,7 +269,7 @@ export default function Sidebar() {
               {badge > 0 ? (
                 <NavBadge count={badge} />
               ) : (
-                <span className={`text-[9px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}>
+                <span className={`text-[11px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}>
                   ^{shortcut}
                 </span>
               )}
@@ -281,7 +281,7 @@ export default function Sidebar() {
       {/* Status footer */}
       <div className="px-4 py-3 border-t border-[var(--color-border)] space-y-2.5">
         <Tooltip content="all governance guards are active" position="right">
-          <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-default">
+          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-default">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
               <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
@@ -291,7 +291,7 @@ export default function Sidebar() {
         </Tooltip>
         {connHealth.total > 0 && (
           <Tooltip content={`${connHealth.healthy}/${connHealth.total} connections healthy`} position="right">
-            <Link href="/connections" className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors cursor-pointer">
+            <Link href="/connections" className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors cursor-pointer">
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                 <ellipse cx="5" cy="3" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
                 <path d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3" stroke="currentColor" strokeWidth="0.75" />
@@ -306,7 +306,7 @@ export default function Sidebar() {
           </Tooltip>
         )}
         <Tooltip content="session uptime since page load" position="right">
-          <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)] cursor-default">
+          <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)] cursor-default">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
               <circle cx="5" cy="5" r="4" stroke="var(--color-border-hover)" strokeWidth="1" fill="none" />
               <path d="M5 2.5V5L6.5 6.5" stroke="var(--color-text-dim)" strokeWidth="0.8" strokeLinecap="round" />
@@ -322,13 +322,13 @@ export default function Sidebar() {
               <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
                 <path d="M1 4H3L4 2L5 6L6 4H7" stroke="var(--color-text-dim)" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+              <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
                 v0.1.0
               </span>
             </div>
           </Tooltip>
           <Tooltip content="bring your own firecracker" position="left">
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
               byof
             </span>
           </Tooltip>

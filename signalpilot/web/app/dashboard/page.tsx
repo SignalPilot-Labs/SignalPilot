@@ -14,8 +14,9 @@ import {
   ArrowRight,
   Loader2,
 } from "lucide-react";
-import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, getConnectionsHealth } from "@/lib/api";
-import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
+import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
+import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
+import { useConnection } from "@/lib/connection-context";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -43,12 +44,12 @@ function MetricCard({
   return (
     <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
       <div className="flex items-center gap-2 mb-3">
-        <Icon className={`w-3.5 h-3.5 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
-        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{label}</span>
+        <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
+        <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
       </div>
-      <p className="text-xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
+      <p className="text-2xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
       {subtext && (
-        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider">{subtext}</p>
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">{subtext}</p>
       )}
       {/* Background sparkline on hover */}
       {sparkValues && sparkValues.length >= 3 && (
@@ -64,12 +65,12 @@ function MetricCard({
 function StatusBadge({ ok }: { ok: boolean | null }) {
   if (ok === null) return <Loader2 className="w-3 h-3 animate-spin text-[var(--color-text-dim)]" />;
   return ok ? (
-    <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-success)] tracking-wider">
+    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
       <span className="w-1.5 h-1.5 bg-[var(--color-success)] pulse-dot" />
       healthy
     </span>
   ) : (
-    <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-error)] tracking-wider">
+    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-error)] tracking-wider">
       <span className="w-1.5 h-1.5 bg-[var(--color-error)]" />
       offline
     </span>
@@ -92,7 +93,7 @@ export default function DashboardPage() {
     sessions: Record<string, unknown>[];
     total_spent_usd: number;
   } | null>(null);
-  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
+  const { connections } = useConnection();
   const [auditStats, setAuditStats] = useState({
     queries: 0,
     executions: 0,
@@ -127,7 +128,6 @@ export default function DashboardPage() {
       .catch(() => {});
 
     getBudgets().then(setBudgetData).catch(() => {});
-    getConnections().then(setConnections).catch(() => {});
     getCacheStats().then(setCacheStats).catch(() => {});
     getConnectionsHealth()
       .then((res) => {
@@ -171,7 +171,7 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2">
             <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
-            <code className="text-[10px] text-[var(--color-text)]">
+            <code className="text-[12px] text-[var(--color-text)]">
               {metrics?.sandbox_manager || "—"}
             </code>
             <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
@@ -183,13 +183,13 @@ export default function DashboardPage() {
           </div>
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
-              <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
+              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
               <Sparkline values={latencyValues} color="var(--color-success)" width={60} height={16} />
             </div>
           )}
           <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
-            <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
               governance: active
             </span>
           </div>
@@ -262,16 +262,16 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query latency</span>
+                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query latency</span>
               </div>
-              <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">last {latencyValues.length} ops</span>
+              <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">last {latencyValues.length} ops</span>
             </div>
             <ResponsiveAreaChart values={latencyValues} height={80} color="var(--color-success)" />
           </div>
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
             <div className="flex items-center gap-2 mb-3">
               <BarChart3 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
+              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
             </div>
             <div className="space-y-3">
               <StackedBar
@@ -283,7 +283,7 @@ export default function DashboardPage() {
                 width={200}
                 height={8}
               />
-              <div className="flex items-center gap-4 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+              <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-success)]" />queries</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400" />exec</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-error)]" />blocked</span>
@@ -295,8 +295,8 @@ export default function DashboardPage() {
                   { label: "blocked", value: auditStats.blocks, total: auditStats.total, color: "text-[var(--color-error)]" },
                 ].map(row => (
                   <div key={row.label} className="flex items-center justify-between">
-                    <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">{row.label}</span>
-                    <span className={`text-[10px] tabular-nums ${row.color}`}>
+                    <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">{row.label}</span>
+                    <span className={`text-[12px] tabular-nums ${row.color}`}>
                       {row.value} <span className="text-[var(--color-text-dim)]">/ {row.total > 0 ? ((row.value / row.total) * 100).toFixed(0) : 0}%</span>
                     </span>
                   </div>
@@ -330,11 +330,11 @@ export default function DashboardPage() {
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path d="M2 6h2l1.5-3 1.5 6 1.5-3H11" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                 recent activity
               </span>
             </div>
-            <a href="/audit" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            <a href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
               view all <ArrowRight className="w-3 h-3" />
             </a>
           </div>
@@ -354,7 +354,7 @@ export default function DashboardPage() {
                     className="group/row hover:bg-[var(--color-bg-hover)] transition-all"
                   >
                     <div className="flex items-center gap-3 px-4 py-2.5">
-                      <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 ${
+                      <span className={`text-[11px] font-medium uppercase tracking-[0.15em] w-8 ${
                         entry.blocked ? "text-[var(--color-error)]" : cfg.color
                       }`}>
                         {cfg.label}
@@ -367,30 +367,30 @@ export default function DashboardPage() {
                             : entry.connection_name || "—"}</span>}
                       </span>
                       {entry.blocked && (
-                        <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">
+                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">
                           blocked
                         </span>
                       )}
                       {entry.rows_returned != null && (
-                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
                           {entry.rows_returned}r
                         </span>
                       )}
                       {entry.duration_ms != null && (
-                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
                           {entry.duration_ms.toFixed(0)}ms
                         </span>
                       )}
                       <TimeAgo
                         timestamp={entry.timestamp}
                         live
-                        className="text-[10px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
+                        className="text-[12px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
                       />
                     </div>
                     {/* Hover-reveal detail row */}
                     <div className="grid grid-cols-[2rem_1fr] gap-3 px-4 max-h-0 overflow-hidden opacity-0 group-hover/row:max-h-16 group-hover/row:opacity-100 group-hover/row:pb-2.5 transition-all duration-200 ease-out">
                       <span />
-                      <div className="flex items-center gap-4 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                         {entry.connection_name && (
                           <span className="flex items-center gap-1">
                             <span className="w-1 h-1 bg-[var(--color-text-dim)] opacity-40" />
@@ -431,11 +431,11 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
               <div className="flex items-center gap-2">
                 <Database className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                   connections
                 </span>
               </div>
-              <a href="/connections" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <a href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 manage <ArrowRight className="w-3 h-3" />
               </a>
             </div>
@@ -443,7 +443,7 @@ export default function DashboardPage() {
               {connections.length === 0 ? (
                 <div className="px-4 py-10 text-center">
                   <Database className="w-5 h-5 mx-auto mb-2 text-[var(--color-text-dim)] opacity-20" strokeWidth={1} />
-                  <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                  <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
                     no connections
                   </p>
                 </div>
@@ -467,7 +467,7 @@ export default function DashboardPage() {
                       />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-[var(--color-text-muted)] truncate">{conn.name}</p>
-                        <p className="text-[10px] text-[var(--color-text-dim)] truncate">
+                        <p className="text-[12px] text-[var(--color-text-dim)] truncate">
                           {conn.host}:{conn.port}/{conn.database}
                         </p>
                       </div>
@@ -481,12 +481,12 @@ export default function DashboardPage() {
                               height={3}
                               color={health.latency_p50_ms < 50 ? "var(--color-success)" : health.latency_p50_ms < 150 ? "var(--color-warning)" : "var(--color-error)"}
                             />
-                            <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                            <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
                               {health.latency_p50_ms.toFixed(0)}ms
                             </span>
                           </div>
                         )}
-                        <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
                           {conn.db_type}
                         </span>
                       </div>
@@ -502,7 +502,7 @@ export default function DashboardPage() {
             <div className="px-4 py-3 border-b border-[var(--color-border)]">
               <div className="flex items-center gap-2">
                 <Zap className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                   query cache
                 </span>
               </div>
@@ -525,20 +525,20 @@ export default function DashboardPage() {
                       }`}>
                         {(cacheStats.hit_rate * 100).toFixed(1)}%
                       </p>
-                      <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3 pt-1">
                     <div>
-                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
                       <p className="text-xs font-light tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
                     </div>
                   </div>

@@ -178,7 +178,7 @@ export default function Home() {
         <div className="mt-4 text-center">
           <button
             onClick={() => router.push("/dashboard")}
-            className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+            className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-3 px-6 active:text-[var(--color-text)]"
           >
             skip &rarr; dashboard
           </button>

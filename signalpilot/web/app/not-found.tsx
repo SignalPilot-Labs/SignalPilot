@@ -54,13 +54,13 @@ export default function NotFound() {
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
           <Link
             href="/dashboard"
-            className="flex items-center gap-2 px-5 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="flex items-center justify-center gap-2 px-6 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 w-full sm:w-auto active:opacity-80"
           >
             dashboard
           </Link>
           <Link
             href="/query"
-            className="flex items-center gap-2 px-5 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+            className="flex items-center justify-center gap-2 px-6 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider w-full sm:w-auto"
           >
             query explorer
           </Link>

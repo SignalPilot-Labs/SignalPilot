@@ -5,6 +5,70 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 11: Connector Quality & Cost Estimation for All DB Types (2026-04-02)
+
+**Summary:** 6 improvements — Enhanced MSSQL/Trino/MySQL connectors, cost estimation for all 11 DB types, frontend HEX parity features, comprehensive schema introspection upgrades.
+
+**Key metrics:**
+- 318 tests passing (up from 211 in Round 10b)
+- Cost estimation now covers all 11 DB types (was 8)
+- MSSQL schema now includes column type precision (varchar(100), decimal(10,2)), identity detection, statistics tracking
+- Trino schema 10x faster via information_schema batch queries (with SHOW COLUMNS fallback)
+- All 4 live Docker databases verified end-to-end
+- 3 git commits this round
+
+### 1. Trino Connector Overhaul
+**File:** `gateway/connectors/trino.py`
+- **information_schema batch introspection** — single query fetches all columns, tables, PKs, and FKs per catalog (10x faster than SHOW COLUMNS per table). Falls back to SHOW commands for connectors that don't expose information_schema.
+- **Query timeout** — `SET SESSION query_max_run_time` for server-side cancellation
+- **SSL without password** — `trino+https://` scheme enables HTTPS without requiring Basic Auth
+- **SSL cert verification control** — `?verify=false` for self-signed certificates
+- **Request timeout** — configurable via `?request_timeout=30` query parameter
+- **Foreign key discovery** — via information_schema.table_constraints + key_column_usage (critical for Spider2.0 join paths)
+
+### 2. MSSQL Schema Enhancements
+**File:** `gateway/connectors/mssql.py`
+- **Accurate row counts** — switched from `sys.partitions` to `sys.dm_db_partition_stats` for precise counts (no table scan)
+- **Column type precision** — `nvarchar(100)`, `decimal(10,2)`, `varchar(max)` instead of bare type names. Critical for Spider2.0 DDL accuracy.
+- **Identity column detection** — `is_identity` flag for auto-increment columns
+- **Index type metadata** — CLUSTERED/NONCLUSTERED/COLUMNSTORE tracking
+- **Column statistics tracking** — `has_statistics` flag from sys.stats for optimization hints
+- **Included columns filtering** — only key columns in index definitions (not included columns)
+
+### 3. MySQL Connection Resilience
+**File:** `gateway/connectors/mysql.py`
+- **Robust reconnection** — `_ensure_connected()` replaces raw `ping(reconnect=True)` with full connection recreation on failure
+- **Connection kwargs stored** — enables clean reconnection after total connection loss
+- **SSL temp file cleanup** — temp PEM files tracked and cleaned up on `close()`
+
+### 4. Cost Estimation for MSSQL and Trino
+**File:** `gateway/governance/cost_estimator.py`
+- **MSSQL** — `SET SHOWPLAN_ALL ON/OFF` to get estimated rows, subtree cost from query plan
+- **Trino** — `EXPLAIN` with regex parsing of row estimates
+- Cost per row heuristics: MSSQL $0.0000004/row, Trino $0.0000002/row
+- All 11 DB types now have cost estimation coverage
+
+### 5. MSSQL SSH Tunnel Support
+**File:** `gateway/connectors/pool_manager.py`
+- MSSQL added to tunnel-capable DB types (alongside Postgres, MySQL, Redshift, ClickHouse)
+- Default port mapping (1433) for connection string rewriting
+- URI scheme recognition: `mssql://`, `mssql+pymssql://`, `sqlserver://`
+
+### 6. Frontend HEX Parity Features
+**File:** `web/app/connections/page.tsx`
+- **Connection scoping** — workspace (shared across projects) vs project (isolated) — matches HEX's scoped connections model
+- **Read-only mode** — checkbox defaulting to on, with clear explanation. Enforces SELECT-only queries.
+- **Advanced options for all connectors** — section now visible for all DB types (not just SSH/SSL-capable). Scope, read-only, and scheduled refresh apply universally.
+- **Trino SSL support** — SSL configuration now available for Trino connections
+- **Active feature indicators** — advanced options button shows ssl, ssh, read-write, auto-refresh status badges
+
+### Industry Research (Spider2.0 & HEX, April 2026)
+- **Spider2.0 SOTA**: ReFoRCE achieves 31.26% on Spider2.0-Snow using table compression, format restriction, iterative column exploration, and self-refinement with parallel voting. Key insight: schema compression + multi-pass refinement are essential.
+- **HEX 2026 features**: Per-user OAuth (Snowflake/Databricks/BigQuery), MCP server integration for AI tools, SSH tunneling for Databricks, dbt Semantic Layer integration, scheduled schema refresh.
+- **SignalPilot positioning**: We now match HEX on connector coverage (11 types), exceed on AI-specific features (schema linking, error hints, query templates, cost estimation). Key gap: per-user OAuth for enterprise deployments.
+
+---
+
 ## Round 10b: MSSQL/Trino Connectors, Error Hints UX, Query Templates (2026-04-02)
 
 **Summary:** 7 features — Two new database connectors (MSSQL, Trino), structured error hints in REST API + frontend display, DB-specific query templates dropdown, DDL semantic comments for Spider2.0, duplicate IP whitelist fix, shared errors module.

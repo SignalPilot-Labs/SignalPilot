@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from typing import Any
 
@@ -22,10 +23,16 @@ class SQLiteConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        cursor = self._conn.execute(sql, params or [])
-        columns = [desc[0] for desc in cursor.description] if cursor.description else []
-        rows = cursor.fetchall()
-        return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+
+        def _run():
+            cursor = self._conn.execute(sql, params or [])
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+            return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+
+        if timeout:
+            return await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
+        return _run()
 
     async def get_schema(self) -> dict[str, Any]:
         if self._conn is None:

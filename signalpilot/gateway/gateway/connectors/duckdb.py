@@ -6,6 +6,7 @@ Feature #9 from the feature table — P0 for demos and local dev.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from .base import BaseConnector
@@ -35,16 +36,22 @@ class DuckDBConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        try:
-            if params:
-                result = self._conn.execute(sql, params)
-            else:
-                result = self._conn.execute(sql)
-            columns = [desc[0] for desc in result.description]
-            rows = result.fetchall()
-            return [{col: val for col, val in zip(columns, row)} for row in rows]
-        except duckdb.Error as e:
-            raise RuntimeError(f"DuckDB query error: {e}") from e
+
+        def _run():
+            try:
+                if params:
+                    result = self._conn.execute(sql, params)
+                else:
+                    result = self._conn.execute(sql)
+                columns = [desc[0] for desc in result.description]
+                rows = result.fetchall()
+                return [{col: val for col, val in zip(columns, row)} for row in rows]
+            except duckdb.Error as e:
+                raise RuntimeError(f"DuckDB query error: {e}") from e
+
+        if timeout:
+            return await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
+        return _run()
 
     async def get_schema(self) -> dict[str, Any]:
         if self._conn is None:

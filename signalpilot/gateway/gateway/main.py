@@ -2180,6 +2180,169 @@ async def get_schema_ddl(
     }
 
 
+@app.get("/api/connections/{name}/schema/agent-context")
+async def get_agent_context(
+    name: str,
+    question: str = Query(default="", description="Optional question for schema linking — omit for full schema"),
+    max_tables: int = Query(default=30, ge=1, le=100, description="Max tables to include"),
+    include_samples: bool = Query(default=True, description="Include cached sample values for string columns"),
+):
+    """Single-call schema context optimized for SQL generation agents (Spider2.0 pattern).
+
+    Combines DDL schema, join relationships, table metadata, and sample values
+    into a single prompt-ready text block. Designed to be pasted directly into
+    an LLM system prompt for text-to-SQL tasks.
+
+    Based on Spider2.0 SOTA findings:
+    - DDL format preferred by top performers (Genloop, QUVI, Databao)
+    - Sample values critical for schema linking (3-4% EX improvement)
+    - Inferred joins fill gaps in FK-free databases (ClickHouse, BigQuery)
+    - Compact metadata (row counts, sizes) helps cost estimation
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        extras = get_credential_extras(name)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            cached = await connector.get_schema()
+        schema_cache.put(name, cached)
+
+    filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
+
+    # If a question is provided, use schema linking to select relevant tables
+    if question:
+        # Reuse the schema link logic inline to select top tables
+        import re as _re_ctx
+        stopwords = {"the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
+                     "her", "was", "one", "our", "out", "has", "how", "many", "much",
+                     "what", "which", "show", "find", "list", "give", "tell",
+                     "from", "with", "that", "this", "have", "will",
+                     "select", "where", "group", "having", "limit", "table", "column", "database"}
+        terms = [w for w in _re_ctx.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question.lower()) if len(w) >= 3 and w not in stopwords]
+        table_scores: dict[str, float] = {}
+        for key, t in filtered.items():
+            score = 0.0
+            tn = t.get("name", "").lower()
+            for term in terms:
+                if term == tn or term == tn.rstrip("s"):
+                    score += 10.0
+                elif term in tn:
+                    score += 3.0
+                for col in t.get("columns", []):
+                    cn = col.get("name", "").lower()
+                    if term == cn:
+                        score += 4.0
+                    elif term in cn:
+                        score += 1.5
+            table_scores[key] = score
+        # Select tables with score > 0, plus their FK-connected tables
+        linked = {k for k, s in table_scores.items() if s > 0}
+        fk_adds = set()
+        for k in list(linked):
+            for fk in filtered.get(k, {}).get("foreign_keys", []):
+                for ck in filtered:
+                    if filtered[ck].get("name") == fk.get("references_table"):
+                        fk_adds.add(ck)
+        linked |= fk_adds
+        if not linked:
+            linked = set(list(filtered.keys())[:max_tables])
+        filtered = {k: filtered[k] for k in sorted(linked)[:max_tables] if k in filtered}
+
+    # Build context sections
+    sections: list[str] = []
+
+    # Section 1: Database info header
+    total_rows = sum(t.get("row_count", 0) or 0 for t in filtered.values())
+    total_mb = sum(t.get("size_mb", 0) or 0 for t in filtered.values())
+    sections.append(f"-- Database: {name} ({info.db_type})")
+    sections.append(f"-- Tables: {len(filtered)}, Total rows: {total_rows:,}, Total size: {total_mb:.1f} MB")
+    sections.append("")
+
+    # Section 2: DDL with inline metadata
+    inferred = _infer_implicit_joins(filtered)
+    inferred_map: dict[str, list[dict]] = {}
+    for ij in inferred:
+        key = f"{ij['from_schema']}.{ij['from_table']}" if ij.get("from_schema") else ij["from_table"]
+        if key not in inferred_map:
+            inferred_map[key] = []
+        inferred_map[key].append(ij)
+
+    for key in sorted(filtered.keys()):
+        table = filtered[key]
+        table_name = f"{table.get('schema', '')}.{table['name']}" if table.get("schema") else table["name"]
+        rc = table.get("row_count", 0) or 0
+        size = table.get("size_mb", 0) or 0
+        meta_parts = []
+        if rc:
+            meta_parts.append(f"{rc:,} rows")
+        if size:
+            meta_parts.append(f"{size:.1f} MB")
+        desc = table.get("description", "")
+        if desc:
+            meta_parts.append(desc)
+        meta_comment = f" -- {', '.join(meta_parts)}" if meta_parts else ""
+
+        obj_kw = "CREATE VIEW" if table.get("type") == "view" else "CREATE TABLE"
+        col_lines = []
+        for col in table.get("columns", []):
+            ct = col.get("type", "").upper()
+            nn = " NOT NULL" if not col.get("nullable", True) else ""
+            comment = col.get("comment", "")
+            comment_str = f" -- {comment}" if comment else ""
+            col_lines.append(f"  {col['name']} {ct}{nn}{comment_str}")
+
+        # PKs
+        pks = [col["name"] for col in table.get("columns", []) if col.get("primary_key")]
+        if pks:
+            col_lines.append(f"  PRIMARY KEY ({', '.join(pks)})")
+
+        # Explicit FKs
+        for fk in table.get("foreign_keys", []):
+            ref = f"{fk.get('references_schema', '')}.{fk['references_table']}" if fk.get("references_schema") else fk["references_table"]
+            col_lines.append(f"  FOREIGN KEY ({fk['column']}) REFERENCES {ref}({fk['references_column']})")
+
+        # Inferred FKs
+        for ij in inferred_map.get(key, []):
+            ref = f"{ij.get('to_schema', '')}.{ij['to_table']}" if ij.get("to_schema") else ij["to_table"]
+            col_lines.append(f"  -- inferred join: {ij['from_column']} -> {ref}({ij['to_column']})")
+
+        ddl = f"{obj_kw} {table_name} (\n{',\n'.join(col_lines)}\n);{meta_comment}"
+        sections.append(ddl)
+
+    # Section 3: Sample values (if cached and requested)
+    if include_samples:
+        sample_sections: list[str] = []
+        for key in sorted(filtered.keys()):
+            samples = schema_cache.get_sample_values(name, key)
+            if samples:
+                lines = [f"-- Sample values for {key}:"]
+                for col_name, vals in samples.items():
+                    lines.append(f"--   {col_name}: {', '.join(repr(v) for v in vals[:5])}")
+                sample_sections.append("\n".join(lines))
+        if sample_sections:
+            sections.append("")
+            sections.append("-- === Sample Values ===")
+            sections.extend(sample_sections)
+
+    context_text = "\n\n".join(sections)
+    return {
+        "connection_name": name,
+        "db_type": info.db_type,
+        "table_count": len(filtered),
+        "token_estimate": len(context_text) // 4,
+        "has_question_filter": bool(question),
+        "context": context_text,
+    }
+
+
 @app.get("/api/connections/{name}/schema/link")
 async def schema_link(
     name: str,

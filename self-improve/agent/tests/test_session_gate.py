@@ -5,16 +5,7 @@ is not tested here because it depends on the db layer. All time.time() calls
 are controlled via monkeypatch for determinism.
 """
 
-import sys
-from unittest.mock import MagicMock
-
-# Mock the SDK before importing session_gate so the @tool decorator is a no-op.
-_sdk_mock = MagicMock()
-_sdk_mock.tool = lambda *args, **kwargs: (lambda f: f)
-sys.modules["claude_agent_sdk"] = _sdk_mock
-sys.modules["claude_agent_sdk.types"] = MagicMock()
-
-import agent.session_gate as session_gate  # noqa: E402
+import agent.session_gate as session_gate
 
 
 # ---------------------------------------------------------------------------

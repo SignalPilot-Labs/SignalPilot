@@ -8,22 +8,11 @@ Covers:
 - start_pulse_checker / stop_pulse_checker task management
 """
 
-import sys
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Stub out heavy dependencies before importing the module under test
-# ---------------------------------------------------------------------------
-sys.modules.setdefault("claude_agent_sdk", MagicMock())
-sys.modules.setdefault("claude_agent_sdk.types", MagicMock())
-sys.modules.setdefault("agent.db", MagicMock())
-sys.modules.setdefault("agent.hooks", MagicMock())
-sys.modules.setdefault("agent.session_gate", MagicMock())
-
-from agent import signals  # noqa: E402  (import after mock setup)
+from agent import signals
 
 # ---------------------------------------------------------------------------
 # Fixtures

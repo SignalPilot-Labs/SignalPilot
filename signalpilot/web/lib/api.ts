@@ -118,6 +118,34 @@ export const searchConnectionSchema = (name: string, query: string) =>
     }>;
   }>(`/api/connections/${name}/schema/search?q=${encodeURIComponent(query)}`);
 
+// Column Exploration (ReFoRCE Spider2.0 pattern)
+export const exploreColumns = (name: string, table: string, columns?: string[], options?: { include_stats?: boolean; include_values?: boolean; value_limit?: number }) =>
+  request<{
+    table: string;
+    table_type: string;
+    row_count: number;
+    columns_explored: number;
+    columns: {
+      name: string;
+      type: string;
+      nullable: boolean;
+      primary_key: boolean;
+      comment?: string;
+      schema_stats?: { distinct_count?: number; distinct_fraction?: number };
+      value_stats?: { min: unknown; max: unknown; avg: number | null };
+      sample_values?: string[];
+    }[];
+  }>(`/api/connections/${name}/schema/explore-columns`, {
+    method: "POST",
+    body: JSON.stringify({
+      table,
+      columns: columns || [],
+      include_stats: options?.include_stats ?? true,
+      include_values: options?.include_values ?? true,
+      value_limit: options?.value_limit ?? 10,
+    }),
+  });
+
 // Column Name Correction
 export const correctColumns = (name: string, table: string, columns: string[], threshold = 0.5) =>
   request<{

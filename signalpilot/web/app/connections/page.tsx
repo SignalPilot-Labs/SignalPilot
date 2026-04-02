@@ -52,6 +52,7 @@ import {
   testCredentials,
   getSchemaRefreshStatus,
   getConnectionSchemaDiff,
+  exploreColumns,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -1605,6 +1606,8 @@ export default function ConnectionsPage() {
   const [diagResults, setDiagResults] = useState<Record<string, { host: string; port: number; diagnostics: { check: string; status: string; message: string; hint?: string; duration_ms: number }[] }>>({});
   const [schemaRefreshStatus, setSchemaRefreshStatus] = useState<Record<string, { fingerprint?: string | null; last_schema_refresh: number | null; cached: boolean; cached_table_count: number; schema_refresh_interval: number | null }>>({});
   const [schemaDiff, setSchemaDiff] = useState<Record<string, { has_changes: boolean; added_tables: string[]; removed_tables: string[]; modified_tables: unknown[] } | null>>({});
+  const [exploringTable, setExploringTable] = useState<string | null>(null);
+  const [exploredData, setExploredData] = useState<Record<string, { columns: { name: string; type: string; sample_values?: string[]; value_stats?: { min: unknown; max: unknown; avg: number | null } }[] }>>({});
 
   const refresh = useCallback(() => {
     getConnections().then(setConnections).catch(() => {});
@@ -2998,6 +3001,55 @@ export default function ConnectionsPage() {
                                   ))}
                                 </div>
                               )}
+                              {/* Column exploration (ReFoRCE pattern) */}
+                              <div className="mt-2 pt-1.5 border-t border-[var(--color-border)]">
+                                <button
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const exploreKey = `${conn.name}:${key}`;
+                                    if (exploredData[exploreKey]) {
+                                      setExploredData(prev => { const next = { ...prev }; delete next[exploreKey]; return next; });
+                                      return;
+                                    }
+                                    setExploringTable(exploreKey);
+                                    try {
+                                      const data = await exploreColumns(conn.name, key);
+                                      setExploredData(prev => ({ ...prev, [exploreKey]: data }));
+                                    } catch { toast("Column exploration failed", "error"); }
+                                    finally { setExploringTable(null); }
+                                  }}
+                                  disabled={exploringTable === `${conn.name}:${key}`}
+                                  className="text-[8px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                                >
+                                  {exploringTable === `${conn.name}:${key}` ? (
+                                    <><Loader2 className="w-2.5 h-2.5 inline animate-spin mr-0.5" /> exploring...</>
+                                  ) : exploredData[`${conn.name}:${key}`] ? (
+                                    <>hide exploration</>
+                                  ) : (
+                                    <><Eye className="w-2.5 h-2.5 inline mr-0.5" strokeWidth={1.5} />explore values &amp; stats</>
+                                  )}
+                                </button>
+                                {exploredData[`${conn.name}:${key}`] && (
+                                  <div className="mt-1.5 space-y-1 animate-fade-in">
+                                    {exploredData[`${conn.name}:${key}`].columns.slice(0, 10).map((ec: any) => (
+                                      <div key={ec.name} className="text-[8px] tracking-wider">
+                                        <span className="text-[var(--color-text-muted)]">{ec.name}</span>
+                                        {ec.value_stats && (
+                                          <span className="text-[var(--color-text-dim)] ml-1.5">
+                                            [{ec.value_stats.min} .. {ec.value_stats.max}]{ec.value_stats.avg != null && ` avg=${ec.value_stats.avg}`}
+                                          </span>
+                                        )}
+                                        {ec.sample_values && ec.sample_values.length > 0 && (
+                                          <span className="text-[var(--color-text-dim)] opacity-60 ml-1.5">
+                                            {ec.sample_values.slice(0, 4).join(", ")}
+                                            {ec.sample_values.length > 4 && "..."}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>

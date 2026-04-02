@@ -111,8 +111,8 @@ async def end_session_tool(args: dict[str, Any]) -> dict[str, Any]:
                     "elapsed_minutes": round(elapsed_minutes(), 1),
                     "was_force_unlocked": _force_unlocked,
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[session_gate] Warning: audit logging failed: {e}")
 
         return {
             "content": [
@@ -139,8 +139,8 @@ async def end_session_tool(args: dict[str, Any]) -> dict[str, Any]:
                     "time_remaining": time_remaining_str(),
                     "elapsed_minutes": round(elapsed_minutes(), 1),
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[session_gate] Warning: audit logging failed: {e}")
 
         return {
             "content": [

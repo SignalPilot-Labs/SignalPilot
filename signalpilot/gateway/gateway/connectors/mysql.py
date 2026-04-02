@@ -222,22 +222,16 @@ class MySQLConnector(BaseConnector):
             WHERE REFERENCED_TABLE_NAME IS NOT NULL
                 AND TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
         """
-        # Index metadata — helps Spider2.0 agent plan optimal queries
+        # Index metadata + cardinality in a single query (avoids redundant STATISTICS scan)
         idx_sql = """
             SELECT
                 TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE,
-                GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columns
+                GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columns,
+                MAX(CASE WHEN SEQ_IN_INDEX = 1 THEN CARDINALITY END) AS lead_cardinality,
+                MIN(CASE WHEN SEQ_IN_INDEX = 1 THEN COLUMN_NAME END) AS lead_column
             FROM information_schema.STATISTICS
             WHERE TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
             GROUP BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, NON_UNIQUE
-        """
-        # Column cardinality from index statistics
-        cardinality_sql = """
-            SELECT
-                TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, CARDINALITY
-            FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
-                AND SEQ_IN_INDEX = 1
         """
         # PyMySQL is not thread-safe for concurrent queries on the same connection,
         # but we can batch queries to reduce round trips
@@ -258,23 +252,24 @@ class MySQLConnector(BaseConnector):
                 _fetch(sql),
                 _fetch(fk_sql),
                 _fetch(idx_sql),
-                _fetch(cardinality_sql),
             )
 
         # Run the synchronous queries in a thread pool to avoid blocking the event loop
         loop = asyncio.get_event_loop()
-        rows, fk_rows, idx_rows, card_rows = await loop.run_in_executor(
+        rows, fk_rows, idx_rows = await loop.run_in_executor(
             None, _fetch_all_sequential
         )
 
-        # Build cardinality map
+        # Build cardinality map from the combined index query
         cardinality: dict[str, int] = {}
-        for r in card_rows:
-            card_key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}.{r['COLUMN_NAME']}"
-            # Keep the highest cardinality for a column (most selective index)
-            existing = cardinality.get(card_key, 0)
-            if r.get("CARDINALITY") and (r["CARDINALITY"] or 0) > existing:
-                cardinality[card_key] = r["CARDINALITY"]
+        for r in idx_rows:
+            lead_col = r.get("lead_column")
+            lead_card = r.get("lead_cardinality")
+            if lead_col and lead_card:
+                card_key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}.{lead_col}"
+                existing = cardinality.get(card_key, 0)
+                if (lead_card or 0) > existing:
+                    cardinality[card_key] = lead_card
 
         # Build index map
         indexes: dict[str, list[dict]] = {}

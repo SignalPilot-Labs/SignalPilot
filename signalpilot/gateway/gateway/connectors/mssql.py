@@ -317,6 +317,7 @@ class MSSQLConnector(BaseConnector):
 
         # Column statistics — helps Spider2.0 understand selectivity
         # Uses dm_db_stats_properties for actual distinct counts from auto-stats
+        # OUTER APPLY is required because dm_db_stats_properties is a TVF
         stats_sql = """
             SELECT
                 OBJECT_SCHEMA_NAME(s.object_id) AS table_schema,
@@ -329,7 +330,7 @@ class MSSQLConnector(BaseConnector):
             FROM sys.stats s
             JOIN sys.stats_columns sc ON s.object_id = sc.object_id AND s.stats_id = sc.stats_id
             JOIN sys.columns c ON sc.object_id = c.object_id AND sc.column_id = c.column_id
-            LEFT JOIN sys.dm_db_stats_properties(s.object_id, s.stats_id) sp ON 1=1
+            OUTER APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
             WHERE sc.stats_column_id = 1
                 AND OBJECT_SCHEMA_NAME(s.object_id) NOT IN ('sys', 'INFORMATION_SCHEMA')
         """

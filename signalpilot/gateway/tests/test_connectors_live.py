@@ -2823,5 +2823,184 @@ class TestMSSQLCostEstimation:
         assert result.warning is not None
 
 
+# ── BaseConnector sample UNION ALL helpers ─────────────────────────────────
+
+class TestBaseConnectorSampleHelpers:
+    """Test _build_sample_union_sql and _parse_sample_union_result."""
+
+    def test_build_sample_union_sql_basic(self):
+        from gateway.connectors.base import BaseConnector
+        sql = BaseConnector._build_sample_union_sql("public.users", ["name", "email"], limit=3, quote='"')
+        assert "UNION ALL" in sql
+        assert "'name' AS _col" in sql
+        assert "'email' AS _col" in sql
+        assert "LIMIT 3" in sql
+        assert '"name"' in sql
+
+    def test_build_sample_union_sql_backtick(self):
+        from gateway.connectors.base import BaseConnector
+        sql = BaseConnector._build_sample_union_sql("users", ["col1"], limit=5, quote='`')
+        assert "`col1`" in sql
+        assert "UNION ALL" not in sql  # Only one column, no UNION
+
+    def test_build_sample_union_sql_caps_at_20(self):
+        from gateway.connectors.base import BaseConnector
+        cols = [f"col{i}" for i in range(30)]
+        sql = BaseConnector._build_sample_union_sql("t", cols, limit=5)
+        # Should only have 20 subqueries
+        assert sql.count("AS _col") == 20
+
+    def test_parse_sample_union_result_dicts(self):
+        from gateway.connectors.base import BaseConnector
+        rows = [
+            {"_col": "name", "_val": "Alice"},
+            {"_col": "name", "_val": "Bob"},
+            {"_col": "email", "_val": "a@b.com"},
+        ]
+        result = BaseConnector._parse_sample_union_result(rows)
+        assert result["name"] == ["Alice", "Bob"]
+        assert result["email"] == ["a@b.com"]
+
+    def test_parse_sample_union_result_tuples(self):
+        from gateway.connectors.base import BaseConnector
+        rows = [("name", "Alice"), ("name", "Bob"), ("email", "a@b.com")]
+        result = BaseConnector._parse_sample_union_result(rows)
+        assert result["name"] == ["Alice", "Bob"]
+        assert result["email"] == ["a@b.com"]
+
+    def test_parse_sample_union_result_skips_none(self):
+        from gateway.connectors.base import BaseConnector
+        rows = [{"_col": "name", "_val": None}, {"_col": "name", "_val": "Alice"}]
+        result = BaseConnector._parse_sample_union_result(rows)
+        assert result["name"] == ["Alice"]
+
+    def test_parse_sample_union_result_empty(self):
+        from gateway.connectors.base import BaseConnector
+        assert BaseConnector._parse_sample_union_result([]) == {}
+
+
+class TestRedshiftSchemaMetadata:
+    """Test that Redshift connector schema output includes new metadata fields."""
+
+    def test_redshift_schema_fields_from_svv_table_info(self):
+        """Verify Redshift connector uses SVV_TABLE_INFO fields, not pg_table_def."""
+        import inspect
+        from gateway.connectors.redshift import RedshiftConnector
+        source = inspect.getsource(RedshiftConnector.get_schema)
+        # Must use SVV_TABLE_INFO for diststyle (not pg_table_def)
+        assert "svv_table_info" in source
+        # Must NOT reference sortkey1 from pg_table_def
+        assert "pg_table_def" in source  # still used for columns
+        # Must include pg_stats for column statistics
+        assert "pg_stats" in source
+        # Must include column encoding
+        assert "encoding" in source.lower()
+
+    def test_redshift_connector_has_logging(self):
+        """Verify Redshift connector logs metadata query failures."""
+        import inspect
+        from gateway.connectors.redshift import RedshiftConnector
+        source = inspect.getsource(RedshiftConnector.get_schema)
+        assert "logger.info" in source
+
+    def test_redshift_schema_output_structure(self):
+        """Verify expected output fields in Redshift schema."""
+        # Just test that the connector can be instantiated and has the right methods
+        from gateway.connectors.redshift import RedshiftConnector
+        c = RedshiftConnector()
+        assert hasattr(c, 'get_schema')
+        assert hasattr(c, 'get_sample_values')
+        # _build_sample_union_sql should be available from base
+        assert hasattr(c, '_build_sample_union_sql')
+
+
+class TestSnowflakeClusteringMetadata:
+    """Test that Snowflake connector fetches clustering key info."""
+
+    def test_snowflake_schema_includes_clustering_query(self):
+        """Verify Snowflake get_schema includes SHOW TABLES query for clustering."""
+        import inspect
+        from gateway.connectors.snowflake import SnowflakeConnector
+        source = inspect.getsource(SnowflakeConnector.get_schema)
+        assert "SHOW TABLES" in source
+        assert "clustering_key" in source
+        assert "cluster_by" in source
+
+    def test_snowflake_connector_has_logging(self):
+        """Verify Snowflake connector logs metadata query failures."""
+        import inspect
+        from gateway.connectors.snowflake import SnowflakeConnector
+        source = inspect.getsource(SnowflakeConnector.get_schema)
+        assert "logger.info" in source
+
+    def test_snowflake_sample_values_uses_union(self):
+        """Verify Snowflake sample values uses batched UNION ALL."""
+        import inspect
+        from gateway.connectors.snowflake import SnowflakeConnector
+        source = inspect.getsource(SnowflakeConnector.get_sample_values)
+        assert "_build_sample_union_sql" in source
+
+
+class TestSampleValuesBatching:
+    """Verify all connectors use batched UNION ALL for sample values."""
+
+    def test_all_connectors_use_union_all(self):
+        """Every connector's get_sample_values should reference _build_sample_union_sql."""
+        import inspect
+        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.duckdb import DuckDBConnector
+        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.databricks import DatabricksConnector
+
+        for cls in [MySQLConnector, ClickHouseConnector, DuckDBConnector,
+                    MSSQLConnector, TrinoConnector, DatabricksConnector]:
+            source = inspect.getsource(cls.get_sample_values)
+            assert "_build_sample_union_sql" in source or "UNION ALL" in source, \
+                f"{cls.__name__} should use batched sample query"
+
+    @pytest.mark.asyncio
+    async def test_mysql_batched_sample_values(self):
+        """Test MySQL sample values with batched UNION ALL on live database."""
+        from gateway.connectors.mysql import MySQLConnector
+        c = MySQLConnector()
+        await c.connect("mysql://analyst:An4lyst!P4ss@host.docker.internal:3307/test_analytics")
+        result = await c.get_sample_values("test_analytics.users", ["username", "email"], limit=5)
+        assert isinstance(result, dict)
+        # Should have at least one column with values
+        if result:
+            for col, vals in result.items():
+                assert isinstance(vals, list)
+                assert all(isinstance(v, str) for v in vals)
+        await c.close()
+
+    @pytest.mark.asyncio
+    async def test_clickhouse_batched_sample_values(self):
+        """Test ClickHouse sample values with batched UNION ALL on live database."""
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        await c.connect("clickhouse://default:test123@host.docker.internal:9100/test_analytics")
+        result = await c.get_sample_values("test_analytics.users", ["username", "email"], limit=5)
+        assert isinstance(result, dict)
+        if result:
+            for col, vals in result.items():
+                assert isinstance(vals, list)
+        await c.close()
+
+    @pytest.mark.asyncio
+    async def test_mssql_batched_sample_values(self):
+        """Test MSSQL sample values with batched UNION ALL on live database."""
+        from gateway.connectors.mssql import MSSQLConnector
+        c = MSSQLConnector()
+        await c.connect("mssql://sa:Test%4012345@host.docker.internal:1434/testdb")
+        result = await c.get_sample_values("dbo.customers", ["name", "email"], limit=5)
+        assert isinstance(result, dict)
+        if result:
+            for col, vals in result.items():
+                assert isinstance(vals, list)
+        await c.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

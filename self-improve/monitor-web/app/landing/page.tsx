@@ -910,6 +910,102 @@ result = await ceo.run(
         </div>
       </Section>
 
+      {/* ─── Recent Improvements ─── */}
+      <Section className="py-20 border-t border-[var(--color-border)]">
+        <div className="relative z-10 max-w-4xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="mb-8"
+          >
+            <p className="text-[10px] text-[var(--color-success)] uppercase tracking-[0.2em] mb-2">Track Record</p>
+            <h2 className="text-[28px] font-bold text-[var(--color-accent)] tracking-tight">
+              What it ships.
+            </h2>
+          </motion.div>
+
+          <div className="space-y-2">
+            {[
+              {
+                title: "Add connection pooling to reduce p99 latency",
+                tag: "perf",
+                tagColor: "text-[#88ccff] border-[#88ccff]/20 bg-[#88ccff]/5",
+                files: "4 files",
+                additions: "+142",
+                deletions: "-38",
+                time: "12m",
+              },
+              {
+                title: "Fix SQL injection in dynamic table name resolution",
+                tag: "security",
+                tagColor: "text-[var(--color-error)] border-[var(--color-error)]/20 bg-[var(--color-error)]/5",
+                files: "2 files",
+                additions: "+28",
+                deletions: "-12",
+                time: "6m",
+              },
+              {
+                title: "Add comprehensive test coverage for governance pipeline",
+                tag: "tests",
+                tagColor: "text-[var(--color-success)] border-[var(--color-success)]/20 bg-[var(--color-success)]/5",
+                files: "3 files",
+                additions: "+267",
+                deletions: "-0",
+                time: "18m",
+              },
+              {
+                title: "Implement session budget tracking with cost alerts",
+                tag: "feature",
+                tagColor: "text-[var(--color-warning)] border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5",
+                files: "6 files",
+                additions: "+189",
+                deletions: "-23",
+                time: "25m",
+              },
+              {
+                title: "Fix race condition in concurrent sandbox creation",
+                tag: "bugfix",
+                tagColor: "text-[#cc88ff] border-[#cc88ff]/20 bg-[#cc88ff]/5",
+                files: "1 file",
+                additions: "+34",
+                deletions: "-8",
+                time: "8m",
+              },
+            ].map((pr, i) => (
+              <motion.div
+                key={pr.title}
+                initial={{ opacity: 0, x: -8 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.3, delay: i * 0.06 }}
+                className="flex items-center gap-3 px-4 py-3 border border-[var(--color-border)] bg-[var(--color-bg-card)] hover:border-[var(--color-border-hover)] transition-all group"
+              >
+                {/* Merge icon */}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0 text-[var(--color-success)]">
+                  <circle cx="7" cy="3" r="2" stroke="currentColor" strokeWidth="1" />
+                  <circle cx="7" cy="11" r="2" stroke="currentColor" strokeWidth="1" />
+                  <line x1="7" y1="5" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
+                </svg>
+
+                <span className={`text-[9px] px-1.5 py-0.5 border tracking-wider uppercase flex-shrink-0 ${pr.tagColor}`}>
+                  {pr.tag}
+                </span>
+
+                <span className="text-[11px] text-[var(--color-text-muted)] flex-1 truncate group-hover:text-[var(--color-accent)] transition-colors">
+                  {pr.title}
+                </span>
+
+                <span className="text-[10px] text-[var(--color-text-dim)] tabular-nums flex-shrink-0">{pr.files}</span>
+                <span className="text-[10px] text-[var(--color-success)] tabular-nums flex-shrink-0">{pr.additions}</span>
+                <span className="text-[10px] text-[var(--color-error)] tabular-nums flex-shrink-0">{pr.deletions}</span>
+                <span className="text-[10px] text-[var(--color-text-dim)] tabular-nums flex-shrink-0 w-8 text-right">{pr.time}</span>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </Section>
+
       {/* ─── CTA ─── */}
       <Section className="py-24 border-t border-[var(--color-border)]">
         <div className="relative z-10 max-w-2xl mx-auto text-center">

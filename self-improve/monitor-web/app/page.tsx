@@ -2,15 +2,17 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
+import { clsx } from "clsx";
 import Image from "next/image";
 import Link from "next/link";
 import type { Run, FeedEvent, RunStatus, ToolCall, SettingsStatus, RepoInfo } from "@/lib/types";
-import { fetchToolCalls, fetchAuditLog, startRun, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo } from "@/lib/api";
+import { fetchToolCalls, fetchAuditLog, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo, fetchRuns } from "@/lib/api";
 import type { AgentHealth } from "@/lib/api";
 import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
 import { useSSE } from "@/hooks/useSSE";
 import { useControl } from "@/hooks/useControl";
+import { useParallelRuns } from "@/hooks/useParallelRuns";
 import { RunList } from "@/components/sidebar/RunList";
 import { EventFeed } from "@/components/feed/EventFeed";
 import { ControlBar } from "@/components/controls/ControlBar";
@@ -23,6 +25,7 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { RepoSelector } from "@/components/ui/RepoSelector";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
+import { ParallelRunsView } from "@/components/parallel/ParallelRunsView";
 
 export default function MonitorPage() {
   const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(() => {
@@ -41,6 +44,18 @@ export default function MonitorPage() {
   const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
+  const [activeView, setActiveView] = useState<"feed" | "bots">("bots");
+
+  const {
+    status: parallelStatus,
+    startRun: startParallelRun,
+    stopRun: parallelStop,
+    killRun: parallelKill,
+    pauseRun: parallelPause,
+    resumeRun: parallelResume,
+    unlockRun: parallelUnlock,
+  } = useParallelRuns();
+  const parallelActive = parallelStatus?.active ?? 0;
 
   const { events: liveEvents, connected, clearEvents } = useSSE(selectedRunId);
 
@@ -261,37 +276,45 @@ export default function MonitorPage() {
     }
   }, [runs, selectedRunId, handleSelectRun, suppressAutoSelect]);
 
-  // Start a new run
+  // Start a new bot run (always spawns an isolated container)
   const handleStartRun = useCallback(
     async (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => {
-      setStartBusy(true);
-      try {
-        const result = await startRun(prompt, budget, durationMinutes, baseBranch);
-        setStartModalOpen(false);
+      // Close modal immediately — don't block on the API
+      setStartModalOpen(false);
+      const existingIds = new Set(runs.map((r) => r.id));
+
+      // Fire API call in background
+      startParallelRun(prompt, budget, durationMinutes, baseBranch).catch((err) => {
         addEvent({
           _kind: "control",
-          text: `New run started${prompt ? ` with custom prompt` : ""}`,
+          text: `Failed to launch bot: ${err}`,
           ts: new Date().toISOString(),
         });
-        // Switch to the new run immediately
-        if (result.run_id) {
-          setSuppressAutoSelect(false);
-          setSelectedRunId(result.run_id);
-          setSelectedRun(null);
-          setHistoryEvents([]);
-          clearEvents();
-        }
-      } catch (err) {
-        addEvent({
-          _kind: "control",
-          text: `Failed to start run: ${err}`,
-          ts: new Date().toISOString(),
-        });
-      } finally {
-        setStartBusy(false);
+      });
+
+      addEvent({
+        _kind: "control",
+        text: `Bot launching${prompt ? ` with custom prompt` : ""}...`,
+        ts: new Date().toISOString(),
+      });
+
+      // Poll runs list until the new run appears in the sidebar
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const freshRuns = await fetchRuns(activeRepoFilter || undefined);
+          const newRun = freshRuns.find((r) => !existingIds.has(r.id));
+          if (newRun) {
+            setSuppressAutoSelect(false);
+            refreshRuns();  // Update sidebar immediately
+            handleSelectRun(newRun.id);
+            setActiveView("feed");
+            return;
+          }
+        } catch {}
       }
     },
-    [addEvent, refreshRuns, handleSelectRun]
+    [startParallelRun, addEvent, runs, activeRepoFilter, handleSelectRun]
   );
 
   const runStatus: RunStatus | null =
@@ -358,6 +381,39 @@ export default function MonitorPage() {
 
         <div className="flex-1" />
 
+        {/* View toggle */}
+        <div className="flex items-center gap-0.5 bg-white/[0.03] rounded p-0.5 border border-[#1a1a1a]">
+          <button
+            onClick={() => setActiveView("bots")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
+              activeView === "bots"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]"
+            )}
+          >
+            Bots
+            {parallelActive > 0 && (
+              <span className="min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88] text-[9px] font-bold px-1">
+                {parallelActive}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveView("feed")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all",
+              activeView === "feed"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]"
+            )}
+          >
+            Event Feed
+          </button>
+        </div>
+
+        <div className="w-px h-4 bg-[#1a1a1a]" />
+
         {/* Agent health indicator */}
         <div className="flex items-center gap-1.5 mr-2">
           <span
@@ -391,8 +447,11 @@ export default function MonitorPage() {
         <Button
           variant="success"
           size="md"
-          onClick={() => { fetchBranches(activeRepoFilter || undefined).then(setBranches); setStartModalOpen(true); }}
-          disabled={!agentIdle || !agentReachable || !isConfigured}
+          onClick={() => {
+            fetchBranches(activeRepoFilter || undefined).then(setBranches);
+            setStartModalOpen(true);
+          }}
+          disabled={!isConfigured}
           title={!isConfigured ? "Configure credentials in Settings first" : undefined}
           icon={
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -400,30 +459,27 @@ export default function MonitorPage() {
             </svg>
           }
         >
-          {!isConfigured
-            ? "Setup Required"
-            : !agentReachable
-              ? "Offline"
-              : !agentIdle
-                ? "Running"
-                : "New Run"}
+          {!isConfigured ? "Setup Required" : "New Bot"}
         </Button>
 
-        <div className="w-px h-4 bg-[#1a1a1a]" />
-
-        <ControlBar
-          status={runStatus}
-          onPause={pause}
-          onResume={resume}
-          onStop={stop}
-          onKill={kill}
-          onUnlock={unlock}
-          onToggleInject={() => setInjectOpen(!injectOpen)}
-          onResumeRun={resumeSession}
-          busy={busy}
-          sessionLocked={agentHealth?.session_unlocked === false}
-          timeRemaining={agentHealth?.time_remaining || null}
-        />
+        {activeView === "feed" && selectedRunId && (
+          <>
+            <div className="w-px h-4 bg-[#1a1a1a]" />
+            <ControlBar
+              status={runStatus}
+              onPause={() => parallelPause(selectedRunId)}
+              onResume={() => parallelResume(selectedRunId)}
+              onStop={() => parallelStop(selectedRunId)}
+              onKill={() => parallelKill(selectedRunId)}
+              onUnlock={() => parallelUnlock(selectedRunId)}
+              onToggleInject={() => setInjectOpen(!injectOpen)}
+              onResumeRun={() => parallelResume(selectedRunId)}
+              busy={busy}
+              sessionLocked={false}
+              timeRemaining={null}
+            />
+          </>
+        )}
       </header>
 
       {/* Inject Panel */}
@@ -441,6 +497,7 @@ export default function MonitorPage() {
         onStart={handleStartRun}
         busy={startBusy}
         branches={branches}
+        mode="parallel"
       />
 
       {/* Onboarding Modal */}
@@ -477,18 +534,33 @@ export default function MonitorPage() {
         <RunList
           runs={runs}
           activeId={selectedRunId}
-          onSelect={handleSelectRun}
+          onSelect={(id: string) => { handleSelectRun(id); setActiveView("feed"); }}
           loading={runsLoading}
         />
 
-        {/* Center - Event feed */}
-        <main className="flex-1 flex flex-col min-h-0 min-w-0">
-          <EventFeed events={allEvents} />
-          <StatsBar run={selectedRun} connected={connected} events={allEvents} />
-        </main>
+        {activeView === "feed" ? (
+          <>
+            {/* Center - Event feed */}
+            <main className="flex-1 flex flex-col min-h-0 min-w-0">
+              <EventFeed events={allEvents} />
+              <StatsBar run={selectedRun} connected={connected} events={allEvents} />
+            </main>
 
-        {/* Right sidebar - WorkTree */}
-        <WorkTree events={allEvents} runId={selectedRunId} />
+            {/* Right sidebar - WorkTree */}
+            <WorkTree events={allEvents} runId={selectedRunId} />
+          </>
+        ) : (
+          <main className="flex-1 flex flex-col min-h-0 min-w-0">
+            <ParallelRunsView
+              onStartNew={() => {
+                fetchBranches(activeRepoFilter || undefined).then(setBranches);
+                setStartModalOpen(true);
+              }}
+              branches={branches}
+              label="Bots"
+            />
+          </main>
+        )}
       </div>
     </div>
   );

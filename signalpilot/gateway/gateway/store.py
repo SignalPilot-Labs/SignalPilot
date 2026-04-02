@@ -248,6 +248,8 @@ def create_connection(conn: ConnectionCreate) -> ConnectionInfo:
         catalog=conn.catalog,
         description=conn.description,
         tags=conn.tags,
+        schema_filter_include=conn.schema_filter_include,
+        schema_filter_exclude=conn.schema_filter_exclude,
         schema_refresh_interval=conn.schema_refresh_interval,
         connection_timeout=conn.connection_timeout,
         query_timeout=conn.query_timeout,

@@ -742,7 +742,10 @@ async def lifespan(app: FastAPI):
         print(f"[agent] Marked {crashed} stale run(s) as crashed from previous restart")
     print("[agent] Ready — waiting for start command on :8500")
     yield
-    await db.close_db()
+    try:
+        await db.close_db()
+    except Exception as e:
+        print(f"[agent] Warning: error closing database: {e}")
 
 
 app = FastAPI(title="Self-Improve Agent", lifespan=lifespan)

@@ -27,6 +27,8 @@ import {
   EyeOff,
   Star,
   Filter,
+  Download,
+  Upload,
 } from "lucide-react";
 import {
   getConnections,
@@ -42,6 +44,8 @@ import {
   refreshConnectionSchema,
   getSchemaEndorsements,
   setSchemaEndorsements,
+  exportConnections,
+  importConnections,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -521,15 +525,17 @@ function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
       };
     }
     if (dbType === "trino") {
-      const parsed = new URL(url.replace(/^trino:/, "http:"));
+      const isHttps = url.startsWith("trino+https://");
+      const parsed = new URL(url.replace(/^trino(\+https)?:/, "http:"));
       const pathParts = parsed.pathname.split("/").filter(Boolean);
       return {
         host: parsed.hostname || "",
-        port: parsed.port || "8080",
+        port: parsed.port || (isHttps ? "443" : "8080"),
         username: decodeURIComponent(parsed.username || "trino"),
         password: decodeURIComponent(parsed.password || ""),
         catalog: pathParts[0] || "",
         schema_name: pathParts[1] || "",
+        trino_https: isHttps,
       };
     }
     if (dbType === "databricks") {
@@ -1072,6 +1078,7 @@ export default function ConnectionsPage() {
   const [form, setForm] = useState<FormState>({ ...defaultForm });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [filterTag, setFilterTag] = useState<string | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
     getConnections().then(setConnections).catch(() => {});
@@ -1295,21 +1302,78 @@ export default function ConnectionsPage() {
     }, 300);
   }
 
+  async function handleExport() {
+    try {
+      const data = await exportConnections(false);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `signalpilot-connections-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+    }
+  }
+
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const manifest = JSON.parse(text);
+      const result = await importConnections(manifest);
+      refresh();
+      const msg = [`Imported: ${result.imported}`];
+      if (result.skipped.length) msg.push(`Skipped (existing): ${result.skipped.join(", ")}`);
+      if (result.errors.length) msg.push(`Errors: ${result.errors.map(e => `${e.name}: ${e.error}`).join("; ")}`);
+      alert(msg.join("\n"));
+    } catch (err) {
+      alert(`Import failed: ${err instanceof Error ? err.message : err}`);
+    }
+    // Reset file input
+    if (importFileRef.current) importFileRef.current.value = "";
+  }
+
   const config = DB_CONFIGS[form.db_type];
 
   return (
     <div className="p-8 animate-fade-in">
+      <input
+        ref={importFileRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleImportFile}
+      />
       <PageHeader
         title="connections"
         subtitle="databases"
         description="manage database connections for governed ai access"
         actions={
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
-          >
-            <Plus className="w-3.5 h-3.5" /> add connection
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+              title="Export connections"
+            >
+              <Download className="w-3 h-3" /> export
+            </button>
+            <button
+              onClick={() => importFileRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+              title="Import connections from JSON"
+            >
+              <Upload className="w-3 h-3" /> import
+            </button>
+            <button
+              onClick={() => setShowForm(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            >
+              <Plus className="w-3.5 h-3.5" /> add connection
+            </button>
+          </div>
         }
       />
 

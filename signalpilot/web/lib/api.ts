@@ -139,6 +139,23 @@ export const setSchemaEndorsements = (name: string, endorsements: { endorsed: st
     { method: "PUT", body: JSON.stringify(endorsements) }
   );
 
+// Connection Export/Import
+export const exportConnections = (includeCredentials = false) =>
+  request<{
+    version: string;
+    exported_at: number;
+    connection_count: number;
+    includes_credentials: boolean;
+    connections: Record<string, unknown>[];
+  }>(`/api/connections/export?include_credentials=${includeCredentials}`);
+
+export const importConnections = (manifest: Record<string, unknown>) =>
+  request<{
+    imported: number;
+    skipped: string[];
+    errors: { name: string; error: string }[];
+  }>("/api/connections/import", { method: "POST", body: JSON.stringify(manifest) });
+
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");
 export const createSandbox = (s: Record<string, unknown>) =>

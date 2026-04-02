@@ -477,6 +477,88 @@ async def get_all_connection_health(window: int = Query(default=300, ge=60, le=3
     return {"connections": health_monitor.all_stats(window)}
 
 
+# Connection export/import — must be defined before {name} routes to avoid path conflict
+@app.get("/api/connections/export")
+async def export_connections(
+    include_credentials: bool = Query(default=False, description="Include passwords and secrets (security risk)"),
+):
+    """Export all connections as a portable JSON manifest.
+
+    HEX-pattern: allows backup, migration, and sharing of connection configs.
+    By default credentials are stripped for safety — set include_credentials=true
+    to include them (for migration between environments).
+    """
+    all_conns = list_connections()
+    exported = []
+    for conn in all_conns:
+        entry: dict = {
+            "name": conn.get("name", ""),
+            "db_type": conn.get("db_type", ""),
+            "description": conn.get("description", ""),
+            "tags": conn.get("tags", []),
+        }
+        # Copy configuration fields
+        for field in ("host", "port", "database", "username", "account", "warehouse",
+                       "schema_name", "role", "project", "dataset", "http_path", "catalog",
+                       "schema_filter_include", "schema_filter_exclude",
+                       "schema_refresh_interval", "connection_timeout", "query_timeout",
+                       "keepalive_interval"):
+            val = conn.get(field)
+            if val is not None:
+                entry[field] = val
+
+        if include_credentials:
+            conn_str = get_connection_string(entry["name"])
+            if conn_str:
+                entry["connection_string"] = conn_str
+            # Include SSL config if present
+            if conn.get("ssl_config"):
+                entry["ssl_config"] = conn["ssl_config"]
+            if conn.get("ssh_tunnel"):
+                entry["ssh_tunnel"] = conn["ssh_tunnel"]
+
+        exported.append(entry)
+
+    return {
+        "version": "1.0",
+        "exported_at": time.time(),
+        "connection_count": len(exported),
+        "includes_credentials": include_credentials,
+        "connections": exported,
+    }
+
+
+@app.post("/api/connections/import")
+async def import_connections(manifest: dict):
+    """Import connections from an exported JSON manifest.
+
+    HEX-pattern: bulk import of connection configs. Skips connections
+    whose names already exist (no overwrite). Returns import results.
+    """
+    connections = manifest.get("connections", [])
+    results = {"imported": 0, "skipped": [], "errors": []}
+
+    for entry in connections:
+        name = entry.get("name", "")
+        if not name:
+            results["errors"].append({"name": "(empty)", "error": "Missing connection name"})
+            continue
+
+        # Skip if already exists
+        if get_connection(name):
+            results["skipped"].append(name)
+            continue
+
+        try:
+            conn = ConnectionCreate(**entry)
+            create_connection(conn)
+            results["imported"] += 1
+        except Exception as e:
+            results["errors"].append({"name": name, "error": str(e)})
+
+    return results
+
+
 @app.get("/api/connections/{name}")
 async def get_connection_detail(name: str):
     conn = get_connection(name)
@@ -567,87 +649,6 @@ async def clone_connection(name: str, new_name: str = Query(..., min_length=1, m
     conn = ConnectionCreate(**create_data)
     result = create_connection(conn)
     return result
-
-
-@app.get("/api/connections/export")
-async def export_connections(
-    include_credentials: bool = Query(default=False, description="Include passwords and secrets (security risk)"),
-):
-    """Export all connections as a portable JSON manifest.
-
-    HEX-pattern: allows backup, migration, and sharing of connection configs.
-    By default credentials are stripped for safety — set include_credentials=true
-    to include them (for migration between environments).
-    """
-    all_conns = list_connections()
-    exported = []
-    for conn in all_conns:
-        entry: dict = {
-            "name": conn.get("name", ""),
-            "db_type": conn.get("db_type", ""),
-            "description": conn.get("description", ""),
-            "tags": conn.get("tags", []),
-        }
-        # Copy configuration fields
-        for field in ("host", "port", "database", "username", "account", "warehouse",
-                       "schema_name", "role", "project", "dataset", "http_path", "catalog",
-                       "schema_filter_include", "schema_filter_exclude",
-                       "schema_refresh_interval", "connection_timeout", "query_timeout",
-                       "keepalive_interval"):
-            val = conn.get(field)
-            if val is not None:
-                entry[field] = val
-
-        if include_credentials:
-            conn_str = get_connection_string(entry["name"])
-            if conn_str:
-                entry["connection_string"] = conn_str
-            # Include SSL config if present
-            if conn.get("ssl_config"):
-                entry["ssl_config"] = conn["ssl_config"]
-            if conn.get("ssh_tunnel"):
-                entry["ssh_tunnel"] = conn["ssh_tunnel"]
-
-        exported.append(entry)
-
-    return {
-        "version": "1.0",
-        "exported_at": time.time(),
-        "connection_count": len(exported),
-        "includes_credentials": include_credentials,
-        "connections": exported,
-    }
-
-
-@app.post("/api/connections/import")
-async def import_connections(manifest: dict):
-    """Import connections from an exported JSON manifest.
-
-    HEX-pattern: bulk import of connection configs. Skips connections
-    whose names already exist (no overwrite). Returns import results.
-    """
-    connections = manifest.get("connections", [])
-    results = {"imported": 0, "skipped": [], "errors": []}
-
-    for entry in connections:
-        name = entry.get("name", "")
-        if not name:
-            results["errors"].append({"name": "(empty)", "error": "Missing connection name"})
-            continue
-
-        # Skip if already exists
-        if get_connection(name):
-            results["skipped"].append(name)
-            continue
-
-        try:
-            conn = ConnectionCreate(**entry)
-            create_connection(conn)
-            results["imported"] += 1
-        except Exception as e:
-            results["errors"].append({"name": name, "error": str(e)})
-
-    return results
 
 
 @app.post("/api/connections/{name}/schema/refresh")

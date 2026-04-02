@@ -170,7 +170,11 @@ class TestSchemaLinkingAccuracy:
     """Test that schema linking finds the right tables for Spider2.0-style questions."""
 
     def _link(self, schema: dict, question: str) -> dict[str, float]:
-        """Simulate the schema linking logic from agent-context endpoint."""
+        """Simulate the schema linking logic from agent-context endpoint.
+
+        Includes FK-propagated scoring: tables connected via FK to high-scoring
+        tables receive proportional boosts (30% forward, 20% reverse).
+        """
         stopwords = {
             "the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
             "her", "was", "one", "our", "out", "has", "how", "many", "much",
@@ -198,15 +202,39 @@ class TestSchemaLinkingAccuracy:
                         score += 1.5
             scores[key] = score
 
-        # Add FK-connected tables
-        linked = {k for k, s in scores.items() if s > 0}
-        fk_adds = set()
-        for k in list(linked):
-            for fk in schema.get(k, {}).get("foreign_keys", []):
+        # FK-propagated scoring (Spider2.0 optimization)
+        # Build reverse FK index
+        reverse_fk: dict[str, list[str]] = {}
+        for key, t in schema.items():
+            for fk in t.get("foreign_keys", []):
+                ref = fk.get("references_table", "")
+                if ref not in reverse_fk:
+                    reverse_fk[ref] = []
+                reverse_fk[ref].append(key)
+
+        fk_boost: dict[str, float] = {}
+        for key, score in scores.items():
+            if score <= 0:
+                continue
+            t = schema.get(key, {})
+            # Forward FK: A→B, boost B
+            for fk in t.get("foreign_keys", []):
+                ref_table = fk.get("references_table", "")
                 for ck in schema:
-                    if schema[ck].get("name") == fk.get("references_table"):
-                        fk_adds.add(ck)
-        linked |= fk_adds
+                    if schema[ck].get("name") == ref_table and ck != key:
+                        fk_boost[ck] = max(fk_boost.get(ck, 0), score * 0.3)
+                        break
+            # Reverse FK: tables that reference this table
+            table_name = t.get("name", "")
+            for rk in reverse_fk.get(table_name, []):
+                if rk in schema and rk != key:
+                    fk_boost[rk] = max(fk_boost.get(rk, 0), score * 0.2)
+
+        for key, boost in fk_boost.items():
+            if scores.get(key, 0) == 0:
+                scores[key] = boost
+
+        linked = {k for k, s in scores.items() if s > 0}
         return {k: scores.get(k, 0) for k in linked}
 
     def test_single_table_question(self):
@@ -264,6 +292,33 @@ class TestSchemaLinkingAccuracy:
         schema = _enterprise_schema()
         result = self._link(schema, "When was the shipment delivered?")
         assert "public.shipments" in result
+
+    def test_fk_propagation_forward(self):
+        """FK-referenced tables should get proportional score boost."""
+        schema = _enterprise_schema()
+        result = self._link(schema, "Show all order items")
+        # order_items has FK to orders and products — they should be included
+        assert "public.order_items" in result
+        assert "public.orders" in result
+        assert "public.products" in result
+        # Orders should have higher propagated score than products
+        # (order_items has more direct mention overlap with "orders")
+
+    def test_fk_propagation_reverse(self):
+        """Tables that reference a high-scoring table should get a boost."""
+        schema = _enterprise_schema()
+        result = self._link(schema, "Show all customers")
+        # orders has FK to customers, so orders should be boosted via reverse FK
+        assert "public.customers" in result
+        assert "public.orders" in result  # reverse FK: orders.customer_id → customers
+
+    def test_fk_propagation_scores_are_proportional(self):
+        """FK-propagated scores should be proportional to the parent's score."""
+        schema = _enterprise_schema()
+        result = self._link(schema, "Show all order items with details")
+        # order_items is directly mentioned (high score)
+        # products is FK-connected (should have lower, propagated score)
+        assert result.get("public.order_items", 0) > result.get("public.products", 0)
 
 
 # ── Progressive Disclosure Tests ──────────────────────────────────

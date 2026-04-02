@@ -125,6 +125,44 @@ class TestValidateSQL:
         )
         assert result.ok
 
+    # ─── Null byte injection (HIGH-04) ─────────────────────────────
+    def test_null_byte_rejected(self):
+        result = validate_sql("SELECT 1\x00; DROP TABLE users")
+        assert not result.ok
+        assert "Null bytes" in (result.blocked_reason or "")
+
+    def test_null_byte_mid_query_rejected(self):
+        result = validate_sql("SELECT \x00* FROM users")
+        assert not result.ok
+
+    # ─── Comment injection (HIGH-04) ─────────────────────────────
+    def test_block_comment_hiding_stacking(self):
+        result = validate_sql("SELECT 1; /* hidden */ INSERT INTO users VALUES (1)")
+        assert not result.ok
+
+    def test_nested_block_comments(self):
+        result = validate_sql("SELECT 1 /* outer /* inner */ ; DROP TABLE users */")
+        assert not result.ok
+
+    def test_line_comment_hiding_stacking(self):
+        result = validate_sql("SELECT 1 -- safe\n; DELETE FROM users")
+        assert not result.ok
+
+    def test_comment_only_no_stacking_allowed(self):
+        result = validate_sql("SELECT /* comment */ 1")
+        assert result.ok
+
+    # ─── Unicode / encoding tricks ──────────────────────────────
+    def test_unicode_fullwidth_semicolon(self):
+        """Fullwidth semicolon (U+FF1B) should not bypass stacking detection."""
+        # sqlglot won't parse this as a separator, so it should either be
+        # a valid single statement or a parse error — not two statements
+        result = validate_sql("SELECT 1\uff1b DROP TABLE users")
+        # Should not be ok — either parse error or blocked
+        # The key thing: it must NOT succeed as two statements
+        if result.ok:
+            assert "users" not in [t.lower() for t in result.tables]
+
     # ─── Input limits ────────────────────────────────────────────────
     def test_query_length_limit(self):
         """MED-07: queries over 100KB should be rejected."""

@@ -1446,6 +1446,60 @@ async def explore_column(
 
 
 @mcp.tool()
+async def find_join_path(connection_name: str, from_table: str, to_table: str, max_hops: int = 4) -> str:
+    """
+    Find FK join paths between two tables — critical for multi-table queries.
+
+    Uses BFS over the foreign key graph to discover all paths, returning
+    the exact join columns at each hop. Prevents hallucinated join conditions.
+
+    Example output: orders → order_items.order_id = orders.id → products.id = order_items.product_id
+
+    Args:
+        connection_name: Database connection to search.
+        from_table: Source table (e.g., 'public.orders' or just 'orders').
+        to_table: Target table (e.g., 'public.products' or just 'products').
+        max_hops: Maximum FK hops to search (1-6, default 4).
+    """
+    err = _validate_connection_name(connection_name)
+    if err:
+        return err
+
+    gw = _gateway_url()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{gw}/api/connections/{connection_name}/schema/join-paths",
+                params={
+                    "from_table": from_table,
+                    "to_table": to_table,
+                    "max_hops": min(max_hops, 6),
+                },
+            )
+            if resp.status_code != 200:
+                return f"Error: {resp.text}"
+            data = resp.json()
+
+        paths = data.get("paths", [])
+        if not paths:
+            return f"No join path found between '{from_table}' and '{to_table}' within {max_hops} hops.\nTry checking the schema/relationships endpoint to see available FK connections."
+
+        lines = [f"Found {len(paths)} join path(s) from {from_table} → {to_table}:", ""]
+        for i, path in enumerate(paths):
+            lines.append(f"Path {i + 1} ({path['hops']} hop{'s' if path['hops'] != 1 else ''}):")
+            lines.append(f"  Tables: {' → '.join(path['tables'])}")
+            for join in path.get("joins", []):
+                lines.append(f"  JOIN ON {join['from']} = {join['to']}")
+            if path.get("sql_hint"):
+                lines.append(f"  SQL: {path['sql_hint']}")
+            lines.append("")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error finding join paths: {e}"
+
+
+@mcp.tool()
 async def estimate_query_cost(connection_name: str, sql: str) -> str:
     """
     Estimate the cost of a SQL query before executing it (dry run).

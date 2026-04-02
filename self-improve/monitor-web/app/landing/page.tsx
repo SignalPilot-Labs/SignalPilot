@@ -267,7 +267,7 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] overflow-x-hidden">
       {/* ─── Nav ─── */}
-      <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
+      <nav aria-label="Main navigation" className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
         <div className="flex items-center justify-between px-6 md:px-12 lg:px-24 h-12">
           <div className="flex items-center gap-2.5">
             <svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="#00ff88" strokeWidth="1.5" strokeLinecap="round">

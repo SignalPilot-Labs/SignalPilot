@@ -285,9 +285,9 @@ export default function SandboxDetailPage() {
       <div className="p-4 sm:p-8 animate-fade-in">
         <button
           onClick={() => router.push("/sandboxes")}
-          className="flex items-center gap-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] mb-4 tracking-wider"
+          className="flex items-center gap-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] mb-4 tracking-wider py-2 active:text-[var(--color-text)]"
         >
-          <ArrowLeft className="w-3.5 h-3.5" /> back
+          <ArrowLeft className="w-4 h-4 sm:w-3.5 sm:h-3.5" /> back
         </button>
         <div className="p-4 border border-[var(--color-error)]/30 bg-[var(--color-error)]/5">
           <p className="text-xs text-[var(--color-error)]">{error}</p>
@@ -314,9 +314,9 @@ export default function SandboxDetailPage() {
         <div className="flex items-center gap-4">
           <button
             onClick={() => router.push("/sandboxes")}
-            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            className="p-2.5 sm:p-1.5 -ml-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors active:text-[var(--color-text)]"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
+            <ArrowLeft className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
           </button>
           <div>
             <Breadcrumb items={[
@@ -517,7 +517,7 @@ export default function SandboxDetailPage() {
         <div className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-1">
           <button
             onClick={() => setShowSnippets(!showSnippets)}
-            className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider"
+            className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider py-1.5 px-1"
           >
             {showSnippets ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             snippets
@@ -527,7 +527,7 @@ export default function SandboxDetailPage() {
               <button
                 key={idx}
                 onClick={() => setCode(snippet.code)}
-                className="px-2 py-0.5 text-[9px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+                className="px-2.5 py-1.5 sm:py-0.5 text-[9px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider active:bg-[var(--color-bg-hover)]"
               >
                 {snippet.label}
               </button>

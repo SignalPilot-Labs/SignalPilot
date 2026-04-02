@@ -278,6 +278,26 @@ export const diagnoseConnection = (name: string) =>
     diagnostics: { check: string; status: string; message: string; hint?: string; duration_ms: number }[];
   }>(`/api/connections/${name}/diagnose`, { method: "POST" });
 
+// Semantic Model (HEX-style inline schema editing)
+export const getSemanticModel = (name: string) =>
+  request<{
+    tables: Record<string, { description: string; columns: Record<string, { description?: string; business_name?: string; unit?: string }> }>;
+    joins: { from: string; to: string; type?: string; description?: string }[];
+    glossary: Record<string, string>;
+  }>(`/api/connections/${name}/semantic-model`);
+
+export const updateSemanticModel = (name: string, model: Record<string, unknown>) =>
+  request<Record<string, unknown>>(`/api/connections/${name}/semantic-model`, {
+    method: "PUT",
+    body: JSON.stringify(model),
+  });
+
+export const generateSemanticModel = (name: string) =>
+  request<{
+    tables: number; joins: number; glossary_terms: number;
+    generated: { tables_with_descriptions: number; joins_added: number; glossary_terms_added: number };
+  }>(`/api/connections/${name}/semantic-model/generate`, { method: "POST" });
+
 // Schema Diff
 export const getConnectionSchemaDiff = (name: string) =>
   request<{

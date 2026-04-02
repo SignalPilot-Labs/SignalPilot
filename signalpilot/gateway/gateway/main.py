@@ -2568,14 +2568,34 @@ async def get_agent_context(
     sections.append(f"-- Tables: {len(filtered)}, Total rows: {total_rows:,}, Total size: {total_mb:.1f} MB")
     sections.append("")
 
-    # Section 0.5: Business glossary (if present in semantic model)
+    # Section 0.5: Business glossary — only show terms relevant to the question or tables
     glossary = semantic.get("glossary", {})
     if glossary:
-        glossary_lines = ["-- === Business Glossary ==="]
-        for term, col_ref in sorted(glossary.items())[:30]:
-            glossary_lines.append(f"-- {term} = {col_ref}")
-        sections.append("\n".join(glossary_lines))
-        sections.append("")
+        # Filter glossary to terms that reference included tables
+        table_names = {t.get("name", "").lower() for t in filtered.values()}
+        relevant_glossary = {}
+        # Extract question terms for matching (reuse if already parsed)
+        import re as _re_gloss
+        q_terms = [w.lower() for w in _re_gloss.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question)] if question else []
+        for term, col_ref in glossary.items():
+            ref_lower = col_ref.lower()
+            # Include if the column reference mentions a table we're showing
+            for tname in table_names:
+                if tname and tname in ref_lower:
+                    relevant_glossary[term] = col_ref
+                    break
+            # Also include if a question term matches the glossary term
+            if question and term not in relevant_glossary:
+                for qterm in q_terms:
+                    if qterm in term.lower():
+                        relevant_glossary[term] = col_ref
+                        break
+        if relevant_glossary:
+            glossary_lines = ["-- === Business Glossary ==="]
+            for term, col_ref in sorted(relevant_glossary.items())[:25]:
+                glossary_lines.append(f"-- {term} = {col_ref}")
+            sections.append("\n".join(glossary_lines))
+            sections.append("")
 
     # Section 2: DDL with inline metadata
     inferred = _infer_implicit_joins(filtered)

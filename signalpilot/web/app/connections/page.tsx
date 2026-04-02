@@ -48,6 +48,7 @@ import {
   importConnections,
   getNetworkInfo,
   diagnoseConnection,
+  generateSemanticModel,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -1499,6 +1500,15 @@ export default function ConnectionsPage() {
     } finally { setTesting(null); }
   }
 
+  async function handleGenerateSemantic(name: string) {
+    try {
+      const result = await generateSemanticModel(name);
+      toast(`${name}: semantic model generated — ${result.joins} joins, ${result.glossary_terms} glossary terms`, "success");
+    } catch (e) {
+      toast(`${name}: semantic model generation failed — ${String(e)}`, "error");
+    }
+  }
+
   async function handleDiagnose(name: string) {
     setDiagnosing(name);
     try {
@@ -2438,6 +2448,16 @@ export default function ConnectionsPage() {
                           >
                             <RefreshCw className={`w-2.5 h-2.5 ${schemaLoading === conn.name ? "animate-spin" : ""}`} strokeWidth={1.5} />
                             refresh
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await handleGenerateSemantic(conn.name);
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+                            title="Generate semantic model with auto-detected joins and business glossary"
+                          >
+                            <Star className="w-2.5 h-2.5" strokeWidth={1.5} />
+                            semantic
                           </button>
                           <div className="relative">
                             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />

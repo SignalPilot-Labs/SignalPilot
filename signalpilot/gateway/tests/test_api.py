@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway.main import app
+from gateway.api.settings import _redact_settings
+from gateway.models import GatewaySettings
 
 
 @pytest.fixture
@@ -263,3 +265,51 @@ class TestHealthEndpoints:
     def test_health_window_validation(self, client):
         response = client.get("/api/connections/health?window=10")
         assert response.status_code == 422  # Below minimum of 60
+
+
+class TestSettingsRedaction:
+    """Tests for _redact_settings in settings.py."""
+
+    def test_redacts_api_key_when_set(self):
+        settings = GatewaySettings(api_key="secret123")
+        result = _redact_settings(settings)
+        assert result["api_key"] == "***"
+
+    def test_redacts_sandbox_api_key_when_set(self):
+        settings = GatewaySettings(sandbox_api_key="sandbox_secret")
+        result = _redact_settings(settings)
+        assert result["sandbox_api_key"] == "***"
+
+    def test_redacts_both_keys_when_both_set(self):
+        settings = GatewaySettings(api_key="key1", sandbox_api_key="key2")
+        result = _redact_settings(settings)
+        assert result["api_key"] == "***"
+        assert result["sandbox_api_key"] == "***"
+
+    def test_preserves_none_api_key(self):
+        settings = GatewaySettings(api_key=None)
+        result = _redact_settings(settings)
+        assert result["api_key"] is None
+
+    def test_preserves_none_sandbox_api_key(self):
+        settings = GatewaySettings(sandbox_api_key=None)
+        result = _redact_settings(settings)
+        assert result["sandbox_api_key"] is None
+
+    def test_preserves_other_fields(self):
+        settings = GatewaySettings(
+            api_key="secret",
+            sandbox_api_key="sandbox_secret",
+            default_row_limit=500,
+            gateway_url="http://custom-host:9999",
+            default_budget_usd=42.0,
+        )
+        result = _redact_settings(settings)
+        assert result["default_row_limit"] == 500
+        assert result["gateway_url"] == "http://custom-host:9999"
+        assert result["default_budget_usd"] == 42.0
+
+    def test_returns_dict(self):
+        settings = GatewaySettings()
+        result = _redact_settings(settings)
+        assert isinstance(result, dict)

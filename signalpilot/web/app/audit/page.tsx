@@ -194,13 +194,13 @@ export default function AuditPage() {
             placeholder="search sql, connection, or reason..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+            className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
           />
         </div>
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
-          className="px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+          className="px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
         >
           <option value="">all types</option>
           <option value="query">queries</option>

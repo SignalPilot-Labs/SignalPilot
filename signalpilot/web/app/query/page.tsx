@@ -230,7 +230,7 @@ export default function QueryExplorerPage() {
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
-            className="appearance-none w-full sm:w-auto pl-3 pr-8 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] sm:min-w-[200px] tracking-wide"
+            className="appearance-none w-full sm:w-auto pl-3 pr-8 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] sm:min-w-[200px] tracking-wide"
           >
             {connections.length === 0 ? (
               <option value="">no connections</option>

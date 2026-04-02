@@ -183,7 +183,7 @@ export default function SchemaExplorerPage() {
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
-            className="px-3 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[150px] sm:min-w-[200px] tracking-wide"
+            className="px-3 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[150px] sm:min-w-[200px] tracking-wide"
           >
             {connections.length === 0 ? (
               <option value="">no connections</option>
@@ -226,7 +226,7 @@ export default function SchemaExplorerPage() {
                 placeholder="search tables and columns..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
               />
             </div>
             <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">

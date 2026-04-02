@@ -113,7 +113,7 @@ export default function SandboxesPage() {
                   placeholder="my-analysis"
                   value={form.label}
                   onChange={(e) => setForm({ ...form, label: e.target.value })}
-                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                 />
               </div>
               <div>
@@ -121,7 +121,7 @@ export default function SandboxesPage() {
                 <select
                   value={form.connection_name}
                   onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
-                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                 >
                   <option value="">none</option>
                   {connections.map((c) => (

@@ -308,7 +308,7 @@ export default function SandboxDetailPage() {
   const inputCount = history.filter(h => h.type === "input").length;
 
   return (
-    <div className="flex flex-col min-h-screen sm:h-screen">
+    <div className="flex flex-col min-h-screen pb-14 sm:pb-0 sm:h-screen">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0 gap-3">
         <div className="flex items-center gap-4">

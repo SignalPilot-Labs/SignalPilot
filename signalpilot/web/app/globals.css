@@ -877,6 +877,11 @@ kbd {
     font-size: max(12px, 0.75rem);
   }
 
+  /* ── Textareas: cap height on mobile to show more content below ── */
+  textarea {
+    max-height: 30vh;
+  }
+
   /* ── Focus-visible: outline for keyboard/screen-reader nav on mobile ── */
   :focus-visible {
     outline: 2px solid var(--color-success);
@@ -951,6 +956,43 @@ kbd {
   }
   .main-content {
     padding-bottom: 3rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Reduced motion — respect user accessibility preferences    */
+/* ═══════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-fade-in,
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-scale-in,
+  .animate-count-up {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .stagger-fade-in > * {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+
+  .pulse-dot,
+  .animate-ping,
+  .animate-spin {
+    animation: none !important;
+  }
+
+  /* Keep spin on loading indicators but reduce visual noise */
+  .animate-spin {
+    animation: spin 2s linear infinite !important;
   }
 }
 

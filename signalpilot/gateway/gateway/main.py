@@ -925,6 +925,8 @@ async def get_connection_schema(
 
     # Apply endorsement filter (HEX Data Browser pattern — curate tables for AI agents)
     filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # Apply table name filter if provided (additional narrowing)
     if filter:
@@ -1221,8 +1223,10 @@ async def get_enriched_schema(
                 cached = await connector.get_schema()
                 schema_cache.put(name, cached)
 
-            # Apply endorsement filter (HEX Data Browser pattern)
+            # Apply endorsement filter and schema filters
             filtered = apply_endorsement_filter(name, cached)
+            sf_include, sf_exclude = _get_schema_filters(name)
+            filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
             # Build enriched compact schema
             enriched: dict[str, Any] = {}
@@ -1333,6 +1337,8 @@ async def get_compact_schema(
             schema_cache.put(name, cached)
 
     filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # Sort tables by relevance: most connected (FK-rich) first, then by row count
     # This ensures the most important join-hub tables appear in truncated schemas
@@ -2232,6 +2238,8 @@ async def get_schema_overview(
         schema_cache.put(name, cached)
 
     filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
     total_tables = len(filtered)
     total_columns = 0
@@ -2387,6 +2395,8 @@ async def get_filtered_schema(
         schema_cache.put(name, cached)
 
     filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # Apply prefix filters
     result: dict[str, Any] = {}
@@ -2452,6 +2462,8 @@ async def get_schema_relationships(
         schema_cache.put(name, cached)
 
     filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # Extract all FK relationships
     relationships: list[dict] = []
@@ -2548,6 +2560,8 @@ async def get_join_paths(
         schema_cache.put(name, cached)
 
     filtered = apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = _get_schema_filters(name)
+    filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # Build bidirectional adjacency list with join info
     # Each edge: (from_table, from_col, to_table, to_col)

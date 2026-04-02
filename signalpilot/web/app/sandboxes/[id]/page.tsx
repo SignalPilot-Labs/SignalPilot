@@ -370,15 +370,15 @@ export default function SandboxDetailPage() {
             </div>
           </div>
 
-          <div className="h-3 w-px bg-[var(--color-border)]" />
+          <div className="h-3 w-px bg-[var(--color-border)] hidden sm:block" />
 
-          <span className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="hidden sm:flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] tracking-wider">
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
             {sandbox.row_limit.toLocaleString()}
           </span>
 
           {sandbox.uptime_sec != null && sandbox.uptime_sec > 0 && (
-            <span className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+            <span className="hidden sm:flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
               <Clock className="w-3 h-3" strokeWidth={1.5} />
               {sandbox.uptime_sec < 60 ? `${sandbox.uptime_sec.toFixed(0)}s` : `${(sandbox.uptime_sec / 60).toFixed(0)}m`}
             </span>
@@ -388,29 +388,29 @@ export default function SandboxDetailPage() {
 
           <button
             onClick={copyOutput}
-            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
             title="Copy output"
           >
-            {copied ? <Check className="w-3 h-3 text-[var(--color-success)]" /> : <Copy className="w-3 h-3" />}
+            {copied ? <Check className="w-4 h-4 sm:w-3 sm:h-3 text-[var(--color-success)]" /> : <Copy className="w-4 h-4 sm:w-3 sm:h-3" />}
           </button>
           <button
             onClick={downloadOutput}
-            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
             title="Download"
           >
-            <Download className="w-3 h-3" />
+            <Download className="w-4 h-4 sm:w-3 sm:h-3" />
           </button>
           <button
             onClick={() => setExpanded(!expanded)}
-            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors hidden sm:block"
           >
             {expanded ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
           </button>
           <button
             onClick={handleKill}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
+            className="flex items-center gap-1.5 px-3 py-2 sm:py-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
           >
-            <Trash2 className="w-3 h-3" /> kill
+            <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" /> kill
           </button>
         </div>
       </div>

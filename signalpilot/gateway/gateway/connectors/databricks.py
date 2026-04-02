@@ -1,14 +1,22 @@
 """Databricks connector — databricks-sql-connector backed.
 
 Supports Databricks SQL Warehouses and Unity Catalog.
-Uses personal access tokens (PAT) or OAuth for authentication.
+Authentication methods:
+  - Personal Access Token (PAT) — simplest, workspace-scoped
+  - OAuth M2M (service principal) — production-grade, uses client_id/client_secret
+  - OAuth U2M — user-to-machine, browser-based OAuth flow
+
+HEX pattern: Databricks recommends OAuth M2M for automated/service connections.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .base import BaseConnector
+
+logger = logging.getLogger(__name__)
 
 try:
     from databricks import sql as databricks_sql
@@ -25,6 +33,10 @@ class DatabricksConnector(BaseConnector):
         self._credential_extras: dict = {}
         self._connection_timeout: int = 30
         self._query_timeout: int | None = None
+        # Auth method: "pat" (default), "oauth_m2m", "oauth_u2m"
+        self._auth_method: str = "pat"
+        self._oauth_client_id: str = ""
+        self._oauth_client_secret: str = ""
 
     def set_credential_extras(self, extras: dict) -> None:
         """Store structured credential data for connection."""
@@ -33,6 +45,12 @@ class DatabricksConnector(BaseConnector):
             self._connection_timeout = extras["connection_timeout"]
         if extras.get("query_timeout"):
             self._query_timeout = extras["query_timeout"]
+        if extras.get("auth_method"):
+            self._auth_method = extras["auth_method"]
+        if extras.get("oauth_client_id"):
+            self._oauth_client_id = extras["oauth_client_id"]
+        if extras.get("oauth_client_secret"):
+            self._oauth_client_secret = extras["oauth_client_secret"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_DATABRICKS:
@@ -43,29 +61,87 @@ class DatabricksConnector(BaseConnector):
         params = self._parse_connection(connection_string)
         # Merge credential_extras (takes precedence)
         if self._credential_extras:
-            for key in ("http_path", "access_token", "catalog", "schema_name"):
+            for key in ("http_path", "access_token", "catalog", "schema_name",
+                        "auth_method", "oauth_client_id", "oauth_client_secret"):
                 val = self._credential_extras.get(key)
                 if val:
                     target = "schema" if key == "schema_name" else key
                     params[target] = val
         self._connect_params = params
 
-        connect_args = {
+        connect_args: dict[str, Any] = {
             "server_hostname": params["host"],
             "http_path": params["http_path"],
-            "access_token": params["access_token"],
         }
         if params.get("catalog"):
             connect_args["catalog"] = params["catalog"]
         if params.get("schema"):
             connect_args["schema"] = params["schema"]
 
+        # Auth method routing (HEX pattern: PAT → OAuth M2M → OAuth U2M)
+        auth_method = params.get("auth_method", self._auth_method)
+
+        if auth_method == "oauth_m2m":
+            # OAuth Machine-to-Machine (service principal) — production-grade
+            client_id = params.get("oauth_client_id", self._oauth_client_id)
+            client_secret = params.get("oauth_client_secret", self._oauth_client_secret)
+            if not client_id or not client_secret:
+                raise RuntimeError(
+                    "OAuth M2M requires client_id and client_secret. "
+                    "Create a service principal in Databricks Account Console → "
+                    "User Management → Service Principals."
+                )
+            try:
+                from databricks.sdk.core import oauth_service_principal
+                credentials_provider = oauth_service_principal(
+                    host=f"https://{params['host']}",
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
+                connect_args["credentials_provider"] = credentials_provider
+            except ImportError:
+                # Fallback: try using databricks-sdk's Config
+                try:
+                    from databricks.sdk.core import Config
+                    config = Config(
+                        host=f"https://{params['host']}",
+                        client_id=client_id,
+                        client_secret=client_secret,
+                    )
+                    connect_args["credentials_provider"] = config.authenticate
+                except ImportError:
+                    raise RuntimeError(
+                        "OAuth M2M requires databricks-sdk. "
+                        "Run: pip install databricks-sdk"
+                    )
+            logger.info("Databricks: using OAuth M2M (service principal) auth")
+        elif auth_method == "oauth_u2m":
+            # OAuth User-to-Machine — browser-based, for interactive use
+            try:
+                from databricks.sdk.core import Config
+                config = Config(host=f"https://{params['host']}", auth_type="external-browser")
+                connect_args["credentials_provider"] = config.authenticate
+                logger.info("Databricks: using OAuth U2M (browser) auth")
+            except ImportError:
+                raise RuntimeError(
+                    "OAuth U2M requires databricks-sdk. "
+                    "Run: pip install databricks-sdk"
+                )
+        else:
+            # PAT (Personal Access Token) — default
+            if not params.get("access_token"):
+                raise RuntimeError(
+                    "PAT auth requires an access_token. "
+                    "Generate one at: Workspace Settings → User Settings → Developer → Access Tokens"
+                )
+            connect_args["access_token"] = params["access_token"]
+
         try:
             self._conn = databricks_sql.connect(**connect_args)
         except Exception as e:
             err_str = str(e).lower()
             if "unauthorized" in err_str or "403" in err_str or "401" in err_str:
-                raise RuntimeError(f"Authentication failed: invalid access token") from e
+                raise RuntimeError(f"Authentication failed: invalid credentials for {auth_method} auth") from e
             elif "not found" in err_str or "404" in err_str:
                 raise RuntimeError(f"Warehouse not found: verify http_path '{params.get('http_path', '')}'") from e
             elif "timeout" in err_str or "timed out" in err_str:

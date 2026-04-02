@@ -46,6 +46,8 @@ import {
   setSchemaEndorsements,
   exportConnections,
   importConnections,
+  getNetworkInfo,
+  diagnoseConnection,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -400,6 +402,9 @@ interface FormState {
   http_path: string;
   access_token: string;
   catalog: string;
+  databricks_auth_method: "pat" | "oauth_m2m";
+  dbx_oauth_client_id: string;
+  dbx_oauth_client_secret: string;
   // SSL
   ssl_enabled: boolean;
   ssl_mode: string;
@@ -466,6 +471,7 @@ const defaultForm: FormState = {
   project: "", dataset: "", credentials_json: "", bq_location: "", bq_max_bytes_billed: "",
   ch_protocol: "native",
   http_path: "", access_token: "", catalog: "",
+  databricks_auth_method: "pat", dbx_oauth_client_id: "", dbx_oauth_client_secret: "",
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
@@ -616,6 +622,15 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
   if (config.fields.includes("http_path")) payload.http_path = form.http_path;
   if (config.fields.includes("access_token")) payload.access_token = form.access_token;
   if (config.fields.includes("catalog")) payload.catalog = form.catalog;
+
+  // Databricks auth method
+  if (form.db_type === "databricks") {
+    payload.auth_method = form.databricks_auth_method;
+    if (form.databricks_auth_method === "oauth_m2m") {
+      payload.oauth_client_id = form.dbx_oauth_client_id;
+      payload.oauth_client_secret = form.dbx_oauth_client_secret;
+    }
+  }
 
   // ClickHouse protocol
   if (form.db_type === "clickhouse" && form.ch_protocol === "http") {
@@ -887,13 +902,44 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
       <>
         <FormInput label="server hostname" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="adb-1234567890123456.7.azuredatabricks.net" required />
         <FormInput label="http path" value={form.http_path} onChange={(v) => setForm({ ...form, http_path: v })} placeholder="/sql/1.0/warehouses/abc123" hint="SQL warehouse or cluster HTTP path" required />
-        <FormInput label="access token" value={form.access_token} onChange={(v) => setForm({ ...form, access_token: v })} type="password" hint="personal access token (PAT)" required />
+        {/* Auth method selector */}
+        <div className="col-span-2 mb-1">
+          <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
+          <div className="flex gap-2">
+            {(["pat", "oauth_m2m"] as const).map((method) => (
+              <button
+                key={method}
+                type="button"
+                onClick={() => setForm({ ...form, databricks_auth_method: method })}
+                className={`px-2.5 py-1 text-[10px] tracking-wider border transition-all ${
+                  form.databricks_auth_method === method
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {method === "pat" ? "personal access token" : "OAuth M2M (service principal)"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {form.databricks_auth_method === "pat" ? (
+          <FormInput label="access token" value={form.access_token} onChange={(v) => setForm({ ...form, access_token: v })} type="password" hint="personal access token (PAT)" required className="col-span-2" />
+        ) : (
+          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5">
+            <FormInput label="client ID" value={form.dbx_oauth_client_id} onChange={(v) => setForm({ ...form, dbx_oauth_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="service principal application (client) ID" required />
+            <FormInput label="client secret" value={form.dbx_oauth_client_secret} onChange={(v) => setForm({ ...form, dbx_oauth_client_secret: v })} type="password" hint="service principal client secret" required />
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+              <div><span className="text-[var(--color-text-muted)]">setup:</span> Account Console → User Management → Service Principals → Add. Grant CAN USE on the SQL Warehouse and data access on Unity Catalog.</div>
+              <div><span className="text-[var(--color-text-muted)]">recommended:</span> OAuth M2M is the production-grade auth method. PATs are workspace-scoped and expire.</div>
+            </div>
+          </div>
+        )}
         <FormInput label="catalog" value={form.catalog} onChange={(v) => setForm({ ...form, catalog: v })} placeholder="main" hint="optional — Unity Catalog name" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="default" hint="optional — default schema" />
         <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
-          <div><span className="text-[var(--color-text-muted)]">setup:</span> Workspace Settings → User Settings → Developer → Access Tokens. SQL Warehouse must be running with CAN USE permission.</div>
           <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private workspace URL (e.g., adb-xxx.x.azuredatabricks.net).</div>
           <div><span className="text-[var(--color-text-muted)]">unity catalog:</span> If enabled, PKs, FKs, and constraints will be automatically extracted for join discovery.</div>
+          <div><span className="text-[var(--color-text-muted)]">ip access list:</span> Add this server&apos;s IP to the workspace IP Access List (Workspace Settings → Security → IP Access Lists).</div>
         </div>
       </>
     );
@@ -1280,6 +1326,9 @@ export default function ConnectionsPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [filterTag, setFilterTag] = useState<string | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  const [serverIp, setServerIp] = useState<string | null>(null);
+  const [diagnosing, setDiagnosing] = useState<string | null>(null);
+  const [diagResults, setDiagResults] = useState<Record<string, { host: string; port: number; diagnostics: { check: string; status: string; message: string; hint?: string; duration_ms: number }[] }>>({});
 
   const refresh = useCallback(() => {
     getConnections().then(setConnections).catch(() => {});
@@ -1293,6 +1342,13 @@ export default function ConnectionsPage() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Fetch server IP for whitelist guidance
+  useEffect(() => {
+    getNetworkInfo().then((info) => {
+      setServerIp(info.public_ip || (info.local_ips?.[0] ?? null));
+    }).catch(() => {});
+  }, []);
 
   function handleDbTypeChange(newType: DBType) {
     const config = DB_CONFIGS[newType];
@@ -1441,6 +1497,18 @@ export default function ConnectionsPage() {
       setTestResult((prev) => ({ ...prev, [name]: { status: "error", message: String(e) } }));
       toast(`${name}: test failed`, "error");
     } finally { setTesting(null); }
+  }
+
+  async function handleDiagnose(name: string) {
+    setDiagnosing(name);
+    try {
+      const result = await diagnoseConnection(name);
+      setDiagResults((prev) => ({ ...prev, [name]: result }));
+      const allOk = result.diagnostics.every((d: { status: string }) => d.status === "ok");
+      toast(allOk ? `${name}: all checks passed` : `${name}: see diagnostic results`, allOk ? "success" : "info");
+    } catch (e) {
+      toast(`${name}: diagnose failed — ${String(e)}`, "error");
+    } finally { setDiagnosing(null); }
   }
 
   async function handleDelete(name: string) { setDeleteTarget(name); }
@@ -1819,15 +1887,24 @@ export default function ConnectionsPage() {
                       </div>
                       <div className="px-3 py-2.5 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
                         <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider mb-1.5">
-                          if your database requires ip allowlisting, add these signalpilot outbound ips to your firewall rules:
+                          if your database requires ip allowlisting, add this signalpilot server ip to your firewall rules:
                         </p>
                         <div className="flex flex-wrap gap-2">
-                          {["0.0.0.0/0 (self-hosted — use your server IP)"].map((ip) => (
-                            <code key={ip} className="text-[10px] text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-2 py-0.5 tracking-wider">{ip}</code>
-                          ))}
+                          <code className="text-[10px] text-[var(--color-text)] bg-[var(--color-bg-hover)] px-2 py-0.5 tracking-wider font-mono">
+                            {serverIp ? `${serverIp}/32` : "detecting..."}
+                          </code>
+                          {serverIp && (
+                            <button
+                              type="button"
+                              onClick={() => { navigator.clipboard.writeText(serverIp); toast("IP copied to clipboard", "success"); }}
+                              className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                            >
+                              <Copy className="w-3 h-3 inline" /> copy
+                            </button>
+                          )}
                         </div>
                         <p className="text-[8px] text-[var(--color-text-dim)] tracking-wider mt-1.5 opacity-60">
-                          for cloud-hosted signalpilot, dedicated static ips are assigned per workspace. contact your admin for the exact ips.
+                          {serverIp ? "add this ip to your database firewall, security group, or network policy." : "fetching server ip..."}
                         </p>
                       </div>
                     </div>
@@ -2229,6 +2306,27 @@ export default function ConnectionsPage() {
                     </div>
                   )}
 
+                  {/* Diagnostic results */}
+                  {diagResults[conn.name] && (
+                    <div className="flex flex-col gap-0.5">
+                      <span className="flex items-center gap-2 text-[10px] tracking-wider">
+                        {diagResults[conn.name].diagnostics.map((d, i) => {
+                          const statusColor = d.status === "ok" ? "text-[var(--color-success)]"
+                            : d.status === "warning" ? "text-[var(--color-warning)]"
+                            : "text-[var(--color-error)]";
+                          const icon = d.status === "ok" ? "\u2713" : d.status === "warning" ? "!" : "\u2717";
+                          return (
+                            <Tooltip key={i} content={d.hint || d.message} position="top">
+                              <span className={`${statusColor} cursor-default tabular-nums`}>
+                                {d.check}{icon} {d.duration_ms}ms
+                              </span>
+                            </Tooltip>
+                          );
+                        })}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Action buttons */}
                   <div className="flex items-center gap-1">
                     <button onClick={(e) => { e.stopPropagation(); handleToggleSchema(conn.name); }}
@@ -2250,6 +2348,11 @@ export default function ConnectionsPage() {
                       className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {testing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" strokeWidth={1.5} />}
                       test
+                    </button>
+                    <button onClick={() => handleDiagnose(conn.name)} disabled={diagnosing === conn.name}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      {diagnosing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" strokeWidth={1.5} />}
+                      diagnose
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleEditConnection(conn); }}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">

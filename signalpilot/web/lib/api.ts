@@ -264,6 +264,20 @@ export const getConnectionCapabilities = (name: string) =>
     configured: Record<string, boolean>;
   }>(`/api/connections/${name}/capabilities`);
 
+// Network info (IP whitelist helper)
+export const getNetworkInfo = () =>
+  request<{
+    hostname: string; local_ips: string[]; public_ip: string | null;
+    whitelist_instructions: Record<string, string>;
+  }>("/api/network/info");
+
+// Connection diagnostics (DNS, TCP, TLS, auth)
+export const diagnoseConnection = (name: string) =>
+  request<{
+    host: string; port: number;
+    diagnostics: { check: string; status: string; message: string; hint?: string; duration_ms: number }[];
+  }>(`/api/connections/${name}/diagnose`, { method: "POST" });
+
 // Schema Diff
 export const getConnectionSchemaDiff = (name: string) =>
   request<{

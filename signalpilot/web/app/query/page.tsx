@@ -391,77 +391,146 @@ export default function QueryExplorerPage() {
                 query returned 0 rows
               </div>
             ) : (
-              <table className="w-full text-[11px] table-fixed-header">
-                <thead className="sticky top-0 bg-[var(--color-bg-card)]">
-                  <tr className="border-b border-[var(--color-border)]">
-                    <th className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-10">
-                      #
-                    </th>
-                    {Object.keys(result.rows[0]).map((col) => {
-                      const colType = inferColumnType(result.rows, col);
-                      return (
-                        <th
-                          key={col}
-                          className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]"
-                        >
-                          <Tooltip content={`${colType.type}${result.pii_redacted?.includes(col) ? " · pii redacted" : ""}`} position="top">
-                            <span className="inline-flex items-center gap-1.5 cursor-default">
-                              <span className={`w-1 h-1 flex-shrink-0 ${colType.dot}`} />
-                              {col}
-                              {result.pii_redacted?.includes(col) && (
-                                <Shield className="w-2.5 h-2.5 text-[var(--color-warning)]" />
-                              )}
-                            </span>
-                          </Tooltip>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-border)]/30">
+              <>
+                {/* Mobile card view */}
+                <div className="sm:hidden divide-y divide-[var(--color-border)]/30">
                   {result.rows.map((row, i) => (
-                    <tr key={i} className="table-row-hover">
-                      <td className="px-3 py-1.5 text-[var(--color-text-dim)] tabular-nums text-[9px]">{i + 1}</td>
-                      {Object.entries(row).map(([col, val], j) => (
-                        <td
-                          key={j}
-                          className="px-3 py-1.5 text-[var(--color-text-muted)] max-w-[300px] truncate cursor-default group/cell relative"
-                          title={val == null ? "NULL" : String(val)}
+                    <div key={i} className="px-3 py-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">row {i + 1}</span>
+                        <button
                           onClick={() => {
-                            if (val != null) {
-                              navigator.clipboard.writeText(String(val)).then(() => {
-                                toast(`copied: ${String(val).slice(0, 50)}`, "info");
-                              }).catch(() => {});
-                            }
+                            const text = Object.entries(row).map(([k, v]) => `${k}: ${v ?? "null"}`).join("\n");
+                            navigator.clipboard.writeText(text).then(() => {
+                              toast(`row ${i + 1} copied`, "info");
+                            }).catch(() => {});
                           }}
+                          className="text-[9px] text-[var(--color-text-dim)] tracking-wider flex items-center gap-1"
                         >
-                          {val == null ? (
-                            <span className="text-[var(--color-text-dim)] italic opacity-50">null</span>
-                          ) : typeof val === "number" ? (
-                            <span className="tabular-nums text-[var(--color-text)]">{val.toLocaleString()}</span>
-                          ) : typeof val === "boolean" ? (
-                            <span className={`font-medium ${val ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
-                              {String(val)}
-                            </span>
-                          ) : typeof val === "object" ? (
-                            <span className="text-orange-400/80 font-mono text-[10px]">{JSON.stringify(val).slice(0, 60)}</span>
-                          ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
-                            <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
-                          ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
-                            <span className="text-pink-400/70 font-mono text-[10px]">{String(val)}</span>
-                          ) : (
-                            String(val)
-                          )}
-                          {/* Click-to-copy hint */}
-                          <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity text-[8px] text-[var(--color-text-dim)]">
-                            <Copy className="w-2.5 h-2.5" />
-                          </span>
-                        </td>
-                      ))}
-                    </tr>
+                          <Copy className="w-2.5 h-2.5" /> copy
+                        </button>
+                      </div>
+                      <div className="space-y-1.5">
+                        {Object.entries(row).map(([col, val], j) => {
+                          const colType = inferColumnType(result.rows, col);
+                          return (
+                            <div key={j} className="flex items-start gap-2">
+                              <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider min-w-[80px] max-w-[100px] truncate flex-shrink-0 pt-0.5 flex items-center gap-1">
+                                <span className={`w-1 h-1 flex-shrink-0 ${colType.dot}`} />
+                                {col}
+                                {result.pii_redacted?.includes(col) && (
+                                  <Shield className="w-2 h-2 text-[var(--color-warning)] flex-shrink-0" />
+                                )}
+                              </span>
+                              <span
+                                className="text-[11px] text-[var(--color-text-muted)] break-all flex-1 min-w-0"
+                                onClick={() => {
+                                  if (val != null) {
+                                    navigator.clipboard.writeText(String(val)).then(() => {
+                                      toast(`copied: ${String(val).slice(0, 50)}`, "info");
+                                    }).catch(() => {});
+                                  }
+                                }}
+                              >
+                                {val == null ? (
+                                  <span className="text-[var(--color-text-dim)] italic opacity-50">null</span>
+                                ) : typeof val === "number" ? (
+                                  <span className="tabular-nums text-[var(--color-text)]">{val.toLocaleString()}</span>
+                                ) : typeof val === "boolean" ? (
+                                  <span className={`font-medium ${val ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
+                                    {String(val)}
+                                  </span>
+                                ) : typeof val === "object" ? (
+                                  <span className="text-orange-400/80 font-mono text-[10px]">{JSON.stringify(val).slice(0, 80)}</span>
+                                ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
+                                  <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
+                                ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
+                                  <span className="text-pink-400/70 font-mono text-[10px]">{String(val)}</span>
+                                ) : (
+                                  String(val)
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+
+                {/* Desktop table view */}
+                <table className="hidden sm:table w-full text-[11px] table-fixed-header">
+                  <thead className="sticky top-0 bg-[var(--color-bg-card)]">
+                    <tr className="border-b border-[var(--color-border)]">
+                      <th className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-10">
+                        #
+                      </th>
+                      {Object.keys(result.rows[0]).map((col) => {
+                        const colType = inferColumnType(result.rows, col);
+                        return (
+                          <th
+                            key={col}
+                            className="px-3 py-2 text-left text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]"
+                          >
+                            <Tooltip content={`${colType.type}${result.pii_redacted?.includes(col) ? " · pii redacted" : ""}`} position="top">
+                              <span className="inline-flex items-center gap-1.5 cursor-default">
+                                <span className={`w-1 h-1 flex-shrink-0 ${colType.dot}`} />
+                                {col}
+                                {result.pii_redacted?.includes(col) && (
+                                  <Shield className="w-2.5 h-2.5 text-[var(--color-warning)]" />
+                                )}
+                              </span>
+                            </Tooltip>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-border)]/30">
+                    {result.rows.map((row, i) => (
+                      <tr key={i} className="table-row-hover">
+                        <td className="px-3 py-1.5 text-[var(--color-text-dim)] tabular-nums text-[9px]">{i + 1}</td>
+                        {Object.entries(row).map(([col, val], j) => (
+                          <td
+                            key={j}
+                            className="px-3 py-1.5 text-[var(--color-text-muted)] max-w-[300px] truncate cursor-default group/cell relative"
+                            title={val == null ? "NULL" : String(val)}
+                            onClick={() => {
+                              if (val != null) {
+                                navigator.clipboard.writeText(String(val)).then(() => {
+                                  toast(`copied: ${String(val).slice(0, 50)}`, "info");
+                                }).catch(() => {});
+                              }
+                            }}
+                          >
+                            {val == null ? (
+                              <span className="text-[var(--color-text-dim)] italic opacity-50">null</span>
+                            ) : typeof val === "number" ? (
+                              <span className="tabular-nums text-[var(--color-text)]">{val.toLocaleString()}</span>
+                            ) : typeof val === "boolean" ? (
+                              <span className={`font-medium ${val ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
+                                {String(val)}
+                              </span>
+                            ) : typeof val === "object" ? (
+                              <span className="text-orange-400/80 font-mono text-[10px]">{JSON.stringify(val).slice(0, 60)}</span>
+                            ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
+                              <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
+                            ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
+                              <span className="text-pink-400/70 font-mono text-[10px]">{String(val)}</span>
+                            ) : (
+                              String(val)
+                            )}
+                            {/* Click-to-copy hint */}
+                            <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity text-[8px] text-[var(--color-text-dim)]">
+                              <Copy className="w-2.5 h-2.5" />
+                            </span>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </div>
 

@@ -353,61 +353,99 @@ export default function SchemaExplorerPage() {
                   </button>
 
                   {expanded && (
-                    <div className="border-t border-[var(--color-border)] overflow-x-auto">
-                      <table className="w-full text-[11px] min-w-[480px]">
-                        <thead>
-                          <tr className="border-b border-[var(--color-border)]/50">
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-8">#</th>
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">column</th>
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">type</th>
-                            <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">nullable</th>
-                            {piiDetections && (
-                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-20">pii</th>
-                            )}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--color-border)]/20">
-                          {table.columns.map((col, i) => (
-                            <tr key={col.name} className="table-row-hover">
-                              <td className="px-4 py-1.5 text-[var(--color-text-dim)] tabular-nums">{i + 1}</td>
-                              <td className="px-4 py-1.5">
-                                <span className="flex items-center gap-2">
-                                  {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)]" />}
-                                  <span className="text-[var(--color-text-muted)]">{col.name}</span>
-                                </span>
-                              </td>
-                              <td className="px-4 py-1.5">
-                                <span className={`${getTypeColor(col.type)} flex items-center gap-1.5`}>
+                    <div className="border-t border-[var(--color-border)]">
+                      {/* Mobile column list */}
+                      <div className="sm:hidden divide-y divide-[var(--color-border)]/20">
+                        {table.columns.map((col, i) => (
+                          <div key={col.name} className="px-3 py-2.5 flex items-start gap-3">
+                            <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-50">{i + 1}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)] flex-shrink-0" />}
+                                <span className="text-[11px] text-[var(--color-text-muted)] truncate">{col.name}</span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`${getTypeColor(col.type)} text-[10px] flex items-center gap-1`}>
                                   <span className={`w-1 h-1 ${getTypeColor(col.type).replace("text-", "bg-")}`} />
                                   {col.type}
                                 </span>
-                              </td>
-                              <td className="px-4 py-1.5">
-                                {col.nullable ? (
-                                  <span className="text-[var(--color-text-dim)]">nullable</span>
-                                ) : (
-                                  <span className="text-[var(--color-warning)]">NOT NULL</span>
+                                {!col.nullable && (
+                                  <span className="text-[9px] text-[var(--color-warning)] tracking-wider">NOT NULL</span>
                                 )}
-                              </td>
+                                {piiDetections && piiDetections[col.name.toLowerCase()] && (
+                                  <span className={`text-[9px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                    piiDetections[col.name.toLowerCase()] === "drop"
+                                      ? "badge-error"
+                                      : piiDetections[col.name.toLowerCase()] === "hash"
+                                        ? "border-purple-500/30 text-purple-400"
+                                        : "badge-warning"
+                                  }`}>
+                                    {piiDetections[col.name.toLowerCase()]}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Desktop column table */}
+                      <div className="hidden sm:block overflow-x-auto">
+                        <table className="w-full text-[11px] min-w-[480px]">
+                          <thead>
+                            <tr className="border-b border-[var(--color-border)]/50">
+                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-8">#</th>
+                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">column</th>
+                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">type</th>
+                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">nullable</th>
                               {piiDetections && (
-                                <td className="px-4 py-1.5">
-                                  {piiDetections[col.name.toLowerCase()] && (
-                                    <span className={`text-[9px] px-1.5 py-0.5 border tracking-wider uppercase ${
-                                      piiDetections[col.name.toLowerCase()] === "drop"
-                                        ? "badge-error"
-                                        : piiDetections[col.name.toLowerCase()] === "hash"
-                                          ? "border-purple-500/30 text-purple-400"
-                                          : "badge-warning"
-                                    }`}>
-                                      {piiDetections[col.name.toLowerCase()]}
-                                    </span>
-                                  )}
-                                </td>
+                                <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-20">pii</th>
                               )}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-[var(--color-border)]/20">
+                            {table.columns.map((col, i) => (
+                              <tr key={col.name} className="table-row-hover">
+                                <td className="px-4 py-1.5 text-[var(--color-text-dim)] tabular-nums">{i + 1}</td>
+                                <td className="px-4 py-1.5">
+                                  <span className="flex items-center gap-2">
+                                    {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)]" />}
+                                    <span className="text-[var(--color-text-muted)]">{col.name}</span>
+                                  </span>
+                                </td>
+                                <td className="px-4 py-1.5">
+                                  <span className={`${getTypeColor(col.type)} flex items-center gap-1.5`}>
+                                    <span className={`w-1 h-1 ${getTypeColor(col.type).replace("text-", "bg-")}`} />
+                                    {col.type}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-1.5">
+                                  {col.nullable ? (
+                                    <span className="text-[var(--color-text-dim)]">nullable</span>
+                                  ) : (
+                                    <span className="text-[var(--color-warning)]">NOT NULL</span>
+                                  )}
+                                </td>
+                                {piiDetections && (
+                                  <td className="px-4 py-1.5">
+                                    {piiDetections[col.name.toLowerCase()] && (
+                                      <span className={`text-[9px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                        piiDetections[col.name.toLowerCase()] === "drop"
+                                          ? "badge-error"
+                                          : piiDetections[col.name.toLowerCase()] === "hash"
+                                            ? "border-purple-500/30 text-purple-400"
+                                            : "badge-warning"
+                                      }`}>
+                                        {piiDetections[col.name.toLowerCase()]}
+                                      </span>
+                                    )}
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
                 </div>

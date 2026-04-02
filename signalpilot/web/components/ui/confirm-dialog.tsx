@@ -82,17 +82,17 @@ export function ConfirmDialog({
         </div>
 
         {/* Actions */}
-        <div className="px-5 py-3 border-t border-[var(--color-border)] flex items-center justify-end gap-2">
+        <div className="px-5 py-3 sm:py-3 border-t border-[var(--color-border)] flex flex-col-reverse sm:flex-row items-stretch sm:items-center sm:justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
+            className="px-4 py-3 sm:py-2 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase text-center"
           >
             {cancelLabel}
           </button>
           <button
             ref={confirmRef}
             onClick={onConfirm}
-            className={`px-4 py-2 text-[10px] font-medium tracking-wider uppercase transition-all ${
+            className={`px-4 py-3 sm:py-2 text-[10px] font-medium tracking-wider uppercase transition-all text-center ${
               isDanger
                 ? "bg-[var(--color-error)] text-white hover:opacity-90"
                 : "bg-[var(--color-text)] text-[var(--color-bg)] hover:opacity-90"

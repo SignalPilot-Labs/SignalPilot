@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 
 interface Toast {
   id: string;
@@ -23,6 +23,9 @@ export function useToast() {
 
 function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) => void }) {
   const [exiting, setExiting] = useState(false);
+  const [swipeX, setSwipeX] = useState(0);
+  const touchStartX = useRef(0);
+  const itemRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -31,6 +34,24 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
     }, toast.duration || 3000);
     return () => clearTimeout(timer);
   }, [toast, onRemove]);
+
+  function handleTouchStart(e: React.TouchEvent) {
+    touchStartX.current = e.touches[0].clientX;
+  }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    const delta = e.touches[0].clientX - touchStartX.current;
+    if (delta > 0) setSwipeX(delta); // only swipe right to dismiss
+  }
+
+  function handleTouchEnd() {
+    if (swipeX > 80) {
+      setExiting(true);
+      setTimeout(() => onRemove(toast.id), 200);
+    } else {
+      setSwipeX(0);
+    }
+  }
 
   const icons: Record<string, ReactNode> = {
     success: (
@@ -62,8 +83,13 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
 
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} shadow-lg ${
-        exiting ? "animate-slide-out-right" : "animate-slide-in-right"
+      ref={itemRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{ transform: swipeX > 0 ? `translateX(${swipeX}px)` : undefined, opacity: swipeX > 0 ? 1 - swipeX / 160 : undefined }}
+      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} shadow-lg transition-transform ${
+        exiting ? "animate-slide-out-right" : swipeX > 0 ? "" : "animate-slide-in-right"
       }`}
     >
       {icons[toast.type]}

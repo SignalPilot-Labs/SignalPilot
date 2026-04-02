@@ -627,6 +627,20 @@ export default function QueryExplorerPage() {
           />
         </div>
       )}
+
+      {/* Mobile floating execute button — visible when results/history are showing */}
+      {(result || error || history.length > 0) && (
+        <button
+          onClick={() => {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            setTimeout(() => textareaRef.current?.focus(), 400);
+          }}
+          className="sm:hidden fixed right-4 bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+0.75rem)] z-40 flex items-center gap-2 px-4 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase shadow-lg active:scale-95 transition-transform"
+        >
+          <Play className="w-4 h-4" />
+          edit query
+        </button>
+      )}
     </div>
   );
 }

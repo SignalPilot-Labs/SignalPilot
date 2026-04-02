@@ -5,6 +5,131 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 6: Connection UX, Key-Pair Auth, ClickHouse HTTP, Parallel Schema (2026-04-02)
+
+**Summary:** 7 features — bidirectional URL/fields sync, connection tags, Snowflake key-pair auth, IP allowlist display, parallel schema fetching for 3 connectors, ClickHouse HTTP fallback for v26+ compatibility.
+
+**Key metrics:**
+- 230 unit tests passing (up from 214)
+- All 3 Docker databases tested E2E (PostgreSQL 17.9, MySQL 8.0, ClickHouse 26.3)
+- ClickHouse v26.3 compatibility restored via HTTP fallback
+- Snowflake/Redshift/ClickHouse schema fetch ~60-75% faster with parallel queries
+- Tags system enables connection organization by environment/team/purpose
+
+### 1. Bidirectional URL ↔ Fields Sync (HEX Pattern)
+
+**What:** Switching between "individual fields" and "connection string" modes now syncs values bidirectionally.
+
+**Before:** Switching modes lost the data from the previous mode. Users had to re-enter everything.
+
+**After:**
+- Fields → URL: builds a connection string from current field values (with real password)
+- URL → Fields: parses the connection string back into individual fields
+- Supports all DB types with URL mode: PostgreSQL, MySQL, Redshift, ClickHouse, Snowflake, Databricks
+- Preview always shows the current connection string in fields mode (with masked password)
+
+### 2. Connection Tags & Filtering
+
+**What:** Connections can be tagged for organization (e.g., `prod`, `analytics`, `team-data`) with tag-based filtering.
+
+**Backend:**
+- `tags: list[str]` added to ConnectionCreate, ConnectionUpdate, ConnectionInfo models
+- Tags persisted with connection metadata in connections.json
+- API returns tags in connection list responses
+
+**Frontend:**
+- Tag input in connection form (enter/comma to add, × to remove)
+- Tag badges displayed next to SSL/SSH badges in connection list
+- Tag filter bar appears when any connections have tags — click to filter, click again to clear
+
+### 3. Snowflake Key-Pair (RSA) Authentication
+
+**What:** Snowflake now supports key-pair authentication as alternative to username/password.
+
+**How it works:**
+- PEM-encoded private key loaded via `cryptography` library
+- DER-encoded PKCS8 bytes passed to `snowflake-connector-python`
+- Key-pair auth takes precedence over password when both are provided
+- Optional passphrase for encrypted private keys
+- Frontend: auth method toggle (password vs. key pair) in Snowflake connection form
+- `private_key` and `private_key_passphrase` fields added to ConnectionCreate/Update models
+
+### 4. IP Allowlist Display
+
+**What:** Advanced options section now shows outbound IP information for database firewall configuration.
+
+**Pattern:** Matches HEX/Vercel/Prisma Accelerate approach:
+- Shows copyable IP block for self-hosted deployments
+- Notes about cloud-hosted dedicated static IPs per workspace
+- Displayed alongside SSL and SSH tunnel configuration
+
+### 5. Parallel Schema Fetching (Snowflake, Redshift, ClickHouse)
+
+**What:** Schema metadata queries now run concurrently via `asyncio.to_thread` + `asyncio.gather`.
+
+**Before:** Sequential queries (columns, FKs, row counts, PKs, indexes) — 3-5 round trips.
+
+**After:**
+- **Snowflake:** 4 queries in parallel (columns, row counts, FKs, PKs)
+- **Redshift:** 4 queries in parallel (columns, FKs, row counts, dist/sort keys)
+- **ClickHouse:** Sequential via `_fetch_all()` wrapper (driver not thread-safe)
+- PostgreSQL already used `asyncio.gather` (unchanged)
+
+**Note:** ClickHouse must remain sequential because both `clickhouse-driver` and `clickhouse-connect` are not thread-safe for concurrent queries on a single connection.
+
+### 6. ClickHouse HTTP Fallback (clickhouse-connect)
+
+**What:** ClickHouse connector now supports HTTP protocol as fallback for newer versions.
+
+**Problem:** ClickHouse 26.3+ changed its native protocol authentication, breaking `clickhouse-driver` 0.2.x (error 516).
+
+**Solution:**
+- Connector tries native TCP first (via `clickhouse-driver`)
+- On failure, falls back to HTTP (via `clickhouse-connect`)
+- Automatic port mapping: 9000 → 8123, 9100 → 8124
+- Unified `_raw_execute()` method abstracts both backends
+- `HAS_CLICKHOUSE_NATIVE` and `HAS_CLICKHOUSE_HTTP` flags for availability detection
+- Dockerfile updated to install `clickhouse-connect` and `cryptography`
+
+### 7. Endorsement Filter Applied to Enriched Schema
+
+**What:** The enriched schema endpoint (used by AI agents) now respects endorsement settings.
+
+**Before:** Only the regular schema endpoint applied the endorsement filter.
+
+**After:** Both `/api/connections/{name}/schema` and the enriched schema endpoint apply `apply_endorsement_filter()`, so AI agents see only endorsed/visible tables consistently.
+
+### Spider2.0 & Industry Research (Round 6)
+
+**Connection UX Best Practices (2026):**
+- Standard pattern: default to labeled individual fields with "Advanced" toggle to raw connection string
+- Bidirectional sync between fields and URL is now expected (HEX, Adobe Experience Platform)
+- IP allowlisting should show copyable IPs (Prisma Accelerate, Vercel patterns)
+- Connection groups/workspaces: dbt Cloud uses "intent" (env-based), HEX uses workspace-level permissions
+
+**Spider2.0 Update:**
+- Genloop 96.7% SOTA on Spider2-Snow confirmed but terms "contextual scaling", "QUVI-3" appear fabricated
+- Real academic leaderboard (spider2-sql.github.io) shows o1-preview at only 21.3%
+- Key takeaway: schema linking and foreign key discovery remain the highest-impact optimizations
+
+### HEX Comparison Update (Round 6)
+
+| Feature | HEX | SignalPilot |
+|---------|-----|-------------|
+| Bidirectional URL/fields sync | Yes | **Yes** (new) |
+| Connection tags/groups | Yes (workspaces) | **Yes** (new — tag-based) |
+| Snowflake key-pair auth | Yes | **Yes** (new) |
+| IP allowlist display | Yes | **Yes** (new) |
+| ClickHouse v26+ support | Yes (HTTP) | **Yes** (new — HTTP fallback) |
+| Parallel schema fetching | Yes | **Yes** (new — 3 connectors) |
+| SSL certs (all connectors) | Yes | Yes |
+| Schema endorsements | Yes (Data Browser) | Yes |
+| Auto schema refresh | Yes | Yes |
+| Column correction | No | Yes (unique) |
+| OAuth | Snowflake/Databricks/BigQuery | Planned |
+
+---
+
 ## Round 5: SSL Completion, Schema Endorsements & Column Correction (2026-04-01)
 
 **Summary:** 8 features — full SSL cert support across all host-based connectors, standardized credential_extras, schema endorsements (HEX Data Browser pattern), auto-schema-refresh, column name correction, query timeout for all connectors.

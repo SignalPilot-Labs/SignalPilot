@@ -18,6 +18,7 @@ from typing import Any
 class CacheEntry:
     """A cached query result."""
     key: str
+    connection_name: str
     rows: list[dict[str, Any]]
     tables: list[str]
     execution_ms: float
@@ -88,6 +89,7 @@ class QueryCache:
 
             self._cache[key] = CacheEntry(
                 key=key,
+                connection_name=connection_name,
                 rows=rows,
                 tables=tables,
                 execution_ms=execution_ms,
@@ -96,20 +98,18 @@ class QueryCache:
 
     def invalidate(self, connection_name: str | None = None) -> int:
         """Invalidate cache entries. If connection_name given, only those entries."""
-        count = 0
         with self._lock:
             if connection_name is None:
                 count = len(self._cache)
                 self._cache.clear()
-            else:
-                keys_to_remove = [
-                    k for k, v in self._cache.items()
-                    # We can't easily filter by connection since the key is hashed,
-                    # so we just clear everything for now
-                ]
-                count = len(self._cache)
-                self._cache.clear()
-        return count
+                return count
+            keys_to_remove = [
+                k for k, v in self._cache.items()
+                if v.connection_name == connection_name
+            ]
+            for k in keys_to_remove:
+                del self._cache[k]
+            return len(keys_to_remove)
 
     def stats(self) -> dict[str, Any]:
         """Return cache statistics."""

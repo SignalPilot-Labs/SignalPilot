@@ -9,12 +9,12 @@ from signalpilot.gateway.gateway.governance.cache import CacheEntry, QueryCache
 
 class TestCacheEntry:
     def test_not_expired_within_ttl(self):
-        entry = CacheEntry(key="k", rows=[], tables=[], execution_ms=10, sql_executed="SELECT 1")
+        entry = CacheEntry(key="k", connection_name="conn", rows=[], tables=[], execution_ms=10, sql_executed="SELECT 1")
         assert not entry.is_expired(300)
 
     def test_expired_after_ttl(self):
         entry = CacheEntry(
-            key="k", rows=[], tables=[], execution_ms=10, sql_executed="SELECT 1",
+            key="k", connection_name="conn", rows=[], tables=[], execution_ms=10, sql_executed="SELECT 1",
             created_at=time.time() - 400,
         )
         assert entry.is_expired(300)
@@ -108,8 +108,10 @@ class TestQueryCache:
         cache.put("a", "SELECT 1", 100, [], [], 1.0, "s")
         cache.put("b", "SELECT 2", 100, [], [], 1.0, "s")
         count = cache.invalidate(connection_name="a")
-        # Current implementation clears all (noted in code comment)
-        assert count >= 1
+        assert count == 1
+        # Connection "a" should be gone, "b" should remain
+        assert cache.get("a", "SELECT 1", 100) is None
+        assert cache.get("b", "SELECT 2", 100) is not None
 
     def test_stats(self):
         cache = QueryCache(max_entries=500, ttl_seconds=120)

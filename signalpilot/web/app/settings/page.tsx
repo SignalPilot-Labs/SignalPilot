@@ -438,13 +438,13 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Save button */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+      {/* Save button — desktop inline, mobile sticky bottom bar */}
+      <div className="hidden sm:flex items-center gap-3 mb-8">
         <button onClick={handleSave} disabled={saving}
-          className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
+          className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           save gateway settings
-          <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30 hidden sm:inline">
+          <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30">
             ctrl+S
           </kbd>
         </button>
@@ -454,6 +454,19 @@ export default function SettingsPage() {
           </span>
         )}
       </div>
+
+      {/* Mobile sticky save bar */}
+      <div className="sm:hidden fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px))] left-0 right-0 z-40 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/95 backdrop-blur-sm px-4 py-3">
+        <button onClick={handleSave} disabled={saving}
+          className="flex items-center justify-center gap-2 w-full px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30 active:scale-[0.98]">
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          save gateway settings
+          {saved && <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success)]" />}
+        </button>
+      </div>
+
+      {/* Bottom spacer for mobile sticky bar */}
+      <div className="sm:hidden h-16" />
     </div>
   );
 }

@@ -73,6 +73,13 @@ export interface ConnectionInfo {
   created_at: number;
   last_used: number | null;
   status: string;
+  // Timeouts
+  connection_timeout: number | null;
+  query_timeout: number | null;
+  keepalive_interval: number | null;
+  // Schema filtering
+  schema_filter_include: string[] | null;
+  schema_filter_exclude: string[] | null;
 }
 
 export interface SandboxInfo {

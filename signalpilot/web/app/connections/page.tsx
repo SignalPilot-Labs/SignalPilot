@@ -1159,16 +1159,20 @@ export default function ConnectionsPage() {
       ssh_username: conn.ssh_tunnel?.username || "",
       ssh_auth_method: conn.ssh_tunnel?.auth_method || "password",
       tags: conn.tags || [],
-      schema_refresh_enabled: !!(conn as any).schema_refresh_interval,
-      schema_refresh_interval: String((conn as any).schema_refresh_interval || 300),
+      schema_refresh_enabled: !!(conn.schema_refresh_interval),
+      schema_refresh_interval: String(conn.schema_refresh_interval || 300),
       scope: (conn as any).scope || "workspace",
       read_only: (conn as any).read_only !== false,
-      schema_filter_include: ((conn as any).schema_filter_include || []).join(", "),
-      schema_filter_exclude: ((conn as any).schema_filter_exclude || []).join(", "),
+      schema_filter_include: (conn.schema_filter_include || []).join(", "),
+      schema_filter_exclude: (conn.schema_filter_exclude || []).join(", "),
+      connection_timeout: String(conn.connection_timeout || 15),
+      query_timeout: String(conn.query_timeout || 120),
+      keepalive_interval: String(conn.keepalive_interval || 0),
     });
     setEditingConnection(conn.name);
     setShowForm(true);
-    setShowAdvanced(!!(conn.ssl || conn.ssh_tunnel?.enabled || (conn as any).schema_refresh_interval || (conn as any).schema_filter_include?.length || (conn as any).schema_filter_exclude?.length));
+    const hasCustomTimeouts = (conn.connection_timeout && conn.connection_timeout !== 15) || (conn.query_timeout && conn.query_timeout !== 120) || (conn.keepalive_interval && conn.keepalive_interval > 0);
+    setShowAdvanced(!!(conn.ssl || conn.ssh_tunnel?.enabled || conn.schema_refresh_interval || conn.schema_filter_include?.length || conn.schema_filter_exclude?.length || hasCustomTimeouts));
   }
 
   async function handleTest(name: string) {
@@ -1780,6 +1784,17 @@ export default function ConnectionsPage() {
                     <div className="text-[10px] text-[var(--color-text-dim)] mt-0.5 tracking-wider">
                       {displayStr}
                       {conn.description && <span className="ml-2 text-[var(--color-text-dim)]">— {conn.description}</span>}
+                      {conn.last_used && (
+                        <span className="ml-2 text-[var(--color-text-dim)] opacity-60" title={new Date(conn.last_used * 1000).toLocaleString()}>
+                          last used {(() => {
+                            const diff = Math.floor(Date.now() / 1000 - conn.last_used);
+                            if (diff < 60) return "just now";
+                            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+                            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                            return `${Math.floor(diff / 86400)}d ago`;
+                          })()}
+                        </span>
+                      )}
                     </div>
                     {health && health.sample_count > 0 && (
                       <div className="flex items-center gap-4 mt-1.5 text-[9px] text-[var(--color-text-dim)] tracking-wider">
@@ -1958,6 +1973,24 @@ export default function ConnectionsPage() {
                             <Star className="w-2.5 h-2.5 inline mr-1" strokeWidth={1.5} />
                             {endorsements[conn.name]?.mode === "endorsed_only" ? "endorsed only" : "all tables"}
                           </button>
+                          <button
+                            onClick={async () => {
+                              setSchemaLoading(conn.name);
+                              try {
+                                await refreshConnectionSchema(conn.name);
+                                const data = await getConnectionSchema(conn.name);
+                                setSchemaData(prev => ({ ...prev, [conn.name]: { tables: data.tables } }));
+                                toast(`${conn.name}: schema refreshed`, "success");
+                              } catch { toast(`${conn.name}: refresh failed`, "error"); }
+                              finally { setSchemaLoading(null); }
+                            }}
+                            disabled={schemaLoading === conn.name}
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+                            title="Re-introspect schema from database"
+                          >
+                            <RefreshCw className={`w-2.5 h-2.5 ${schemaLoading === conn.name ? "animate-spin" : ""}`} strokeWidth={1.5} />
+                            refresh
+                          </button>
                           <div className="relative">
                             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
                             <input
@@ -1979,6 +2012,9 @@ export default function ConnectionsPage() {
                                 <Table2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
                                 <span className="text-[10px] text-[var(--color-text-muted)]">{t.schema}.{t.name}</span>
                                 <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">{t.columns?.length || 0} cols</span>
+                                {t.type === "view" && (
+                                  <span className="text-[9px] text-cyan-400 tracking-wider">view</span>
+                                )}
                                 {t.row_count > 0 && (
                                   <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
                                     ~{t.row_count >= 1000000 ? `${(t.row_count / 1000000).toFixed(1)}M` : t.row_count >= 1000 ? `${(t.row_count / 1000).toFixed(1)}K` : t.row_count} rows
@@ -2047,6 +2083,9 @@ export default function ConnectionsPage() {
                                   <EyeOff className="w-2.5 h-2.5" strokeWidth={1.5} />
                                 </button>
                               </div>
+                              {t.description && (
+                                <p className="text-[8px] text-[var(--color-text-dim)] tracking-wider opacity-70 mb-1.5 italic">{t.description}</p>
+                              )}
                               <div className="space-y-0.5">
                                 {(t.columns || []).slice(0, 8).map((col: any) => {
                                   const isMatched = t._matched_columns?.includes(col.name);
@@ -2058,6 +2097,7 @@ export default function ConnectionsPage() {
                                     <span className="text-[var(--color-text-dim)] opacity-50">{col.type}</span>
                                     {col.primary_key && <span className="text-[var(--color-warning)]">pk</span>}
                                     {isMatched && !col.primary_key && <span className="text-[var(--color-success)] text-[8px]">match</span>}
+                                    {col.comment && <span className="text-[var(--color-text-dim)] opacity-40 text-[8px] italic truncate max-w-[120px]" title={col.comment}>{col.comment}</span>}
                                   </div>
                                   );
                                 })}

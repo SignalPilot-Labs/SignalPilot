@@ -181,7 +181,7 @@ export default function ConnectionsPage() {
   }
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="connections"
         subtitle="databases"
@@ -208,11 +208,11 @@ export default function ConnectionsPage() {
       {/* Create form */}
       {showForm && (
         <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
-          <div className="px-6 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
+          <div className="px-4 sm:px-6 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
             <span className="text-[var(--color-text-dim)]"><DbTypeIcon type={form.db_type} /></span>
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">new connection</span>
           </div>
-          <div className="p-6">
+          <div className="p-4 sm:p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
               {[
                 { label: "name", key: "name", placeholder: "prod-analytics", type: "text" },

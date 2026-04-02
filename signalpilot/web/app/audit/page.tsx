@@ -109,7 +109,7 @@ export default function AuditPage() {
   })();
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="audit"
         subtitle="log"
@@ -258,7 +258,7 @@ export default function AuditPage() {
                         {isExpanded ? (
                           <ChevronDown className="w-2.5 h-2.5 text-[var(--color-text-dim)]" />
                         ) : (
-                          <ChevronRight className="w-2.5 h-2.5 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <ChevronRight className="w-2.5 h-2.5 text-[var(--color-text-dim)] sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
                         )}
                         <TimeAgo timestamp={entry.timestamp} live className="text-[10px]" />
                       </div>

@@ -70,7 +70,7 @@ export default function SandboxesPage() {
   }
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="sandboxes"
         subtitle="microvms"

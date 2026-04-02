@@ -197,7 +197,7 @@ export default function QueryExplorerPage() {
   }
 
   return (
-    <div className="p-8 flex flex-col min-h-screen sm:h-screen sm:max-h-screen animate-fade-in">
+    <div className="p-4 sm:p-8 flex flex-col min-h-screen sm:h-screen sm:max-h-screen animate-fade-in">
       <div className="flex-shrink-0">
         <PageHeader
           title="query"

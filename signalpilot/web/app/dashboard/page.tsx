@@ -88,6 +88,7 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
+  const [expandedActivity, setExpandedActivity] = useState<string | null>(null);
   const [budgetData, setBudgetData] = useState<{
     sessions: Record<string, unknown>[];
     total_spent_usd: number;
@@ -149,7 +150,7 @@ export default function DashboardPage() {
     .reverse();
 
   return (
-    <div className="p-8 max-w-[1400px] animate-fade-in mx-auto">
+    <div className="p-4 sm:p-8 max-w-[1400px] animate-fade-in mx-auto">
       <PageHeader
         title="dashboard"
         subtitle="live overview"
@@ -350,10 +351,12 @@ export default function DashboardPage() {
             ) : (
               recentAudit.slice(0, 12).map((entry) => {
                 const cfg = eventTypeConfig[entry.event_type] || eventTypeConfig.query;
+                const isExpanded = expandedActivity === entry.id;
                 return (
                   <div
                     key={entry.id}
-                    className="group/row hover:bg-[var(--color-bg-hover)] transition-all"
+                    className="group/row hover:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
+                    onClick={() => setExpandedActivity(isExpanded ? null : entry.id)}
                   >
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
                       <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 flex-shrink-0 ${
@@ -389,8 +392,12 @@ export default function DashboardPage() {
                         className="text-[10px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
                       />
                     </div>
-                    {/* Hover-reveal detail row */}
-                    <div className="grid grid-cols-[2rem_1fr] gap-3 px-4 max-h-0 overflow-hidden opacity-0 group-hover/row:max-h-16 group-hover/row:opacity-100 group-hover/row:pb-2.5 transition-all duration-200 ease-out">
+                    {/* Detail row — tap on mobile, hover on desktop */}
+                    <div className={`grid grid-cols-[2rem_1fr] gap-3 px-4 overflow-hidden transition-all duration-200 ease-out ${
+                      isExpanded
+                        ? "max-h-16 opacity-100 pb-2.5"
+                        : "max-h-0 opacity-0 sm:group-hover/row:max-h-16 sm:group-hover/row:opacity-100 sm:group-hover/row:pb-2.5"
+                    }`}>
                       <span />
                       <div className="flex items-center gap-4 text-[9px] text-[var(--color-text-dim)] tracking-wider">
                         {entry.connection_name && (

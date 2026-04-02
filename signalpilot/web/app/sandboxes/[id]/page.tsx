@@ -282,7 +282,7 @@ export default function SandboxDetailPage() {
 
   if (error) {
     return (
-      <div className="p-8 animate-fade-in">
+      <div className="p-4 sm:p-8 animate-fade-in">
         <button
           onClick={() => router.push("/sandboxes")}
           className="flex items-center gap-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] mb-4 tracking-wider"

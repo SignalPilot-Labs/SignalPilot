@@ -171,7 +171,7 @@ export default function SchemaExplorerPage() {
     : [];
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="schema"
         subtitle="explorer"

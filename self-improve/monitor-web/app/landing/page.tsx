@@ -186,7 +186,7 @@ function Feature({
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true }}
       transition={{ duration: 0.4, delay }}
-      className="grid grid-cols-1 md:grid-cols-2 gap-6 py-8 border-b border-[var(--color-border)]"
+      className="grid grid-cols-1 lg:grid-cols-2 gap-6 py-8 border-b border-[var(--color-border)]"
     >
       <div className="flex flex-col justify-center">
         <h3 className="text-[14px] font-semibold text-[var(--color-accent)] mb-2">{title}</h3>
@@ -367,7 +367,7 @@ export default function LandingPage() {
 
       {/* ─── Stats bar ─── */}
       <Section className="py-12 border-y border-[var(--color-border)]">
-        <div className="relative z-10 grid grid-cols-2 md:grid-cols-4 gap-8 max-w-4xl mx-auto text-center">
+        <div className="relative z-10 grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-8 max-w-4xl mx-auto text-center">
           {[
             { value: 247, suffix: "+", label: "PRs shipped" },
             { value: 1842, suffix: "", label: "Files improved" },
@@ -502,8 +502,8 @@ export default function LandingPage() {
         </div>
       </Section>
 
-      {/* ─── Architecture Diagram ─── */}
-      <Section className="py-20 border-t border-[var(--color-border)]">
+      {/* ─── Architecture Diagram (hidden on mobile — too wide for small screens) ─── */}
+      <Section className="hidden md:block py-20 border-t border-[var(--color-border)]">
         <div className="relative z-10 max-w-4xl mx-auto">
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -996,9 +996,9 @@ result = await ceo.run(
                   {pr.title}
                 </span>
 
-                <span className="text-[10px] text-[var(--color-text-dim)] tabular-nums flex-shrink-0">{pr.files}</span>
-                <span className="text-[10px] text-[var(--color-success)] tabular-nums flex-shrink-0">{pr.additions}</span>
-                <span className="text-[10px] text-[var(--color-error)] tabular-nums flex-shrink-0">{pr.deletions}</span>
+                <span className="hidden sm:block text-[10px] text-[var(--color-text-dim)] tabular-nums flex-shrink-0">{pr.files}</span>
+                <span className="hidden sm:block text-[10px] text-[var(--color-success)] tabular-nums flex-shrink-0">{pr.additions}</span>
+                <span className="hidden sm:block text-[10px] text-[var(--color-error)] tabular-nums flex-shrink-0">{pr.deletions}</span>
                 <span className="text-[10px] text-[var(--color-text-dim)] tabular-nums flex-shrink-0 w-8 text-right">{pr.time}</span>
               </motion.div>
             ))}

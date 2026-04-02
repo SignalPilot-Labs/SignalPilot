@@ -1,3 +1,17 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "SignalPilot · Self-Improving AI Agent",
+  description:
+    "CEO, PM, and Engineer agents collaborate in an autonomous loop — planning improvements, writing code, running tests, and shipping PRs. Every cycle makes your codebase better.",
+  openGraph: {
+    title: "SignalPilot · Self-Improving AI Agent",
+    description:
+      "Software that improves itself. Autonomous agents that plan, code, test, and ship — 24/7.",
+    type: "website",
+  },
+};
+
 export default function LandingLayout({
   children,
 }: {

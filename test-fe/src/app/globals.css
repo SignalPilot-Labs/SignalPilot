@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* ── Design tokens ────────────────────────────────────────────── */
+:root {
+  --background: #0f0f1a;
+  --foreground: #f0f0f5;
+
+  --color-primary:   #6c5ce7;
+  --color-secondary: #00cec9;
+  --color-dark:      #1a1a2e;
+  --color-accent:    #fd79a8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter, ui-sans-serif, system-ui, sans-serif);
+
+  /* Brand palette — available as Tailwind utilities e.g. bg-brand-purple */
+  --color-brand-purple:       #6c5ce7;
+  --color-brand-purple-dark:  #5a4bd1;
+  --color-brand-purple-light: #a29bfe;
+  --color-brand-teal:         #00cec9;
+  --color-brand-dark:         #1a1a2e;
+  --color-brand-pink:         #fd79a8;
+}
+
+/* ── Base reset & smooth scrolling ───────────────────────────── */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 64px; /* offset for sticky navbar */
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Typography defaults ──────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img,
+video {
+  max-width: 100%;
+  display: block;
+}
+
+/* ── Focus ring ───────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ── Selection highlight ──────────────────────────────────────── */
+::selection {
+  background-color: var(--color-primary);
+  color: #fff;
+}

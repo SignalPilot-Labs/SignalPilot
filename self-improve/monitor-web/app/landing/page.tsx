@@ -67,20 +67,56 @@ function TypingText({ text, delay = 0 }: { text: string; delay?: number }) {
   );
 }
 
-/* ─── Grid background SVG ─── */
+/* ─── Grid background SVG with network topology ─── */
 function GridBG() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      <svg width="100%" height="100%" className="opacity-[0.03]">
+      <svg width="100%" height="100%" className="opacity-[0.04]">
         <defs>
           <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
             <path d="M 48 0 L 0 0 0 48" fill="none" stroke="white" strokeWidth="0.5" />
           </pattern>
+          <radialGradient id="grid-fade" cx="30%" cy="40%" r="50%">
+            <stop offset="0%" stopColor="white" stopOpacity="1" />
+            <stop offset="100%" stopColor="white" stopOpacity="0" />
+          </radialGradient>
+          <mask id="grid-mask">
+            <rect width="100%" height="100%" fill="url(#grid-fade)" />
+          </mask>
         </defs>
-        <rect width="100%" height="100%" fill="url(#grid)" />
+        <rect width="100%" height="100%" fill="url(#grid)" mask="url(#grid-mask)" />
       </svg>
+
+      {/* Network topology dots */}
+      <svg width="100%" height="100%" className="absolute inset-0 opacity-[0.06]">
+        {/* Static constellation dots */}
+        <circle cx="15%" cy="20%" r="1.5" fill="white" opacity="0.6" />
+        <circle cx="25%" cy="35%" r="1" fill="white" opacity="0.4" />
+        <circle cx="40%" cy="15%" r="1.5" fill="white" opacity="0.5" />
+        <circle cx="55%" cy="25%" r="1" fill="white" opacity="0.3" />
+        <circle cx="70%" cy="18%" r="1.5" fill="white" opacity="0.4" />
+        <circle cx="80%" cy="40%" r="1" fill="white" opacity="0.3" />
+        <circle cx="35%" cy="55%" r="1" fill="white" opacity="0.3" />
+        <circle cx="60%" cy="50%" r="1.5" fill="white" opacity="0.4" />
+
+        {/* Connecting lines */}
+        <line x1="15%" y1="20%" x2="25%" y2="35%" stroke="white" strokeWidth="0.5" opacity="0.15" />
+        <line x1="25%" y1="35%" x2="40%" y2="15%" stroke="white" strokeWidth="0.5" opacity="0.1" />
+        <line x1="40%" y1="15%" x2="55%" y2="25%" stroke="white" strokeWidth="0.5" opacity="0.12" />
+        <line x1="55%" y1="25%" x2="70%" y2="18%" stroke="white" strokeWidth="0.5" opacity="0.1" />
+        <line x1="70%" y1="18%" x2="80%" y2="40%" stroke="white" strokeWidth="0.5" opacity="0.08" />
+        <line x1="25%" y1="35%" x2="35%" y2="55%" stroke="white" strokeWidth="0.5" opacity="0.08" />
+        <line x1="55%" y1="25%" x2="60%" y2="50%" stroke="white" strokeWidth="0.5" opacity="0.1" />
+
+        {/* Pulsing node */}
+        <circle cx="40%" cy="15%" r="3" fill="#00ff88" opacity="0">
+          <animate attributeName="r" values="1;4;1" dur="4s" repeatCount="indefinite" />
+          <animate attributeName="opacity" values="0;0.15;0" dur="4s" repeatCount="indefinite" />
+        </circle>
+      </svg>
+
       {/* Radial fade */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,#050505_70%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_40%,transparent_0%,#050505_65%)]" />
     </div>
   );
 }

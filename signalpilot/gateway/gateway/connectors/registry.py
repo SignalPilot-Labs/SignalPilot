@@ -10,6 +10,7 @@ from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
 from .mssql import MSSQLConnector
 from .mysql import MySQLConnector
+from .trino import TrinoConnector
 from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
 from .snowflake import SnowflakeConnector
@@ -26,6 +27,7 @@ _REGISTRY: dict[str, type[BaseConnector]] = {
     DBType.clickhouse: ClickHouseConnector,
     DBType.databricks: DatabricksConnector,
     DBType.mssql: MSSQLConnector,
+    DBType.trino: TrinoConnector,
     DBType.sqlite: SQLiteConnector,
 }
 

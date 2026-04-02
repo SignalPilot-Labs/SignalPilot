@@ -34,11 +34,13 @@ snowflake = ["snowflake-connector-python>=3.6.0"]
 bigquery = ["google-cloud-bigquery>=3.20.0"]
 clickhouse = ["clickhouse-driver>=0.2.7"]
 databricks = ["databricks-sql-connector>=3.0.0"]
+trino = ["trino>=0.330.0"]
 all-connectors = [
     "snowflake-connector-python>=3.6.0",
     "google-cloud-bigquery>=3.20.0",
     "clickhouse-driver>=0.2.7",
     "databricks-sql-connector>=3.0.0",
+    "trino>=0.330.0",
 ]
 
 [project.scripts]

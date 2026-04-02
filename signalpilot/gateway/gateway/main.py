@@ -47,6 +47,7 @@ _SQLGLOT_DIALECTS: dict[str, str] = {
     "clickhouse": "clickhouse",
     "databricks": "databricks",
     "mssql": "tsql",
+    "trino": "trino",
     "duckdb": "duckdb",
     "sqlite": "sqlite",
 }
@@ -707,6 +708,7 @@ async def test_connection(name: str):
                 "clickhouse": "SELECT version()",
                 "snowflake": "SELECT CURRENT_VERSION()",
                 "mssql": "SELECT @@VERSION",
+                "trino": "SELECT version()",
                 "duckdb": "SELECT version()",
                 "sqlite": "SELECT sqlite_version()",
             }
@@ -3337,6 +3339,19 @@ _CONNECTOR_TIERS = {
             "sample_values": True, "read_only_transactions": False,
             "query_timeout": True, "cost_estimation": False,
             "connection_pooling": False, "parallel_schema": False,
+        },
+    },
+    "trino": {
+        "tier": 2,
+        "label": "Tier 2 — Stable",
+        "features": {
+            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
+            "foreign_keys": False, "indexes": False, "row_counts": False,
+            "column_stats": False, "primary_keys": False, "comments": True,
+            "sample_values": True, "read_only_transactions": False,
+            "query_timeout": False, "cost_estimation": False,
+            "connection_pooling": False, "parallel_schema": False,
+            "federated_query": True,
         },
     },
     "duckdb": {

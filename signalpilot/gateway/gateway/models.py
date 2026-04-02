@@ -48,6 +48,7 @@ class DBType(str, Enum):
     clickhouse = "clickhouse"
     databricks = "databricks"
     mssql = "mssql"
+    trino = "trino"
     sqlite = "sqlite"
 
 

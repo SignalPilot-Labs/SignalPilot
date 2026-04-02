@@ -152,6 +152,17 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     fields: ["host", "port", "database", "username", "password"],
     description: "Microsoft SQL Server / Azure SQL",
   },
+  trino: {
+    label: "Trino",
+    shortLabel: "trino",
+    defaultPort: 8080,
+    category: "warehouse",
+    supportsSSH: false,
+    supportsSSL: false,
+    connectionModes: ["fields", "url"],
+    fields: ["host", "port", "username", "password", "catalog", "schema_name"],
+    description: "Distributed SQL query engine",
+  },
   duckdb: {
     label: "DuckDB",
     shortLabel: "duck",
@@ -178,7 +189,7 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
 
 const DB_TYPE_ORDER: DBType[] = [
   "postgres", "mysql", "mssql", "redshift", "snowflake", "bigquery",
-  "clickhouse", "databricks", "duckdb", "sqlite",
+  "clickhouse", "databricks", "trino", "duckdb", "sqlite",
 ];
 
 /* ── Connector tier classification (HEX pattern) ── */
@@ -191,6 +202,7 @@ const CONNECTOR_TIERS: Record<DBType, { tier: number; label: string; color: stri
   redshift:   { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   clickhouse: { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   databricks: { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
+  trino:      { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   duckdb:     { tier: 3, label: "T3", color: "text-zinc-400 border-zinc-500/30" },
   sqlite:     { tier: 3, label: "T3", color: "text-zinc-400 border-zinc-500/30" },
 };
@@ -281,6 +293,13 @@ function DbTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
         <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
           <rect x="1.5" y="2" width="9" height="8" rx="1" stroke="currentColor" strokeWidth="0.75" fill="none" />
           <path d="M3.5 5L5 7L8.5 4" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        </svg>
+      );
+    case "trino":
+      return (
+        <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
+          <path d="M4 4L6 8L8 4" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
         </svg>
       );
     case "sqlite":
@@ -443,6 +462,8 @@ function buildConnectionPreview(form: FormState): string {
       return `databricks://****@${form.host || "host"}/${form.http_path || "sql/..."}${form.catalog ? `?catalog=${form.catalog}` : ""}`;
     case "mssql":
       return `mssql://${form.username || "sa"}:****@${form.host || "host"}:${form.port || "1433"}/${form.database || "master"}`;
+    case "trino":
+      return `trino://${form.username || "trino"}@${form.host || "host"}:${form.port || "8080"}/${form.catalog || "catalog"}${form.schema_name ? `/${form.schema_name}` : ""}`;
     case "duckdb":
     case "sqlite":
       return form.database || ":memory:";
@@ -476,6 +497,18 @@ function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
         schema_name: pathParts[1] || "",
         warehouse: parsed.searchParams.get("warehouse") || "",
         role: parsed.searchParams.get("role") || "",
+      };
+    }
+    if (dbType === "trino") {
+      const parsed = new URL(url.replace(/^trino:/, "http:"));
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      return {
+        host: parsed.hostname || "",
+        port: parsed.port || "8080",
+        username: decodeURIComponent(parsed.username || "trino"),
+        password: decodeURIComponent(parsed.password || ""),
+        catalog: pathParts[0] || "",
+        schema_name: pathParts[1] || "",
       };
     }
     if (dbType === "databricks") {
@@ -596,6 +629,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
       snowflake: "snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE",
       databricks: "databricks://token@host.databricks.com/sql/1.0/warehouses/abc?catalog=main",
       mssql: "mssql://sa:password@host:1433/mydb",
+      trino: "trino://user@host:8080/catalog/schema",
     };
     const parsed = form.connection_string ? parseConnectionUrl(form.connection_string, form.db_type) : null;
     const hasValidUrl = parsed && Object.values(parsed).some(v => v);
@@ -714,6 +748,23 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="default" hint="optional — default schema" />
         <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
           <span className="text-[var(--color-text-muted)]">setup:</span> Workspace Settings → User Settings → Developer → Access Tokens. Ensure SQL Warehouse is running and token has CAN USE permission.
+        </div>
+      </>
+    );
+  }
+
+  // Trino — host/port + catalog/schema
+  if (form.db_type === "trino") {
+    return (
+      <>
+        <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="trino.example.com" required />
+        <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="8080" />
+        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="trino" />
+        <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" hint="optional — for authenticated clusters" />
+        <FormInput label="catalog" value={form.catalog} onChange={(v) => setForm({ ...form, catalog: v })} placeholder="hive" hint="default catalog for queries" />
+        <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="default" hint="optional — default schema" />
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="text-[var(--color-text-muted)]">note:</span> Trino supports federated queries across multiple catalogs (Hive, Iceberg, MySQL, PostgreSQL, etc.). Each catalog maps to a data source configured in Trino.
         </div>
       </>
     );

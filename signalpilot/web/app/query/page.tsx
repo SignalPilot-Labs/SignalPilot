@@ -107,6 +107,12 @@ const QUERY_TEMPLATES: Record<string, { label: string; sql: string }[]> = {
     { label: "List tables", sql: "SELECT table_schema, table_name, table_type\nFROM information_schema.tables\nWHERE table_schema NOT IN ('information_schema')\nORDER BY table_schema, table_name;" },
     { label: "Describe table", sql: "DESCRIBE TABLE EXTENDED your_schema.your_table;" },
   ],
+  trino: [
+    { label: "List catalogs", sql: "SHOW CATALOGS;" },
+    { label: "List schemas", sql: "SHOW SCHEMAS;" },
+    { label: "List tables", sql: "SHOW TABLES;" },
+    { label: "Running queries", sql: "SELECT query_id, state, query,\n  date_diff('second', created, now()) AS elapsed_sec\nFROM system.runtime.queries\nWHERE state = 'RUNNING'\nORDER BY created;" },
+  ],
   mssql: [
     { label: "List tables", sql: "SELECT s.name AS [schema], t.name AS [table],\n  p.rows AS row_count\nFROM sys.tables t\nJOIN sys.schemas s ON t.schema_id = s.schema_id\nLEFT JOIN sys.partitions p ON t.object_id = p.object_id AND p.index_id IN (0, 1)\nWHERE s.name NOT IN ('sys')\nORDER BY p.rows DESC;" },
     { label: "Table sizes", sql: "SELECT s.name + '.' + t.name AS [table],\n  SUM(a.total_pages) * 8 / 1024 AS total_mb,\n  SUM(a.used_pages) * 8 / 1024 AS used_mb,\n  p.rows\nFROM sys.tables t\nJOIN sys.schemas s ON t.schema_id = s.schema_id\nJOIN sys.indexes i ON t.object_id = i.object_id\nJOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id\nJOIN sys.allocation_units a ON p.partition_id = a.container_id\nGROUP BY s.name, t.name, p.rows\nORDER BY SUM(a.total_pages) DESC;" },

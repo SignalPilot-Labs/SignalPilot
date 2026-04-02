@@ -21,6 +21,7 @@ export type DBType =
   | "clickhouse"
   | "databricks"
   | "mssql"
+  | "trino"
   | "sqlite";
 
 export interface SSHTunnelConfig {

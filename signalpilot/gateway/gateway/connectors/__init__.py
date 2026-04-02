@@ -5,6 +5,7 @@ from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
 from .mssql import MSSQLConnector
 from .mysql import MySQLConnector
+from .trino import TrinoConnector
 from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
 from .registry import get_connector
@@ -19,6 +20,7 @@ __all__ = [
     "DuckDBConnector",
     "MSSQLConnector",
     "MySQLConnector",
+    "TrinoConnector",
     "PostgresConnector",
     "RedshiftConnector",
     "SnowflakeConnector",

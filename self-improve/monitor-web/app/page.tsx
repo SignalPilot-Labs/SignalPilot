@@ -259,6 +259,14 @@ export default function MonitorPage() {
 
         <div className="flex-1" />
 
+        {/* About link */}
+        <a
+          href="/landing"
+          className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-[0.15em] uppercase mr-2"
+        >
+          About
+        </a>
+
         {/* Agent health indicator */}
         <div className="flex items-center gap-1.5 mr-2">
           <span

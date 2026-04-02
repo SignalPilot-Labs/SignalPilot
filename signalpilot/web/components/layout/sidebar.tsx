@@ -403,10 +403,10 @@ export default function Sidebar() {
             onClick={() => {
               window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
             }}
-            className="flex items-center justify-center w-8 h-8"
+            className="flex items-center justify-center w-10 h-10 -mr-1"
             aria-label="Search"
           >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-[var(--color-text-dim)]">
+            <svg width="16" height="16" viewBox="0 0 14 14" fill="none" className="text-[var(--color-text-dim)]">
               <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1" />
               <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
             </svg>
@@ -414,7 +414,7 @@ export default function Sidebar() {
           {/* Hamburger / more menu */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="flex flex-col items-center justify-center w-8 h-8 gap-1"
+            className="flex flex-col items-center justify-center w-10 h-10 gap-1"
             aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
           >
             <span className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "rotate-45 translate-y-[3px]" : ""}`} />
@@ -500,20 +500,20 @@ export default function Sidebar() {
             <Link
               key={href}
               href={href}
-              className={`flex flex-col items-center justify-center gap-1 px-3 py-1 min-w-[56px] relative transition-colors ${
+              className={`flex flex-col items-center justify-center gap-1 py-1.5 flex-1 relative transition-colors ${
                 active
                   ? "text-[var(--color-text)]"
                   : "text-[var(--color-text-dim)]"
               }`}
             >
               {active && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-[var(--color-success)]" />
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-[3px] bg-[var(--color-success)]" />
               )}
               <span className="relative">
                 <Icon active={active} />
                 {badge > 0 && <MobileNavBadge count={badge} />}
               </span>
-              <span className="text-[8px] tracking-[0.1em] uppercase">{label}</span>
+              <span className="text-[9px] tracking-[0.1em] uppercase">{label}</span>
             </Link>
           );
         })}

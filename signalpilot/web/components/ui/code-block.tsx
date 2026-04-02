@@ -70,7 +70,7 @@ export function CodeBlock({
               ))}
             </div>
           )}
-          <pre className="flex-1 p-3 text-[11px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto">
+          <pre className="flex-1 p-3 text-[12px] sm:text-[11px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto [-webkit-overflow-scrolling:touch]">
             <code>{code}</code>
           </pre>
         </div>

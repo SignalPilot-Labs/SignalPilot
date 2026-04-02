@@ -843,6 +843,32 @@ kbd {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════ */
+/* Extra-small phones (<400px) — iPhone SE, Galaxy S mini     */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 400px) {
+  /* Tighter padding */
+  .p-4 { padding: 0.75rem !important; }
+  .px-4 { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+  .gap-3 { gap: 0.5rem; }
+
+  /* Smaller metric card text */
+  .text-xl { font-size: 1.125rem; }
+
+  /* Stack 2-col grids to single column on tiny phones */
+  .grid-cols-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reduce bottom bar height for more content space */
+  .mobile-bottombar {
+    height: 3rem;
+  }
+  .main-content {
+    padding-bottom: 3rem;
+  }
+}
+
 /* ── Smooth page load ── */
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(8px); }

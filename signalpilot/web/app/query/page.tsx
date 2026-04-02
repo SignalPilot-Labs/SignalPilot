@@ -226,7 +226,7 @@ export default function QueryExplorerPage() {
 
       {/* Connection bar + controls */}
       <div className="flex flex-wrap items-center gap-3 mb-4 flex-shrink-0">
-        <div className="relative flex-1 min-w-[160px] sm:flex-none">
+        <div className="relative flex-1 min-w-[120px] sm:min-w-[160px] sm:flex-none">
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
@@ -281,8 +281,7 @@ export default function QueryExplorerPage() {
         {/* Line numbers gutter */}
         <div
           ref={lineNumbersRef}
-          className="flex-shrink-0 py-3 pr-0 pl-3 select-none overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-bg)]"
-          style={{ width: "3rem" }}
+          className="flex-shrink-0 py-3 pr-0 pl-2 sm:pl-3 select-none overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-bg)] w-8 sm:w-12"
         >
           {Array.from({ length: lineCount }, (_, i) => (
             <div key={i} className="text-[10px] text-[var(--color-text-dim)] text-right pr-2 leading-[1.65rem] tabular-nums opacity-50">

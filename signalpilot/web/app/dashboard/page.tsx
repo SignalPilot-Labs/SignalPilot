@@ -168,7 +168,7 @@ export default function DashboardPage() {
           />
         }
       >
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 sm:gap-x-6 gap-y-2 text-xs">
           <div className="flex items-center gap-2">
             <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
@@ -358,39 +358,43 @@ export default function DashboardPage() {
                     className="group/row hover:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
                     onClick={() => setExpandedActivity(isExpanded ? null : entry.id)}
                   >
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
-                      <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 flex-shrink-0 ${
-                        entry.blocked ? "text-[var(--color-error)]" : cfg.color
-                      }`}>
-                        {cfg.label}
-                      </span>
-                      <span className="flex-1 text-xs truncate overflow-hidden min-w-0 basis-[120px]">
-                        {entry.sql
-                          ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
-                          : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
-                            ? String(entry.metadata.code_preview).slice(0, 80)
-                            : entry.connection_name || "—"}</span>}
-                      </span>
-                      {entry.blocked && (
-                        <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase flex-shrink-0">
-                          blocked
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-y-1 sm:gap-x-3 px-4 py-2.5">
+                      <div className="flex items-center gap-2 sm:contents min-w-0">
+                        <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 flex-shrink-0 ${
+                          entry.blocked ? "text-[var(--color-error)]" : cfg.color
+                        }`}>
+                          {cfg.label}
                         </span>
-                      )}
-                      {entry.rows_returned != null && (
-                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
-                          {entry.rows_returned}r
+                        <span className="flex-1 text-xs truncate overflow-hidden min-w-0 sm:basis-[120px]">
+                          {entry.sql
+                            ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
+                            : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
+                              ? String(entry.metadata.code_preview).slice(0, 80)
+                              : entry.connection_name || "—"}</span>}
                         </span>
-                      )}
-                      {entry.duration_ms != null && (
-                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
-                          {entry.duration_ms.toFixed(0)}ms
-                        </span>
-                      )}
-                      <TimeAgo
-                        timestamp={entry.timestamp}
-                        live
-                        className="text-[10px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
-                      />
+                        <TimeAgo
+                          timestamp={entry.timestamp}
+                          live
+                          className="text-[10px] text-[var(--color-text-dim)] flex-shrink-0 sm:order-last sm:w-10 sm:text-right"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 pl-10 sm:pl-0 sm:contents">
+                        {entry.blocked && (
+                          <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase flex-shrink-0">
+                            blocked
+                          </span>
+                        )}
+                        {entry.rows_returned != null && (
+                          <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
+                            {entry.rows_returned}r
+                          </span>
+                        )}
+                        {entry.duration_ms != null && (
+                          <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
+                            {entry.duration_ms.toFixed(0)}ms
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {/* Detail row — tap on mobile, hover on desktop */}
                     <div className={`grid grid-cols-[2rem_1fr] gap-3 px-4 overflow-hidden transition-all duration-200 ease-out ${

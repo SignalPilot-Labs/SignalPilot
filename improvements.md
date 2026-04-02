@@ -5,6 +5,76 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 31: Diagnostics, Validation, Schema Optimization, Async Execute (2026-04-01)
+
+**Summary:** 7 improvements — diagnostics URL parsing fix, frontend form validation hardening, Redshift query optimization (6→5), compact schema sample value inlining, MySQL/MSSQL async execute fix, FK-target column preservation in pruning, and 70 new tests.
+
+**Key metrics:**
+- 629 tests passing (70 new this round: 23 cost estimator, 25 diagnostics URL, 22 compact schema)
+- 5 git commits this round
+- Redshift: views query merged into main column query (6→5 queries)
+- Compact schema: ENUM columns now include inline sample values (Spider2.0 optimization)
+- MySQL/MSSQL: execute no longer blocks the event loop (asyncio.to_thread)
+- Schema linking: FK-target columns preserved during pruning (EDBT 2026 insight)
+- All 4 Docker databases verified end-to-end after rebuild
+
+### 1. Diagnostics URL Parsing Fix
+**Files:** `gateway/main.py`
+- **Impact:** Diagnostics now work for all 11+ URL schemes instead of just 5
+- Replaced fragile per-scheme string replacement (`conn_str.replace("postgresql://", "http://")`) with regex-based scheme normalization (`re.sub(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://', 'http://', conn_str)`)
+- Handles all variants: `mysql+pymysql://`, `clickhouse+https://`, `sqlserver://`, `trino+https://`, etc.
+- Added early-exit for local databases (DuckDB, SQLite) — skip network diagnostics, just verify file access
+- 25 new URL parsing tests covering all schemes + edge cases
+
+### 2. Frontend Form Validation Hardening
+**Files:** `signalpilot/web/app/connections/page.tsx`
+- **Impact:** Catches more configuration errors before submission (HEX-level UX)
+- Databricks OAuth M2M: validates `dbx_oauth_client_id` and `dbx_oauth_client_secret` when M2M auth selected
+- SSH private key: PEM format check (`-----BEGIN ... PRIVATE KEY-----`)
+- SSH port: validates 1-65535 range
+- Connection timeout: validates 1-300 seconds
+- Query timeout: validates 1-3600 seconds
+
+### 3. Redshift Schema Query Optimization (6→5 queries)
+**Files:** `connectors/redshift.py`
+- **Impact:** One fewer round trip during Redshift schema introspection
+- Merged standalone `views_sql` query into main column query via `LEFT JOIN pg_views`
+- View detection now uses `is_view` column from joined result instead of separate set lookup
+- Same optimization pattern applied to MSSQL (Round 30) and MySQL (Round 29)
+
+### 4. Compact Schema Sample Value Inlining (Spider2.0)
+**Files:** `gateway/main.py`
+- **Impact:** ENUM-like columns in compact DDL now show actual values, helping agents understand semantics without extra queries
+- When cached sample values exist, they're inlined as SQL comments: `status varchar ENUM -- values: 'active', 'inactive', 'pending'`
+- Limited to 5 values per column to keep compact schema concise
+- Existing column comments are preserved (values prepended)
+- 22 new tests covering DDL generation, cardinality hints, FK compression, sample inlining
+
+### 5. MySQL/MSSQL Async Execute Fix
+**Files:** `connectors/mysql.py`, `connectors/mssql.py`
+- **Impact:** Execute no longer blocks the event loop — critical for concurrent request handling
+- Both connectors now wrap blocking `pymysql`/`pymssql` calls in `asyncio.to_thread()`
+- Added `asyncio.wait_for()` with configurable timeout (effective_timeout + 5s grace)
+- Clear `RuntimeError` on timeout instead of hanging indefinitely
+- MySQL uses `read_timeout`, MSSQL uses `query_timeout` from credential_extras
+
+### 6. FK-Target Column Preservation in Schema Pruning
+**Files:** `gateway/main.py`
+- **Impact:** Prevents broken join paths when column pruning is enabled
+- Based on RSL-SQL / EDBT 2026 research: "missing a column is fatal; extras are tolerable noise"
+- When `prune_columns=true`, now also preserves columns referenced as FK targets from other linked tables
+- Example: if `orders.customer_id → customers.id`, `customers.id` is always kept even with no direct question relevance
+- Builds FK-target column set from all linked tables before pruning
+
+### 7. Cost Estimation Test Coverage
+**Files:** `tests/test_cost_estimator.py`
+- **Impact:** 23 new tests covering EXPLAIN parsing for all database types
+- Mock connector tests: Postgres JSON plan, MySQL EXPLAIN FORMAT=JSON, MSSQL SHOWPLAN_ALL, ClickHouse EXPLAIN ESTIMATE with PLAN fallback, Redshift text EXPLAIN, Trino row parsing
+- Error handling: all estimators gracefully return warnings on failure
+- Routing: SQLite→DuckDB, unknown DB type returns warning
+
+---
+
 ## Round 30: Read-Only Enforcement, Schema Linking FK-Propagation, URL Auto-Detect (2026-04-01)
 
 **Summary:** 5 improvements — read-only enforcement for MySQL/MSSQL, MSSQL query optimization (6→5), URL-based DB type auto-detection, FK-propagated schema linking scores, and join inference + validation tests.

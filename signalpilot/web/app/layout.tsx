@@ -9,6 +9,7 @@ import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
 import { NetworkStatus } from "@/components/ui/network-status";
 import { ScrollToTop } from "@/components/ui/scroll-to-top";
+import { ServiceWorkerRegister } from "@/components/ui/sw-register";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -56,6 +57,7 @@ export default function RootLayout({
             <CommandPalette />
             <ScrollToTop />
           </main>
+          <ServiceWorkerRegister />
         </ToastProvider>
       </body>
     </html>

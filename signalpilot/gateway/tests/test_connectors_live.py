@@ -1768,5 +1768,24 @@ class TestSQLiteForeignKeys:
         assert "PRAGMA foreign_keys" in source
 
 
+# ── MCP list_tables Tool (Round 7) ────────────────────────────────────────
+
+class TestMCPListTables:
+    """Tests for the list_tables MCP tool."""
+
+    def test_list_tables_exists(self):
+        """MCP server has list_tables function."""
+        from gateway.mcp_server import list_tables
+        assert callable(list_tables)
+
+    def test_list_tables_has_fk_support(self):
+        """list_tables includes FK references in output."""
+        import inspect
+        from gateway.mcp_server import list_tables
+        source = inspect.getsource(list_tables)
+        assert "fk_map" in source
+        assert "foreign_keys" in source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

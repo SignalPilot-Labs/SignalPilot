@@ -441,6 +441,80 @@ async def describe_table(connection_name: str, table_name: str) -> str:
 
 
 @mcp.tool()
+async def list_tables(connection_name: str) -> str:
+    """
+    List all tables in a database with compact schema overview.
+
+    Returns a one-line-per-table summary with column names, primary keys,
+    foreign keys, and row counts. This is designed for schema linking —
+    read this first, then use describe_table for details on relevant tables.
+
+    Args:
+        connection_name: Name of a configured database connection
+
+    Returns:
+        Compact table listing optimized for LLM context efficiency.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    from .connectors.schema_cache import schema_cache
+    schema = schema_cache.get(connection_name)
+    if schema is None:
+        from .connectors.pool_manager import pool_manager
+        try:
+            extras = get_credential_extras(connection_name)
+            connector = await pool_manager.acquire(conn_info.db_type, conn_str, credential_extras=extras)
+            schema = await connector.get_schema()
+            await pool_manager.release(conn_info.db_type, conn_str)
+        except Exception as e:
+            return f"Error: {e}"
+        schema_cache.put(connection_name, schema)
+
+    # Build FK lookup
+    fk_map: dict[str, str] = {}
+    for key, table in schema.items():
+        for fk in table.get("foreign_keys", []):
+            fk_map[f"{key}.{fk['column']}"] = f"{fk.get('references_table', '')}.{fk.get('references_column', '')}"
+
+    lines = [f"Database: {connection_name} ({conn_info.db_type})", f"Tables: {len(schema)}", ""]
+    for key in sorted(schema.keys()):
+        table = schema[key]
+        row_count = table.get("row_count", 0)
+        if row_count >= 1_000_000:
+            row_str = f" ({row_count / 1_000_000:.1f}M rows)"
+        elif row_count >= 1_000:
+            row_str = f" ({row_count / 1_000:.0f}K rows)"
+        elif row_count > 0:
+            row_str = f" ({row_count} rows)"
+        else:
+            row_str = ""
+
+        col_parts = []
+        for col in table.get("columns", []):
+            name = col["name"]
+            if col.get("primary_key"):
+                name += "*"
+            fk_ref = fk_map.get(f"{key}.{col['name']}")
+            if fk_ref:
+                name += f"→{fk_ref}"
+            col_parts.append(name)
+
+        lines.append(f"{key}{row_str}: {', '.join(col_parts)}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 async def check_budget(session_id: str = "default") -> str:
     """
     Check the remaining query budget for a session.

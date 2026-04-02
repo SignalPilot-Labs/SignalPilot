@@ -67,9 +67,13 @@ class BaseConnector(ABC):
         parts = []
         for i, col in enumerate(columns[:20]):
             q = quote
+            # Escape single quotes in column name for the string literal
+            safe_name = col.replace("'", "''")
+            # Escape the quote character inside the identifier
+            safe_id = col.replace(q, q + q) if q else col
             parts.append(
-                f"SELECT '{col}' AS _col, CAST({q}{col}{q} AS VARCHAR) AS _val "
-                f"FROM (SELECT DISTINCT {q}{col}{q} FROM {table} WHERE {q}{col}{q} IS NOT NULL LIMIT {limit}) t{i}"
+                f"SELECT '{safe_name}' AS _col, CAST({q}{safe_id}{q} AS VARCHAR) AS _val "
+                f"FROM (SELECT DISTINCT {q}{safe_id}{q} FROM {table} WHERE {q}{safe_id}{q} IS NOT NULL LIMIT {limit}) t{i}"
             )
         return "\n UNION ALL \n".join(parts)
 

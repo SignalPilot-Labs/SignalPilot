@@ -71,6 +71,15 @@ function NavIconAudit({ active }: { active: boolean }) {
     </svg>
   );
 }
+function NavIconTunnel({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M1 7H4M10 7H13" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
+      <rect x="4" y="3" width="6" height="8" rx="3" stroke="currentColor" strokeWidth="1" fill="none" />
+      {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
+    </svg>
+  );
+}
 function NavIconSettings({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -89,8 +98,9 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "4" },
   { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "5" },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "6" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "8" },
+  { href: "/tunnels", label: "tunnels", icon: NavIconTunnel, shortcut: "7" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
 ];
 
 function SignalPilotLogo() {
@@ -165,11 +175,13 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
+  const [activeTunnels, setActiveTunnels] = useState(0);
   const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
 
   // Poll for active sandbox count and connection health
   const fetchCounts = useCallback(() => {
-    const url = typeof window !== "undefined" ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300" : "";
+    const isRemote = typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
+    const url = isRemote ? "" : (typeof window !== "undefined" ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300" : "");
     const key = typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
     const headers: Record<string, string> = {};
     if (key) headers["Authorization"] = `Bearer ${key}`;
@@ -177,6 +189,12 @@ export default function Sidebar() {
       .then((r) => r.ok ? r.json() : [])
       .then((sandboxes: { status: string }[]) => {
         setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
+      })
+      .catch(() => {});
+    fetch(`${url}/api/tunnels`, { headers })
+      .then((r) => r.ok ? r.json() : [])
+      .then((tunnels: { status: string }[]) => {
+        setActiveTunnels(tunnels.filter((t) => t.status === "running").length);
       })
       .catch(() => {});
     fetch(`${url}/api/health/connections`, { headers })
@@ -253,7 +271,7 @@ export default function Sidebar() {
       <nav className="flex-1 px-3 py-2 space-y-0.5">
         {nav.map(({ href, label, icon: Icon, shortcut }) => {
           const active = pathname.startsWith(href);
-          const badge = href === "/sandboxes" ? activeSandboxes : 0;
+          const badge = href === "/sandboxes" ? activeSandboxes : href === "/tunnels" ? activeTunnels : 0;
           return (
             <Link
               key={href}

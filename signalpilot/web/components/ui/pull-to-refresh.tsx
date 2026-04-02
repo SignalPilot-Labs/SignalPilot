@@ -137,25 +137,34 @@ export function PullToRefresh({
   );
 }
 
-/* Desktop passthrough — just renders children without pull-to-refresh */
+/**
+ * Responsive wrapper — pull-to-refresh on mobile, plain render on desktop.
+ * Uses a single render of children to avoid double-mounting effects/API calls.
+ */
 export function PullToRefreshWrapper({
   onRefresh,
   children,
-  threshold,
-  disabled,
+  threshold = 80,
+  disabled = false,
 }: PullToRefreshProps) {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    function check() {
+      setIsMobile(window.innerWidth < 768);
+    }
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  if (!isMobile) {
+    return <>{children}</>;
+  }
+
   return (
-    <>
-      {/* Mobile: pull-to-refresh */}
-      <PullToRefresh
-        onRefresh={onRefresh}
-        threshold={threshold}
-        disabled={disabled}
-      >
-        {children}
-      </PullToRefresh>
-      {/* Desktop: plain render */}
-      <div className="hidden sm:block">{children}</div>
-    </>
+    <PullToRefresh onRefresh={onRefresh} threshold={threshold} disabled={disabled}>
+      {children}
+    </PullToRefresh>
   );
 }

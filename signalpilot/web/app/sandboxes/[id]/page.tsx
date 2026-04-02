@@ -416,7 +416,7 @@ export default function SandboxDetailPage() {
       </div>
 
       {/* Terminal status bar */}
-      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] text-[9px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] text-[9px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0 overflow-x-auto">
         <span className="flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 ${sandbox.status === "running" ? "bg-[var(--color-success)]" : "bg-[var(--color-text-dim)]"}`} />
           {sandbox.status}
@@ -514,7 +514,7 @@ export default function SandboxDetailPage() {
       {/* Input area */}
       <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0">
         {/* Snippet bar */}
-        <div className="flex items-center gap-2 px-4 pt-3 pb-1">
+        <div className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-1">
           <button
             onClick={() => setShowSnippets(!showSnippets)}
             className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider"
@@ -564,15 +564,18 @@ export default function SandboxDetailPage() {
             >
               {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               run
-              <kbd className="ml-1 px-1 py-0.5 bg-[var(--color-bg)]/20 text-[7px] opacity-50 border border-[var(--color-bg)]/30">
+              <kbd className="ml-1 px-1 py-0.5 bg-[var(--color-bg)]/20 text-[7px] opacity-50 border border-[var(--color-bg)]/30 hidden sm:inline">
                 ⌃⏎
               </kbd>
             </button>
           </div>
         </div>
         <div className="flex items-center justify-between px-4 pb-3">
-          <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider hidden sm:block">
             isolated firecracker microvm · ctrl+enter to execute · tab to indent
+          </p>
+          <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider sm:hidden">
+            firecracker microvm
           </p>
           {code.length > 0 && (
             <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">

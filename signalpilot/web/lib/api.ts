@@ -59,6 +59,7 @@ export const getSchemaRefreshStatus = (name: string) =>
     next_refresh_at: number | null;
     cached: boolean;
     cached_table_count: number;
+    fingerprint: string | null;
   }>(`/api/connections/${name}/schema/refresh-status`);
 export const testConnection = (name: string) =>
   request<{

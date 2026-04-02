@@ -50,6 +50,8 @@ import {
   diagnoseConnection,
   generateSemanticModel,
   testCredentials,
+  getSchemaRefreshStatus,
+  getConnectionSchemaDiff,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -1568,6 +1570,8 @@ export default function ConnectionsPage() {
   const [serverIp, setServerIp] = useState<string | null>(null);
   const [diagnosing, setDiagnosing] = useState<string | null>(null);
   const [diagResults, setDiagResults] = useState<Record<string, { host: string; port: number; diagnostics: { check: string; status: string; message: string; hint?: string; duration_ms: number }[] }>>({});
+  const [schemaRefreshStatus, setSchemaRefreshStatus] = useState<Record<string, { fingerprint?: string | null; last_schema_refresh: number | null; cached: boolean; cached_table_count: number; schema_refresh_interval: number | null }>>({});
+  const [schemaDiff, setSchemaDiff] = useState<Record<string, { has_changes: boolean; added_tables: string[]; removed_tables: string[]; modified_tables: unknown[] } | null>>({});
 
   const refresh = useCallback(() => {
     getConnections().then(setConnections).catch(() => {});
@@ -1820,6 +1824,16 @@ export default function ConnectionsPage() {
         setEndorsements(prev => ({ ...prev, [name]: e }));
       } catch {}
     }
+    // Load schema refresh status (fingerprint, last refresh time)
+    getSchemaRefreshStatus(name)
+      .then((status) => setSchemaRefreshStatus(prev => ({ ...prev, [name]: status })))
+      .catch(() => {});
+    // Load schema diff if available
+    getConnectionSchemaDiff(name)
+      .then((diff) => {
+        if (diff.diff) setSchemaDiff(prev => ({ ...prev, [name]: diff.diff as any }));
+      })
+      .catch(() => {});
   }
 
   async function handleScanPII(name: string) {
@@ -2731,6 +2745,38 @@ export default function ConnectionsPage() {
                               </>
                             );
                           })()}
+                          {/* Schema fingerprint & refresh status */}
+                          {schemaRefreshStatus[conn.name] && (
+                            <>
+                              <Tooltip content={`Structural fingerprint: ${schemaRefreshStatus[conn.name].fingerprint || "n/a"}`} position="top">
+                                <span className="text-[8px] text-[var(--color-text-dim)] opacity-60 tracking-widest font-mono cursor-default">
+                                  #{(schemaRefreshStatus[conn.name].fingerprint || "").slice(0, 8)}
+                                </span>
+                              </Tooltip>
+                              {schemaRefreshStatus[conn.name].last_schema_refresh && (
+                                <Tooltip content={`Last refresh: ${new Date(schemaRefreshStatus[conn.name].last_schema_refresh! * 1000).toLocaleString()}`} position="top">
+                                  <span className="text-[8px] text-[var(--color-text-dim)] opacity-60 tracking-wider cursor-default flex items-center gap-0.5">
+                                    <Clock className="w-2 h-2" strokeWidth={1.5} />
+                                    {(() => {
+                                      const diff = Math.floor(Date.now() / 1000 - schemaRefreshStatus[conn.name].last_schema_refresh!);
+                                      if (diff < 60) return "just now";
+                                      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+                                      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                                      return `${Math.floor(diff / 86400)}d ago`;
+                                    })()}
+                                  </span>
+                                </Tooltip>
+                              )}
+                            </>
+                          )}
+                          {/* Schema diff indicators */}
+                          {schemaDiff[conn.name] && schemaDiff[conn.name]?.has_changes && (
+                            <Tooltip content={`Changes: +${(schemaDiff[conn.name] as any).added_tables?.length || 0} added, -${(schemaDiff[conn.name] as any).removed_tables?.length || 0} removed, ~${(schemaDiff[conn.name] as any).modified_tables?.length || 0} modified`} position="top">
+                              <span className="text-[8px] px-1 py-0.5 border border-[var(--color-warning)]/30 text-[var(--color-warning)] tracking-wider cursor-default">
+                                schema changed
+                              </span>
+                            </Tooltip>
+                          )}
                           <div className="flex-1" />
                           {/* Endorsement mode toggle */}
                           <button
@@ -2764,6 +2810,16 @@ export default function ConnectionsPage() {
                                 await refreshConnectionSchema(conn.name);
                                 const data = await getConnectionSchema(conn.name);
                                 setSchemaData(prev => ({ ...prev, [conn.name]: { tables: data.tables } }));
+                                // Refresh status and diff after schema refresh
+                                getSchemaRefreshStatus(conn.name)
+                                  .then((status) => setSchemaRefreshStatus(prev => ({ ...prev, [conn.name]: status })))
+                                  .catch(() => {});
+                                getConnectionSchemaDiff(conn.name)
+                                  .then((diff) => {
+                                    if (diff.diff) setSchemaDiff(prev => ({ ...prev, [conn.name]: diff.diff as any }));
+                                    else setSchemaDiff(prev => { const next = { ...prev }; delete next[conn.name]; return next; });
+                                  })
+                                  .catch(() => {});
                                 toast(`${conn.name}: schema refreshed`, "success");
                               } catch { toast(`${conn.name}: refresh failed`, "error"); }
                               finally { setSchemaLoading(null); }

@@ -41,7 +41,7 @@ function MetricCard({
   sparkValues?: number[];
 }) {
   return (
-    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
+    <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
       <div className="flex items-center gap-2 mb-3">
         <Icon className={`w-3.5 h-3.5 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
         <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{label}</span>

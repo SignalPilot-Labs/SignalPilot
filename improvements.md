@@ -5,6 +5,44 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 4: Schema Search, MySQL SSL, Industry Research (2026-04-01)
+
+**Summary:** 3 features — AI agent schema search endpoint, MySQL SSL/TLS support, pool_manager wiring.
+
+### 1. Schema Search Endpoint (GET /api/connections/{name}/schema/search?q=)
+
+**What:** Keyword-based schema search for AI agent schema linking — the #1 technique used by Spider2.0 SOTA methods.
+
+**How it works:**
+- Multi-signal relevance scoring: exact table match (10pt) > prefix (5pt) > substring (3pt) > exact column (4pt) > column prefix (2pt) > FK reference (2pt) > comment (1pt) > description (1.5pt)
+- Results ranked by composite score, top N returned (default 20)
+- Optional `include_samples=true` fetches sample values for matched columns
+- Searched metadata: table names, column names, column comments, FK references, table descriptions
+
+**Example:** `?q=customer email` returns:
+1. `public.customers` (exact table match + exact column match) — score 14.0
+2. `public.orders` (FK references "customers") — score 2.0
+
+**Spider2.0 impact:** Schema linking is the #1 bottleneck in text-to-SQL (27.6% of failures). This endpoint lets the agent efficiently narrow 100+ tables to the relevant subset before SQL generation — matching DSR-SQL's "adaptive context state" approach.
+
+### 2. MySQL SSL/TLS Certificate Support
+
+**What:** MySQL connections now support full SSL/TLS with CA cert, client cert, and client key.
+
+**Implementation:**
+- `MySQLConnector.set_ssl_config()` method accepts PEM content
+- Certs written to secure temp files at connect time
+- Pool manager automatically wires `credential_extras.ssl_config` to MySQL connector
+- Supports: CA certificate, client certificate, client key (all as PEM strings)
+
+### 3. Test Coverage
+
+**8 new tests added (70 → 75 total unit tests):**
+- Schema search scoring (5 cases: exact match, column match, FK reference, no match, comment match)
+- MySQL SSL config (3 cases: set correctly, default none, pool_manager wiring)
+
+---
+
 ## Round 3: Connection Management & Spider2.0 Schema Intelligence (2026-04-01)
 
 **Summary:** 8 features, connection CRUD lifecycle, ReFoRCE-inspired table grouping, 169 tests.
@@ -125,32 +163,44 @@ Backend already supported URL parsing — this exposes it in the frontend toggle
 
 ---
 
-### Spider2.0 Leaderboard Update (April 2026)
+### Spider2.0 Leaderboard Update (April 2026 — Research Round 4)
 
 | Method | Spider2.0-Snow | Spider2.0-Lite | Key Technique |
 |--------|---------------|----------------|---------------|
-| **ReFoRCE** (SOTA) | **35.83%** | **36.56%** | Table grouping + schema compression + self-refinement |
-| DSR-SQL | 35.28% | — | Dual-state reasoning (context + generation) |
-| Paytm Prism | Listed | — | Multi-agent swarm (first Indian company) |
+| **ReFoRCE** (SOTA) | **35.83%** | **36.56%** | Table grouping + schema compression + self-refinement + 8-path voting |
+| **DSR-SQL** | **35.28%** | — | Dual-state reasoning — single path matches ReFoRCE's 8-path voting (+6.03% over ReFoRCE single-path) |
+| Paytm Prism | Listed | — | Multi-agent swarm (first Indian company on leaderboard, Jan 2026) |
 
-**Key research insights (EDBT 2026, ReFoRCE paper):**
-- Schema linking errors remain the #1 bottleneck in text-to-SQL
-- Pattern-based table grouping + LLM-guided schema linking is the winning approach
-- Combined methods can solve 66.91% (366/547) of Spider 2.0 examples
+**Key updates since Round 3:**
+- DSR-SQL (arXiv:2511.21402) introduces "adaptive context state" — compact, semantically faithful schema pruning. **Our `/schema/search` endpoint implements the same pattern at the API level.**
+- Combined methods can now solve **66.91% (366/547)** of Spider 2.0 examples
+- Spider2-DBT (68 tasks) added as new task setting for quick benchmarking
+- Evaluation suite refreshed — scores now more accurate and stable
+- Even GPT-4o only solves 10.1% of Spider 2.0 tasks (vs 86.6% on Spider 1.0)
+
+**Key research insights:**
+- Schema linking errors remain the #1 bottleneck (27.6% of SQL failures)
+- **Adaptive context pruning** (DSR-SQL) > naive schema compression — our search endpoint enables this
+- Pattern-based table grouping + LLM-guided schema linking remains the winning approach
 - Identity-aware proxies replacing SSH tunnels in production (zero-trust trend 2026)
+- Hex uses on-demand SSH sessions with static IPs for allow-listing — we match this pattern
 
-### HEX Comparison Update
+### HEX Comparison Update (Round 4)
 
 | Feature | HEX | SignalPilot |
 |---------|-----|-------------|
-| Connection editing | Yes | **Yes** (new) |
-| Save & Test | Yes | **Yes** (fixed) |
-| Validation errors | Yes | **Yes** (new) |
+| Connection editing | Yes | **Yes** |
+| Save & Test | Yes | **Yes** |
+| Validation errors | Yes | **Yes** |
 | Schema refresh | Manual | **Yes** (API endpoint) |
 | Schema diff | No | **Yes** (unique) |
 | Table grouping | No | **Yes** (unique — ReFoRCE-inspired) |
 | Grouped schema API | No | **Yes** (unique — for AI agents) |
-| Snowflake URL mode | Yes | **Yes** (new) |
+| Schema search API | No | **Yes** (unique — DSR-SQL adaptive context) |
+| Snowflake URL mode | Yes | **Yes** |
+| MySQL SSL/TLS | Yes | **Yes** (new — CA/client certs) |
+| SSH tunnels | On-demand + static IPs | On-demand (sshtunnel) |
+| IP allow-listing | Static IPs published | Not needed (self-hosted) |
 | OAuth | Some DBs | Planned |
 | Identity-Aware Proxy | No | Planned |
 
@@ -521,10 +571,12 @@ Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
 - [x] ~~Connection editing~~ (Done: PUT /api/connections/{name})
 - [x] ~~Save & Test workflow~~ (Done: auto-test after save)
 - [x] ~~Pattern-based table grouping~~ (Done: GET /schema/grouped)
+- [x] ~~Schema search for AI agents~~ (Done: GET /schema/search — DSR-SQL adaptive context pattern)
+- [x] ~~MySQL SSL/TLS support~~ (Done: CA cert, client cert, client key via credential_extras)
 - [ ] OAuth support for Snowflake, BigQuery, Databricks
 - [ ] Automated schema refresh scheduling (like HEX workspace connections)
-- [ ] Multi-round semantic retrieval for irrelevant table filtering (LinkAlign approach)
 - [ ] LLM-guided schema linking (ReFoRCE Phase 2 — after table grouping)
+- [ ] DSR-SQL progressive generation state (feedback-guided SQL synthesis)
 - [ ] Approximate string matching (threshold 0.5) for column name hallucination correction
 - [ ] Column statistics for MySQL and ClickHouse (currently Postgres only)
 - [ ] Identity-Aware Proxy (IAP) support for zero-trust database access

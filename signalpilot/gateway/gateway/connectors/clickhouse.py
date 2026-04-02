@@ -262,10 +262,13 @@ class ClickHouseConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._client is None and self._http_client is None:
             raise RuntimeError("Not connected")
-        try:
+
+        effective_timeout = timeout or self._query_timeout
+
+        def _run():
             settings = {}
-            if timeout:
-                settings["max_execution_time"] = timeout
+            if effective_timeout:
+                settings["max_execution_time"] = effective_timeout
 
             result = self._raw_execute(sql, params, settings)
             if isinstance(result, tuple) and len(result) == 2:
@@ -273,6 +276,15 @@ class ClickHouseConnector(BaseConnector):
                 col_names = [c[0] for c in columns_info]
                 return [dict(zip(col_names, row)) for row in rows_data]
             return []
+
+        import asyncio
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run),
+                timeout=effective_timeout + 5 if effective_timeout else None,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"ClickHouse query timed out after {effective_timeout}s")
         except Exception as e:
             raise RuntimeError(f"ClickHouse query error: {e}") from e
 

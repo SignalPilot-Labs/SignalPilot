@@ -203,14 +203,26 @@ class SnowflakeConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        try:
+
+        effective_timeout = timeout or self._network_timeout
+
+        def _run():
             cursor = self._conn.cursor(snowflake.connector.DictCursor)
-            if timeout:
-                cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {timeout}")
+            if effective_timeout:
+                cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {effective_timeout}")
             cursor.execute(sql, params or ())
             rows = cursor.fetchall()
             cursor.close()
             return list(rows) if rows else []
+
+        import asyncio
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run),
+                timeout=effective_timeout + 5 if effective_timeout else None,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Snowflake query timed out after {effective_timeout}s")
         except snowflake.connector.Error as e:
             raise RuntimeError(f"Snowflake query error: {e}") from e
 

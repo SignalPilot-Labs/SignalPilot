@@ -205,8 +205,10 @@ class DatabricksConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
+
         effective_timeout = timeout or self._query_timeout
-        try:
+
+        def _run():
             cursor = self._conn.cursor()
             # Databricks SQL Warehouses support SET for query timeout
             if effective_timeout:
@@ -219,6 +221,15 @@ class DatabricksConnector(BaseConnector):
             rows = cursor.fetchall()
             cursor.close()
             return [dict(zip(columns, row)) for row in rows]
+
+        import asyncio
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run),
+                timeout=effective_timeout + 5 if effective_timeout else None,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Databricks query timed out after {effective_timeout}s")
         except Exception as e:
             raise RuntimeError(f"Databricks query error: {e}") from e
 

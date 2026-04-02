@@ -17,10 +17,20 @@ type ActivityState =
   | { kind: "calling_tool"; toolName: string; detail: string }
   | { kind: "waiting_tool"; toolName: string; detail: string };
 
+const TERMINAL_EVENTS = new Set([
+  "session_ended", "pr_created", "pr_failed", "killed",
+  "fatal_error", "agent_stop", "stop_requested",
+]);
+
 function deriveActivity(events: FeedEvent[]): ActivityState {
   // Walk backwards through recent events to find current state
   for (let i = events.length - 1; i >= Math.max(0, events.length - 20); i--) {
     const ev = events[i];
+
+    // Terminal audit events = run is done, no activity
+    if (ev._kind === "audit" && TERMINAL_EVENTS.has(ev.data.event_type)) {
+      return { kind: "idle" };
+    }
 
     // A tool pre without a matching post = currently executing
     if (ev._kind === "tool" && ev.data.phase === "pre" && !ev.data.output_data) {

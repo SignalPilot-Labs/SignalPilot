@@ -4023,6 +4023,101 @@ async def schema_link(
             if hint not in join_hints:
                 join_hints.append(hint)
 
+    # ── Dialect hints (Spider2.0 multi-database optimization) ───────────
+    # Tells the agent which SQL dialect to use and common pitfalls.
+    _DIALECT_HINTS: dict[str, dict[str, Any]] = {
+        "postgres": {
+            "dialect": "PostgreSQL",
+            "identifier_quote": '"',
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "NOW(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+            "tips": ["Use :: for type casting (e.g., col::TEXT)", "ILIKE for case-insensitive LIKE"],
+        },
+        "mysql": {
+            "dialect": "MySQL",
+            "identifier_quote": "`",
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "NOW(), CURDATE(), DATE_FORMAT(col, '%Y-%m'), YEAR(col), MONTH(col)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+            "tips": ["Use backticks for reserved words", "GROUP BY is strict — list all non-aggregated columns"],
+        },
+        "mssql": {
+            "dialect": "T-SQL (SQL Server)",
+            "identifier_quote": "[]",
+            "string_quote": "'",
+            "limit_syntax": "TOP n or OFFSET m ROWS FETCH NEXT n ROWS ONLY",
+            "date_functions": "GETDATE(), CAST(col AS DATE), DATEPART(YEAR, col), DATEDIFF(DAY, a, b), FORMAT(col, 'yyyy-MM')",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LEN(), SUBSTRING()",
+            "tips": ["Use TOP n instead of LIMIT", "Use OFFSET...FETCH for pagination", "Use [] for reserved words"],
+        },
+        "redshift": {
+            "dialect": "Redshift (PostgreSQL-based)",
+            "identifier_quote": '"',
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "GETDATE(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF(day, a, b)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LEN(), SUBSTRING()",
+            "tips": ["PostgreSQL-like but no LATERAL joins", "Use APPROXIMATE COUNT(DISTINCT) for large tables"],
+        },
+        "snowflake": {
+            "dialect": "Snowflake SQL",
+            "identifier_quote": '"',
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF('day', a, b)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
+            "tips": ["Identifiers are case-insensitive unless double-quoted", "Use FLATTEN() for semi-structured data", "QUALIFY for window function filtering"],
+        },
+        "bigquery": {
+            "dialect": "BigQuery Standard SQL",
+            "identifier_quote": "`",
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC(col, MONTH), EXTRACT(YEAR FROM col)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
+            "tips": ["Use backticks for project.dataset.table references", "Use UNNEST() for repeated fields", "QUALIFY for window filtering"],
+        },
+        "clickhouse": {
+            "dialect": "ClickHouse SQL",
+            "identifier_quote": '"',
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "now(), today(), toStartOfMonth(col), toYear(col), dateDiff('day', a, b)",
+            "string_functions": "concat(a, b), lower(), upper(), length(), substring()",
+            "tips": ["Functions are case-sensitive and camelCase", "Use -If suffix for conditional aggregation (e.g., countIf, sumIf)", "Array functions: arrayJoin, groupArray"],
+        },
+        "trino": {
+            "dialect": "Trino SQL (ANSI-based)",
+            "identifier_quote": '"',
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "CURRENT_TIMESTAMP, CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
+            "tips": ["Use catalog.schema.table for cross-catalog queries", "UNNEST() for arrays", "Supports ANSI SQL window functions"],
+        },
+        "databricks": {
+            "dialect": "Databricks SQL (Spark SQL-based)",
+            "identifier_quote": "`",
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n",
+            "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('MONTH', col), EXTRACT(YEAR FROM col)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+            "tips": ["Use backticks for identifiers", "Supports QUALIFY for window filtering", "Use catalog.schema.table for Unity Catalog"],
+        },
+        "duckdb": {
+            "dialect": "DuckDB SQL (PostgreSQL-compatible)",
+            "identifier_quote": '"',
+            "string_quote": "'",
+            "limit_syntax": "LIMIT n OFFSET m",
+            "date_functions": "NOW(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATE_DIFF('day', a, b)",
+            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+            "tips": ["Very PostgreSQL-compatible", "Supports LIST and STRUCT types", "PIVOT/UNPIVOT supported natively"],
+        },
+    }
+
     result: dict[str, Any] = {
         "connection_name": name,
         "question": question,
@@ -4035,6 +4130,9 @@ async def schema_link(
     }
     if join_hints:
         result["join_hints"] = join_hints
+    dialect = _DIALECT_HINTS.get(info.db_type)
+    if dialect:
+        result["dialect"] = dialect
     return result
 
 

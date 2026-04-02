@@ -63,4 +63,48 @@ def query_error_hint(error: str, db_type: str) -> str | None:
     if "boolean" in err_lower or "invalid use of group function" in err_lower:
         return "Cannot use aggregate function in WHERE clause. Move the condition to HAVING."
 
+    # Date/time function mismatches across dialects
+    if "date" in err_lower and ("function" in err_lower or "not recognized" in err_lower or "does not exist" in err_lower):
+        dialect_hints = {
+            "bigquery": "BigQuery uses DATE(), TIMESTAMP(), EXTRACT(), DATE_DIFF(), FORMAT_TIMESTAMP().",
+            "snowflake": "Snowflake uses DATEADD(), DATEDIFF(), TO_DATE(), DATE_TRUNC().",
+            "clickhouse": "ClickHouse uses toDate(), toDateTime(), dateDiff(), formatDateTime().",
+            "mssql": "SQL Server uses DATEADD(), DATEDIFF(), CONVERT(), FORMAT().",
+            "mysql": "MySQL uses DATE(), STR_TO_DATE(), DATEDIFF(), DATE_FORMAT().",
+            "postgres": "PostgreSQL uses DATE_TRUNC(), TO_DATE(), AGE(), EXTRACT().",
+            "redshift": "Redshift uses DATEADD(), DATEDIFF(), DATE_TRUNC(), GETDATE().",
+        }
+        hint = dialect_hints.get(db_type, "Check date function names for this database dialect.")
+        return f"Date/time function not found. {hint}"
+
+    # Window function errors
+    if "window" in err_lower or ("over" in err_lower and "not allowed" in err_lower):
+        return "Window function error. Ensure OVER() clause has valid PARTITION BY and ORDER BY. Cannot use window functions in WHERE/HAVING."
+
+    # CTE / WITH clause errors
+    if "recursive" in err_lower or ("with" in err_lower and "defined but not used" in err_lower):
+        return "CTE (WITH clause) error. Ensure the CTE name is referenced in the main query and syntax matches the dialect."
+
+    # String concatenation differences
+    if "concat" in err_lower and ("operator" in err_lower or "function" in err_lower):
+        dialect_hints = {
+            "bigquery": "BigQuery uses CONCAT() function, not || operator.",
+            "mssql": "SQL Server uses + for concatenation or CONCAT() function.",
+            "mysql": "MySQL uses CONCAT() function. || is logical OR by default.",
+        }
+        hint = dialect_hints.get(db_type, "Use CONCAT() for portable string concatenation.")
+        return hint
+
+    # NULL handling
+    if "null" in err_lower and ("operator" in err_lower or "comparison" in err_lower):
+        return "Cannot compare with NULL using = or !=. Use IS NULL or IS NOT NULL instead."
+
+    # HAVING without GROUP BY
+    if "having" in err_lower and "group" in err_lower:
+        return "HAVING requires GROUP BY. Add a GROUP BY clause or move the condition to WHERE."
+
+    # Snowflake case sensitivity
+    if db_type == "snowflake" and ("identifier" in err_lower and ("not exist" in err_lower or "invalid" in err_lower)):
+        return "Snowflake identifiers are uppercase by default. Use double-quotes for case-sensitive names or convert to uppercase."
+
     return None

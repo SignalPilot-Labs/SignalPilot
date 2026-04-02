@@ -413,11 +413,18 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
     db = conn.db_type
 
     # Host/port databases need at minimum host
-    if db in ("postgres", "mysql", "redshift", "clickhouse"):
+    if db in ("postgres", "mysql", "redshift", "clickhouse", "mssql"):
         if not conn.host:
             errors.append(f"{db} requires a host")
         if not conn.username:
             errors.append(f"{db} requires a username")
+
+    # Trino needs host + catalog (username optional for some clusters)
+    if db == "trino":
+        if not conn.host:
+            errors.append("Trino requires a host")
+        if not conn.catalog:
+            errors.append("Trino requires a catalog")
 
     # Snowflake needs account
     if db == "snowflake":
@@ -623,7 +630,7 @@ async def validate_connection_url(body: dict):
         parsed_info: dict[str, Any] = {"db_type": db_type}
         warnings: list[str] = []
 
-        if db_type in ("postgres", "mysql", "redshift", "clickhouse"):
+        if db_type in ("postgres", "mysql", "redshift", "clickhouse", "mssql"):
             # Standard URL format
             normalized = url
             if db_type == "clickhouse":
@@ -635,6 +642,11 @@ async def validate_connection_url(body: dict):
                 normalized = "postgresql://" + normalized[len("redshift://"):]
             elif db_type == "mysql" and normalized.startswith("mysql+pymysql://"):
                 normalized = "http://" + normalized[len("mysql+pymysql://"):]
+            elif db_type == "mssql":
+                for prefix in ("mssql://", "mssql+pymssql://", "sqlserver://"):
+                    if normalized.startswith(prefix):
+                        normalized = "http://" + normalized[len(prefix):]
+                        break
 
             parsed = urlparse(normalized)
             parsed_info["host"] = parsed.hostname or ""
@@ -651,6 +663,25 @@ async def validate_connection_url(body: dict):
                 warnings.append("No username specified")
             if not parsed_info["has_password"]:
                 warnings.append("No password in URL — will need separate credentials")
+
+        elif db_type == "trino":
+            normalized = url
+            if normalized.startswith("trino://"):
+                normalized = "http://" + normalized[len("trino://"):]
+            elif normalized.startswith("trino+https://"):
+                normalized = "http://" + normalized[len("trino+https://"):]
+            parsed = urlparse(normalized)
+            path_parts = [p for p in (parsed.path or "").split("/") if p]
+            parsed_info["host"] = parsed.hostname or ""
+            parsed_info["port"] = parsed.port or 8080
+            parsed_info["username"] = unquote(parsed.username or "trino")
+            parsed_info["has_password"] = bool(parsed.password)
+            parsed_info["catalog"] = path_parts[0] if path_parts else ""
+            parsed_info["schema"] = path_parts[1] if len(path_parts) > 1 else ""
+            if not parsed_info["host"]:
+                warnings.append("No host specified")
+            if not parsed_info["catalog"]:
+                warnings.append("No catalog specified")
 
         elif db_type == "snowflake":
             if url.startswith("snowflake://"):

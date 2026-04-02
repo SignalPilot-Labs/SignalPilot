@@ -27,15 +27,21 @@ class RedshiftConnector(BaseConnector):
         self._conn = None
         self._ssl_config: dict | None = None
         self._temp_files: list[str] = []
+        self._connect_timeout: int = 15
+        self._query_timeout: int = 30
 
     def set_ssl_config(self, ssl_config: dict) -> None:
         """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
         self._ssl_config = ssl_config
 
     def set_credential_extras(self, extras: dict) -> None:
-        """Extract SSL config from credential extras."""
+        """Extract SSL config and timeout settings from credential extras."""
         if extras.get("ssl_config"):
             self.set_ssl_config(extras["ssl_config"])
+        if extras.get("connection_timeout"):
+            self._connect_timeout = extras["connection_timeout"]
+        if extras.get("query_timeout"):
+            self._query_timeout = extras["query_timeout"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PSYCOPG2:
@@ -51,7 +57,7 @@ class RedshiftConnector(BaseConnector):
         ssl_kwargs = self._build_ssl_kwargs() if self._ssl_config and self._ssl_config.get("enabled") else {}
 
         try:
-            self._conn = psycopg2.connect(dsn, connect_timeout=15, **ssl_kwargs)
+            self._conn = psycopg2.connect(dsn, connect_timeout=self._connect_timeout, **ssl_kwargs)
             self._conn.set_session(readonly=True, autocommit=True)
         except psycopg2.OperationalError as e:
             err_str = str(e).lower()

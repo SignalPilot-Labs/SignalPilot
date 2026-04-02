@@ -65,15 +65,19 @@ class BaseConnector(ABC):
           SELECT 'col2' AS _col, CAST("col2" AS VARCHAR) AS _val FROM (SELECT DISTINCT "col2" FROM tbl WHERE "col2" IS NOT NULL LIMIT 5) t
         """
         parts = []
+        # Handle bracket-style quoting: quote="[" means [col] not [col[
+        if quote == "[":
+            q_open, q_close = "[", "]"
+        else:
+            q_open, q_close = quote, quote
         for i, col in enumerate(columns[:20]):
-            q = quote
             # Escape single quotes in column name for the string literal
             safe_name = col.replace("'", "''")
-            # Escape the quote character inside the identifier
-            safe_id = col.replace(q, q + q) if q else col
+            # Escape the close-quote inside the identifier
+            safe_id = col.replace(q_close, q_close + q_close) if q_close else col
             parts.append(
-                f"SELECT '{safe_name}' AS _col, CAST({q}{safe_id}{q} AS VARCHAR) AS _val "
-                f"FROM (SELECT DISTINCT {q}{safe_id}{q} FROM {table} WHERE {q}{safe_id}{q} IS NOT NULL LIMIT {limit}) t{i}"
+                f"SELECT '{safe_name}' AS _col, CAST({q_open}{safe_id}{q_close} AS VARCHAR) AS _val "
+                f"FROM (SELECT DISTINCT {q_open}{safe_id}{q_close} FROM {table} WHERE {q_open}{safe_id}{q_close} IS NOT NULL LIMIT {limit}) t{i}"
             )
         return "\n UNION ALL \n".join(parts)
 

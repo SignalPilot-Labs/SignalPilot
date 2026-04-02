@@ -23,10 +23,16 @@ class DatabricksConnector(BaseConnector):
         self._conn = None
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
+        self._connection_timeout: int = 30
+        self._query_timeout: int | None = None
 
     def set_credential_extras(self, extras: dict) -> None:
         """Store structured credential data for connection."""
         self._credential_extras = extras
+        if extras.get("connection_timeout"):
+            self._connection_timeout = extras["connection_timeout"]
+        if extras.get("query_timeout"):
+            self._query_timeout = extras["query_timeout"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_DATABRICKS:
@@ -253,7 +259,9 @@ class DatabricksConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     cursor = self._conn.cursor()
-                    cursor.execute(f"SELECT DISTINCT `{col}` FROM {table} WHERE `{col}` IS NOT NULL LIMIT {limit}")
+                    # Quote table name parts to prevent SQL injection
+                    safe_table = ".".join(f"`{p}`" for p in table.split("."))
+                    cursor.execute(f"SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}")
                     rows = cursor.fetchall()
                     cursor.close()
                     values = [str(row[0]) for row in rows if row[0] is not None]

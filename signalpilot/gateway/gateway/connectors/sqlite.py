@@ -56,6 +56,18 @@ class SQLiteConnector(BaseConnector):
         )
         tables = [row[0] for row in cursor.fetchall()]
 
+        # Batch row counts in a single query (avoids N per-table COUNT(*) queries)
+        row_counts: dict[str, int] = {}
+        if tables:
+            # Build a UNION ALL query for all table counts at once
+            count_parts = [f"SELECT '{t.replace(chr(39), chr(39)+chr(39))}' AS t, COUNT(*) AS c FROM [{t}]" for t in tables]
+            try:
+                count_sql = " UNION ALL ".join(count_parts)
+                for row in self._conn.execute(count_sql).fetchall():
+                    row_counts[row[0]] = row[1]
+            except Exception:
+                pass  # Fall back to 0 counts if UNION fails
+
         schema: dict[str, Any] = {}
         for table in tables:
             # Column info
@@ -84,20 +96,12 @@ class SQLiteConnector(BaseConnector):
             except Exception:
                 pass
 
-            # Row count estimate
-            row_count = 0
-            try:
-                cursor = self._conn.execute(f"SELECT COUNT(*) FROM [{table}]")
-                row_count = cursor.fetchone()[0]
-            except Exception:
-                pass
-
             schema[table] = {
                 "schema": "main",
                 "name": table,
                 "columns": columns,
                 "foreign_keys": foreign_keys,
-                "row_count": row_count,
+                "row_count": row_counts.get(table, 0),
             }
         return schema
 
@@ -106,14 +110,7 @@ class SQLiteConnector(BaseConnector):
         if self._conn is None or not columns:
             return {}
         try:
-            # SQLite uses [] quoting like MSSQL
-            parts = []
-            for i, col in enumerate(columns[:20]):
-                parts.append(
-                    f"SELECT '{col}' AS _col, CAST([{col}] AS TEXT) AS _val "
-                    f"FROM (SELECT DISTINCT [{col}] FROM [{table}] WHERE [{col}] IS NOT NULL LIMIT {limit})"
-                )
-            sql = "\n UNION ALL \n".join(parts)
+            sql = self._build_sample_union_sql(table, columns, limit, quote="[")
             cursor = self._conn.execute(sql)
             rows = cursor.fetchall()
             return self._parse_sample_union_result(rows)

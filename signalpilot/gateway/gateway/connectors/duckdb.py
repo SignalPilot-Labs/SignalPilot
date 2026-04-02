@@ -22,23 +22,47 @@ class DuckDBConnector(BaseConnector):
     def __init__(self):
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_path: str = ""
+        self._credential_extras: dict = {}
+        self._query_timeout: int | None = None
+
+    def set_credential_extras(self, extras: dict) -> None:
+        """Store credential extras — primarily for MotherDuck token auth."""
+        self._credential_extras = extras
+        if extras.get("query_timeout"):
+            self._query_timeout = extras["query_timeout"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_DUCKDB:
             raise RuntimeError("duckdb not installed. Run: pip install duckdb")
+
+        # MotherDuck token from credential_extras takes precedence
+        motherduck_token = self._credential_extras.get("motherduck_token", "")
+
         # connection_string is a file path, :memory:, or a MotherDuck URL (md:)
         self._db_path = connection_string
-        # In-memory and MotherDuck databases cannot be opened in read_only mode
         is_memory = connection_string == ":memory:" or connection_string.startswith("md:")
-        self._conn = duckdb.connect(connection_string, read_only=not is_memory)
+
+        config = {}
+        if motherduck_token and connection_string.startswith("md:"):
+            config["motherduck_token"] = motherduck_token
+
+        try:
+            self._conn = duckdb.connect(connection_string, read_only=not is_memory, config=config)
+        except Exception as e:
+            err = str(e).lower()
+            if "motherduck" in err or "token" in err or "auth" in err:
+                raise RuntimeError(f"MotherDuck authentication failed: {e}") from e
+            raise RuntimeError(f"DuckDB connection error: {e}") from e
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        try:
-            # DuckDB supports PRAGMA to limit execution time (seconds)
-            if timeout:
-                self._conn.execute(f"SET timeout = '{timeout}s'")
+
+        import asyncio
+
+        effective_timeout = timeout or self._query_timeout
+
+        def _run():
             if params:
                 result = self._conn.execute(sql, params)
             else:
@@ -46,6 +70,21 @@ class DuckDBConnector(BaseConnector):
             columns = [desc[0] for desc in result.description]
             rows = result.fetchall()
             return [{col: val for col, val in zip(columns, row)} for row in rows]
+
+        try:
+            if effective_timeout:
+                # DuckDB has no native query timeout — use asyncio timeout on thread
+                return await asyncio.wait_for(
+                    asyncio.to_thread(_run), timeout=effective_timeout
+                )
+            return await asyncio.to_thread(_run)
+        except asyncio.TimeoutError:
+            # Interrupt the connection to cancel the query
+            try:
+                self._conn.interrupt()
+            except Exception:
+                pass
+            raise RuntimeError(f"DuckDB query timed out after {effective_timeout}s")
         except duckdb.Error as e:
             raise RuntimeError(f"DuckDB query error: {e}") from e
 
@@ -119,25 +158,18 @@ class DuckDBConnector(BaseConnector):
         except Exception:
             pass
 
-        # Row counts — use duckdb_tables() for estimated_size, but get actual count
+        # Row counts — duckdb_tables().estimated_size IS the estimated row count
         row_counts: dict[str, int] = {}
         try:
-            # DuckDB v0.9+ has estimated_size; row count from pg_stat not available
-            # Use table list + SELECT COUNT(*) TABLESAMPLE for large tables
             count_sql = """
-                SELECT table_schema, table_name, estimated_size, column_count
+                SELECT schema_name, table_name, estimated_size
                 FROM duckdb_tables()
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                WHERE NOT internal
             """
             count_result = self._conn.execute(count_sql)
             for row in count_result.fetchall():
                 key = f"{row[0]}.{row[1]}"
-                est_size = row[2] or 0
-                # estimated_size is in bytes; estimate rows as size / avg_row_size
-                # avg_row_size ≈ 100 bytes per row for most analytical tables
-                col_count = row[3] or 1
-                avg_row_bytes = max(col_count * 20, 50)  # ~20 bytes per column
-                row_counts[key] = est_size // avg_row_bytes if est_size > 0 else 0
+                row_counts[key] = row[2] or 0
         except Exception:
             pass
 

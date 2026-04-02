@@ -4,7 +4,8 @@ Implements the industry-standard two-phase connection pattern:
 1. Establish SSH tunnel to bastion host
 2. Connect to database through the tunnel's local port
 
-Supports password and private key authentication.
+Supports password, private key, and ssh-agent authentication.
+HTTP proxy support for corporate VPCs that block direct SSH (HEX pattern).
 """
 
 from __future__ import annotations
@@ -21,6 +22,17 @@ try:
     HAS_SSHTUNNEL = True
 except ImportError:
     HAS_SSHTUNNEL = False
+
+
+def _build_proxy_command(proxy_host: str, proxy_port: int, ssh_host: str, ssh_port: int) -> str:
+    """Build a ProxyCommand string for HTTP CONNECT proxy tunneling.
+
+    This enables SSH through corporate HTTP proxies (e.g. Squid) that support
+    the CONNECT method — common in VPC environments where direct SSH is blocked.
+    """
+    # Use socat or nc (netcat) to tunnel through the HTTP proxy
+    # socat is preferred because it handles the CONNECT handshake properly
+    return f"socat - PROXY:{proxy_host}:{ssh_host}:{ssh_port},proxyport={proxy_port}"
 
 
 class SSHTunnel:
@@ -54,6 +66,16 @@ class SSHTunnel:
             "set_keepalive": 60,  # Keep-alive every 60s (industry standard)
         }
 
+        # HTTP proxy support (HEX pattern) — for VPCs that block direct SSH
+        proxy_host = self._config.get("proxy_host")
+        proxy_port = self._config.get("proxy_port", 3128)
+        if proxy_host:
+            import paramiko
+            proxy_cmd = _build_proxy_command(proxy_host, proxy_port, ssh_host, ssh_port)
+            sock = paramiko.ProxyCommand(proxy_cmd)
+            tunnel_kwargs["ssh_proxy"] = sock
+            logger.info("SSH tunnel using HTTP proxy: %s:%d", proxy_host, proxy_port)
+
         auth_method = self._config.get("auth_method", "password")
         if auth_method == "key" and self._config.get("private_key"):
             # Private key auth — parse PEM from string
@@ -80,6 +102,10 @@ class SSHTunnel:
                 )
 
             tunnel_kwargs["ssh_pkey"] = pkey
+        elif auth_method == "agent":
+            # ssh-agent forwarding — use keys loaded in the agent
+            tunnel_kwargs["allow_agent"] = True
+            logger.info("SSH tunnel using ssh-agent for authentication")
         else:
             # Password auth
             password = self._config.get("password")

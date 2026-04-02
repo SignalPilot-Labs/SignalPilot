@@ -58,10 +58,13 @@ class SSHTunnelConfig(BaseModel):
     host: str | None = Field(default=None, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=128)
-    auth_method: str = "password"  # password | key
+    auth_method: str = "password"  # password | key | agent
     password: str | None = Field(default=None, max_length=1024)
     private_key: str | None = Field(default=None, max_length=16384)
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
+    # HTTP proxy for SSH (HEX pattern) — for VPCs that block direct SSH
+    proxy_host: str | None = Field(default=None, max_length=255)
+    proxy_port: int = Field(default=3128, ge=1, le=65535)
 
 
 class SSLConfig(BaseModel):

@@ -521,6 +521,10 @@ interface FormState {
   ssh_password: string;
   ssh_private_key: string;
   ssh_key_passphrase: string;
+  // HTTP proxy for SSH (HEX pattern — for VPCs that block direct SSH)
+  ssh_proxy_enabled: boolean;
+  ssh_proxy_host: string;
+  ssh_proxy_port: string;
   // Snowflake auth method (password, key-pair, or OAuth)
   snowflake_auth_method: "password" | "key_pair" | "oauth";
   sf_private_key: string;
@@ -582,6 +586,7 @@ const defaultForm: FormState = {
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
+  ssh_proxy_enabled: false, ssh_proxy_host: "", ssh_proxy_port: "3128",
   snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", sf_oauth_token: "",
   iam_auth: false, aws_region: "us-east-1", aws_access_key_id: "", aws_secret_access_key: "",
   redshift_cluster_id: "", redshift_workgroup: "",
@@ -927,7 +932,7 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
 
   // SSH
   if (form.ssh_enabled && config.supportsSSH) {
-    payload.ssh_tunnel = {
+    const sshPayload: Record<string, unknown> = {
       enabled: true,
       host: form.ssh_host,
       port: parseInt(form.ssh_port) || 22,
@@ -937,6 +942,12 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
       private_key: form.ssh_auth_method === "key" ? form.ssh_private_key : null,
       private_key_passphrase: form.ssh_auth_method === "key" ? form.ssh_key_passphrase : null,
     };
+    // HTTP proxy for SSH (HEX pattern)
+    if (form.ssh_proxy_enabled && form.ssh_proxy_host) {
+      sshPayload.proxy_host = form.ssh_proxy_host;
+      sshPayload.proxy_port = parseInt(form.ssh_proxy_port) || 3128;
+    }
+    payload.ssh_tunnel = sshPayload;
   }
 
   // Schema filtering
@@ -1688,6 +1699,28 @@ function SSHSection({ form, setForm, serverIp }: { form: FormState; setForm: (f:
               </p>
             </div>
           )}
+          {/* HTTP Proxy for SSH (HEX pattern — for VPCs blocking direct SSH) */}
+          <div className="col-span-2 border-t border-[var(--color-border)]/50 pt-3 mt-1">
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, ssh_proxy_enabled: !form.ssh_proxy_enabled })}
+              className="flex items-center gap-2 text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+            >
+              {form.ssh_proxy_enabled ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              <span>http proxy for ssh</span>
+              {form.ssh_proxy_enabled && <span className="text-[var(--color-success)] text-[9px]">enabled</span>}
+            </button>
+            {form.ssh_proxy_enabled && (
+              <div className="grid grid-cols-2 gap-3 animate-fade-in">
+                <FormInput label="proxy host" value={form.ssh_proxy_host} onChange={(v) => setForm({ ...form, ssh_proxy_host: v })} placeholder="proxy.corp.example.com" hint="HTTP CONNECT proxy (e.g. Squid)" required />
+                <FormInput label="proxy port" value={form.ssh_proxy_port} onChange={(v) => setForm({ ...form, ssh_proxy_port: v })} placeholder="3128" hint="default: 3128 (Squid)" />
+                <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                  routes ssh through an http connect proxy. use this when your vpc or corporate network blocks direct ssh connections to the bastion host. requires <code className="text-[var(--color-text-muted)]">socat</code> on the signalpilot server.
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
             <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
               signalpilot creates an on-demand ssh tunnel to your database through this bastion host.
@@ -1903,6 +1936,9 @@ export default function ConnectionsPage() {
       ssh_port: String(conn.ssh_tunnel?.port || 22),
       ssh_username: conn.ssh_tunnel?.username || "",
       ssh_auth_method: conn.ssh_tunnel?.auth_method || "password",
+      ssh_proxy_enabled: !!(conn.ssh_tunnel as any)?.proxy_host,
+      ssh_proxy_host: (conn.ssh_tunnel as any)?.proxy_host || "",
+      ssh_proxy_port: String((conn.ssh_tunnel as any)?.proxy_port || 3128),
       tags: conn.tags || [],
       schema_refresh_enabled: !!(conn.schema_refresh_interval),
       schema_refresh_interval: String(conn.schema_refresh_interval || 300),
@@ -2605,6 +2641,39 @@ export default function ConnectionsPage() {
                 )}
               </div>
             )}
+
+            {/* Connection warnings (HEX pattern — proactive security guidance) */}
+            {(() => {
+              const warnings: string[] = [];
+              const cfg = DB_CONFIGS[form.db_type];
+              // Warn if SSL not enabled on a production-capable connector
+              if (cfg.supportsSSL && !form.ssl_enabled && !["duckdb", "sqlite"].includes(form.db_type)) {
+                warnings.push("SSL/TLS is not enabled. Recommended for production databases to encrypt traffic in transit.");
+              }
+              // Warn if using password auth for Snowflake (key-pair is preferred per HEX)
+              if (form.db_type === "snowflake" && form.snowflake_auth_method === "password") {
+                warnings.push("Snowflake recommends key-pair authentication over password. Password auth may be blocked by Snowflake's mandatory MFA policy.");
+              }
+              // Warn about read-write mode
+              if (!form.read_only) {
+                warnings.push("Read-write mode enabled. This allows INSERT, UPDATE, DELETE, and DDL queries. Use read-only for analytics workloads.");
+              }
+              // Warn about missing schema filtering for large warehouses
+              if (["snowflake", "bigquery", "redshift", "databricks"].includes(form.db_type) && !form.schema_filter_include.trim() && !form.schema_filter_exclude.trim()) {
+                warnings.push("No schema filtering configured. For large warehouses, filtering schemas improves AI agent accuracy and reduces metadata overhead.");
+              }
+              if (warnings.length === 0) return null;
+              return (
+                <div className="mt-4 space-y-1.5">
+                  {warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2 px-3 py-2 border border-amber-500/20 bg-amber-500/5">
+                      <AlertTriangle className="w-3 h-3 text-amber-400 flex-shrink-0 mt-0.5" strokeWidth={1.5} />
+                      <span className="text-[9px] text-amber-400/80 tracking-wider">{w}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             {/* Action buttons */}
             <div className="flex items-center gap-3 mt-5 pt-4 border-t border-[var(--color-border)]">

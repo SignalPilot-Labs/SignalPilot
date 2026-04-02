@@ -398,11 +398,46 @@ export const deleteTunnel = (id: string) => request<void>(`/api/tunnels/${id}`, 
 export const stopTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}/stop`, { method: "POST" });
 export const startTunnel = (id: string) => request<import("./types").TunnelInfo>(`/api/tunnels/${id}/start`, { method: "POST" });
 
+// SSE base URL — Next.js rewrites buffer SSE, so when remote we need the
+// gateway's direct tunnel URL for streaming endpoints.
+let _sseBaseUrl: string | null = null;
+
+async function getSSEBaseUrl(): Promise<string> {
+  // On localhost, connect to gateway directly
+  if (GATEWAY_URL) return GATEWAY_URL;
+  // Remote: use cached value
+  if (_sseBaseUrl !== null) return _sseBaseUrl;
+  // Remote: discover the gateway tunnel URL (port 3300)
+  try {
+    const tunnels = await getTunnels();
+    const gatewayTunnel = tunnels.find((t) => t.local_port === 3300 && t.status === "running");
+    _sseBaseUrl = gatewayTunnel?.public_url || "";
+  } catch {
+    _sseBaseUrl = "";
+  }
+  return _sseBaseUrl;
+}
+
+// Reset cached SSE URL when tunnels change (called from tunnels page)
+export function resetSSEBaseUrl() {
+  _sseBaseUrl = null;
+}
+
 // Metrics SSE
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
-  const es = new EventSource(`${GATEWAY_URL}/api/metrics`);
-  es.onmessage = (e) => {
-    try { cb(JSON.parse(e.data)); } catch {}
+  let es: EventSource | null = null;
+  let closed = false;
+
+  getSSEBaseUrl().then((base) => {
+    if (closed) return;
+    es = new EventSource(`${base}/api/metrics`);
+    es.onmessage = (e) => {
+      try { cb(JSON.parse(e.data)); } catch {}
+    };
+  });
+
+  return () => {
+    closed = true;
+    es?.close();
   };
-  return () => es.close();
 }

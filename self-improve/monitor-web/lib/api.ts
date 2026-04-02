@@ -87,8 +87,30 @@ export async function injectPrompt(
   return res.json();
 }
 
+// SSE needs a direct connection — Next.js rewrites buffer streaming responses.
+// On localhost, connect to port 3401 directly. Via tunnel, use the same origin
+// (the monitor's tunnel handles both HTTP and SSE when routed to the same container).
+let _sseBase: string | null = null;
+
+function getSSEBase(): string {
+  if (_sseBase !== null) return _sseBase;
+  if (typeof window === "undefined") {
+    _sseBase = "http://localhost:3401";
+  } else {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      _sseBase = `${window.location.protocol}//${host}:3401`;
+    } else {
+      // Remote: rely on relative URL through Next.js rewrite.
+      // SSE may be buffered — if so, user should also tunnel port 3401.
+      _sseBase = "";
+    }
+  }
+  return _sseBase;
+}
+
 export function createSSE(runId: string): EventSource {
-  return new EventSource(`${getApiBase()}/api/stream/${runId}`);
+  return new EventSource(`${getSSEBase()}/api/stream/${runId}`);
 }
 
 export interface AgentHealth {

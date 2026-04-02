@@ -5,6 +5,77 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 10: Schema Linking, Agent Self-Correction, Industry Research (2026-04-02)
+
+**Summary:** 8 features — Smart schema linking endpoint (EDBT 2026 high-recall approach), MCP explain_query tool for pre-execution analysis, structured error hints for agent self-correction, pool manager bug fix, connection test diagnostics with tooltips, schema explorer enhancements (column comments, table descriptions, engine badges).
+
+**Key metrics:**
+- 210 tests passing (up from 196 in Round 9)
+- Schema linking: tokenizes questions, scores tables by name/column/comment matching, expands via FKs
+- Error hints: 8 common SQL error patterns with DB-specific guidance (BigQuery, Snowflake, ClickHouse)
+- MCP tools: 12 total (added schema_link, explain_query)
+- Industry research: Spider2.0 leaderboard checked, EDBT 2026 schema linking paper integrated
+- 7 git commits this round
+
+### 1. Smart Schema Linking (EDBT 2026)
+
+**What:** `GET /api/connections/{name}/schema/link?question=...` — finds tables relevant to a natural language question.
+
+**How it works:**
+1. Tokenizes question, removes SQL/English stopwords
+2. Scores tables: exact name match (10pts), partial (5pts), singular/plural (8pts), column match (4pts), comment match (1pt)
+3. FK expansion: includes referenced tables for join path completeness
+4. Falls back to FK-relevance sorted tables if no matches
+
+**Based on:** EDBT 2026 finding that "recall matters more than precision" for schema linking. Better to include extra tables than miss a relevant one.
+
+**Output formats:** DDL (default, preferred by SOTA), compact, JSON — all include relevance scores.
+
+### 2. MCP explain_query Tool
+
+**What:** Pre-execution query plan analysis — the "generate → explain → fix → execute" workflow.
+
+**Why:** Every Spider2.0 leaderboard leader uses agent-based multi-turn workflows with self-correction. This tool enables agents to validate queries before execution, catching errors and estimating costs.
+
+### 3. Structured Error Hints for Agent Self-Correction
+
+**What:** When `query_database` fails, the error now includes actionable hints:
+- Column not found → "Use schema_link to verify column names"
+- Table not found → "Table may need schema prefix"
+- Ambiguous column → "Qualify with table alias"
+- Syntax error → DB-specific guidance (BigQuery backticks, Snowflake uppercase, ClickHouse functions)
+- Division by zero → "Use NULLIF(divisor, 0)" or BigQuery's SAFE_DIVIDE
+- Type mismatch → "Use CAST(column AS type)"
+- Timeout → "Add WHERE filters, reduce date range"
+
+### 4. Connection Test Diagnostics
+
+**What:** Improved inline test result display with tooltips showing full phase detail messages, "Auth" label instead of "DB", and total duration always visible.
+
+### 5. Pool Manager Bug Fix
+
+**What:** Fixed `AttributeError: '_max_idle'` in `pool_manager.stats()` — the attribute was renamed to `_idle_timeout` but the stats method wasn't updated.
+
+### 6. Schema Explorer Enhancements
+
+**What:** Column comments shown when available (italic, truncated to 60 chars), table descriptions in header, engine badges (e.g., MergeTree for ClickHouse).
+
+**Why:** Column comments provide semantic context critical for Spider2.0 schema linking accuracy.
+
+### 7. Industry Research Summary (2026-04-02)
+
+**Spider2.0 leaderboard:** Genloop Sentinel Agent v2 Pro leads Snow at 96.70, JetBrains Databao Agent leads Lite at 69.65. All top methods use agent-based architectures with multi-turn reasoning.
+
+**Key trends:** Tiered connector support (HEX/Sigma), workspace-level connections, configurable query timeouts, centralized access control with audit logging, GitOps-friendly configuration.
+
+**Techniques to consider:**
+- Bidirectional schema linking (RSL-SQL) for higher recall
+- Logical guidance (LU-SQL) for SQL generation
+- Contextual scaling (Tencent's approach) — dynamically adjust context based on query complexity
+- "Death of Schema Linking?" finding: strong models can skip schema linking when full schema fits in context
+
+---
+
 ## Round 9: Connector Tier Classification, DDL Schema Format, BigQuery Optimization (2026-04-02)
 
 **Summary:** 10 features — HEX-style connector tier classification system (3 tiers, feature matrix, scoring), DDL schema format (Spider2.0 SOTA), FK-based relevance sorting, BigQuery parallel schema with nested field flattening, IP whitelist display, live URL parsing preview, schema DDL view toggle, 3 new MCP tools (connector_capabilities, schema_diff, schema_ddl).
@@ -1393,9 +1464,19 @@ Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
 - [x] ~~MCP schema_ddl tool~~ (Done: DDL-formatted schema for AI agent workflow)
 - [x] ~~MCP connector_capabilities tool~~ (Done: tier info + features for agents)
 - [x] ~~MCP schema_diff tool~~ (Done: detect added/removed/modified tables)
+- [x] ~~Smart schema linking~~ (Done: EDBT 2026 high-recall approach with FK expansion)
+- [x] ~~MCP schema_link tool~~ (Done: question-aware schema filtering for agents)
+- [x] ~~MCP explain_query tool~~ (Done: pre-execution plan analysis for self-correction workflow)
+- [x] ~~Structured error hints~~ (Done: 8 error patterns with DB-specific guidance)
+- [x] ~~Pool manager bug fix~~ (Done: _max_idle → _idle_timeout in stats())
+- [x] ~~Connection test diagnostics~~ (Done: tooltips, Auth label, total duration)
+- [x] ~~Column comments in schema explorer~~ (Done: italic display with truncation)
+- [x] ~~Table description + engine badges~~ (Done: header display for semantic context)
 - [ ] OAuth support for Snowflake, BigQuery, Databricks
 - [ ] Claude MCP Connector integration (HEX pattern)
 - [ ] Contextual scaling engine (Genloop/QUVI-3 approach for 90%+ accuracy)
 - [ ] Identity-Aware Proxy (IAP) support for zero-trust database access
 - [ ] Query tagging for cost attribution (Databricks pattern)
 - [ ] Self-refinement loop for SQL generation (ReFoRCE approach)
+- [ ] Bidirectional schema linking (RSL-SQL approach)
+- [ ] Agent-based SQL generation pipeline (Spider2.0 SOTA pattern)

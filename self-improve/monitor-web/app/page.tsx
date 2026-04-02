@@ -11,7 +11,6 @@ import type { AgentHealth } from "@/lib/api";
 import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
 import { useSSE } from "@/hooks/useSSE";
-import { useControl } from "@/hooks/useControl";
 import { useParallelRuns } from "@/hooks/useParallelRuns";
 import { RunList } from "@/components/sidebar/RunList";
 import { EventFeed } from "@/components/feed/EventFeed";
@@ -48,12 +47,14 @@ export default function MonitorPage() {
 
   const {
     status: parallelStatus,
+    loading: parallelBusy,
     startRun: startParallelRun,
     stopRun: parallelStop,
     killRun: parallelKill,
     pauseRun: parallelPause,
     resumeRun: parallelResume,
     unlockRun: parallelUnlock,
+    injectPrompt: parallelInject,
   } = useParallelRuns();
   const parallelActive = parallelStatus?.active ?? 0;
 
@@ -93,11 +94,6 @@ export default function MonitorPage() {
   const addEvent = useCallback((event: FeedEvent) => {
     setHistoryEvents((prev) => [...prev, event]);
   }, []);
-
-  const { pause, resume, stop, kill, inject, unlock, resumeSession, busy } = useControl(
-    selectedRunId,
-    addEvent
-  );
 
   // Poll agent health
   useEffect(() => {
@@ -474,7 +470,7 @@ export default function MonitorPage() {
               onUnlock={() => parallelUnlock(selectedRunId)}
               onToggleInject={() => setInjectOpen(!injectOpen)}
               onResumeRun={() => parallelResume(selectedRunId)}
-              busy={busy}
+              busy={parallelBusy}
               sessionLocked={false}
               timeRemaining={null}
             />
@@ -486,8 +482,8 @@ export default function MonitorPage() {
       <InjectPanel
         open={injectOpen}
         onClose={() => setInjectOpen(false)}
-        onSend={inject}
-        busy={busy}
+        onSend={(prompt: string) => { if (selectedRunId) parallelInject(selectedRunId, prompt); }}
+        busy={parallelBusy}
       />
 
       {/* Start Run Modal */}
@@ -497,7 +493,6 @@ export default function MonitorPage() {
         onStart={handleStartRun}
         busy={startBusy}
         branches={branches}
-        mode="parallel"
       />
 
       {/* Onboarding Modal */}
@@ -523,8 +518,8 @@ export default function MonitorPage() {
       {selectedRun?.status === "rate_limited" && selectedRun.rate_limit_resets_at && (
         <RateLimitBanner
           resetsAt={selectedRun.rate_limit_resets_at}
-          onResume={resumeSession}
-          busy={busy}
+          onResume={() => { if (selectedRunId) parallelResume(selectedRunId); }}
+          busy={parallelBusy}
         />
       )}
 

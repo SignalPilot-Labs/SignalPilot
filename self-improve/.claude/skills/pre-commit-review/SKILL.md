@@ -90,6 +90,18 @@ PRE-COMMIT REVIEW: N issues (X critical, Y informational)
 Review Score: X/10
 ```
 
+## Auto-Regulation
+
+If a review produces more than 15 findings, the review scope is likely too broad.
+In this case:
+
+1. **Re-scope**: Only review files in the current commit, not the entire branch diff
+2. **Raise the bar**: Only report findings with confidence 7+ (drop tentative findings)
+3. **Prioritize**: Report only the top 10 findings by severity * confidence
+
+This prevents runaway reviews that produce noise instead of signal. A focused review
+of 5 high-confidence findings is more valuable than 30 speculative ones.
+
 ## Rules
 
 - Do NOT flag import ordering, string quote style, or trailing whitespace

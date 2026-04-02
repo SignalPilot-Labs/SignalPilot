@@ -65,18 +65,18 @@ export function TerminalBarSkeleton() {
  */
 export function DashboardSkeleton() {
   return (
-    <div className="p-8 max-w-[1400px] animate-fade-in">
+    <div className="p-4 sm:p-8 max-w-[1400px] animate-fade-in">
       <PageHeaderSkeleton />
       <TerminalBarSkeleton />
 
       {/* Metric cards */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)]">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)]">
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
       </div>
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)]">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)]">
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
@@ -84,8 +84,8 @@ export function DashboardSkeleton() {
       </div>
 
       {/* Chart area */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+        <div className="sm:col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
           <div className="flex items-center gap-2 mb-3">
             <Skeleton className="w-3 h-3" />
             <Skeleton className="h-2 w-24" />
@@ -125,7 +125,7 @@ export function DashboardSkeleton() {
  */
 export function ConnectionsSkeleton() {
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeaderSkeleton />
       <TerminalBarSkeleton />
       <div className="space-y-2">

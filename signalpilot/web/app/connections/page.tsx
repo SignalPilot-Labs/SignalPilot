@@ -938,7 +938,13 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           </div>
         </div>
         {form.snowflake_auth_method === "password" ? (
-          <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required className="col-span-2" />
+          <>
+            <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required className="col-span-2" />
+            <div className="col-span-2 px-3 py-2 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 text-[9px] text-[var(--color-warning)] tracking-wider">
+              <AlertTriangle className="w-3 h-3 inline mr-1" strokeWidth={1.5} />
+              snowflake is enforcing mandatory MFA for all accounts. password-only connections will stop working. switch to <button type="button" onClick={() => setForm({ ...form, snowflake_auth_method: "key_pair" })} className="underline hover:text-[var(--color-text)]">key pair</button> or <button type="button" onClick={() => setForm({ ...form, snowflake_auth_method: "oauth" })} className="underline hover:text-[var(--color-text)]">OAuth</button> authentication.
+            </div>
+          </>
         ) : form.snowflake_auth_method === "key_pair" ? (
           <>
             <FormTextArea

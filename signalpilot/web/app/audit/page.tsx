@@ -213,37 +213,114 @@ export default function AuditPage() {
         )}
       </div>
 
-      {/* Table */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-x-auto">
-        <table className="w-full text-xs min-w-[640px]">
-          <thead>
-            <tr className="border-b border-[var(--color-border)]">
-              {["time", "type", "connection", "detail", "duration"].map((h, i) => (
-                <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]`}>
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {loading && filtered.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-12 text-center">
-                  <Loader2 className="w-4 h-4 animate-spin mx-auto text-[var(--color-text-dim)]" />
-                </td>
+      {/* Loading / Empty */}
+      {loading && filtered.length === 0 && (
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] px-4 py-12 text-center">
+          <Loader2 className="w-4 h-4 animate-spin mx-auto text-[var(--color-text-dim)]" />
+        </div>
+      )}
+      {!loading && filtered.length === 0 && (
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          <EmptyState
+            icon={EmptyList}
+            title="no entries found"
+            description="run some queries to populate the audit log"
+          />
+        </div>
+      )}
+
+      {/* Mobile card view */}
+      {filtered.length > 0 && (
+        <div className="sm:hidden border border-[var(--color-border)] bg-[var(--color-bg-card)] divide-y divide-[var(--color-border)] stagger-fade-in">
+          {filtered.map((entry) => {
+            const Icon = typeIcons[entry.event_type] || ScrollText;
+            const color = typeColors[entry.event_type] || typeColors.connect;
+            const isExpanded = expandedRow === entry.id;
+            return (
+              <div
+                key={entry.id}
+                onClick={() => setExpandedRow(isExpanded ? null : entry.id)}
+                className="px-4 py-3 cursor-pointer active:bg-[var(--color-bg-hover)] transition-colors"
+              >
+                {/* Top row: type + time + duration */}
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`flex items-center gap-1.5 text-[10px] tracking-wider ${color}`}>
+                    <Icon className="w-3 h-3" strokeWidth={1.5} />
+                    {entry.event_type}
+                    {entry.blocked && (
+                      <span className="px-1 py-0.5 border badge-error text-[9px] uppercase tracking-wider">
+                        blocked
+                      </span>
+                    )}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {entry.duration_ms != null && (
+                      <span className={`text-[10px] tabular-nums tracking-wider ${
+                        entry.duration_ms < 50 ? "text-[var(--color-success)]" :
+                        entry.duration_ms < 200 ? "text-[var(--color-text-dim)]" :
+                        "text-[var(--color-warning)]"
+                      }`}>
+                        {entry.duration_ms.toFixed(0)}ms
+                      </span>
+                    )}
+                    <TimeAgo timestamp={entry.timestamp} live className="text-[10px] text-[var(--color-text-dim)]" />
+                    {isExpanded ? <ChevronDown className="w-2.5 h-2.5 text-[var(--color-text-dim)]" /> : <ChevronRight className="w-2.5 h-2.5 text-[var(--color-text-dim)]" />}
+                  </div>
+                </div>
+                {/* SQL preview */}
+                {entry.sql ? (
+                  <div className="text-[10px] bg-[var(--color-bg)] px-2 py-1 truncate overflow-hidden">
+                    <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-[10px]" />
+                  </div>
+                ) : entry.block_reason ? (
+                  <p className="text-[10px] text-[var(--color-error)] truncate">{entry.block_reason}</p>
+                ) : null}
+                {/* Meta row */}
+                <div className="flex items-center gap-3 mt-1.5 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                  {entry.connection_name && <span>{entry.connection_name}</span>}
+                  {entry.rows_returned != null && <span className="tabular-nums">{entry.rows_returned.toLocaleString()} rows</span>}
+                  {entry.tables.length > 0 && (
+                    <span className="truncate">{entry.tables.join(", ")}</span>
+                  )}
+                </div>
+                {/* Expanded detail */}
+                {isExpanded && entry.sql && (
+                  <div className="mt-3 animate-fade-in">
+                    <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
+                    <pre className="text-[11px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto whitespace-pre-wrap">
+                      <SqlHighlight sql={entry.sql!} className="text-[11px]" />
+                    </pre>
+                    {entry.metadata && Object.keys(entry.metadata).length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
+                        <pre className="text-[9px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)] overflow-auto">
+                          {JSON.stringify(entry.metadata, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Desktop table view */}
+      {filtered.length > 0 && (
+        <div className="hidden sm:block border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-x-auto">
+          <table className="w-full text-xs min-w-[640px]">
+            <thead>
+              <tr className="border-b border-[var(--color-border)]">
+                {["time", "type", "connection", "detail", "duration"].map((h, i) => (
+                  <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]`}>
+                    {h}
+                  </th>
+                ))}
               </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan={5}>
-                  <EmptyState
-                    icon={EmptyList}
-                    title="no entries found"
-                    description="run some queries to populate the audit log"
-                  />
-                </td>
-              </tr>
-            ) : (
-              filtered.map((entry) => {
+            </thead>
+            <tbody className="divide-y divide-[var(--color-border)]">
+              {filtered.map((entry) => {
                 const Icon = typeIcons[entry.event_type] || ScrollText;
                 const color = typeColors[entry.event_type] || typeColors.connect;
                 const isExpanded = expandedRow === entry.id;
@@ -339,11 +416,11 @@ export default function AuditPage() {
                     </td>
                   </tr>
                 );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

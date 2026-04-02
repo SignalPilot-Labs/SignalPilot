@@ -1500,6 +1500,9 @@ async def get_enriched_schema(
             sf_include, sf_exclude = _get_schema_filters(name)
             filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
+            # ReFoRCE-style: deduplicate partitioned table families
+            filtered, partition_map = _deduplicate_partitioned_tables(filtered)
+
             # Build enriched compact schema
             enriched: dict[str, Any] = {}
             for key, table in filtered.items():
@@ -1541,6 +1544,10 @@ async def get_enriched_schema(
                     entry["indexes"] = [idx.get("name", "") for idx in table["indexes"]]
                 if table.get("description"):
                     entry["description"] = table["description"]
+                # Add partition info for deduplicated table families
+                if key in partition_map:
+                    entry["_partitions"] = len(partition_map[key])
+                    entry["_partition_base"] = table.get("_partition_base", "")
 
                 enriched[key] = entry
 
@@ -1567,6 +1574,7 @@ async def get_enriched_schema(
             "connection_name": name,
             "db_type": info.db_type,
             "table_count": len(enriched),
+            "partitioned_families": len(partition_map),
             "tables": enriched,
         }
     except Exception as e:
@@ -1767,6 +1775,9 @@ async def get_schema_ddl(
     filtered = apply_endorsement_filter(name, cached)
     sf_include, sf_exclude = _get_schema_filters(name)
     filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
+
+    # ReFoRCE-style: deduplicate partitioned table families
+    filtered, _partition_map = _deduplicate_partitioned_tables(filtered)
 
     # Sort by FK relevance (same as compact)
     def _table_relevance(key: str) -> tuple:

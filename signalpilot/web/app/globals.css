@@ -767,6 +767,19 @@ kbd {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
+  /* ── Extend background behind home indicator ── */
+  body::after {
+    content: "";
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-bottom, 0px);
+    background: rgba(3, 3, 3, 0.95);
+    z-index: 51;
+    pointer-events: none;
+  }
+
   /* ── Tooltip: disabled on mobile (touch doesn't hover well) ── */
   .tooltip-container .tooltip-content {
     display: none !important;
@@ -859,12 +872,21 @@ kbd {
   .mobile-bottombar {
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    background: rgba(3, 3, 3, 0.85);
+    background: rgba(3, 3, 3, 0.88);
   }
   .mobile-topbar {
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    background: rgba(3, 3, 3, 0.85);
+    background: rgba(3, 3, 3, 0.88);
+  }
+
+  /* ── Bottom tab active press feedback ── */
+  .mobile-bottombar a:active {
+    transform: scale(0.92);
+    transition: transform 0.08s ease-out;
+  }
+  .mobile-bottombar a {
+    transition: transform 0.15s ease-out;
   }
 
   /* ── Overscroll: prevent accidental page pull on Chrome ── */

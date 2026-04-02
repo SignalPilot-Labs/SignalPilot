@@ -5,6 +5,73 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 29: Connector Fixes, UX Flexibility, Spider2.0 Test Coverage (2026-04-01)
+
+**Summary:** 6 improvements — Spider2.0 context optimization tests, schema fingerprint UI, connector flexibility (SSH/SSL), MSSQL/MySQL query fixes, Snowflake MFA warning, and industry research alignment.
+
+**Key metrics:**
+- 525 tests passing (27 new this round)
+- 6 git commits this round
+- MSSQL stats cross-join bug fixed (was multiplying stat rows)
+- MySQL schema introspection: 4 queries → 3 (merged cardinality into index query)
+- All 5 Docker databases verified: PostgreSQL ×2, MySQL, MSSQL, ClickHouse
+- Schema fingerprints verified unique for all connections
+
+### 1. Spider2.0 Context Optimization Tests (27 tests)
+**Files:** `tests/test_spider2_context.py`
+- **Impact:** Comprehensive test coverage for agent-context output quality, ensuring Spider2.0 compliance
+- TestSchemaLinkingAccuracy (8 tests): single-table, join, FK traversal, column matching, plural stripping, substring matching
+- TestProgressiveDisclosure (7 tests): token reduction >25%, compact section presence, PK/FK in compact, question prioritization, full_ddl_count control
+- TestCompactFormat (2 tests): format structure validation, join info preservation
+- TestTokenEfficiency (3 tests): 10-table progressive <3K tokens, full DDL <5K tokens
+- TestDDLQuality (4 tests): CREATE TABLE syntax, NOT NULL correctness, FK references, VIEW detection
+- TestNormalizationForContext (3 tests): missing fields, BigQuery size conversion, dotted key extraction
+
+### 2. Schema Fingerprint & Diff UI
+**Files:** `signalpilot/web/app/connections/page.tsx`, `signalpilot/web/lib/api.ts`
+- **Impact:** Schema change visibility directly in the connections page
+- Shows 8-char fingerprint hash in schema browser header (with full hash tooltip)
+- Shows last refresh time with relative timestamp ("3m ago", "2h ago")
+- Shows "schema changed" badge with diff details (added/removed/modified counts)
+- Automatically fetches refresh status and diff when expanding a connection
+- Updates fingerprint and diff after manual schema refresh
+
+### 3. Connector Flexibility Enhancements
+**Files:** `signalpilot/web/app/connections/page.tsx`
+- **SSH tunnel:** Added ssh-agent auth method (forwarded key), shows server's public IP in whitelist hint
+- **SSL/TLS:** Added `disable` mode, added contextual hints for each SSL mode (require/verify-ca/verify-full/prefer/allow/disable), conditionally hides cert fields when disabled
+- **Snowflake:** Added MFA deprecation warning for password auth with clickable links to switch to key pair or OAuth
+- Aligns with HEX patterns: on-demand SSH tunnels, static IP whitelisting, OAuth for Snowflake/Databricks/BigQuery
+
+### 4. MSSQL Stats Cross-Join Bug Fix
+**Files:** `signalpilot/gateway/gateway/connectors/mssql.py`
+- **Impact:** Fixed incorrect stat multiplier that inflated column statistics results
+- `LEFT JOIN sys.dm_db_stats_properties(...) ON 1=1` → `OUTER APPLY sys.dm_db_stats_properties(...)`
+- `dm_db_stats_properties` is a table-valued function — must use APPLY, not JOIN
+- The ON 1=1 created a cross product, producing N×M rows instead of N rows
+
+### 5. MySQL Schema Query Optimization
+**Files:** `signalpilot/gateway/gateway/connectors/mysql.py`
+- **Impact:** One fewer round trip to MySQL during schema introspection
+- Merged `cardinality_sql` into `idx_sql` using `MAX(CASE WHEN SEQ_IN_INDEX = 1 THEN CARDINALITY END)`
+- Schema introspection now uses 3 sequential queries instead of 4
+- Cardinality extracted from the same GROUP BY as index columns — no redundant STATISTICS scan
+
+### 6. Spider2.0 / HEX Industry Research (2026-04-01)
+**ReFoRCE (Snowflake Labs) — #1 on Spider2.0:**
+- Spider2.0-Snow: 35.83% EX, Spider2.0-Lite: 36.56% EX
+- Key techniques: table compression (pattern-based grouping), column exploration (iterative), self-refinement, consensus voting
+- Our alignment: `_deduplicate_partitioned_tables` = ReFoRCE table compression, progressive disclosure = CHESS/DIN-SQL pattern, sample values = column exploration seed data
+
+**HEX connector patterns (2026):**
+- SSH: on-demand tunnels from static IP, no persistent connection, HTTP proxy for restricted networks
+- Auth: key pair recommended over password (Snowflake MFA mandate), OAuth for Snowflake/Databricks/BigQuery
+- SSL: enabled by default for cloud connectors, configurable per connection type
+- Scope: workspace-level (shared) or project-level (isolated) connections
+- Tiers: T1 (fully maintained), T2 (stable), T3 (basic) — matches our connector tier system
+
+---
+
 ## Round 28: Schema Intelligence — Fingerprinting, Normalization, Progressive Disclosure (2026-04-01)
 
 **Summary:** 4 improvements — schema fingerprinting with diff tracking for automatic change detection, unified schema normalization across all 11 connector types, progressive schema disclosure (47% token reduction for agent context), and HEX/Spider2.0 industry research integration.

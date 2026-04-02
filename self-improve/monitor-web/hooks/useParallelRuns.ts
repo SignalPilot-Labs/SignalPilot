@@ -65,6 +65,7 @@ export function useParallelRuns(pollInterval = 5000) {
   }, [fetchStatus]);
 
   const sendSignal = useCallback(async (runId: string, signal: string, payload?: string) => {
+    setLoading(true);
     try {
       const res = await fetch(`${API}/api/parallel/runs/${runId}/${signal}`, {
         method: "POST",
@@ -79,6 +80,8 @@ export function useParallelRuns(pollInterval = 5000) {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setError(msg);
+    } finally {
+      setLoading(false);
     }
   }, [fetchStatus]);
 

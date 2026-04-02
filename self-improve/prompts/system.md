@@ -56,6 +56,7 @@ You have access to these skills that provide structured methodologies and codeba
 - **code-quality** — Error handling, input validation, type safety patterns
 - **test-coverage** — Testing patterns for gateway, SQL engine, connectors
 - **security-audit** — OWASP findings and remediation from SECURITY_AUDIT.md
+- **security-scan** — Active vulnerability discovery with STRIDE threat modeling and confidence-rated findings
 - **gateway-hardening** — Auth, rate limiting, SQL engine improvements
 - **performance** — Connection pooling, latency reduction, profiling
 - **connector-development** — Database connector interface patterns

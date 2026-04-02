@@ -2707,12 +2707,16 @@ async def get_schema_overview(
             else "full" if total_columns < 50
             else "enriched"
         ),
+        "inferred_joins": len(inferred_joins := _infer_implicit_joins(filtered)),
         "spider2_hints": {
             "needs_compression": total_columns > 500,
             "has_partitioned_tables": any(
                 "_20" in (t.get("name", "") or "") for t in filtered.values()
             ),
-            "join_complexity": "high" if total_fks > 15 else "medium" if total_fks > 5 else "low",
+            "join_complexity": "high" if (total_fks + len(inferred_joins)) > 15
+                              else "medium" if (total_fks + len(inferred_joins)) > 5
+                              else "low",
+            "has_implicit_joins": len(inferred_joins) > 0,
         },
     }
 

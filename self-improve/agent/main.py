@@ -34,7 +34,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher, AgentDefinition
 
-from agent import db, hooks, git_ops, permissions, prompt, session_gate
+from agent import db, hooks, git_ops, permissions, prompt, session_gate, signals
 
 
 # =============================================================================
@@ -74,82 +74,7 @@ def _is_workspace_same_repo(github_repo: str) -> bool:
 # =============================================================================
 _current_run_id: str | None = None
 _current_task: asyncio.Task | None = None
-_signal_queue: asyncio.Queue | None = None  # Instant control signal delivery
 _audit_log_warned: bool = False  # Log audit failures once, then suppress
-
-
-# =============================================================================
-# Instant signal delivery via HTTP endpoints + in-process queue
-# =============================================================================
-
-def _init_signal_queue() -> None:
-    """Initialize the signal queue for a new run."""
-    global _signal_queue
-    _signal_queue = asyncio.Queue()
-    print("[agent] Signal queue initialized")
-
-
-def _teardown_signal_queue() -> None:
-    """Tear down the signal queue."""
-    global _signal_queue
-    _signal_queue = None
-
-
-def _push_signal(signal: str, payload: str | None = None) -> None:
-    """Push a signal directly to the queue (used by /stop, /kill endpoints)."""
-    if _signal_queue:
-        _signal_queue.put_nowait({"signal": signal, "payload": payload})
-
-
-async def _drain_signal() -> dict | None:
-    """Non-blocking check for a pending signal."""
-    if not _signal_queue:
-        return None
-    try:
-        return _signal_queue.get_nowait()
-    except asyncio.QueueEmpty:
-        return None
-
-
-async def _wait_for_signal(timeout: float = 2.0) -> dict | None:
-    """Wait up to timeout seconds for a signal."""
-    if not _signal_queue:
-        return None
-    try:
-        return await asyncio.wait_for(_signal_queue.get(), timeout=timeout)
-    except (asyncio.TimeoutError, asyncio.QueueEmpty):
-        return None
-
-
-async def handle_pause(run_id: str) -> str | None:
-    """Block until resume, inject, or stop signal arrives via the instant queue."""
-    print("[agent] PAUSED — waiting for signal...")
-    await db.update_run_status(run_id, "paused")
-    await db.log_audit(run_id, "paused", {})
-
-    while True:
-        signal = await _wait_for_signal(timeout=5.0)
-        if signal:
-            sig = signal["signal"]
-            if sig == "resume":
-                print("[agent] RESUMED")
-                await db.update_run_status(run_id, "running")
-                return "resume"
-            elif sig == "inject":
-                payload = signal.get("payload", "")
-                print(f"[agent] INJECTED: {payload[:100]}...")
-                await db.update_run_status(run_id, "running")
-                await db.log_audit(run_id, "prompt_injected", {"prompt": payload})
-                return f"inject:{payload}"
-            elif sig == "stop":
-                print("[agent] STOP received while paused")
-                await db.log_audit(run_id, "stop_requested", {"reason": signal.get("payload", "")})
-                return "stop"
-            elif sig == "unlock":
-                session_gate.force_unlock()
-                await db.update_run_status(run_id, "running")
-                await db.log_audit(run_id, "session_unlocked", {})
-                return "resume"
 
 
 # =============================================================================
@@ -193,7 +118,7 @@ async def run_agent(
     session_mcp = session_gate.create_session_mcp_server()
 
     # --- Start instant signal queue ---
-    _init_signal_queue()
+    signals.init()
 
     duration_str = f"{duration_minutes}m" if duration_minutes > 0 else "unlimited"
     print(f"[agent] Duration: {duration_str}")
@@ -339,7 +264,7 @@ async def run_agent(
 
                 async for message in client.receive_response():
                     # --- Instant signal check (non-blocking) ---
-                    signal = await _drain_signal()
+                    signal = await signals.drain()
                     if signal:
                         sig = signal["signal"]
                         if sig == "stop":
@@ -354,7 +279,7 @@ async def run_agent(
                             await client.interrupt()
                             async for _ in client.receive_response():
                                 pass
-                            result = await handle_pause(run_id)
+                            result = await signals.handle_pause(run_id)
                             if result == "stop":
                                 final_status = "stopped"
                                 should_stop = True
@@ -494,7 +419,7 @@ async def run_agent(
                     break
 
                 # --- Between-round signal check ---
-                signal = await _drain_signal()
+                signal = await signals.drain()
                 if signal:
                     sig = signal["signal"]
                     if sig == "stop":
@@ -505,7 +430,7 @@ async def run_agent(
                         final_status = "stopped"
                         break
                     elif sig == "pause":
-                        result = await handle_pause(run_id)
+                        result = await signals.handle_pause(run_id)
                         if result == "stop":
                             final_status = "stopped"
                             break
@@ -606,7 +531,7 @@ async def run_agent(
 
                     ceo_decision_chunks: list[str] = []
                     async for msg in client.receive_response():
-                        signal = await _drain_signal()
+                        signal = await signals.drain()
                         if signal and signal["signal"] == "stop":
                             final_status = "stopped"
                             should_stop = True
@@ -681,7 +606,7 @@ async def run_agent(
         final_status = "error"
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
-        _teardown_signal_queue()
+        signals.teardown()
 
     # --- Post-run: push and create PR ---
     if final_status != "killed":
@@ -858,7 +783,7 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     session_gate.configure(run_id, duration_minutes)
     session_mcp = session_gate.create_session_mcp_server()
 
-    _init_signal_queue()
+    signals.init()
     await db.update_run_status(run_id, "running")
     await db.log_audit(run_id, "session_resumed", {
         "sdk_session_id": session_id[:20] if session_id else None,
@@ -929,7 +854,7 @@ async def resume_agent(run_id: str, max_budget: float = 0):
                 round_text_chunks: list[str] = []
 
                 async for message in client.receive_response():
-                    signal = await _drain_signal()
+                    signal = await signals.drain()
                     if signal:
                         sig = signal["signal"]
                         if sig == "stop":
@@ -1005,7 +930,7 @@ async def resume_agent(run_id: str, max_budget: float = 0):
         final_status = "error"
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
-        _teardown_signal_queue()
+        signals.teardown()
 
     if final_status != "killed":
         try:
@@ -1066,7 +991,7 @@ async def pause_agent():
     """Push pause signal to the in-process queue."""
     if _current_run_id is None:
         raise HTTPException(status_code=409, detail="No run in progress")
-    _push_signal("pause")
+    signals.push("pause")
     return {"ok": True, "signal": "pause", "delivery": "instant"}
 
 
@@ -1075,7 +1000,7 @@ async def resume_agent_signal():
     """Push resume signal to the in-process queue."""
     if _current_run_id is None:
         raise HTTPException(status_code=409, detail="No run in progress")
-    _push_signal("resume")
+    signals.push("resume")
     return {"ok": True, "signal": "resume", "delivery": "instant"}
 
 
@@ -1084,7 +1009,7 @@ async def inject_agent(body: InjectRequest = InjectRequest()):
     """Push inject signal with payload to the in-process queue."""
     if _current_run_id is None:
         raise HTTPException(status_code=409, detail="No run in progress")
-    _push_signal("inject", body.payload)
+    signals.push("inject", body.payload)
     return {"ok": True, "signal": "inject", "delivery": "instant"}
 
 
@@ -1093,7 +1018,7 @@ async def unlock_agent():
     """Push unlock signal to the in-process queue."""
     if _current_run_id is None:
         raise HTTPException(status_code=409, detail="No run in progress")
-    _push_signal("unlock")
+    signals.push("unlock")
     return {"ok": True, "signal": "unlock", "delivery": "instant"}
 
 
@@ -1102,7 +1027,7 @@ async def stop_run_instant():
     """Push stop signal directly to the in-process queue. Instant delivery."""
     if _current_run_id is None:
         raise HTTPException(status_code=409, detail="No run in progress")
-    _push_signal("stop", "Operator stop via API")
+    signals.push("stop", "Operator stop via API")
     return {"ok": True, "signal": "stop", "delivery": "instant"}
 
 

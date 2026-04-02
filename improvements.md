@@ -7,13 +7,15 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ## Round 4: Schema Search, Error Handling, Stats & UX (2026-04-01)
 
-**Summary:** 10 features — AI agent schema search, frontend search UI, connector error handling, ClickHouse/BigQuery stats, Databricks URL format, Redshift optimization.
+**Summary:** 15 features — AI agent schema search, connection cloning, query explain preview, database version reporting, connector error handling, ClickHouse/BigQuery stats, Databricks URL format, Redshift optimization.
 
 **Key metrics:**
 - 78 unit tests passing (up from 75)
 - All 3 live DBs tested E2E (PostgreSQL, MySQL, ClickHouse)
 - Schema search: 5 tables matched from "customer email" query in 21ms
 - Frontend builds cleanly with debounced search
+- Connection clone preserves encrypted credentials
+- Query explain returns cost estimate without executing
 
 ### 1. Schema Search Endpoint (GET /api/connections/{name}/schema/search?q=)
 
@@ -87,6 +89,51 @@ Previously only supported pipe-delimited format. This matches HEX's pattern of U
 - Schema search scoring (5 cases)
 - MySQL SSL config (3 cases)
 - Databricks URL parsing (3 cases: pipe, URL, host-only)
+
+### 10. Connection Cloning (POST /api/connections/{name}/clone)
+
+**What:** Duplicate an existing connection with all settings, including encrypted credentials.
+- `?new_name=` query parameter for the cloned connection name
+- All credential_extras (SSH keys, SSL certs, service account JSON) preserved
+- Frontend "Clone" button with name prompt dialog
+- Useful for creating dev/staging copies of production connections
+
+### 11. Query Explain Preview (POST /api/query/explain)
+
+**What:** Pre-flight cost estimation without executing the query.
+- Returns: estimated rows, estimated USD cost, is_expensive flag, warning message, and execution plan
+- Extracts referenced tables from the plan
+- Reuses connector's existing `estimate_cost()` infrastructure
+- Helps agents decide whether to execute expensive queries
+
+### 12. Database Version Reporting
+
+**What:** Connection test now reports the database server version.
+- Version extracted via DB-specific queries: `SELECT version()` (Postgres, MySQL, ClickHouse), `SELECT CURRENT_VERSION()` (Snowflake), etc.
+- Displayed in test results: e.g., "PostgreSQL 17.9 on x86_64"
+- Useful for compatibility checking and debugging
+
+### 13. ClickHouse Auth Error Cleanup
+
+**What:** ClickHouse auth errors now truncated to first line only.
+- ClickHouse includes multi-line help text about password reset in auth errors
+- Only the first line (actual error message) is surfaced to users
+- Prevents confusing error dialogs in the frontend
+
+### 14. Databricks Frontend Improvements
+
+**What:** Databricks connections now support URL mode toggle in the frontend.
+- URL format preview: `databricks://token@host/http_path?catalog=CAT&schema=SCH`
+- Connection modes: fields (default) + URL
+- Matches the existing pattern for Postgres, MySQL, Snowflake
+
+### 15. Frontend Clone Button
+
+**What:** One-click connection duplication from the connections list.
+- "Clone" icon button on each connection card
+- Prompts for new connection name
+- Creates identical copy via clone API endpoint
+- Refreshes connection list after successful clone
 
 ---
 
@@ -625,6 +672,10 @@ Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
 - [x] ~~Databricks URL format~~ (Done: standard URL alongside pipe-delimited)
 - [x] ~~Frontend schema search~~ (Done: debounced search with match highlighting)
 - [x] ~~Connector error handling~~ (Done: actionable error messages for auth, host, db errors)
+- [x] ~~Connection cloning~~ (Done: POST /api/connections/{name}/clone with credential preservation)
+- [x] ~~Query explain preview~~ (Done: POST /api/query/explain with cost estimation)
+- [x] ~~Database version reporting~~ (Done: version displayed in connection test results)
+- [x] ~~ClickHouse auth error cleanup~~ (Done: truncated to first line)
 - [ ] OAuth support for Snowflake, BigQuery, Databricks
 - [ ] Automated schema refresh scheduling (like HEX workspace connections)
 - [ ] LLM-guided schema linking (ReFoRCE Phase 2 — after table grouping)

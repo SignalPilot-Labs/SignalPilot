@@ -318,11 +318,11 @@ async def explore_column_values(
     safe_col = column.replace(close_quote, close_quote + close_quote)
     q_col = f"{quote}{safe_col}{close_quote}"
 
-    # Quote the table name — handle schema.table notation (e.g. "public"."users")
+    # Quote the table name — handle schema.table or catalog.schema.table notation
     if "." in table:
         q_table = ".".join(
             f"{quote}{part.replace(close_quote, close_quote + close_quote)}{close_quote}"
-            for part in table.split(".", 1)
+            for part in table.split(".")
         )
     else:
         q_table = f"{quote}{table.replace(close_quote, close_quote + close_quote)}{close_quote}"
@@ -3313,7 +3313,7 @@ async def explore_columns_deep(name: str, body: dict):
                     # Quote the table name to prevent SQL injection from cache-poisoned table names
                     safe_table = table_key.replace(qc, qc + qc)
                     q_table = f"{qo}{safe_table}{qc}" if "." not in table_key else ".".join(
-                        f"{qo}{part.replace(qc, qc + qc)}{qc}" for part in table_key.split(".", 1)
+                        f"{qo}{part.replace(qc, qc + qc)}{qc}" for part in table_key.split(".")
                     )
                     stat_sql = f"SELECT {', '.join(stat_parts)} FROM {q_table}"
                     if db_type == "mssql":

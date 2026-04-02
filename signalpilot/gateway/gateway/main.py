@@ -2957,6 +2957,10 @@ async def get_agent_context(
     sf_include, sf_exclude = _get_schema_filters(name)
     filtered = _apply_schema_filter(filtered, sf_include, sf_exclude)
 
+    # ReFoRCE-style: deduplicate date-partitioned table families
+    # This is the single most impactful compression step per ReFoRCE ablation
+    filtered, _partition_map = _deduplicate_partitioned_tables(filtered)
+
     # If a question is provided, use schema linking to select relevant tables
     table_scores: dict[str, float] = {}
     if question:

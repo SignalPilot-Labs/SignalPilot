@@ -392,6 +392,16 @@ export default function LandingPage() {
         </div>
       </Section>
 
+      {/* ─── Backed by ─── */}
+      <Section className="py-10">
+        <div className="relative z-10 flex items-center justify-center gap-10 opacity-40">
+          <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.2em]">Backed by</span>
+          <Image src="/logos/yc.svg" alt="Y Combinator" width={24} height={24} className="grayscale" />
+          <Image src="/logos/anthropic-logo.svg" alt="Anthropic" width={80} height={20} className="grayscale" />
+          <Image src="/logos/goldman.svg" alt="Goldman Sachs" width={24} height={24} className="grayscale" />
+        </div>
+      </Section>
+
       {/* ─── Agent Architecture ─── */}
       <Section id="agents" className="py-24">
         <div className="relative z-10 max-w-5xl mx-auto">
@@ -487,6 +497,125 @@ export default function LandingPage() {
             {/* Loop arrow */}
             <svg width="24" height="16" viewBox="0 0 24 16" fill="none" stroke="var(--color-success)" strokeWidth="1" className="ml-1 opacity-50">
               <path d="M20 8c0-3-2-6-8-6S2 5 2 8M4 5L2 8l3 2" />
+            </svg>
+          </motion.div>
+        </div>
+      </Section>
+
+      {/* ─── Architecture Diagram ─── */}
+      <Section className="py-20 border-t border-[var(--color-border)]">
+        <div className="relative z-10 max-w-4xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="mb-8 text-center"
+          >
+            <p className="text-[10px] text-[var(--color-success)] uppercase tracking-[0.2em] mb-2">System Design</p>
+            <h2 className="text-[20px] font-bold text-[var(--color-accent)] tracking-tight">
+              End-to-end architecture
+            </h2>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            whileInView={{ opacity: 1, scale: 1 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-8"
+          >
+            <svg viewBox="0 0 800 320" fill="none" className="w-full" style={{ fontFamily: "monospace" }}>
+              {/* Grid background */}
+              <defs>
+                <pattern id="arch-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                  <path d="M 20 0 L 0 0 0 20" fill="none" stroke="white" strokeWidth="0.3" opacity="0.05" />
+                </pattern>
+              </defs>
+              <rect width="800" height="320" fill="url(#arch-grid)" />
+
+              {/* CEO Agent */}
+              <rect x="30" y="40" width="160" height="80" stroke="#333" fill="#0a0a0a" strokeWidth="1" />
+              <rect x="30" y="40" width="160" height="1" fill="#00ff88" opacity="0.4" />
+              <circle cx="55" cy="70" r="8" stroke="#00ff88" strokeWidth="1" fill="none" opacity="0.5" />
+              <text x="70" y="74" fill="#e8e8e8" fontSize="11" fontWeight="600">CEO Agent</text>
+              <text x="50" y="100" fill="#555" fontSize="9">Strategy · Review · Direct</text>
+
+              {/* Arrow CEO → PM */}
+              <line x1="190" y1="80" x2="280" y2="80" stroke="#333" strokeWidth="1" strokeDasharray="4 3">
+                <animate attributeName="stroke-dashoffset" from="7" to="0" dur="1s" repeatCount="indefinite" />
+              </line>
+              <polygon points="280,76 280,84 290,80" fill="#555" />
+              <text x="220" y="72" fill="#444" fontSize="8">delegate</text>
+
+              {/* PM Agent */}
+              <rect x="290" y="40" width="160" height="80" stroke="#333" fill="#0a0a0a" strokeWidth="1" />
+              <rect x="290" y="40" width="160" height="1" fill="#00ff88" opacity="0.4" />
+              <rect cx="315" cy="70" x="307" y="62" width="16" height="16" stroke="#00ff88" strokeWidth="1" fill="none" opacity="0.5" />
+              <text x="330" y="74" fill="#e8e8e8" fontSize="11" fontWeight="600">PM Agent</text>
+              <text x="310" y="100" fill="#555" fontSize="9">Plan · Prioritize · Spec</text>
+
+              {/* Arrow PM → Engineer */}
+              <line x1="450" y1="80" x2="540" y2="80" stroke="#333" strokeWidth="1" strokeDasharray="4 3">
+                <animate attributeName="stroke-dashoffset" from="7" to="0" dur="1s" repeatCount="indefinite" />
+              </line>
+              <polygon points="540,76 540,84 550,80" fill="#555" />
+              <text x="478" y="72" fill="#444" fontSize="8">tasks</text>
+
+              {/* Engineer Agent */}
+              <rect x="550" y="40" width="200" height="80" stroke="#333" fill="#0a0a0a" strokeWidth="1" />
+              <rect x="550" y="40" width="200" height="1" fill="#00ff88" opacity="0.4" />
+              <text x="580" y="66" fill="#00ff88" fontSize="10" opacity="0.7">&lt;/&gt;</text>
+              <text x="605" y="74" fill="#e8e8e8" fontSize="11" fontWeight="600">Engineer Agent</text>
+              <text x="570" y="100" fill="#555" fontSize="9">Code · Test · Commit · Ship</text>
+
+              {/* Tools layer */}
+              <rect x="550" y="160" width="200" height="60" stroke="#333" fill="#0a0a0a" strokeWidth="1" rx="0" />
+              <text x="570" y="185" fill="#777" fontSize="9">Edit · Bash · Grep · Read</text>
+              <text x="570" y="200" fill="#777" fontSize="9">Write · Agent · Git · Test</text>
+
+              {/* Arrow Engineer → Tools */}
+              <line x1="650" y1="120" x2="650" y2="160" stroke="#333" strokeWidth="1" />
+              <polygon points="646,160 654,160 650,168" fill="#555" />
+
+              {/* Git/GitHub */}
+              <rect x="550" y="250" width="200" height="50" stroke="#333" fill="#0a0a0a" strokeWidth="1" />
+              <rect x="550" y="299" width="200" height="1" fill="#00ff88" opacity="0.3" />
+              <text x="620" y="278" fill="#e8e8e8" fontSize="10" textAnchor="middle">GitHub</text>
+              <text x="660" y="278" fill="#555" fontSize="9">· PRs · Branches</text>
+
+              {/* Arrow Tools → Git */}
+              <line x1="650" y1="220" x2="650" y2="250" stroke="#333" strokeWidth="1" />
+              <polygon points="646,250 654,250 650,258" fill="#555" />
+
+              {/* Monitor */}
+              <rect x="30" y="160" width="180" height="100" stroke="#333" fill="#0a0a0a" strokeWidth="1" />
+              <rect x="30" y="160" width="180" height="1" fill="#88ccff" opacity="0.3" />
+              <text x="85" y="195" fill="#e8e8e8" fontSize="11" fontWeight="600">Monitor</text>
+              <text x="55" y="215" fill="#555" fontSize="9">Real-time event stream</text>
+              <text x="55" y="230" fill="#555" fontSize="9">Tool calls · Audit · Stats</text>
+              <text x="55" y="245" fill="#555" fontSize="9">SSE · WebSocket</text>
+
+              {/* Arrow Agents → Monitor (observability) */}
+              <line x1="290" y1="120" x2="210" y2="160" stroke="#333" strokeWidth="1" strokeDasharray="2 4" opacity="0.5" />
+              <line x1="550" y1="120" x2="210" y2="180" stroke="#333" strokeWidth="1" strokeDasharray="2 4" opacity="0.5" />
+              <text x="300" y="150" fill="#444" fontSize="8">observe</text>
+
+              {/* Session gate */}
+              <rect x="290" y="160" width="180" height="60" stroke="#333" fill="#0a0a0a" strokeWidth="1" />
+              <rect x="290" y="160" width="180" height="1" fill="#ffaa00" opacity="0.3" />
+              <text x="337" y="195" fill="#e8e8e8" fontSize="10" fontWeight="600">Session Gate</text>
+              <text x="310" y="208" fill="#555" fontSize="8">Time lock · Budget · Permissions</text>
+
+              {/* Arrow Session Gate → Engineer */}
+              <line x1="470" y1="180" x2="550" y2="120" stroke="#333" strokeWidth="1" strokeDasharray="2 4" opacity="0.5" />
+              <text x="505" y="145" fill="#444" fontSize="8">guard</text>
+
+              {/* Loop arrow from GitHub back to CEO */}
+              <path d="M550 275 L30 275 L30 120" stroke="#00ff88" strokeWidth="1" fill="none" opacity="0.2" strokeDasharray="6 4">
+                <animate attributeName="stroke-dashoffset" from="10" to="0" dur="2s" repeatCount="indefinite" />
+              </path>
+              <polygon points="26,120 34,120 30,112" fill="#00ff88" opacity="0.3" />
+              <text x="260" y="290" fill="#00ff88" fontSize="9" opacity="0.4" textAnchor="middle">feedback loop</text>
             </svg>
           </motion.div>
         </div>

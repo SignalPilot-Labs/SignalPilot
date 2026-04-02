@@ -569,6 +569,7 @@ export default function MonitorPage() {
         <div
           className="mobile-drawer-overlay md:!hidden"
           onClick={closeMobileDrawer}
+          aria-hidden="true"
         />
       )}
 

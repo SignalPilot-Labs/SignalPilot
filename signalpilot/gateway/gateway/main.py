@@ -4413,7 +4413,7 @@ _CONNECTOR_TIERS = {
             "sample_values": True, "read_only_transactions": True,
             "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": True,
-            "dist_sort_keys": True,
+            "dist_sort_keys": True, "iam_auth": True, "table_sizes": True,
         },
     },
     "clickhouse": {
@@ -4453,7 +4453,7 @@ _CONNECTOR_TIERS = {
             "sample_values": True, "read_only_transactions": False,
             "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": False,
-            "table_sizes": True,
+            "table_sizes": True, "azure_ad_auth": True,
         },
     },
     "trino": {

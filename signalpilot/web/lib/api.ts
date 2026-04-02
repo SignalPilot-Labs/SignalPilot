@@ -76,6 +76,22 @@ export const getConnectionSchema = (name: string) =>
     }>;
   }>(`/api/connections/${name}/schema`);
 
+export const searchConnectionSchema = (name: string, query: string) =>
+  request<{
+    connection_name: string;
+    query: string;
+    result_count: number;
+    total_tables: number;
+    tables: Record<string, {
+      schema: string;
+      name: string;
+      columns: { name: string; type: string; nullable: boolean; primary_key?: boolean }[];
+      foreign_keys?: { column: string; references_table: string; references_column: string }[];
+      _matched_columns?: string[];
+      _relevance_score?: number;
+    }>;
+  }>(`/api/connections/${name}/schema/search?q=${encodeURIComponent(query)}`);
+
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");
 export const createSandbox = (s: Record<string, unknown>) =>

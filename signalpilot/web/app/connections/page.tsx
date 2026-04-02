@@ -22,6 +22,7 @@ import {
   Server,
   Pencil,
   RefreshCw,
+  Search,
 } from "lucide-react";
 import {
   getConnections,
@@ -30,6 +31,7 @@ import {
   deleteConnection,
   testConnection,
   getConnectionSchema,
+  searchConnectionSchema,
   getConnectionsHealth,
   detectPII,
   refreshConnectionSchema,
@@ -663,6 +665,9 @@ export default function ConnectionsPage() {
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [schemaSearch, setSchemaSearch] = useState<Record<string, string>>({});
+  const [schemaSearchResults, setSchemaSearchResults] = useState<Record<string, { result_count: number; total_tables: number; tables: Record<string, any> }>>({});
+  const [schemaSearchLoading, setSchemaSearchLoading] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({ ...defaultForm });
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -830,6 +835,23 @@ export default function ConnectionsPage() {
       setPiiData((prev) => ({ ...prev, [name]: data }));
     } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
     finally { setPiiLoading(null); }
+  }
+
+  async function handleSchemaSearch(name: string, query: string) {
+    setSchemaSearch((prev) => ({ ...prev, [name]: query }));
+    if (!query.trim()) {
+      setSchemaSearchResults((prev) => { const n = { ...prev }; delete n[name]; return n; });
+      return;
+    }
+    setSchemaSearchLoading(name);
+    try {
+      const data = await searchConnectionSchema(name, query);
+      setSchemaSearchResults((prev) => ({ ...prev, [name]: { result_count: data.result_count, total_tables: data.total_tables, tables: data.tables } }));
+    } catch {
+      setSchemaSearchResults((prev) => ({ ...prev, [name]: { result_count: 0, total_tables: 0, tables: {} } }));
+    } finally {
+      setSchemaSearchLoading(null);
+    }
   }
 
   const config = DB_CONFIGS[form.db_type];
@@ -1182,11 +1204,14 @@ export default function ConnectionsPage() {
                       <div className="space-y-2">
                         <div className="flex items-center gap-3 mb-3">
                           <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
-                            {Object.keys(tables).length} tables
+                            {schemaSearchResults[conn.name]
+                              ? `${schemaSearchResults[conn.name].result_count} / ${schemaSearchResults[conn.name].total_tables} tables`
+                              : `${Object.keys(tables).length} tables`}
                           </p>
                           {(() => {
-                            const totalFKs = Object.values(tables).reduce((sum: number, t: any) => sum + (t.foreign_keys?.length || 0), 0);
-                            const totalIdxs = Object.values(tables).reduce((sum: number, t: any) => sum + (t.indexes?.length || 0), 0);
+                            const displayTables = schemaSearchResults[conn.name]?.tables || tables;
+                            const totalFKs = Object.values(displayTables).reduce((sum: number, t: any) => sum + (t.foreign_keys?.length || 0), 0);
+                            const totalIdxs = Object.values(displayTables).reduce((sum: number, t: any) => sum + (t.indexes?.length || 0), 0);
                             return (
                               <>
                                 {totalFKs > 0 && <span className="text-[9px] text-purple-400 tracking-wider">{totalFKs} FKs</span>}
@@ -1194,30 +1219,53 @@ export default function ConnectionsPage() {
                               </>
                             );
                           })()}
+                          <div className="flex-1" />
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+                            <input
+                              type="text"
+                              placeholder="search tables & columns..."
+                              value={schemaSearch[conn.name] || ""}
+                              onChange={(e) => handleSchemaSearch(conn.name, e.target.value)}
+                              className="w-48 pl-7 pr-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none tracking-wider"
+                            />
+                            {schemaSearchLoading === conn.name && (
+                              <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-[var(--color-text-dim)]" />
+                            )}
+                          </div>
                         </div>
                         <div className="grid grid-cols-2 gap-px max-h-96 overflow-auto bg-[var(--color-border)]">
-                          {Object.values(tables).map((t: any) => (
+                          {Object.entries(schemaSearchResults[conn.name]?.tables || tables).map(([key, t]: [string, any]) => (
                             <div key={t.name} className="p-3 bg-[var(--color-bg)]">
                               <div className="flex items-center gap-2 mb-2">
                                 <Table2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
                                 <span className="text-[10px] text-[var(--color-text-muted)]">{t.schema}.{t.name}</span>
-                                <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">{t.columns.length} cols</span>
+                                <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">{t.columns?.length || 0} cols</span>
                                 {t.row_count > 0 && (
                                   <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
                                     ~{t.row_count >= 1000000 ? `${(t.row_count / 1000000).toFixed(1)}M` : t.row_count >= 1000 ? `${(t.row_count / 1000).toFixed(1)}K` : t.row_count} rows
                                   </span>
                                 )}
+                                {t._relevance_score && (
+                                  <span className="text-[9px] text-[var(--color-success)] tabular-nums tracking-wider">
+                                    score: {t._relevance_score}
+                                  </span>
+                                )}
                               </div>
                               <div className="space-y-0.5">
-                                {t.columns.slice(0, 8).map((col: any) => (
+                                {(t.columns || []).slice(0, 8).map((col: any) => {
+                                  const isMatched = t._matched_columns?.includes(col.name);
+                                  return (
                                   <div key={col.name} className="flex items-center gap-2 text-[9px] tracking-wider">
-                                    <span className={col.primary_key ? "text-[var(--color-warning)]" : "text-[var(--color-text-dim)]"}>
+                                    <span className={col.primary_key ? "text-[var(--color-warning)]" : isMatched ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}>
                                       {col.name}
                                     </span>
                                     <span className="text-[var(--color-text-dim)] opacity-50">{col.type}</span>
                                     {col.primary_key && <span className="text-[var(--color-warning)]">pk</span>}
+                                    {isMatched && !col.primary_key && <span className="text-[var(--color-success)] text-[8px]">match</span>}
                                   </div>
-                                ))}
+                                  );
+                                })}
                                 {t.columns.length > 8 && (
                                   <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">+ {t.columns.length - 8} more</p>
                                 )}

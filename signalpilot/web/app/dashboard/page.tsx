@@ -274,15 +274,17 @@ export default function DashboardPage() {
               <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
             </div>
             <div className="space-y-3">
-              <StackedBar
-                segments={[
-                  { value: auditStats.queries, color: "var(--color-success)", label: "queries" },
-                  { value: auditStats.executions, color: "#60a5fa", label: "executions" },
-                  { value: auditStats.blocks, color: "var(--color-error)", label: "blocked" },
-                ]}
-                width={200}
-                height={8}
-              />
+              <div className="w-full [&>svg]:w-full">
+                <StackedBar
+                  segments={[
+                    { value: auditStats.queries, color: "var(--color-success)", label: "queries" },
+                    { value: auditStats.executions, color: "#60a5fa", label: "executions" },
+                    { value: auditStats.blocks, color: "var(--color-error)", label: "blocked" },
+                  ]}
+                  width={200}
+                  height={8}
+                />
+              </div>
               <div className="flex items-center gap-4 text-[9px] text-[var(--color-text-dim)] tracking-wider">
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-success)]" />queries</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400" />exec</span>

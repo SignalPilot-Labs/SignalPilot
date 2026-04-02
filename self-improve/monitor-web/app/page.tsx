@@ -484,7 +484,7 @@ export default function MonitorPage() {
         {/* Center - Event feed */}
         <main className="flex-1 flex flex-col min-h-0 min-w-0">
           <EventFeed events={allEvents} />
-          <StatsBar run={selectedRun} connected={connected} />
+          <StatsBar run={selectedRun} connected={connected} events={allEvents} />
         </main>
 
         {/* Right sidebar - WorkTree */}

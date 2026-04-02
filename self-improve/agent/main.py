@@ -284,7 +284,7 @@ async def run_agent(
         "researcher": AgentDefinition(
             description="Use for researching the codebase, finding patterns, understanding architecture, or looking up documentation. Returns findings without making changes.",
             prompt=prompt.load_agent_prompt("researcher"),
-            model="sonnet",
+            model="opus",
             tools=["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"],
         ),
         "frontend-builder": AgentDefinition(

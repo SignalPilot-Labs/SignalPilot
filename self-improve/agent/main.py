@@ -517,9 +517,8 @@ async def run_agent(
 
                 # --- Push commits between rounds so work isn't lost ---
                 try:
-                    if git_ops.has_changes() or True:  # Always try push in case there are unpushed commits
-                        git_ops.push_branch(branch_name)
-                        print(f"[agent] Pushed branch {branch_name}")
+                    git_ops.push_branch(branch_name)
+                    print(f"[agent] Pushed branch {branch_name}")
                 except Exception as e:
                     print(f"[agent] Push between rounds failed (non-fatal): {e}")
 

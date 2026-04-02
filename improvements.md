@@ -5,6 +5,69 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 12: Schema Introspection Fixes, Sample Values Optimization, DDL Metadata (2026-04-02)
+
+**Summary:** 6 improvements — Fixed Redshift schema introspection bug, added column stats/encoding to Redshift, Snowflake clustering key metadata, batched sample value queries (20→1 round trips), MSSQL/Redshift-specific frontend forms, DDL metadata for Snowflake/Redshift.
+
+**Key metrics:**
+- 350 tests passing (up from 333 — 17 new tests)
+- Sample values: 20 round trips → 1 per table (UNION ALL batching across 9 connectors)
+- Redshift: fixed silent bug where dist/sort key query was querying wrong system table
+- Snowflake: clustering key metadata now exposed in schema + DDL output
+- Redshift: column encoding, statistics, and composite sort keys now captured
+- Frontend: MSSQL and Redshift now have dedicated form sections with contextual help
+- 4 git commits this round
+
+### 1. Redshift Schema Introspection Fix (Bug Fix)
+**File:** `gateway/connectors/redshift.py`
+- **BUG:** `dist_sort_sql` queried `diststyle` and `sortkey1` from `pg_table_def`, which does NOT have those columns. Query was silently failing (caught by bare `except`), so all Redshift connections had empty diststyle/sortkey metadata.
+- **FIX:** Replaced with `SVV_TABLE_INFO` query which is the authoritative source for Redshift table metadata (diststyle, sortkey1, sortkey_num, tbl_rows, size).
+- **Sort keys:** Now captures ALL sort key columns from `pg_table_def.sortkey` column position (not just first key). Composite sort keys displayed as comma-separated list.
+- **Column encoding:** Added `td.encoding` to columns query — Redshift column compression type (bytedict, delta, lzo, raw, etc.) is useful for query optimization hints.
+- **Distribution key:** Added `td.distkey` boolean flag to identify distribution key columns in schema output.
+- **Column statistics:** Added `pg_stats` query (n_distinct, most_common_vals) for data distribution, matching Postgres connector quality.
+- **Structured logging:** Silent `except Exception: return []` replaced with `logger.info("Redshift metadata query failed (%s): %s", label, e)` for each query.
+
+### 2. Snowflake Clustering Key Metadata
+**File:** `gateway/connectors/snowflake.py`
+- **Clustering keys** are Snowflake's equivalent of sort keys — critical for query optimization hints. Not available in `INFORMATION_SCHEMA.TABLES`.
+- **New 5th parallel query:** `SHOW TABLES IN DATABASE` returns `cluster_by` column. Parsed into `clustering_key` field on table metadata.
+- **DDL output:** Tables with clustering keys now show `CLUSTER BY(col1, col2)` in DDL comments.
+- **Schema-link DDL:** Clustering key also included in schema-link DDL for Spider2.0 agent.
+- **Structured logging:** Added `logger.info` for all metadata query failures.
+
+### 3. Sample Values Optimization (N→1 Round Trips)
+**Files:** `gateway/connectors/base.py` + all 9 connectors
+- **Problem:** Every connector fetched sample values with N separate queries (1 per column). For a 20-column table, this means 20 network round trips — terrible for cloud warehouses with 50-200ms latency per query.
+- **Solution:** Added `_build_sample_union_sql()` and `_parse_sample_union_result()` helpers to `BaseConnector` that batch all columns into a single UNION ALL query.
+- **Coverage:** Applied to MySQL, ClickHouse, DuckDB, MSSQL, Trino, Snowflake, Redshift, Databricks (8 connectors). Postgres excluded (already uses asyncio.gather with connection pool).
+- **MSSQL custom builder:** MSSQL uses `SELECT DISTINCT TOP N` instead of `LIMIT N`, and `[col]` quoting instead of `"col"`, so it has a custom SQL builder.
+- **Fallback:** Every connector falls back to per-column queries if UNION ALL fails (handles edge cases like unsupported column types).
+- **Verified:** Tested on 4 live databases — MySQL, ClickHouse, MSSQL, PostgreSQL.
+
+### 4. MSSQL and Redshift Frontend Forms
+**File:** `web/app/connections/page.tsx`
+- **MSSQL:** Dedicated form section with instance name hint (`host\INSTANCE`), Azure SQL guidance, and contextual help text about firewall rules.
+- **Redshift:** Dedicated form with cluster endpoint placeholder, VPC/security group guidance, default database hint (`dev`), and Serverless compatibility note.
+- Previously both used the generic host/port/db/user/pass form with no contextual guidance.
+
+### 5. DDL Metadata Enrichment
+**File:** `gateway/main.py`
+- **Snowflake CLUSTER BY:** Added to DDL endpoint table comments and schema-link DDL.
+- **Redshift SORTKEY:** Added to schema-link DDL (was only in main DDL endpoint).
+- **Schema overview:** Redshift diststyle/sortkey and Snowflake clustering_key now passed through to compressed schema format.
+
+### 6. Test Coverage
+**File:** `tests/test_connectors_live.py`
+- 17 new tests (350 total):
+  - BaseConnector UNION ALL helpers: build SQL, parse dicts/tuples, 20-col cap, empty input
+  - Redshift: verify SVV_TABLE_INFO usage, pg_stats, encoding, logging
+  - Snowflake: verify SHOW TABLES clustering query, logging, union sample
+  - All 6 sync connectors verified to use _build_sample_union_sql
+  - Live batched sample values: MySQL, ClickHouse, MSSQL
+
+---
+
 ## Round 11: Connector Quality & Cost Estimation for All DB Types (2026-04-02)
 
 **Summary:** 10 improvements — Enhanced MSSQL/Trino/MySQL connectors, cost estimation for all 11 DB types, frontend HEX parity features, Spider2.0 schema linking with column statistics, 2 new MCP tools, DDL metadata enrichment.

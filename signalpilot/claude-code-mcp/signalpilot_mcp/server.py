@@ -86,14 +86,38 @@ def _fmt_table(rows: list[dict], max_rows: int = 50) -> str:
 
 
 def _err(e: Exception) -> str:
-    """Format an exception for tool output."""
-    if isinstance(e, Exception) and hasattr(e, "response"):
+    """Format an exception into a clear, actionable error message."""
+    import httpx
+
+    # Connection-level failures (server unreachable)
+    if isinstance(e, httpx.ConnectError):
+        return f"Error: Cannot reach server — is it running? ({e})"
+    if isinstance(e, httpx.ConnectTimeout):
+        return "Error: Connection timed out — server may be down or unreachable."
+    if isinstance(e, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+        return "Error: Request timed out — the operation took too long."
+    if isinstance(e, httpx.TimeoutException):
+        return "Error: Request timed out."
+
+    # HTTP error responses (4xx, 5xx)
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        detail = ""
         try:
-            body = e.response.json()  # type: ignore[union-attr]
-            detail = body.get("detail", body)
-            return f"Error: {detail}"
+            body = e.response.json()
+            detail = body.get("detail", "") if isinstance(body, dict) else str(body)
         except Exception:
-            return f"Error: HTTP {e.response.status_code}"  # type: ignore[union-attr]
+            detail = e.response.text[:200] if e.response.text else ""
+
+        if status == 401 or status == 403:
+            return f"Error: Authentication failed — check SIGNALPILOT_API_KEY. ({detail})" if detail else "Error: Authentication failed — check SIGNALPILOT_API_KEY."
+        if status == 404:
+            return f"Error: Not found: {detail}" if detail else "Error: Not found."
+        if status == 409:
+            return f"Error: {detail}" if detail else "Error: Conflict — operation not allowed in current state."
+        return f"Error: HTTP {status}: {detail}" if detail else f"Error: HTTP {status}"
+
+    # Fallback
     return f"Error: {e}"
 
 

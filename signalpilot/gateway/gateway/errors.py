@@ -42,4 +42,25 @@ def query_error_hint(error: str, db_type: str) -> str | None:
     if "timeout" in err_lower or "timed out" in err_lower:
         return "Query timed out. Try adding WHERE filters, reducing the date range, or using LIMIT."
 
+    if "aggregate" in err_lower and ("group by" in err_lower or "not in group" in err_lower):
+        return "Non-aggregated column in SELECT with GROUP BY. Add the column to GROUP BY or wrap it in an aggregate function (MAX, MIN, ANY_VALUE)."
+
+    if "subquery" in err_lower and ("more than one" in err_lower or "multiple rows" in err_lower):
+        return "Scalar subquery returned multiple rows. Use IN, ANY, or add LIMIT 1."
+
+    if "join" in err_lower and "condition" in err_lower:
+        return "Missing or invalid JOIN condition. Ensure ON clause references columns from both tables."
+
+    if "distinct" in err_lower and ("order by" in err_lower or "sort" in err_lower):
+        return "ORDER BY column must be in SELECT DISTINCT list, or use a subquery."
+
+    if "limit" in err_lower and db_type == "mssql":
+        return "SQL Server uses TOP N instead of LIMIT. Use: SELECT TOP 100 ... or OFFSET/FETCH."
+
+    if "ilike" in err_lower and db_type in ("mysql", "mssql", "clickhouse"):
+        return "ILIKE is not supported. Use LOWER(column) LIKE LOWER(pattern) instead."
+
+    if "boolean" in err_lower or "invalid use of group function" in err_lower:
+        return "Cannot use aggregate function in WHERE clause. Move the condition to HAVING."
+
     return None

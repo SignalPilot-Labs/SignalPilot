@@ -76,6 +76,7 @@ Open Claude Code and start talking:
 > "Pause the current run"
 > "Tell the agent to focus on security instead"
 > "Resume the run"
+> "Resume the latest stopped run"
 > "What files did run abc-123 change?"
 > "Stop the current improvement run"
 ```
@@ -88,15 +89,16 @@ Open Claude Code and start talking:
 > "Check the connection health for enterprise-pg"
 ```
 
-## Available Tools (36)
+## Available Tools (37)
 
-### Self-Improve Agent (15 tools)
+### Self-Improve Agent (16 tools)
 
 | Tool | Description |
 |------|-------------|
 | `agent_health` | Check if the agent is idle or running, with timing info |
 | `start_improvement_run` | Start a new autonomous improvement run with a custom prompt |
-| `resume_improvement_run` | Resume a stopped or rate-limited run |
+| `resume_improvement_run` | Resume a specific run by ID |
+| `resume_latest_run` | Auto-find and resume the most recent stopped/rate-limited run |
 | `stop_improvement_run` | Gracefully stop — agent commits work and creates PR |
 | `kill_improvement_run` | Immediately kill — no cleanup, no PR |
 | `list_improvement_runs` | List recent runs with status, cost, and PR links |

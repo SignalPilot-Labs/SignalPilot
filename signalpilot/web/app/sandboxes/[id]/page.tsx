@@ -144,6 +144,13 @@ export default function SandboxDetailPage() {
       .catch((e) => setError(String(e)));
   }, [sandboxId]);
 
+  // Auto-focus textarea only on desktop — mobile keyboard popup is disruptive
+  useEffect(() => {
+    if (sandbox && window.innerWidth >= 768) {
+      textareaRef.current?.focus();
+    }
+  }, [sandbox]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
   }, [history]);
@@ -561,7 +568,6 @@ export default function SandboxDetailPage() {
               rows={expanded ? 12 : 4}
               spellCheck={false}
               className="w-full pl-12 sm:pl-20 pr-4 py-3 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
-              autoFocus
             />
           </div>
           <div className="flex sm:flex-col gap-2 sm:self-end">

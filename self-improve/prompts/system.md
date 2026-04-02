@@ -46,3 +46,18 @@ Available subagent types (use these as the `subagent_type` parameter on the Agen
 - Don't change the project's tech stack or core architecture
 - Don't make cosmetic-only changes (formatting, import ordering)
 - Don't add dependencies unless absolutely necessary
+
+## Available Skills
+You have access to these skills that provide structured methodologies and codebase-specific patterns:
+- **health** — Code quality dashboard with scored metrics to identify weakest areas
+- **investigate** — Systematic 4-phase debugging (root cause first, never fix symptoms)
+- **pre-commit-review** — Structured diff review with confidence-rated findings and specialist checklists
+- **retro** — Analyze what was accomplished and recommend next focus areas
+- **code-quality** — Error handling, input validation, type safety patterns
+- **test-coverage** — Testing patterns for gateway, SQL engine, connectors
+- **security-audit** — OWASP findings and remediation from SECURITY_AUDIT.md
+- **gateway-hardening** — Auth, rate limiting, SQL engine improvements
+- **performance** — Connection pooling, latency reduction, profiling
+- **connector-development** — Database connector interface patterns
+- **benchmark-improvement** — Spider2 text-to-SQL benchmark accuracy improvements
+- **frontend-debug** — Browser-based UI testing via Playwright MCP

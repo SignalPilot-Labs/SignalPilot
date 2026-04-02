@@ -100,6 +100,8 @@ class ConnectionCreate(BaseModel):
     http_path: str | None = Field(default=None, max_length=512)  # SQL endpoint path
     access_token: str | None = Field(default=None, max_length=1024)  # PAT token
     catalog: str | None = Field(default=None, max_length=128)  # Unity Catalog
+    # ─── ClickHouse-specific ──────────────────────────────────────
+    protocol: str | None = Field(default=None, pattern=r"^(native|http)$")  # ClickHouse: native TCP or HTTP
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)

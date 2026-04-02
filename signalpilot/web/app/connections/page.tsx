@@ -495,6 +495,11 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
   if (config.fields.includes("access_token")) payload.access_token = form.access_token;
   if (config.fields.includes("catalog")) payload.catalog = form.catalog;
 
+  // ClickHouse protocol
+  if (form.db_type === "clickhouse" && form.ch_protocol === "http") {
+    payload.protocol = "http";
+  }
+
   // Tags
   if (form.tags.length > 0) {
     payload.tags = form.tags;

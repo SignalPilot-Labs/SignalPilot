@@ -395,9 +395,17 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         user = url_quote(conn.username or "default", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
-        port = conn.port or 9000
         db = conn.database or "default"
-        return f"clickhouse://{user}{pw}@{host}:{port}/{db}"
+        use_http = conn.protocol == "http"
+        use_ssl = conn.ssl or (conn.ssl_config and conn.ssl_config.enabled)
+
+        if use_http:
+            scheme = "clickhouse+https" if use_ssl else "clickhouse+http"
+            port = conn.port or (8443 if use_ssl else 8123)
+        else:
+            scheme = "clickhouses" if use_ssl else "clickhouse"
+            port = conn.port or (9440 if use_ssl else 9000)
+        return f"{scheme}://{user}{pw}@{host}:{port}/{db}"
 
     elif conn.db_type == DBType.databricks:
         # URL format: databricks://token@host/http_path?catalog=CAT&schema=SCH

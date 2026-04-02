@@ -1724,6 +1724,34 @@ class TestConnectionStringBuilder:
         url = _build_connection_string(conn)
         assert url == "clickhouse://default:secret@ch.example.com:9000/analytics"
 
+    def test_clickhouse_http_protocol(self):
+        """ClickHouse HTTP protocol builds clickhouse+http:// URL."""
+        from gateway.store import _build_connection_string
+        from gateway.models import ConnectionCreate
+        conn = ConnectionCreate(
+            name="test", db_type="clickhouse",
+            host="ch.example.com", database="analytics",
+            username="default", password="secret",
+            protocol="http",
+        )
+        url = _build_connection_string(conn)
+        assert url.startswith("clickhouse+http://")
+        assert ":8123/" in url
+
+    def test_clickhouse_https_protocol(self):
+        """ClickHouse HTTPS protocol builds clickhouse+https:// URL."""
+        from gateway.store import _build_connection_string
+        from gateway.models import ConnectionCreate
+        conn = ConnectionCreate(
+            name="test", db_type="clickhouse",
+            host="ch.cloud.com", database="default",
+            username="default", password="secret",
+            protocol="http", ssl=True,
+        )
+        url = _build_connection_string(conn)
+        assert url.startswith("clickhouse+https://")
+        assert ":8443/" in url
+
     def test_duckdb_connection_string(self):
         """DuckDB uses database path as connection string."""
         from gateway.store import _build_connection_string

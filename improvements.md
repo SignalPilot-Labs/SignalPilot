@@ -5,6 +5,58 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 16: Retry Logic, Keepalive, _ensure_connected, Frontend UX (2026-04-02)
+
+**Summary:** 6 improvements — added exponential backoff retry logic to PoolManager, enforced keepalive intervals via background health-check loop, completed `_ensure_connected()` on all 11 connectors, and improved frontend connection form UX (edit timeouts, schema refresh button, column comments display).
+
+**Key metrics:**
+- 353 tests passing, 1 skipped
+- All 4 live Docker databases verified healthy
+- `_ensure_connected()` now on 11/11 connectors (was 6/11)
+- Keepalive interval now actively enforced (was stored but unused)
+- Retry logic handles transient network failures automatically
+- 4 git commits this round
+
+### 1. Retry Logic with Exponential Backoff (PoolManager)
+**File:** `connectors/pool_manager.py`
+- Transient connection failures (timeout, connection refused, host unreachable) are automatically retried up to 3 times
+- Exponential backoff: 0.5s → 1s → 2s with random jitter to prevent thundering herd
+- Non-transient errors (auth failed, invalid config, SSL errors) fail immediately — no wasted retries
+- Connector state is recreated fresh between retry attempts to avoid stale state
+- HEX pattern: on-demand SSH tunnel retries are covered since tunnel setup happens before connect()
+
+### 2. Keepalive Interval Enforcement
+**File:** `connectors/pool_manager.py`
+- `keepalive_interval` field was stored in ConnectionInfo but never used — now enforced
+- Background `asyncio.Task` runs every 30s, pings idle connections at their configured interval
+- Dead connections detected by `health_check()` are automatically removed from pool
+- Tunnel cleanup when keepalive detects dead connections
+- Stats endpoint now reports `keepalive_interval` per pool entry
+
+### 3. _ensure_connected() on All 11 Connectors
+**Files:** `connectors/{postgres,bigquery,databricks,duckdb,sqlite}.py`
+- Added to remaining 5 connectors (was on MySQL, MSSQL, Redshift, ClickHouse, Snowflake, Trino)
+- Pattern: ping with `SELECT 1`, clean up connection on failure, raise RuntimeError
+- BigQuery: uses `asyncio.to_thread` for the synchronous client ping
+- Now 11/11 connectors have consistent reconnection detection
+
+### 4. Frontend: Edit Form Loads Timeout Values
+**File:** `web/app/connections/page.tsx`, `web/lib/types.ts`
+- **Bug**: Editing a connection with custom timeouts showed defaults (15s/120s/0) instead of actual values
+- Added `connection_timeout`, `query_timeout`, `keepalive_interval`, `schema_filter_include`, `schema_filter_exclude` to `ConnectionInfo` type
+- Edit handler now loads all timeout fields from existing connection data
+- Advanced section auto-expands when editing connections with custom timeouts
+
+### 5. Frontend: Schema Browser Improvements
+**File:** `web/app/connections/page.tsx`
+- Added "Refresh Schema" button — triggers re-introspect from database, updates UI
+- Shows table descriptions when available (from `pg_description`, `duckdb_tables()`, etc.)
+- Shows column comments inline (truncated with hover tooltip for full text)
+- Shows view/table type badge (cyan "view" label)
+- Shows relative "last used" time on each connection card (e.g., "2h ago")
+
+---
+
 ## Round 15: Comments, Reconnection, DDL Compression, Error Classification (2026-04-02)
 
 **Summary:** 15 improvements — added column/table comments to Redshift/DuckDB/Trino, reconnection logic (`_ensure_connected()`) to 4 more connectors, ReFoRCE-style DDL compression for large schemas, SQLite error classification, unified type abbreviations, NoneType fix, MSSQL/Trino URL validation + connection string builders, 6 new query error hints, extended schema linking synonyms, and capability flag updates.

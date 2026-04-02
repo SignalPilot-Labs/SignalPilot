@@ -214,8 +214,8 @@ async def check_tool_permission(
                     "deny_reason": deny_reason,
                 },
             )
-        except Exception:
-            pass  # Don't let audit failures block the agent
+        except Exception as e:
+            print(f"[permissions] Failed to log audit: {e}")
 
     if deny_reason:
         return PermissionResultDeny(message=deny_reason)

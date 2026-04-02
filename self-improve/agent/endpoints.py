@@ -187,8 +187,8 @@ async def kill_run():
     # Force update DB in case the task didn't get to clean up
     try:
         await db.finish_run(run_id=run_id, status="killed")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[agent] Failed to update killed run status: {e}")
     signals.current_run_id = None
     return {"ok": True, "signal": "kill", "run_id": run_id}
 
@@ -200,7 +200,8 @@ async def list_branches():
         output = git_ops._run_git(["branch", "-r", "--format", "%(refname:short)"])
         branches = [b.replace("origin/", "") for b in output.strip().split("\n") if b.strip() and "HEAD" not in b]
         return sorted(set(branches))
-    except Exception:
+    except Exception as e:
+        print(f"[agent] Failed to list branches: {e}")
         return ["main"]
 
 

@@ -284,25 +284,6 @@ async def log_audit(
     await conn.commit()
 
 
-async def poll_control_signal(run_id: str) -> dict | None:
-    """Fetch and consume the oldest pending control signal for this run."""
-    conn = get_db()
-    cursor = await conn.execute(
-        """SELECT id, signal, payload FROM control_signals
-        WHERE run_id = ? AND consumed = 0
-        ORDER BY ts ASC LIMIT 1""",
-        (run_id,),
-    )
-    row = await cursor.fetchone()
-    if row:
-        await conn.execute(
-            "UPDATE control_signals SET consumed = 1 WHERE id = ?",
-            (row["id"],),
-        )
-        await conn.commit()
-        return {"signal": row["signal"], "payload": row["payload"]}
-    return None
-
 
 async def update_run_status(run_id: str, status: str) -> None:
     """Update the run status (e.g. to 'paused')."""

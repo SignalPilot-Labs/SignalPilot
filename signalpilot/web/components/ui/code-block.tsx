@@ -37,7 +37,7 @@ export function CodeBlock({
         <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{language}</span>
         <button
           onClick={handleCopy}
-          className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider flex items-center gap-1"
+          className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] active:text-[var(--color-text)] tracking-wider flex items-center gap-1 px-1.5 py-1.5 sm:py-0.5 -mr-1.5 sm:-mr-0"
         >
           {copied ? (
             <>

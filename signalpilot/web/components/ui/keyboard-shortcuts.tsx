@@ -88,7 +88,7 @@ export function KeyboardShortcuts() {
           <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">navigation</p>
           <div className="space-y-0.5">
             {NAV_SHORTCUTS.map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-1.5 group">
+              <div key={s.key} className="flex items-center justify-between py-2.5 sm:py-1.5 group">
                 <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors tracking-wide">{s.label}</span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] tabular-nums">
                   ctrl+{s.key}
@@ -103,7 +103,7 @@ export function KeyboardShortcuts() {
           <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">actions</p>
           <div className="space-y-0.5">
             {ACTION_SHORTCUTS.map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-1.5">
+              <div key={s.key} className="flex items-center justify-between py-2.5 sm:py-1.5">
                 <span className="text-xs text-[var(--color-text-muted)] tracking-wide">{s.label}</span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)]">
                   {s.modifier ? `${s.modifier}+` : ""}{s.key}

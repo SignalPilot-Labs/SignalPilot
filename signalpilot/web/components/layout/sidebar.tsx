@@ -452,7 +452,7 @@ export default function Sidebar() {
                   <Link
                     key={href}
                     href={href}
-                    className={`group flex items-center gap-3 px-4 py-3 text-sm transition-all ${
+                    className={`group flex items-center gap-3 px-4 py-3 text-sm transition-all active:bg-[var(--color-bg-hover)] ${
                       active
                         ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
                         : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -507,10 +507,10 @@ export default function Sidebar() {
             <Link
               key={href}
               href={href}
-              className={`flex flex-col items-center justify-center gap-1 py-1.5 flex-1 relative transition-colors ${
+              className={`flex flex-col items-center justify-center gap-1 py-1.5 flex-1 relative transition-colors active:bg-[var(--color-bg-hover)] ${
                 active
                   ? "text-[var(--color-text)]"
-                  : "text-[var(--color-text-dim)]"
+                  : "text-[var(--color-text-dim)] active:text-[var(--color-text-muted)]"
               }`}
             >
               {active && (

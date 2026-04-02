@@ -1,143 +1,12 @@
 import type { Metadata } from 'next'
-import FaqAccordion from '@/components/FaqAccordion'
+import PricingHero from '@/components/pricing/PricingHero'
+import PricingTiers from '@/components/pricing/PricingTiers'
+import PricingFaq from '@/components/pricing/PricingFaq'
 
 export const metadata: Metadata = {
   title: 'Pricing — SuperPilot',
   description:
     'Simple, transparent pricing for every pack. Choose the plan that fits your dog and your life.',
-}
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Feature {
-  text: string
-}
-
-interface PricingTier {
-  name: string
-  price: string
-  period: string
-  description: string
-  features: Feature[]
-  cta: string
-  href: string
-  highlighted: boolean
-  badge?: string
-}
-
-interface FaqItem {
-  question: string
-  answer: string
-}
-
-// ─── Data ─────────────────────────────────────────────────────────────────────
-
-const tiers: PricingTier[] = [
-  {
-    name: 'Puppy Plan',
-    price: 'Free',
-    period: 'forever',
-    description:
-      'Everything you need to get started on the path to a happier, healthier dog.',
-    features: [
-      { text: '1 dog profile' },
-      { text: 'Basic activity tracking' },
-      { text: 'Community access' },
-      { text: 'Weekly health tips' },
-    ],
-    cta: 'Get Started Free',
-    href: '/signup',
-    highlighted: false,
-  },
-  {
-    name: 'Good Boy Plan',
-    price: '$9.99',
-    period: 'per month',
-    description:
-      'AI-powered coaching and health tools for dogs who deserve the very best.',
-    features: [
-      { text: 'Up to 3 dog profiles' },
-      { text: 'AI training coach' },
-      { text: 'Health monitoring' },
-      { text: 'GPS activity tracking' },
-      { text: 'Priority support' },
-    ],
-    cta: 'Start Free Trial',
-    href: '/signup?plan=good-boy',
-    highlighted: true,
-    badge: 'Most Popular',
-  },
-  {
-    name: 'Alpha Pack',
-    price: '$24.99',
-    period: 'per month',
-    description:
-      'Enterprise-grade tools for serious breeders, trainers, and multi-dog households.',
-    features: [
-      { text: 'Unlimited dog profiles' },
-      { text: 'Advanced AI behavior analysis' },
-      { text: 'Vet telehealth integration' },
-      { text: 'Custom training programs' },
-      { text: 'Dedicated account manager' },
-      { text: 'API access' },
-    ],
-    cta: 'Contact Sales',
-    href: '/contact',
-    highlighted: false,
-  },
-]
-
-const faqs: FaqItem[] = [
-  {
-    question: 'Can I change my plan at any time?',
-    answer:
-      'Yes. You can upgrade, downgrade, or cancel your subscription at any time from your account settings. When upgrading, the change takes effect immediately and you are billed the prorated difference. When downgrading, the change takes effect at the end of your current billing period.',
-  },
-  {
-    question: 'Is there a free trial for paid plans?',
-    answer:
-      'The Good Boy Plan includes a 14-day free trial — no credit card required. If you decide it is not right for you, simply cancel before the trial ends and you will never be charged. The Alpha Pack plan offers a personalized demo; contact our sales team to get started.',
-  },
-  {
-    question: 'What happens to my data if I cancel?',
-    answer:
-      'Your dog profiles, activity history, and training records are retained for 30 days after cancellation, giving you time to export everything. After 30 days, data is permanently deleted in accordance with our privacy policy.',
-  },
-  {
-    question: 'Do you offer discounts for annual billing?',
-    answer:
-      'Yes. Choosing annual billing saves you two months compared to monthly — effectively giving you 12 months for the price of 10. Annual plans are available for both the Good Boy and Alpha Pack tiers and can be selected during signup or from your account settings.',
-  },
-  {
-    question: 'Can I add more dogs beyond my plan limit?',
-    answer:
-      'On the Good Boy Plan you can have up to 3 dog profiles. If your pack keeps growing, upgrading to Alpha Pack gives you unlimited profiles. You can also temporarily add an extra profile by contacting support, and we will work out the best option for your situation.',
-  },
-]
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function CheckIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      className="flex-shrink-0 mt-0.5"
-    >
-      <circle cx="8" cy="8" r="8" className="fill-indigo-500/20" />
-      <path
-        d="M4.5 8L7 10.5L11.5 5.5"
-        stroke="#818cf8"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
 }
 
 function PawIcon() {
@@ -150,9 +19,7 @@ function PawIcon() {
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
     >
-      {/* Main pad */}
       <ellipse cx="14" cy="17" rx="5.5" ry="5" className="fill-amber-400" />
-      {/* Toes */}
       <ellipse cx="8.5" cy="11.5" rx="2.2" ry="2.8" className="fill-amber-400" />
       <ellipse cx="12" cy="9.5" rx="2.2" ry="2.8" className="fill-amber-400" />
       <ellipse cx="16" cy="9.5" rx="2.2" ry="2.8" className="fill-amber-400" />
@@ -160,98 +27,6 @@ function PawIcon() {
     </svg>
   )
 }
-
-function TierCard({ tier }: { tier: PricingTier }) {
-  const { highlighted } = tier
-
-  return (
-    <article
-      aria-label={`${tier.name} pricing tier`}
-      className={[
-        'relative flex flex-col rounded-2xl p-8 transition-shadow',
-        highlighted
-          ? 'bg-gradient-to-b from-indigo-600 to-violet-700 ring-2 ring-indigo-400 shadow-2xl shadow-indigo-900/50 scale-[1.03] z-10'
-          : 'bg-white/5 border border-white/10 hover:border-white/20 hover:bg-white/[0.07]',
-      ].join(' ')}
-    >
-      {/* Badge */}
-      {tier.badge && (
-        <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-400 px-3.5 py-1 text-xs font-semibold uppercase tracking-wide text-amber-900">
-            <PawIcon />
-            {tier.badge}
-          </span>
-        </div>
-      )}
-
-      {/* Header */}
-      <header className="mb-6">
-        <h2
-          className={`text-sm font-semibold uppercase tracking-widest mb-3 ${highlighted ? 'text-indigo-200' : 'text-indigo-400'}`}
-        >
-          {tier.name}
-        </h2>
-
-        <div className="flex items-end gap-1.5 mb-3">
-          <span
-            className={`text-4xl font-bold tracking-tight ${highlighted ? 'text-white' : 'text-white'}`}
-          >
-            {tier.price}
-          </span>
-          {tier.price !== 'Free' && (
-            <span
-              className={`mb-1 text-sm ${highlighted ? 'text-indigo-200' : 'text-slate-400'}`}
-            >
-              / mo
-            </span>
-          )}
-        </div>
-
-        <p
-          className={`text-sm leading-relaxed ${highlighted ? 'text-indigo-100' : 'text-slate-400'}`}
-        >
-          {tier.description}
-        </p>
-      </header>
-
-      {/* Divider */}
-      <hr
-        className={`mb-6 border-t ${highlighted ? 'border-indigo-500/50' : 'border-white/10'}`}
-      />
-
-      {/* Features */}
-      <ul className="mb-8 flex flex-col gap-3" role="list">
-        {tier.features.map((feature) => (
-          <li key={feature.text} className="flex items-start gap-3">
-            <CheckIcon />
-            <span
-              className={`text-sm ${highlighted ? 'text-indigo-50' : 'text-slate-300'}`}
-            >
-              {feature.text}
-            </span>
-          </li>
-        ))}
-      </ul>
-
-      {/* CTA */}
-      <div className="mt-auto">
-        <a
-          href={tier.href}
-          className={[
-            'block w-full rounded-xl px-6 py-3.5 text-center text-sm font-semibold transition-all duration-150',
-            highlighted
-              ? 'bg-white text-indigo-700 hover:bg-indigo-50 shadow-lg shadow-indigo-900/30'
-              : 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-600/30 hover:border-indigo-400/50 hover:text-white',
-          ].join(' ')}
-        >
-          {tier.cta}
-        </a>
-      </div>
-    </article>
-  )
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PricingPage() {
   return (
@@ -264,97 +39,9 @@ export default function PricingPage() {
       </div>
 
       <div className="relative">
-        {/* ── Hero ─────────────────────────────────────────────────────── */}
-        <header className="mx-auto max-w-3xl px-6 pt-20 pb-16 text-center">
-          {/* Eyebrow */}
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-4 py-1.5 text-sm font-medium text-indigo-300">
-            <PawIcon />
-            <span>Simple, Transparent Pricing</span>
-          </div>
+        <PricingHero />
 
-          <h1 className="text-5xl font-bold tracking-tight text-white sm:text-6xl">
-            The right plan for{' '}
-            <span className="relative inline-block">
-              <span className="relative z-10 bg-gradient-to-r from-indigo-400 via-violet-400 to-amber-400 bg-clip-text text-transparent">
-                every good dog
-              </span>
-              <span
-                aria-hidden="true"
-                className="absolute inset-x-0 bottom-1 h-3 bg-amber-400/15 blur-sm rounded"
-              />
-            </span>
-          </h1>
-
-          <p className="mt-6 text-lg leading-relaxed text-slate-400 max-w-xl mx-auto">
-            Start free and upgrade as your pack grows. No hidden fees, no
-            lock-in — just smarter tools to help your dog thrive.
-          </p>
-
-          {/* Social proof */}
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-6 text-sm text-slate-500">
-            <div className="flex items-center gap-2">
-              <div className="flex -space-x-1.5">
-                {['bg-indigo-400', 'bg-violet-400', 'bg-amber-400', 'bg-pink-400'].map(
-                  (color) => (
-                    <div
-                      key={color}
-                      className={`w-6 h-6 rounded-full border-2 border-slate-950 ${color}`}
-                      aria-hidden="true"
-                    />
-                  )
-                )}
-              </div>
-              <span>50,000+ happy owners</span>
-            </div>
-            <div className="hidden sm:block w-px h-4 bg-slate-700" aria-hidden="true" />
-            <div className="flex items-center gap-1.5">
-              {/* Stars */}
-              <div className="flex gap-0.5" aria-label="4.9 out of 5 stars">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <svg
-                    key={i}
-                    width="14"
-                    height="14"
-                    viewBox="0 0 14 14"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M7 1L8.545 5.09H13L9.59 7.59L10.91 12L7 9.5L3.09 12L4.41 7.59L1 5.09H5.455L7 1Z"
-                      fill="#fbbf24"
-                    />
-                  </svg>
-                ))}
-              </div>
-              <span>4.9 / 5 on the App Store</span>
-            </div>
-            <div className="hidden sm:block w-px h-4 bg-slate-700" aria-hidden="true" />
-            <span>14-day free trial</span>
-          </div>
-        </header>
-
-        {/* ── Pricing grid ─────────────────────────────────────────────── */}
-        <section aria-label="Pricing tiers" className="mx-auto max-w-6xl px-6 pb-24">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-            {tiers.map((tier) => (
-              <TierCard key={tier.name} tier={tier} />
-            ))}
-          </div>
-
-          {/* Fine print */}
-          <p className="mt-10 text-center text-sm text-slate-500">
-            All plans include a 14-day free trial. No credit card required to
-            get started.{' '}
-            <a
-              href="/terms"
-              className="text-indigo-400 underline underline-offset-2 hover:text-indigo-300 transition-colors"
-            >
-              View full terms
-            </a>
-            .
-          </p>
-        </section>
+        <PricingTiers />
 
         {/* ── Feature comparison callout ───────────────────────────────── */}
         <section
@@ -397,7 +84,7 @@ export default function PricingPage() {
                     </svg>
                   ),
                   title: 'AI-powered coaching',
-                  body: 'Personalized training plans that adapt to your dog\'s unique personality and learning pace.',
+                  body: "Personalized training plans that adapt to your dog's unique personality and learning pace.",
                 },
                 {
                   icon: (
@@ -423,32 +110,7 @@ export default function PricingPage() {
           </div>
         </section>
 
-        {/* ── FAQ ──────────────────────────────────────────────────────── */}
-        <section
-          aria-labelledby="faq-heading"
-          className="mx-auto max-w-3xl px-6 pb-32"
-        >
-          <div className="text-center mb-12">
-            <h2
-              id="faq-heading"
-              className="text-3xl font-bold tracking-tight text-white"
-            >
-              Frequently asked questions
-            </h2>
-            <p className="mt-3 text-slate-400">
-              Can&apos;t find the answer you&apos;re looking for?{' '}
-              <a
-                href="/contact"
-                className="text-indigo-400 underline underline-offset-2 hover:text-indigo-300 transition-colors"
-              >
-                Reach out to our team
-              </a>
-              .
-            </p>
-          </div>
-
-          <FaqAccordion items={faqs} />
-        </section>
+        <PricingFaq />
 
         {/* ── CTA banner ───────────────────────────────────────────────── */}
         <section

@@ -425,6 +425,24 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         query = f"?{'&'.join(params)}" if params else ""
         return f"databricks://{token}@{host}/{http_path}{query}"
 
+    elif conn.db_type == DBType.mssql:
+        user = url_quote(conn.username or "sa", safe="")
+        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
+        host = conn.host or "localhost"
+        port = conn.port or 1433
+        db = conn.database or "master"
+        return f"mssql://{user}{pw}@{host}:{port}/{db}"
+
+    elif conn.db_type == DBType.trino:
+        user = url_quote(conn.username or "trino", safe="")
+        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
+        host = conn.host or "localhost"
+        port = conn.port or 8080
+        catalog = conn.catalog or ""
+        schema = conn.schema_name or ""
+        path = f"/{catalog}/{schema}" if schema else f"/{catalog}" if catalog else ""
+        return f"trino://{user}{pw}@{host}:{port}{path}"
+
     return ""
 
 

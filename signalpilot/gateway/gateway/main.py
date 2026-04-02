@@ -3374,6 +3374,134 @@ async def get_agent_context(
     return result
 
 
+def _build_join_hints(linked_keys: set[str], filtered: dict[str, Any]) -> list[str]:
+    """Build FK-based and inferred join hints between linked tables."""
+    join_hints: list[str] = []
+    _seen_joins: set[tuple] = set()
+    for key in linked_keys:
+        if key not in filtered:
+            continue
+        t = filtered[key]
+        for fk in t.get("foreign_keys", []):
+            ref_table = fk.get("references_table", "")
+            ref_col = fk.get("references_column", "")
+            fk_col = fk.get("column", "")
+            for ref_key in linked_keys:
+                if filtered.get(ref_key, {}).get("name", "") == ref_table:
+                    pair = tuple(sorted([key, ref_key]))
+                    if pair not in _seen_joins:
+                        _seen_joins.add(pair)
+                        join_hints.append(f"{t['name']}.{fk_col} = {ref_table}.{ref_col}")
+                    break
+    inferred = _infer_implicit_joins(filtered)
+    for ij in inferred:
+        from_name, to_name = ij.get("from_table", ""), ij.get("to_table", "")
+        from_col, to_col = ij.get("from_column", ""), ij.get("to_column", "")
+        from_in = any(filtered.get(k, {}).get("name", "") == from_name for k in linked_keys)
+        to_in = any(filtered.get(k, {}).get("name", "") == to_name for k in linked_keys)
+        if from_in and to_in:
+            hint = f"{from_name}.{from_col} = {to_name}.{to_col} (inferred)"
+            if hint not in join_hints:
+                join_hints.append(hint)
+    return join_hints
+
+
+# ── Dialect hints (Spider2.0 multi-database optimization) ─────────────────
+# Tells the agent which SQL dialect to use and common pitfalls.
+_DIALECT_HINTS: dict[str, dict[str, Any]] = {
+    "postgres": {
+        "dialect": "PostgreSQL",
+        "identifier_quote": '"',
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "NOW(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+        "tips": ["Use :: for type casting (e.g., col::TEXT)", "ILIKE for case-insensitive LIKE"],
+    },
+    "mysql": {
+        "dialect": "MySQL",
+        "identifier_quote": "`",
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "NOW(), CURDATE(), DATE_FORMAT(col, '%Y-%m'), YEAR(col), MONTH(col)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+        "tips": ["Use backticks for reserved words", "GROUP BY is strict — list all non-aggregated columns"],
+    },
+    "mssql": {
+        "dialect": "T-SQL (SQL Server)",
+        "identifier_quote": "[]",
+        "string_quote": "'",
+        "limit_syntax": "TOP n or OFFSET m ROWS FETCH NEXT n ROWS ONLY",
+        "date_functions": "GETDATE(), CAST(col AS DATE), DATEPART(YEAR, col), DATEDIFF(DAY, a, b), FORMAT(col, 'yyyy-MM')",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LEN(), SUBSTRING()",
+        "tips": ["Use TOP n instead of LIMIT", "Use OFFSET...FETCH for pagination", "Use [] for reserved words"],
+    },
+    "redshift": {
+        "dialect": "Redshift (PostgreSQL-based)",
+        "identifier_quote": '"',
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "GETDATE(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF(day, a, b)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LEN(), SUBSTRING()",
+        "tips": ["PostgreSQL-like but no LATERAL joins", "Use APPROXIMATE COUNT(DISTINCT) for large tables"],
+    },
+    "snowflake": {
+        "dialect": "Snowflake SQL",
+        "identifier_quote": '"',
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF('day', a, b)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
+        "tips": ["Identifiers are case-insensitive unless double-quoted", "Use FLATTEN() for semi-structured data", "QUALIFY for window function filtering"],
+    },
+    "bigquery": {
+        "dialect": "BigQuery Standard SQL",
+        "identifier_quote": "`",
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC(col, MONTH), EXTRACT(YEAR FROM col)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
+        "tips": ["Use backticks for project.dataset.table references", "Use UNNEST() for repeated fields", "QUALIFY for window filtering"],
+    },
+    "clickhouse": {
+        "dialect": "ClickHouse SQL",
+        "identifier_quote": '"',
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "now(), today(), toStartOfMonth(col), toYear(col), dateDiff('day', a, b)",
+        "string_functions": "concat(a, b), lower(), upper(), length(), substring()",
+        "tips": ["Functions are case-sensitive and camelCase", "Use -If suffix for conditional aggregation (e.g., countIf, sumIf)", "Array functions: arrayJoin, groupArray"],
+    },
+    "trino": {
+        "dialect": "Trino SQL (ANSI-based)",
+        "identifier_quote": '"',
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "CURRENT_TIMESTAMP, CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
+        "tips": ["Use catalog.schema.table for cross-catalog queries", "UNNEST() for arrays", "Supports ANSI SQL window functions"],
+    },
+    "databricks": {
+        "dialect": "Databricks SQL (Spark SQL-based)",
+        "identifier_quote": "`",
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n",
+        "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('MONTH', col), EXTRACT(YEAR FROM col)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+        "tips": ["Use backticks for identifiers", "Supports QUALIFY for window filtering", "Use catalog.schema.table for Unity Catalog"],
+    },
+    "duckdb": {
+        "dialect": "DuckDB SQL (PostgreSQL-compatible)",
+        "identifier_quote": '"',
+        "string_quote": "'",
+        "limit_syntax": "LIMIT n OFFSET m",
+        "date_functions": "NOW(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATE_DIFF('day', a, b)",
+        "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
+        "tips": ["Very PostgreSQL-compatible", "Supports LIST and STRUCT types", "PIVOT/UNPIVOT supported natively"],
+    },
+}
+
+
 @app.get("/api/connections/{name}/schema/link")
 async def schema_link(
     name: str,
@@ -3841,7 +3969,7 @@ async def schema_link(
             condensed_lines.append(f"{obj_kw} {table_name} (\n{',\n'.join(col_parts)}\n);{pruned_note}")
         condensed_text = "\n\n".join(condensed_lines)
         reduction_pct = round((1 - total_cols_kept / max(total_cols_original, 1)) * 100)
-        return {
+        condensed_result: dict[str, Any] = {
             "connection_name": name,
             "question": question,
             "format": "condensed",
@@ -3854,6 +3982,14 @@ async def schema_link(
             "scores": {k: round(table_scores.get(k, 0), 1) for k in sorted(linked_keys) if table_scores.get(k, 0) > 0},
             "ddl": condensed_text,
         }
+        # Add join hints and dialect (shared with DDL format)
+        _join_hints = _build_join_hints(linked_keys, filtered)
+        if _join_hints:
+            condensed_result["join_hints"] = _join_hints
+        _dh = _DIALECT_HINTS.get(info.db_type)
+        if _dh:
+            condensed_result["dialect"] = _dh
+        return condensed_result
 
     if format == "compact":
         lines = []
@@ -4038,141 +4174,8 @@ async def schema_link(
         except Exception:
             pass  # Best-effort — don't fail the schema_link response
 
-    # ── Join path hints (Spider2.0 optimization) ────────────────────────
-    # Show the agent exactly how linked tables connect via FKs and inferred
-    # joins, so it doesn't hallucinate join conditions.
-    join_hints: list[str] = []
-    _seen_joins: set[tuple] = set()
-
-    # Explicit FK paths between linked tables
-    for key in linked_keys:
-        if key not in filtered:
-            continue
-        t = filtered[key]
-        for fk in t.get("foreign_keys", []):
-            ref_table = fk.get("references_table", "")
-            ref_col = fk.get("references_column", "")
-            fk_col = fk.get("column", "")
-            # Check if the referenced table is also in linked tables
-            for ref_key in linked_keys:
-                if filtered.get(ref_key, {}).get("name", "") == ref_table:
-                    pair = tuple(sorted([key, ref_key]))
-                    if pair not in _seen_joins:
-                        _seen_joins.add(pair)
-                        join_hints.append(
-                            f"{t['name']}.{fk_col} = {ref_table}.{ref_col}"
-                        )
-                    break
-
-    # Inferred joins between linked tables (name-pattern based)
-    inferred = _infer_implicit_joins(filtered)
-    for ij in inferred:
-        from_name = ij.get("from_table", "")
-        to_name = ij.get("to_table", "")
-        from_col = ij.get("from_column", "")
-        to_col = ij.get("to_column", "")
-        # Only include if both tables are in linked set
-        from_in = any(filtered.get(k, {}).get("name", "") == from_name for k in linked_keys)
-        to_in = any(filtered.get(k, {}).get("name", "") == to_name for k in linked_keys)
-        if from_in and to_in:
-            hint = f"{from_name}.{from_col} = {to_name}.{to_col} (inferred)"
-            if hint not in join_hints:
-                join_hints.append(hint)
-
-    # ── Dialect hints (Spider2.0 multi-database optimization) ───────────
-    # Tells the agent which SQL dialect to use and common pitfalls.
-    _DIALECT_HINTS: dict[str, dict[str, Any]] = {
-        "postgres": {
-            "dialect": "PostgreSQL",
-            "identifier_quote": '"',
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "NOW(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
-            "tips": ["Use :: for type casting (e.g., col::TEXT)", "ILIKE for case-insensitive LIKE"],
-        },
-        "mysql": {
-            "dialect": "MySQL",
-            "identifier_quote": "`",
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "NOW(), CURDATE(), DATE_FORMAT(col, '%Y-%m'), YEAR(col), MONTH(col)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
-            "tips": ["Use backticks for reserved words", "GROUP BY is strict — list all non-aggregated columns"],
-        },
-        "mssql": {
-            "dialect": "T-SQL (SQL Server)",
-            "identifier_quote": "[]",
-            "string_quote": "'",
-            "limit_syntax": "TOP n or OFFSET m ROWS FETCH NEXT n ROWS ONLY",
-            "date_functions": "GETDATE(), CAST(col AS DATE), DATEPART(YEAR, col), DATEDIFF(DAY, a, b), FORMAT(col, 'yyyy-MM')",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LEN(), SUBSTRING()",
-            "tips": ["Use TOP n instead of LIMIT", "Use OFFSET...FETCH for pagination", "Use [] for reserved words"],
-        },
-        "redshift": {
-            "dialect": "Redshift (PostgreSQL-based)",
-            "identifier_quote": '"',
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "GETDATE(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF(day, a, b)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LEN(), SUBSTRING()",
-            "tips": ["PostgreSQL-like but no LATERAL joins", "Use APPROXIMATE COUNT(DISTINCT) for large tables"],
-        },
-        "snowflake": {
-            "dialect": "Snowflake SQL",
-            "identifier_quote": '"',
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF('day', a, b)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
-            "tips": ["Identifiers are case-insensitive unless double-quoted", "Use FLATTEN() for semi-structured data", "QUALIFY for window function filtering"],
-        },
-        "bigquery": {
-            "dialect": "BigQuery Standard SQL",
-            "identifier_quote": "`",
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC(col, MONTH), EXTRACT(YEAR FROM col)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
-            "tips": ["Use backticks for project.dataset.table references", "Use UNNEST() for repeated fields", "QUALIFY for window filtering"],
-        },
-        "clickhouse": {
-            "dialect": "ClickHouse SQL",
-            "identifier_quote": '"',
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "now(), today(), toStartOfMonth(col), toYear(col), dateDiff('day', a, b)",
-            "string_functions": "concat(a, b), lower(), upper(), length(), substring()",
-            "tips": ["Functions are case-sensitive and camelCase", "Use -If suffix for conditional aggregation (e.g., countIf, sumIf)", "Array functions: arrayJoin, groupArray"],
-        },
-        "trino": {
-            "dialect": "Trino SQL (ANSI-based)",
-            "identifier_quote": '"',
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "CURRENT_TIMESTAMP, CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
-            "tips": ["Use catalog.schema.table for cross-catalog queries", "UNNEST() for arrays", "Supports ANSI SQL window functions"],
-        },
-        "databricks": {
-            "dialect": "Databricks SQL (Spark SQL-based)",
-            "identifier_quote": "`",
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n",
-            "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('MONTH', col), EXTRACT(YEAR FROM col)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
-            "tips": ["Use backticks for identifiers", "Supports QUALIFY for window filtering", "Use catalog.schema.table for Unity Catalog"],
-        },
-        "duckdb": {
-            "dialect": "DuckDB SQL (PostgreSQL-compatible)",
-            "identifier_quote": '"',
-            "string_quote": "'",
-            "limit_syntax": "LIMIT n OFFSET m",
-            "date_functions": "NOW(), CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATE_DIFF('day', a, b)",
-            "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
-            "tips": ["Very PostgreSQL-compatible", "Supports LIST and STRUCT types", "PIVOT/UNPIVOT supported natively"],
-        },
-    }
+    # Build join hints and dialect info using extracted helpers
+    join_hints = _build_join_hints(linked_keys, filtered)
 
     result: dict[str, Any] = {
         "connection_name": name,

@@ -12,17 +12,19 @@ audit logs — all through natural conversation.
 ### 1. Install the package
 
 ```bash
-# From the repo (recommended for now)
+# From the repo
 cd signalpilot/claude-code-mcp
 pip install -e .
 
-# Or from a wheel/sdist
-pip install signalpilot-mcp
+# Or run directly with python
+python -m signalpilot_mcp
 ```
 
 ### 2. Configure Claude Code
 
-Add to your Claude Code settings file (`~/.claude/settings.json`):
+**Option A — Global** (all projects get SignalPilot tools):
+
+Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -38,7 +40,9 @@ Add to your Claude Code settings file (`~/.claude/settings.json`):
 }
 ```
 
-Or for a specific project, add to `PROJECT_DIR/.claude/settings.json`:
+**Option B — Per-project** (only this project gets SignalPilot tools):
+
+Add to `PROJECT_DIR/.claude/settings.json`:
 
 ```json
 {
@@ -51,6 +55,29 @@ Or for a specific project, add to `PROJECT_DIR/.claude/settings.json`:
     }
   }
 }
+```
+
+**Option C — python -m fallback** (if the script isn't in PATH):
+
+```json
+{
+  "mcpServers": {
+    "signalpilot": {
+      "command": "python",
+      "args": ["-m", "signalpilot_mcp"],
+      "env": {
+        "SIGNALPILOT_URL": "http://YOUR_SERVER:3300"
+      }
+    }
+  }
+}
+```
+
+**Option D — One-line setup script:**
+
+```bash
+./signalpilot/claude-code-mcp/setup-claude-code.sh http://YOUR_SERVER:3300
+# Installs the package and prints the config to paste into settings.json
 ```
 
 ### 3. Use it

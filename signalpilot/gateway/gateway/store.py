@@ -164,9 +164,23 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
 
 _active_sandboxes: dict[str, SandboxInfo] = {}
+# Max age for sandbox entries before automatic cleanup (24 hours)
+_SANDBOX_MAX_AGE = int(os.getenv("SP_SANDBOX_MAX_AGE", str(24 * 3600)))
+
+
+def _cleanup_stale_sandboxes():
+    """Remove sandbox entries older than max age to prevent unbounded memory growth."""
+    now = time.time()
+    stale = [
+        sid for sid, s in _active_sandboxes.items()
+        if now - s.created_at > _SANDBOX_MAX_AGE
+    ]
+    for sid in stale:
+        del _active_sandboxes[sid]
 
 
 def list_sandboxes() -> list[SandboxInfo]:
+    _cleanup_stale_sandboxes()
     return list(_active_sandboxes.values())
 
 

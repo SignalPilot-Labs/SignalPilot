@@ -7,15 +7,16 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ## Round 31: Diagnostics, Validation, Schema Optimization, Async Execute (2026-04-01)
 
-**Summary:** 7 improvements — diagnostics URL parsing fix, frontend form validation hardening, Redshift query optimization (6→5), compact schema sample value inlining, MySQL/MSSQL async execute fix, FK-target column preservation in pruning, and 70 new tests.
+**Summary:** 10 improvements — diagnostics URL parsing fix, frontend form validation hardening, Redshift query optimization (6→5), compact schema sample value inlining, async execute for ALL 7 sync connectors, FK-target column preservation, cloud provider presets, schema dedup tests, and 92 new tests.
 
 **Key metrics:**
-- 629 tests passing (70 new this round: 23 cost estimator, 25 diagnostics URL, 22 compact schema)
-- 5 git commits this round
+- 651 tests passing (92 new: 23 cost estimator, 25 diagnostics URL, 22 compact schema, 10 validation, 12 dedup)
+- 10 git commits this round
 - Redshift: views query merged into main column query (6→5 queries)
 - Compact schema: ENUM columns now include inline sample values (Spider2.0 optimization)
-- MySQL/MSSQL: execute no longer blocks the event loop (asyncio.to_thread)
+- All 7 sync connectors now use asyncio.to_thread (MySQL, MSSQL, Redshift, Trino, ClickHouse, Snowflake, Databricks)
 - Schema linking: FK-target columns preserved during pruning (EDBT 2026 insight)
+- 4 new cloud provider presets (Redshift, Redshift Serverless/IAM, GCP Cloud SQL, MotherDuck)
 - All 4 Docker databases verified end-to-end after rebuild
 
 ### 1. Diagnostics URL Parsing Fix
@@ -72,6 +73,26 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 - Mock connector tests: Postgres JSON plan, MySQL EXPLAIN FORMAT=JSON, MSSQL SHOWPLAN_ALL, ClickHouse EXPLAIN ESTIMATE with PLAN fallback, Redshift text EXPLAIN, Trino row parsing
 - Error handling: all estimators gracefully return warnings on failure
 - Routing: SQLite→DuckDB, unknown DB type returns warning
+
+### 8. Async Execute Migration (all 7 sync connectors)
+**Files:** `connectors/mysql.py`, `connectors/mssql.py`, `connectors/redshift.py`, `connectors/trino.py`, `connectors/clickhouse.py`, `connectors/snowflake.py`, `connectors/databricks.py`
+- **Impact:** No connector now blocks the FastAPI event loop during query execution
+- All sync drivers wrap blocking calls in `asyncio.to_thread()` with `asyncio.wait_for()` timeout
+- Timeout = effective_timeout + 5s grace period (DB-side timeout fires first, Python catches if DB doesn't)
+- Only PostgreSQL (asyncpg, natively async), DuckDB (wait_for + interrupt), and SQLite (progress handler) were already non-blocking
+
+### 9. Cloud Provider Connection Presets
+**Files:** `signalpilot/web/app/connections/page.tsx`
+- **Impact:** 4 new presets for common cloud configurations (HEX quick-start pattern)
+- Amazon Redshift (SSL required), Redshift Serverless (IAM auth), GCP Cloud SQL PostgreSQL (verify-ca SSL), MotherDuck (cloud DuckDB)
+- Preset display now shows all presets sorted by relevance (matching DB type first), up to 8
+
+### 10. Schema Deduplication Tests
+**Files:** `tests/test_schema_dedup.py`
+- **Impact:** 12 new tests for ReFoRCE-style partitioned table deduplication (most impactful compression step)
+- Tests: YYYYMMDD, YYYY_MM_DD, YYYY_MM date formats, numeric p1/p2 and shard_001 families
+- False positive prevention: too few tables, different column structures
+- Correctness: row count aggregation, partition map, base name extraction, mixed schemas
 
 ---
 

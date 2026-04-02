@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
@@ -193,11 +193,45 @@ export default function Sidebar() {
   const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
 
   // Close mobile menu on navigation
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
+
+  // Swipe from right edge to open menu, swipe right to close
+  useEffect(() => {
+    function handleTouchStart(e: TouchEvent) {
+      touchStartX.current = e.touches[0].clientX;
+      touchStartY.current = e.touches[0].clientY;
+    }
+    function handleTouchEnd(e: TouchEvent) {
+      const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+      const deltaY = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+      // Only trigger on horizontal swipes (not vertical scrolling)
+      if (deltaY > 50) return;
+      const screenW = window.innerWidth;
+      // Swipe left from right edge to open
+      if (!mobileMenuOpen && touchStartX.current > screenW - 30 && deltaX < -60) {
+        setMobileMenuOpen(true);
+      }
+      // Swipe right to close
+      if (mobileMenuOpen && deltaX > 60) {
+        setMobileMenuOpen(false);
+      }
+    }
+    // Only on mobile (< 768px)
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      document.addEventListener("touchstart", handleTouchStart, { passive: true });
+      document.addEventListener("touchend", handleTouchEnd, { passive: true });
+      return () => {
+        document.removeEventListener("touchstart", handleTouchStart);
+        document.removeEventListener("touchend", handleTouchEnd);
+      };
+    }
+  }, [mobileMenuOpen]);
 
   // Prevent body scroll when mobile menu is open
   useEffect(() => {

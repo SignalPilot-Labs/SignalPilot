@@ -700,6 +700,108 @@ result = await ceo.run(
         </div>
       </Section>
 
+      {/* ─── Code Diff Preview ─── */}
+      <Section className="py-20 border-t border-[var(--color-border)]">
+        <div className="relative z-10 max-w-4xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="mb-8"
+          >
+            <p className="text-[10px] text-[var(--color-success)] uppercase tracking-[0.2em] mb-2">Output</p>
+            <h2 className="text-[28px] font-bold text-[var(--color-accent)] tracking-tight">
+              Real changes. Real commits.
+            </h2>
+            <p className="text-[13px] text-[var(--color-text-muted)] mt-3 max-w-lg">
+              Every improvement round produces clean, atomic commits with descriptive messages.
+            </p>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5 }}
+            className="border border-[var(--color-border)] bg-[rgba(0,0,0,0.5)]"
+          >
+            {/* Diff header */}
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="flex gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-[#ff5f57] opacity-60" />
+                <div className="w-2 h-2 rounded-full bg-[#febc2e] opacity-60" />
+                <div className="w-2 h-2 rounded-full bg-[#28c840] opacity-60" />
+              </div>
+              <span className="text-[9px] text-[var(--color-text-dim)] ml-2 tracking-wider">
+                git diff — gateway/src/pool.ts
+              </span>
+              <span className="ml-auto text-[9px] px-2 py-0.5 bg-[rgba(0,255,136,0.08)] text-[var(--color-success)] border border-[rgba(0,255,136,0.15)]">
+                +42 -8
+              </span>
+            </div>
+            {/* Diff body */}
+            <div className="p-4 font-mono text-[11px] leading-[1.8] overflow-x-auto">
+              <div className="text-[var(--color-text-dim)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">14</span>
+                {"  "}const pool = new Pool(config);
+              </div>
+              <div className="text-[var(--color-text-dim)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">15</span>
+                {"  "}
+              </div>
+              <div className="bg-[rgba(255,68,68,0.06)] text-[#ff6b6b]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">16</span>
+                {"- "}const client = await pool.connect();
+              </div>
+              <div className="bg-[rgba(255,68,68,0.06)] text-[#ff6b6b]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">17</span>
+                {"- "}const result = await client.query(sql);
+              </div>
+              <div className="bg-[rgba(255,68,68,0.06)] text-[#ff6b6b]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">18</span>
+                {"- "}client.release();
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">16</span>
+                {"+ "}const client = await pool.connect();
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">17</span>
+                {"+ "}try {"{"}
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">18</span>
+                {"+ "}{"  "}const result = await client.query(sql);
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">19</span>
+                {"+ "}{"  "}return result;
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">20</span>
+                {"+ "}{"}"} finally {"{"}
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">21</span>
+                {"+ "}{"  "}client.release();
+              </div>
+              <div className="bg-[rgba(0,255,136,0.06)] text-[var(--color-success)]">
+                <span className="text-[var(--color-text-dim)] opacity-40 select-none mr-3">22</span>
+                {"+ "}{"}"} {"//"} ensures connection is always returned to pool
+              </div>
+            </div>
+            {/* Commit message */}
+            <div className="px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="text-[var(--color-success)]">●</span>
+                <span className="text-[var(--color-text-muted)]">Fix: wrap pool.query in try/finally to prevent connection leaks</span>
+                <span className="ml-auto text-[var(--color-text-dim)]">2m ago</span>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </Section>
+
       {/* ─── Integration logos ─── */}
       <Section id="stack" className="py-20 border-t border-[var(--color-border)]">
         <div className="relative z-10 max-w-4xl mx-auto text-center">

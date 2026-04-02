@@ -447,6 +447,16 @@ export default function SchemaExplorerPage() {
                         {table.foreign_keys!.length} FK{table.foreign_keys!.length > 1 ? "s" : ""}
                       </span>
                     )}
+                    {table.description && (
+                      <span className="text-[9px] text-[var(--color-text-dim)] italic tracking-wider truncate max-w-[200px]">
+                        {table.description}
+                      </span>
+                    )}
+                    {table.engine && (
+                      <span className="text-[9px] px-1 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                        {table.engine}
+                      </span>
+                    )}
                     <span className="ml-auto flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
                       {table.row_count != null && table.row_count > 0 && (
                         <span className="opacity-60">
@@ -471,6 +481,9 @@ export default function SchemaExplorerPage() {
                             <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">type</th>
                             <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">nullable</th>
                             <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">references</th>
+                            {table.columns.some(c => c.comment) && (
+                              <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">comment</th>
+                            )}
                             {piiDetections && (
                               <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-20">pii</th>
                             )}
@@ -512,6 +525,15 @@ export default function SchemaExplorerPage() {
                                   return null;
                                 })()}
                               </td>
+                              {table.columns.some(c => c.comment) && (
+                                <td className="px-4 py-1.5">
+                                  {col.comment && (
+                                    <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider italic">
+                                      {col.comment.length > 60 ? col.comment.slice(0, 60) + "..." : col.comment}
+                                    </span>
+                                  )}
+                                </td>
+                              )}
                               {piiDetections && (
                                 <td className="px-4 py-1.5">
                                   {piiDetections[col.name.toLowerCase()] && (

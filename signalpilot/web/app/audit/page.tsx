@@ -167,7 +167,7 @@ export default function AuditPage() {
             if (latencyVals.length < 3) return null;
             const avg = latencyVals.reduce((a, b) => a + b, 0) / latencyVals.length;
             return (
-              <div className="flex items-center gap-2 ml-auto">
+              <div className="hidden sm:flex items-center gap-2 ml-auto">
                 <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</span>
                 <Sparkline values={latencyVals} color="var(--color-success)" width={60} height={16} />
                 <span className="text-[9px] tabular-nums text-[var(--color-text-dim)]">avg {avg.toFixed(0)}ms</span>
@@ -175,7 +175,7 @@ export default function AuditPage() {
             );
           })()}
           {activitySlots.length > 0 && (
-            <div className={`flex items-center gap-2 ${filtered.filter(e => e.duration_ms != null).length < 3 ? "ml-auto" : ""}`}>
+            <div className={`hidden sm:flex items-center gap-2 ${filtered.filter(e => e.duration_ms != null).length < 3 ? "ml-auto" : ""}`}>
               <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">activity</span>
               <ActivityDots values={activitySlots} rows={3} cols={12} dotSize={5} gap={2} />
             </div>

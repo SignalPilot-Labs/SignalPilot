@@ -17,6 +17,12 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
     title: "SignalPilot",
   },
+  icons: {
+    apple: "/icon-192.svg",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
 };
 
 export const viewport: Viewport = {

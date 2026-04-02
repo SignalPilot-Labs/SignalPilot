@@ -803,6 +803,18 @@ kbd {
     -webkit-tap-highlight-color: rgba(0, 255, 136, 0.08);
   }
 
+  /* ── Touch feedback for interactive elements ── */
+  button:active, a:active, [role="button"]:active {
+    opacity: 0.85;
+    transition: opacity 0.05s ease-out;
+  }
+
+  /* ── Card press effect on touch ── */
+  .card-accent-top:active {
+    transform: scale(0.99);
+    transition: transform 0.1s ease-out;
+  }
+
   /* ── Smooth momentum scrolling ── */
   .overflow-auto, .overflow-x-auto, .overflow-y-auto {
     -webkit-overflow-scrolling: touch;

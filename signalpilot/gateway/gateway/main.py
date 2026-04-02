@@ -2852,6 +2852,152 @@ async def correct_columns(name: str, body: dict):
     }
 
 
+# ─── Column Exploration (ReFoRCE pattern) ────────────────────────────────────
+
+@app.post("/api/connections/{name}/schema/explore-columns")
+async def explore_columns_deep(name: str, body: dict):
+    """Deep column exploration for complex Spider2.0 queries.
+
+    ReFoRCE research shows column exploration significantly enhances EX@8
+    for harder questions by promoting diverse candidate generation. This
+    endpoint lets the agent explore column distributions, value ranges,
+    and cross-column correlations before generating complex SQL.
+
+    Body: {
+        "table": "public.orders",
+        "columns": ["status", "total_amount"],  // optional — explore all if omitted
+        "include_stats": true,  // include min/max/avg for numeric cols
+        "include_values": true, // include sample distinct values
+        "value_limit": 10       // max sample values per column
+    }
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    table_key = body.get("table", "")
+    requested_cols = body.get("columns", [])
+    include_stats = body.get("include_stats", True)
+    include_values = body.get("include_values", True)
+    value_limit = min(body.get("value_limit", 10), 25)
+
+    if not table_key:
+        raise HTTPException(status_code=422, detail="table is required")
+
+    # Get cached schema
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        try:
+            extras = get_credential_extras(name)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+        schema_cache.put(name, cached)
+
+    table_info = cached.get(table_key)
+    if not table_info:
+        raise HTTPException(status_code=404, detail=f"Table '{table_key}' not found in schema")
+
+    all_columns = table_info.get("columns", [])
+    if requested_cols:
+        col_set = {c.lower() for c in requested_cols}
+        explore_cols = [c for c in all_columns if c["name"].lower() in col_set]
+    else:
+        explore_cols = all_columns
+
+    db_type = info.db_type
+    result_cols: list[dict] = []
+    numeric_types = {"integer", "int", "bigint", "smallint", "numeric", "decimal",
+                     "float", "double", "real", "number", "int4", "int8", "int2",
+                     "float4", "float8", "Float32", "Float64", "UInt32", "UInt64",
+                     "Int32", "Int64", "INTEGER", "BIGINT", "FLOAT64", "NUMERIC", "DECIMAL"}
+
+    # Build exploration queries
+    conn_str = get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+    extras = get_credential_extras(name)
+
+    async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
+        # Get sample values for all requested columns in one round trip
+        sample_values: dict[str, list] = {}
+        if include_values:
+            col_names = [c["name"] for c in explore_cols[:20]]
+            try:
+                sample_values = await connector.get_sample_values(table_key, col_names, value_limit)
+            except Exception:
+                pass
+
+        # Get numeric stats in one query
+        numeric_stats: dict[str, dict] = {}
+        if include_stats:
+            num_cols = [c for c in explore_cols if c.get("type", "").lower().rstrip("()0123456789, ").split("(")[0] in numeric_types]
+            if num_cols:
+                # Build a single query with MIN/MAX/AVG for all numeric columns
+                stat_parts = []
+                for c in num_cols[:15]:
+                    cn = c["name"]
+                    # Use appropriate quoting based on db_type
+                    q = '"' if db_type in ("postgres", "redshift", "snowflake", "duckdb", "trino") else '`' if db_type in ("mysql", "clickhouse", "databricks") else '['
+                    if q == '[':
+                        qo, qc = '[', ']'
+                    else:
+                        qo = qc = q
+                    safe = cn.replace(qc, qc + qc)
+                    stat_parts.append(f"MIN({qo}{safe}{qc})")
+                    stat_parts.append(f"MAX({qo}{safe}{qc})")
+                    stat_parts.append(f"AVG(CAST({qo}{safe}{qc} AS FLOAT))")
+                try:
+                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {table_key}"
+                    # Add LIMIT for safety on large tables
+                    if db_type == "mssql":
+                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {table_key}"
+                    rows = await connector.execute(stat_sql, timeout=15)
+                    if rows:
+                        row = rows[0]
+                        vals = list(row.values())
+                        for i, c in enumerate(num_cols[:15]):
+                            idx = i * 3
+                            if idx + 2 < len(vals):
+                                numeric_stats[c["name"]] = {
+                                    "min": vals[idx],
+                                    "max": vals[idx + 1],
+                                    "avg": round(float(vals[idx + 2]), 4) if vals[idx + 2] is not None else None,
+                                }
+                except Exception:
+                    pass
+
+        # Build result
+        for col in explore_cols:
+            col_result: dict = {
+                "name": col["name"],
+                "type": col.get("type", ""),
+                "nullable": col.get("nullable", True),
+                "primary_key": col.get("primary_key", False),
+            }
+            if col.get("comment"):
+                col_result["comment"] = col["comment"]
+            if col.get("stats"):
+                col_result["schema_stats"] = col["stats"]
+            if col["name"] in numeric_stats:
+                col_result["value_stats"] = numeric_stats[col["name"]]
+            if col["name"] in sample_values:
+                col_result["sample_values"] = sample_values[col["name"]]
+            result_cols.append(col_result)
+
+    return {
+        "table": table_key,
+        "table_type": table_info.get("type", "table"),
+        "row_count": table_info.get("row_count", 0),
+        "columns_explored": len(result_cols),
+        "columns": result_cols,
+    }
+
+
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sandboxes")

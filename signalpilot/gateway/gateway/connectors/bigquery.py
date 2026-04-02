@@ -51,7 +51,15 @@ class BigQueryConnector(BaseConnector):
         """Set credentials from a service account JSON string."""
         if not HAS_BIGQUERY:
             raise RuntimeError("google-cloud-bigquery not installed")
-        info = json.loads(credentials_json)
+        try:
+            info = json.loads(credentials_json)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid service account JSON: {e}") from e
+        if not isinstance(info, dict) or "type" not in info:
+            raise RuntimeError(
+                "Invalid service account JSON: must be a JSON object with a 'type' field. "
+                "Download the JSON key file from GCP Console > IAM > Service Accounts."
+            )
         creds = service_account.Credentials.from_service_account_info(info)
         self._project = project or info.get("project_id", "")
         self._dataset = dataset
@@ -107,13 +115,22 @@ class BigQueryConnector(BaseConnector):
                         "primary_key": False,  # BigQuery doesn't have traditional PKs
                         "description": field.description or "",
                     })
-                schema[key] = {
+                table_meta: dict[str, Any] = {
                     "schema": ds.dataset_id,
                     "name": table.table_id,
                     "columns": columns,
                     "row_count": table.num_rows,
                     "size_bytes": table.num_bytes,
                 }
+                # BigQuery-specific metadata for query optimization
+                if table.time_partitioning:
+                    table_meta["partitioning"] = {
+                        "field": table.time_partitioning.field,
+                        "type": table.time_partitioning.type_,
+                    }
+                if table.clustering_fields:
+                    table_meta["clustering_fields"] = list(table.clustering_fields)
+                schema[key] = table_meta
 
         return schema
 

@@ -560,6 +560,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
       redshift: "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/dev",
       clickhouse: "clickhouse://user:pass@host:9000/default  (or clickhouse+http:// for HTTP)",
       snowflake: "snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE",
+      databricks: "databricks://token@host.databricks.com/sql/1.0/warehouses/abc?catalog=main",
     };
     return (
       <FormInput

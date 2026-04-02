@@ -10,7 +10,7 @@ Run available quality tools, score the results, and produce a clear dashboard. T
 
 ## Step 1: Detect Health Stack
 
-Auto-detect available tools for the SignalPilot project:
+Auto-detect available tools. Search sub-directories since SignalPilot has multiple sub-projects (`signalpilot/gateway/`, `self-improve/agent/`, `self-improve/monitor/`):
 
 ```bash
 # Python linting
@@ -21,15 +21,24 @@ command -v pylint >/dev/null 2>&1 && echo "LINT: pylint"
 command -v mypy >/dev/null 2>&1 && echo "TYPECHECK: mypy"
 command -v pyright >/dev/null 2>&1 && echo "TYPECHECK: pyright"
 
-# Test runner
-[ -f pyproject.toml ] && grep -q "pytest" pyproject.toml 2>/dev/null && echo "TEST: pytest"
-[ -f package.json ] && grep -q '"test"' package.json 2>/dev/null && echo "TEST: npm test"
+# Test runner (check sub-projects too)
+find . -maxdepth 3 -name "pyproject.toml" -exec grep -l "pytest" {} \; 2>/dev/null | while read f; do
+  echo "TEST: pytest ($(dirname $f))"
+done
+find . -maxdepth 3 -name "package.json" -exec grep -l '"test"' {} \; 2>/dev/null | while read f; do
+  echo "TEST: npm test ($(dirname $f))"
+done
 
 # TypeScript
-[ -f tsconfig.json ] && echo "TYPECHECK_TS: tsc --noEmit"
+find . -maxdepth 3 -name "tsconfig.json" 2>/dev/null | while read f; do
+  echo "TYPECHECK_TS: tsc --noEmit ($(dirname $f))"
+done
 
-# ESLint
-ls eslint.config.* .eslintrc.* 2>/dev/null | head -1 && echo "LINT_TS: eslint ."
+# Dead code detection (Python)
+command -v vulture >/dev/null 2>&1 && echo "DEADCODE: vulture ."
+
+# Shell linting
+command -v shellcheck >/dev/null 2>&1 && echo "SHELL: shellcheck"
 ```
 
 ## Step 2: Run Tools

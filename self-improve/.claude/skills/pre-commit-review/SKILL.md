@@ -16,33 +16,16 @@ git diff origin/main
 
 ## Step 2: Critical Pass
 
-Apply these critical checks against the diff:
+Apply the checks from the **/code-quality** and **/security-audit** skills against the diff. In addition, check for these review-specific concerns:
 
 ### SQL & Data Safety
 - Raw string interpolation in SQL queries (use parameterized queries)
-- Missing LIMIT on SELECT queries that could return unbounded results
 - DDL/DML statements that should be blocked by the engine
-
-### Security
-- Hardcoded secrets, API keys, or credentials
-- Missing input validation at API boundaries
-- Shell injection via unsanitized user input in subprocess calls
-- Missing authentication/authorization checks on endpoints
 
 ### Concurrency & State
 - Race conditions in async code (shared mutable state without locks)
 - Missing await on async calls
 - Database operations outside transactions where atomicity is needed
-
-### Error Handling
-- Bare `except:` clauses (must catch specific exceptions)
-- Swallowed exceptions (catch and silently ignore)
-- Missing error handling at system boundaries
-
-### Type Safety
-- `Any` type where a specific type is possible
-- Missing return type annotations on public functions
-- Implicit None returns where explicit is expected
 
 ### Completeness
 - New enum values not handled in all switch/match statements
@@ -71,13 +54,12 @@ Every finding MUST include a confidence score (1-10):
 For each finding, classify as:
 
 **AUTO-FIX** (apply immediately, no deliberation needed):
-- Missing type annotations
+- Missing type annotations on public functions
 - Bare except clauses -> specific exception types
-- Missing LIMIT on queries
 - Unused imports
-- Simple error handling additions
 
 **INVESTIGATE** (requires deeper analysis before fixing):
+- Missing LIMIT on queries (adding LIMIT changes semantics; verify the query intent first)
 - Potential race conditions
 - Security concerns
 - Architectural issues

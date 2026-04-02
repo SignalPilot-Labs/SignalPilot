@@ -192,6 +192,13 @@ class RedshiftConnector(BaseConnector):
             WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
         """
 
+        # Identify views vs tables
+        views_sql = """
+            SELECT schemaname AS table_schema, viewname AS table_name
+            FROM pg_views
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_internal')
+        """
+
         import asyncio
 
         # Run all metadata queries concurrently via thread pool
@@ -204,12 +211,18 @@ class RedshiftConnector(BaseConnector):
                 logger.info("Redshift metadata query failed (%s): %s", label, e)
                 return []
 
-        rows, fk_rows_raw, table_info_raw, stats_raw = await asyncio.gather(
+        rows, fk_rows_raw, table_info_raw, stats_raw, views_raw = await asyncio.gather(
             asyncio.to_thread(_fetch, sql, "columns"),
             asyncio.to_thread(_fetch, fk_sql, "foreign_keys"),
             asyncio.to_thread(_fetch, table_info_sql, "table_info"),
             asyncio.to_thread(_fetch, stats_sql, "stats"),
+            asyncio.to_thread(_fetch, views_sql, "views"),
         )
+
+        # Build views set for type classification
+        view_keys: set[str] = set()
+        for r in views_raw:
+            view_keys.add(f"{r['table_schema']}.{r['table_name']}")
 
         # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
@@ -260,7 +273,7 @@ class RedshiftConnector(BaseConnector):
                 schema[key] = {
                     "schema": row["table_schema"],
                     "name": row["table_name"],
-                    "type": "table",
+                    "type": "view" if key in view_keys else "table",
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
                     "row_count": ti.get("row_count", 0),

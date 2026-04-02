@@ -17,6 +17,18 @@ demonstrating how an attacker could exploit it.
 
 Run phases in order. Skip phases that don't apply to changed files (diff-aware mode).
 
+**Diff-aware mode:** On a feature branch, scope scanning to changed files:
+```bash
+CHANGED=$(git diff origin/main --name-only 2>/dev/null)
+if [ -n "$CHANGED" ]; then
+  echo "DIFF-AWARE: Scanning $(echo "$CHANGED" | wc -l) changed files"
+  # Only run phases relevant to changed file types
+  echo "$CHANGED" | grep -q '\.py$' && echo "RUN: Phase 4-6 (Python)"
+  echo "$CHANGED" | grep -qE 'gateway/(engine|governance)' && echo "RUN: Phase 5 (SQL Safety)"
+fi
+```
+For full-codebase scans, run on main or pass `--full`.
+
 ### Phase 1 — Architecture & Attack Surface
 
 ```bash

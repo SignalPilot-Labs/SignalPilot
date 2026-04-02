@@ -8,6 +8,28 @@ Run available quality tools, score the results, and produce a clear dashboard. T
 
 **Read-only.** Do not fix issues. Produce the dashboard and recommendations only.
 
+## Diff-Aware Mode
+
+When running on a feature branch (not main), automatically scope scans to changed areas:
+
+```bash
+# Detect changed files since diverging from main
+CHANGED=$(git diff origin/main --name-only 2>/dev/null)
+if [ -n "$CHANGED" ]; then
+  echo "DIFF-AWARE: Scoping scan to $(echo "$CHANGED" | wc -l) changed files"
+  # Extract sub-projects with changes
+  echo "$CHANGED" | cut -d'/' -f1-2 | sort -u
+fi
+```
+
+In diff-aware mode:
+- Run lint/typecheck only on changed files or their containing sub-projects
+- Run only tests in sub-projects that have changes
+- Report both scoped scores (changed areas) and baseline scores (full project) for context
+- Flag if changed files introduced new issues not present on main
+
+For full-codebase assessment, run on the main branch or pass `--full`.
+
 ## Step 1: Detect Health Stack
 
 Auto-detect available tools. Search sub-directories since SignalPilot has multiple sub-projects (`signalpilot/gateway/`, `self-improve/agent/`, `self-improve/monitor/`):

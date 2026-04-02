@@ -2,7 +2,7 @@ Begin your self-improvement pass on the codebase. Follow this structured workflo
 
 1. **Explore** — Read the project README, key source files, and recent git history to understand the current state.
 
-2. **Assess** — Run the **/health** skill methodology: detect available quality tools, run them, and produce a scored dashboard. This gives you an objective baseline and identifies the weakest areas.
+2. **Assess** — Run the **/health** skill methodology: detect available quality tools, run them, and produce a scored dashboard. This gives you an objective baseline and identifies the weakest areas. If security improvements are in scope, also run **/security-scan** to discover vulnerabilities with confidence-rated findings.
 
 3. **Prioritize** — Pick the single highest-impact improvement from the health results. Focus on categories scoring below 7, weighted by importance (tests > type safety > lint > dead code).
 

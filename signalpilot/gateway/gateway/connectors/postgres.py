@@ -25,11 +25,12 @@ class PostgresConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._pool is None:
             raise RuntimeError("Not connected")
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire(timeout=10) as conn:
             # Set statement timeout on the DB side (Feature #8)
             # This cancels the query on the server, not just the client
             if timeout:
-                await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
+                timeout_ms = max(1, min(int(timeout), 300)) * 1000
+                await conn.execute(f"SET LOCAL statement_timeout = {timeout_ms}")
             # Wrap in read-only transaction (defense in depth)
             async with conn.transaction(readonly=True):
                 rows = await conn.fetch(sql, *(params or []), timeout=timeout)

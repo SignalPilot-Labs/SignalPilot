@@ -19,13 +19,16 @@ import textwrap
 from mcp.server.fastmcp import FastMCP
 
 from .client import SignalPilotClient
+from .agent_client import AgentClient
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 GATEWAY_URL = os.environ.get("SIGNALPILOT_URL", "http://localhost:3300")
 API_KEY = os.environ.get("SIGNALPILOT_API_KEY", "")
+MONITOR_URL = os.environ.get("SIGNALPILOT_MONITOR_URL", "http://localhost:3401")
 
 _client: SignalPilotClient | None = None
+_agent_client: AgentClient | None = None
 
 
 def _get_client() -> SignalPilotClient:
@@ -35,11 +38,19 @@ def _get_client() -> SignalPilotClient:
     return _client
 
 
+def _get_agent_client() -> AgentClient:
+    global _agent_client
+    if _agent_client is None:
+        _agent_client = AgentClient(MONITOR_URL)
+    return _agent_client
+
+
 mcp = FastMCP(
     "SignalPilot Remote",
     instructions=textwrap.dedent("""\
         You have access to a remote SignalPilot instance — a governed platform for
-        AI database access with sandbox code execution.
+        AI database access with sandbox code execution, plus a self-improving
+        AI agent that autonomously improves the SignalPilot codebase.
 
         Key capabilities:
         - Query databases with automatic governance (SQL validation, LIMIT injection,
@@ -47,9 +58,13 @@ mcp = FastMCP(
         - Execute Python code in isolated Firecracker microVMs (~300ms cold start)
         - Manage database connections, sandboxes, and gateway settings
         - View audit logs, connection health, cache stats, and budgets
+        - Start, monitor, pause, resume, stop, and inject prompts into the
+          self-improving agent — a Claude-powered autonomous coding agent
+        - View agent run history, tool calls, diffs, and real-time output
 
-        The gateway is at: {url}
-    """).format(url=GATEWAY_URL),
+        The gateway is at: {gateway}
+        The self-improve monitor is at: {monitor}
+    """).format(gateway=GATEWAY_URL, monitor=MONITOR_URL),
 )
 
 
@@ -735,6 +750,474 @@ async def update_settings(settings_json: str) -> str:
         return _err(e)
 
     return f"Settings updated:\n{json.dumps(result, indent=2)}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SELF-IMPROVE AGENT TOOLS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _fmt_run(run: dict) -> str:
+    """Format a single run dict into readable text."""
+    lines = [f"Run: {run.get('id', '?')[:12]}"]
+    if run.get("status"):
+        lines[0] += f"  [{run['status'].upper()}]"
+    if run.get("branch_name"):
+        lines.append(f"  Branch: {run['branch_name']}")
+    if run.get("custom_prompt"):
+        lines.append(f"  Prompt: {run['custom_prompt'][:120]}")
+    if run.get("base_branch"):
+        lines.append(f"  Base: {run['base_branch']}")
+    if run.get("total_cost_usd") is not None:
+        lines.append(f"  Cost: ${run['total_cost_usd']:.2f}")
+    tokens_in = run.get("total_input_tokens", 0) or 0
+    tokens_out = run.get("total_output_tokens", 0) or 0
+    if tokens_in or tokens_out:
+        lines.append(f"  Tokens: {tokens_in:,} in / {tokens_out:,} out")
+    if run.get("started_at"):
+        lines.append(f"  Started: {run['started_at']}")
+    if run.get("finished_at"):
+        lines.append(f"  Finished: {run['finished_at']}")
+    if run.get("duration_minutes"):
+        lines.append(f"  Duration: {run['duration_minutes']}m")
+    if run.get("pr_url"):
+        lines.append(f"  PR: {run['pr_url']}")
+    return "\n".join(lines)
+
+
+# ── Agent Health ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def agent_health() -> str:
+    """
+    Check the status of the self-improving agent.
+
+    Returns whether the agent is idle or running, the current run ID,
+    elapsed time, and time remaining if a run is active.
+    """
+    try:
+        data = await _get_agent_client().agent_health()
+    except Exception as e:
+        return f"Agent at {MONITOR_URL} is unreachable: {e}"
+
+    status = data.get("status", "unknown")
+    lines = [f"Agent Status: {status.upper()}"]
+    if data.get("current_run_id"):
+        lines.append(f"Current Run: {data['current_run_id'][:12]}")
+    if data.get("elapsed_minutes") is not None:
+        lines.append(f"Elapsed: {data['elapsed_minutes']:.0f}m")
+    if data.get("time_remaining"):
+        lines.append(f"Remaining: {data['time_remaining']}")
+    if data.get("session_unlocked") is not None:
+        lines.append(f"Session Unlocked: {data['session_unlocked']}")
+    return "\n".join(lines)
+
+
+# ── Start / Resume / Stop ────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def start_improvement_run(
+    prompt: str = "",
+    duration_minutes: float = 30,
+    max_budget_usd: float = 0,
+    base_branch: str = "main",
+) -> str:
+    """
+    Start a new self-improvement run on the SignalPilot codebase.
+
+    The agent will autonomously analyze the codebase, identify improvements,
+    implement changes, run tests, commit, and create a PR. A CEO/PM layer
+    reviews work between rounds and assigns the next task.
+
+    Args:
+        prompt: Custom focus/task for the agent (e.g. "improve test coverage for the gateway").
+                If empty, the agent does a general improvement pass.
+        duration_minutes: How long the agent should work (default 30). Set to 0 for unlimited.
+        max_budget_usd: Maximum API spend in USD (0 = use server default).
+        base_branch: Git branch to base work from (default: main).
+
+    Returns:
+        Run ID and configuration details.
+    """
+    try:
+        data = await _get_agent_client().start_run(
+            prompt=prompt or None,
+            max_budget_usd=max_budget_usd,
+            duration_minutes=duration_minutes,
+            base_branch=base_branch,
+        )
+    except Exception as e:
+        return _err(e)
+
+    run_id = data.get("run_id", "?")
+    lines = [f"Improvement run started!"]
+    if run_id and run_id != "?":
+        lines.append(f"Run ID: {run_id[:12]}")
+    if data.get("prompt"):
+        lines.append(f"Prompt: {data['prompt']}")
+    lines.append(f"Duration: {duration_minutes}m")
+    lines.append(f"Base Branch: {base_branch}")
+    if data.get("max_budget_usd"):
+        lines.append(f"Budget: ${data['max_budget_usd']:.2f}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def resume_improvement_run(run_id: str, max_budget_usd: float = 0) -> str:
+    """
+    Resume a previously stopped or rate-limited improvement run.
+
+    The agent picks up where it left off, using the same branch and
+    session context. Useful after rate limiting or manual stops.
+
+    Args:
+        run_id: ID of the run to resume (from list_improvement_runs)
+        max_budget_usd: Additional budget for the resumed run (0 = server default)
+
+    Returns:
+        Confirmation that the run has been resumed.
+    """
+    try:
+        data = await _get_agent_client().resume_run(run_id, max_budget_usd)
+    except Exception as e:
+        return _err(e)
+    return f"Run {run_id[:12]} resumed."
+
+
+@mcp.tool()
+async def stop_improvement_run(run_id: str = "", reason: str = "") -> str:
+    """
+    Gracefully stop the current improvement run.
+
+    The agent will commit its work, push the branch, and create a PR
+    before shutting down. Use this for a clean stop.
+
+    If run_id is provided, sends the stop signal through the control
+    channel (allows the agent to wrap up). If omitted, sends an instant
+    stop to whatever is currently running.
+
+    Args:
+        run_id: Specific run to stop (optional — defaults to current run)
+        reason: Why you're stopping (logged in audit trail)
+
+    Returns:
+        Confirmation message.
+    """
+    try:
+        if run_id:
+            data = await _get_agent_client().stop_run(run_id, reason or "Operator stop from Claude Code")
+        else:
+            data = await _get_agent_client().stop_agent()
+    except Exception as e:
+        return _err(e)
+    return f"Stop signal sent. The agent will commit progress and create a PR."
+
+
+@mcp.tool()
+async def kill_improvement_run() -> str:
+    """
+    Immediately kill the current improvement run. NO cleanup.
+
+    Unlike stop_improvement_run, this cancels the agent task instantly
+    without waiting for commits or PR creation. Use only as a last resort.
+
+    Returns:
+        Confirmation message.
+    """
+    try:
+        data = await _get_agent_client().kill_agent()
+    except Exception as e:
+        return _err(e)
+    run_id = data.get("run_id", "?")
+    return f"Run {run_id[:12]} killed immediately. No PR was created."
+
+
+# ── Run Management ───────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_improvement_runs(limit: int = 10) -> str:
+    """
+    List recent self-improvement runs with status, cost, and PR links.
+
+    Args:
+        limit: Number of runs to show (default 10, max 50)
+
+    Returns:
+        Formatted list of recent runs.
+    """
+    try:
+        runs = await _get_agent_client().list_runs()
+    except Exception as e:
+        return _err(e)
+
+    if not runs:
+        return "No improvement runs found."
+
+    runs = runs[:min(limit, 50)]
+    lines = [f"Improvement Runs ({len(runs)} most recent):", ""]
+    for run in runs:
+        lines.append(_fmt_run(run))
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_improvement_run(run_id: str) -> str:
+    """
+    Get detailed information about a specific improvement run.
+
+    Returns full status, cost, tokens, branch, PR URL, prompt, and timing.
+
+    Args:
+        run_id: Run ID to look up
+
+    Returns:
+        Detailed run information.
+    """
+    try:
+        run = await _get_agent_client().get_run(run_id)
+    except Exception as e:
+        return _err(e)
+    return _fmt_run(run)
+
+
+@mcp.tool()
+async def get_run_tool_calls(run_id: str, limit: int = 50) -> str:
+    """
+    View the tool calls made by the agent during an improvement run.
+
+    Shows what files were read, edited, what commands were run, etc.
+
+    Args:
+        run_id: Run ID to look up
+        limit: Number of tool calls to show (default 50)
+
+    Returns:
+        Recent tool calls with tool name, timing, and status.
+    """
+    try:
+        calls = await _get_agent_client().get_tool_calls(run_id, limit)
+    except Exception as e:
+        return _err(e)
+
+    if not calls:
+        return f"No tool calls recorded for run {run_id[:12]}."
+
+    lines = [f"Tool Calls for run {run_id[:12]} ({len(calls)} shown):", ""]
+    for tc in calls:
+        tool = tc.get("tool_name", "?")
+        status = tc.get("status", "?")
+        ts = tc.get("ts", "")
+        duration = tc.get("duration_ms")
+        line = f"  [{status}] {tool}"
+        if duration is not None:
+            line += f" ({duration:.0f}ms)"
+        if tc.get("input_preview"):
+            line += f" — {tc['input_preview'][:80]}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_run_output(run_id: str, limit: int = 30) -> str:
+    """
+    View the latest LLM output and audit events from an improvement run.
+
+    This shows the agent's thinking, text output, and key events
+    (start, stop, errors, prompt injections, etc.) in reverse chronological order.
+
+    Args:
+        run_id: Run ID to look up
+        limit: Number of events to show (default 30)
+
+    Returns:
+        Recent agent output and events.
+    """
+    try:
+        entries = await _get_agent_client().get_run_audit(run_id, limit)
+    except Exception as e:
+        return _err(e)
+
+    if not entries:
+        return f"No audit entries for run {run_id[:12]}."
+
+    lines = [f"Output for run {run_id[:12]} ({len(entries)} events):", ""]
+    for entry in entries:
+        event = entry.get("event_type", "?")
+        data = entry.get("data", {})
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+
+        if event == "llm_text":
+            text = data.get("text", "")[:200]
+            role = data.get("agent_role", "worker")
+            lines.append(f"  [{role}] {text}")
+        elif event == "llm_thinking":
+            text = data.get("text", "")[:100]
+            lines.append(f"  [thinking] {text}...")
+        elif event in ("run_started", "round_complete", "ceo_continuation", "worker_assignment"):
+            lines.append(f"  [{event}] {json.dumps(data, default=str)[:150]}")
+        elif event in ("stop_requested", "killed", "fatal_error", "prompt_injected", "session_unlocked"):
+            lines.append(f"  [{event}] {json.dumps(data, default=str)[:150]}")
+        elif event == "usage":
+            inp = data.get("total_input_tokens", 0)
+            out = data.get("total_output_tokens", 0)
+            lines.append(f"  [usage] {inp:,} in / {out:,} out")
+        elif event == "pr_created":
+            lines.append(f"  [PR] {data.get('url', '?')}")
+        else:
+            # Show other events briefly
+            lines.append(f"  [{event}] {json.dumps(data, default=str)[:120]}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_run_diff(run_id: str) -> str:
+    """
+    View the git diff (files changed) for an improvement run.
+
+    Shows which files were added, modified, or removed, with line counts.
+
+    Args:
+        run_id: Run ID to look up
+
+    Returns:
+        File-level diff summary.
+    """
+    try:
+        data = await _get_agent_client().get_run_diff(run_id)
+    except Exception as e:
+        return _err(e)
+
+    files = data.get("files", [])
+    if not files:
+        return f"No changes in run {run_id[:12]}."
+
+    total_add = data.get("total_added", 0)
+    total_rm = data.get("total_removed", 0)
+    lines = [f"Diff for run {run_id[:12]} ({len(files)} files, +{total_add}/-{total_rm}):", ""]
+    for f in files:
+        fname = f.get("file", f.get("path", "?"))
+        added = f.get("added", 0)
+        removed = f.get("removed", 0)
+        lines.append(f"  {fname}  +{added}/-{removed}")
+    return "\n".join(lines)
+
+
+# ── Agent Control Signals ────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def pause_improvement_run(run_id: str) -> str:
+    """
+    Pause a running improvement run.
+
+    The agent will stop processing after the current tool call completes.
+    Use resume_improvement_signal to continue, or inject_agent_prompt to
+    redirect the agent before resuming.
+
+    Args:
+        run_id: Run ID to pause
+
+    Returns:
+        Confirmation message.
+    """
+    try:
+        data = await _get_agent_client().pause_run(run_id)
+    except Exception as e:
+        return _err(e)
+    return f"Run {run_id[:12]} paused."
+
+
+@mcp.tool()
+async def resume_improvement_signal(run_id: str) -> str:
+    """
+    Resume a paused improvement run.
+
+    Args:
+        run_id: Run ID to resume
+
+    Returns:
+        Confirmation message.
+    """
+    try:
+        data = await _get_agent_client().resume_run_signal(run_id)
+    except Exception as e:
+        return _err(e)
+    return f"Run {run_id[:12]} resumed."
+
+
+@mcp.tool()
+async def inject_agent_prompt(run_id: str, message: str) -> str:
+    """
+    Inject a message into a running or paused improvement agent.
+
+    This lets you redirect the agent mid-session. The message will be
+    delivered to the agent as an operator instruction. If the agent is
+    paused, it will resume with your message as the next task.
+
+    Args:
+        run_id: Run ID to inject into
+        message: The instruction to send to the agent
+
+    Returns:
+        Confirmation message.
+    """
+    if not message or not message.strip():
+        return "Error: Message cannot be empty."
+    try:
+        data = await _get_agent_client().inject_prompt(run_id, message)
+    except Exception as e:
+        return _err(e)
+    length = data.get("prompt_length", len(message))
+    return f"Message injected into run {run_id[:12]} ({length} chars)."
+
+
+@mcp.tool()
+async def unlock_improvement_run(run_id: str) -> str:
+    """
+    Unlock the session time gate for a running improvement run.
+
+    Normally the agent is locked for a minimum duration. Unlocking lets
+    the agent's end_session tool succeed immediately, allowing a clean
+    early exit.
+
+    Args:
+        run_id: Run ID to unlock
+
+    Returns:
+        Confirmation message.
+    """
+    try:
+        data = await _get_agent_client().unlock_run(run_id)
+    except Exception as e:
+        return _err(e)
+    return f"Run {run_id[:12]} session gate unlocked. Agent can now end early."
+
+
+@mcp.tool()
+async def list_agent_branches() -> str:
+    """
+    List available git branches in the agent's repository clone.
+
+    Useful for choosing a base_branch when starting a new improvement run.
+
+    Returns:
+        List of branch names.
+    """
+    try:
+        branches = await _get_agent_client().list_branches()
+    except Exception as e:
+        return _err(e)
+    if not branches:
+        return "No branches found."
+    return "Branches:\n" + "\n".join(f"  - {b}" for b in branches)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

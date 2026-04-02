@@ -3,19 +3,28 @@
 # Setup SignalPilot MCP for Claude Code
 #
 # Usage:
-#   ./setup-claude-code.sh                           # localhost:3300, no auth
-#   ./setup-claude-code.sh http://myserver:3300       # custom URL
-#   ./setup-claude-code.sh http://myserver:3300 sk-.. # custom URL + API key
+#   ./setup-claude-code.sh                                          # localhost defaults
+#   ./setup-claude-code.sh http://myserver:3300                     # custom gateway
+#   ./setup-claude-code.sh http://myserver:3300 http://myserver:3401  # custom gateway + monitor
+#   ./setup-claude-code.sh http://myserver:3300 http://myserver:3401 sk-..  # + API key
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SP_URL="${1:-http://localhost:3300}"
-SP_KEY="${2:-}"
+SP_MONITOR="${2:-http://localhost:3401}"
+SP_KEY="${3:-}"
+
+# Auto-derive monitor URL from gateway URL if only gateway provided
+if [ "$#" -eq 1 ]; then
+    # Replace port with 3401
+    SP_MONITOR="$(echo "$SP_URL" | sed 's/:[0-9]*$/:3401/')"
+fi
 
 echo "=== SignalPilot MCP — Claude Code Setup ==="
 echo ""
 echo "Gateway URL: $SP_URL"
+echo "Monitor URL: $SP_MONITOR"
 [ -n "$SP_KEY" ] && echo "API Key:     (set)" || echo "API Key:     (none)"
 echo ""
 
@@ -39,35 +48,31 @@ echo ""
 echo "File: ~/.claude/settings.json (global) or .claude/settings.json (per-project)"
 echo ""
 
+ENV_BLOCK="\"SIGNALPILOT_URL\": \"$SP_URL\",
+        \"SIGNALPILOT_MONITOR_URL\": \"$SP_MONITOR\""
 if [ -n "$SP_KEY" ]; then
-cat <<SETTINGS
-{
-  "mcpServers": {
-    "signalpilot": {
-      "command": "signalpilot-mcp-remote",
-      "env": {
-        "SIGNALPILOT_URL": "$SP_URL",
-        "SIGNALPILOT_API_KEY": "$SP_KEY"
-      }
-    }
-  }
-}
-SETTINGS
-else
-cat <<SETTINGS
-{
-  "mcpServers": {
-    "signalpilot": {
-      "command": "signalpilot-mcp-remote",
-      "env": {
-        "SIGNALPILOT_URL": "$SP_URL"
-      }
-    }
-  }
-}
-SETTINGS
+    ENV_BLOCK="$ENV_BLOCK,
+        \"SIGNALPILOT_API_KEY\": \"$SP_KEY\""
 fi
+
+cat <<SETTINGS
+{
+  "mcpServers": {
+    "signalpilot": {
+      "command": "signalpilot-mcp-remote",
+      "env": {
+        $ENV_BLOCK
+      }
+    }
+  }
+}
+SETTINGS
 
 echo ""
 echo "=== Done ==="
 echo "Restart Claude Code to pick up the new MCP server."
+echo ""
+echo "Try these in Claude Code:"
+echo '  "Check the agent status"'
+echo '  "Start an improvement run focused on test coverage for 30 minutes"'
+echo '  "Show me the latest improvement run output"'

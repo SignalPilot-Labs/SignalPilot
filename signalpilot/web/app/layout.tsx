@@ -7,6 +7,7 @@ import { CommandPalette } from "@/components/ui/command-palette";
 import { ToastProvider } from "@/components/ui/toast";
 import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
+import { NetworkStatus } from "@/components/ui/network-status";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -43,6 +44,7 @@ export default function RootLayout({
       <body className="antialiased bg-noise">
         <ToastProvider>
           <Sidebar />
+          <NetworkStatus />
           <GridBackground />
           <main className="main-content min-h-screen relative z-10">
             <ErrorBoundary>

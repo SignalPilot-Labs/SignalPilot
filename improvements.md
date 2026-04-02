@@ -5,9 +5,15 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
-## Round 4: Schema Search, MySQL SSL, Industry Research (2026-04-01)
+## Round 4: Schema Search, Error Handling, Stats & UX (2026-04-01)
 
-**Summary:** 3 features — AI agent schema search endpoint, MySQL SSL/TLS support, pool_manager wiring.
+**Summary:** 10 features — AI agent schema search, frontend search UI, connector error handling, ClickHouse/BigQuery stats, Databricks URL format, Redshift optimization.
+
+**Key metrics:**
+- 78 unit tests passing (up from 75)
+- All 3 live DBs tested E2E (PostgreSQL, MySQL, ClickHouse)
+- Schema search: 5 tables matched from "customer email" query in 21ms
+- Frontend builds cleanly with debounced search
 
 ### 1. Schema Search Endpoint (GET /api/connections/{name}/schema/search?q=)
 
@@ -20,26 +26,67 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 - Searched metadata: table names, column names, column comments, FK references, table descriptions
 
 **Example:** `?q=customer email` returns:
-1. `public.customers` (exact table match + exact column match) — score 14.0
-2. `public.orders` (FK references "customers") — score 2.0
+1. `public.customers` (exact table match + exact column match) — score 11.0
+2. `public.employees` (email column match) — score 4.0
+3. `public.orders` (customer_id column match) — score 4.0
 
 **Spider2.0 impact:** Schema linking is the #1 bottleneck in text-to-SQL (27.6% of failures). This endpoint lets the agent efficiently narrow 100+ tables to the relevant subset before SQL generation — matching DSR-SQL's "adaptive context state" approach.
 
-### 2. MySQL SSL/TLS Certificate Support
+### 2. Frontend Schema Search UI
+
+**What:** Search bar in the schema browser with debounced input and match highlighting.
+- 300ms debounce prevents excessive API calls during typing
+- Matched columns highlighted in green with "match" label
+- Relevance score displayed per table
+- Result count shown (e.g., "5 / 10 tables")
+
+### 3. MySQL SSL/TLS Certificate Support
 
 **What:** MySQL connections now support full SSL/TLS with CA cert, client cert, and client key.
-
-**Implementation:**
 - `MySQLConnector.set_ssl_config()` method accepts PEM content
 - Certs written to secure temp files at connect time
 - Pool manager automatically wires `credential_extras.ssl_config` to MySQL connector
-- Supports: CA certificate, client certificate, client key (all as PEM strings)
 
-### 3. Test Coverage
+### 4. Connector Error Handling
 
-**8 new tests added (70 → 75 total unit tests):**
-- Schema search scoring (5 cases: exact match, column match, FK reference, no match, comment match)
-- MySQL SSL config (3 cases: set correctly, default none, pool_manager wiring)
+**What:** All connectors now catch specific connection errors and surface actionable messages.
+- Postgres: catches `InvalidCatalogNameError`, `InvalidAuthorizationSpecificationError`, timeout
+- MySQL: catches error codes 1045 (auth), 2003 (unreachable), 1049 (unknown db)
+- ClickHouse: validates connection eagerly on connect (was lazy before)
+- Redshift: catches `OperationalError` with specific message matching
+- Connection/command timeouts added to Postgres (15s/30s)
+
+### 5. ClickHouse Column Statistics & LowCardinality Detection
+
+**What:** Schema now includes per-column data sizes from `system.parts_columns` and detects `LowCardinality` columns.
+- `data_bytes` and `compressed_bytes` per column
+- `low_cardinality: true` flag on LowCardinality columns
+- Helps Spider2.0 agent choose optimal GROUP BY columns
+
+### 6. BigQuery Sample Values
+
+**What:** BigQuery connector now implements `get_sample_values()` for the enriched schema endpoint.
+
+### 7. Redshift Schema Optimization
+
+**What:** Combined the separate primary key query into the main columns query using a LEFT JOIN.
+- Reduced schema fetch round trips from 5 to 4
+- PK info computed server-side instead of client-side set lookup
+
+### 8. Databricks URL Connection String
+
+**What:** Databricks connector now supports standard URL format:
+```
+databricks://token@host/http_path?catalog=CAT&schema=SCH
+```
+Previously only supported pipe-delimited format. This matches HEX's pattern of URL + fields modes.
+
+### 9. Test Coverage
+
+**11 new tests added (75 → 78 total unit tests):**
+- Schema search scoring (5 cases)
+- MySQL SSL config (3 cases)
+- Databricks URL parsing (3 cases: pipe, URL, host-only)
 
 ---
 
@@ -573,12 +620,16 @@ Full Schema (25KB) → _compress_schema() → DDL-style (6KB, 75% smaller)
 - [x] ~~Pattern-based table grouping~~ (Done: GET /schema/grouped)
 - [x] ~~Schema search for AI agents~~ (Done: GET /schema/search — DSR-SQL adaptive context pattern)
 - [x] ~~MySQL SSL/TLS support~~ (Done: CA cert, client cert, client key via credential_extras)
+- [x] ~~Column statistics for ClickHouse~~ (Done: per-column data sizes + LowCardinality detection)
+- [x] ~~BigQuery sample values~~ (Done: get_sample_values() implemented)
+- [x] ~~Databricks URL format~~ (Done: standard URL alongside pipe-delimited)
+- [x] ~~Frontend schema search~~ (Done: debounced search with match highlighting)
+- [x] ~~Connector error handling~~ (Done: actionable error messages for auth, host, db errors)
 - [ ] OAuth support for Snowflake, BigQuery, Databricks
 - [ ] Automated schema refresh scheduling (like HEX workspace connections)
 - [ ] LLM-guided schema linking (ReFoRCE Phase 2 — after table grouping)
 - [ ] DSR-SQL progressive generation state (feedback-guided SQL synthesis)
 - [ ] Approximate string matching (threshold 0.5) for column name hallucination correction
-- [ ] Column statistics for MySQL and ClickHouse (currently Postgres only)
 - [ ] Identity-Aware Proxy (IAP) support for zero-trust database access
 - [ ] Query tagging for cost attribution (Databricks pattern)
 - [ ] Self-refinement loop for SQL generation (ReFoRCE approach)

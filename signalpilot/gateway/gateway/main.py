@@ -1346,6 +1346,83 @@ async def explore_table(
     return result
 
 
+@app.get("/api/connections/{name}/schema/overview")
+async def get_schema_overview(
+    name: str,
+):
+    """Quick database overview — table count, total columns, total rows, FK graph density.
+
+    Gives the AI agent a fast sense of database complexity before loading the full schema.
+    Useful for deciding whether to use compact or full schema format.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        try:
+            extras = get_credential_extras(name)
+            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+            cached = await connector.get_schema()
+            await pool_manager.release(info.db_type, conn_str)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+        schema_cache.put(name, cached)
+
+    filtered = apply_endorsement_filter(name, cached)
+
+    total_tables = len(filtered)
+    total_columns = 0
+    total_rows = 0
+    total_fks = 0
+    schemas_set: set[str] = set()
+    tables_with_fks: set[str] = set()
+    largest_tables: list[dict] = []
+
+    for key, table in filtered.items():
+        cols = table.get("columns", [])
+        total_columns += len(cols)
+        row_count = table.get("row_count", 0) or 0
+        total_rows += row_count
+        schemas_set.add(table.get("schema", ""))
+        fks = table.get("foreign_keys", [])
+        total_fks += len(fks)
+        if fks:
+            tables_with_fks.add(key)
+        largest_tables.append({
+            "table": key,
+            "columns": len(cols),
+            "rows": row_count,
+            "fks": len(fks),
+        })
+
+    # Sort by row count descending
+    largest_tables.sort(key=lambda t: t["rows"], reverse=True)
+
+    return {
+        "connection_name": name,
+        "db_type": info.db_type,
+        "schemas": sorted(schemas_set),
+        "schema_count": len(schemas_set),
+        "table_count": total_tables,
+        "total_columns": total_columns,
+        "total_rows": total_rows,
+        "total_foreign_keys": total_fks,
+        "tables_with_fks": len(tables_with_fks),
+        "avg_columns_per_table": round(total_columns / total_tables, 1) if total_tables else 0,
+        "largest_tables": largest_tables[:10],
+        "recommendation": (
+            "compact" if total_columns > 200
+            else "full" if total_columns < 50
+            else "enriched"
+        ),
+    }
+
+
 @app.get("/api/connections/{name}/schema/diff")
 async def get_schema_diff(name: str):
     """Compare current database schema against cached version.

@@ -755,6 +755,45 @@ async def explore_table(connection_name: str, table_name: str) -> str:
 
 
 @mcp.tool()
+async def schema_overview(connection_name: str) -> str:
+    """
+    Quick database overview — table count, columns, rows, FK density.
+
+    Use this first to understand the database before loading schema.
+    Returns a recommendation for which schema format to use.
+
+    Args:
+        connection_name: Name of the database connection
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+        resp = await client.get(f"/api/connections/{connection_name}/schema/overview")
+        if resp.status_code != 200:
+            return f"Error: {resp.text}"
+        data = resp.json()
+
+    lines = [
+        f"Database: {connection_name} ({data.get('db_type', 'unknown')})",
+        f"Schemas: {', '.join(data.get('schemas', []))}",
+        f"Tables: {data.get('table_count', 0)}",
+        f"Columns: {data.get('total_columns', 0)} (avg {data.get('avg_columns_per_table', 0)} per table)",
+        f"Total rows: {data.get('total_rows', 0):,}",
+        f"Foreign keys: {data.get('total_foreign_keys', 0)} across {data.get('tables_with_fks', 0)} tables",
+        f"Recommended schema format: {data.get('recommendation', 'enriched')}",
+    ]
+
+    largest = data.get("largest_tables", [])
+    if largest:
+        lines.append(f"\nLargest tables:")
+        for t in largest[:5]:
+            lines.append(f"  {t['table']}: {t['rows']:,} rows, {t['columns']} cols, {t['fks']} FKs")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 async def cache_status() -> str:
     """
     Check the query cache status and performance.

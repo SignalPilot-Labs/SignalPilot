@@ -302,7 +302,6 @@ async def log_audit(
     await conn.commit()
 
 
-
 async def update_run_status(run_id: str, status: str) -> None:
     """Update the run status (e.g. to 'paused')."""
     conn = get_db()

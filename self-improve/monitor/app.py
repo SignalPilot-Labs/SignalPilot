@@ -405,15 +405,8 @@ async def unlock_run(run_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Agent proxy (start / health / branches / diff / stop / kill / resume)
+# Agent proxy (health / branches / diff)
 # ---------------------------------------------------------------------------
-
-class StartRunRequest(BaseModel):
-    prompt: str | None = None
-    max_budget_usd: float = 0
-    duration_minutes: float = 0
-    base_branch: str = "main"
-
 
 @app.get("/api/agent/health")
 async def agent_health():
@@ -423,41 +416,6 @@ async def agent_health():
             return res.json()
     except Exception as e:
         return {"status": "unreachable", "error": str(e)}
-
-
-@app.post("/api/agent/start")
-async def start_agent_run(body: StartRunRequest = StartRunRequest()):
-    """Trigger a new improvement run. Decrypts stored credentials and passes them to agent."""
-    conn = await _get_db()
-
-    # Read decrypted credentials from settings DB
-    creds = {}
-    for key, env_key in [("claude_token", "claude_token"), ("git_token", "git_token"), ("github_repo", "github_repo")]:
-        cursor = await conn.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
-        row = await cursor.fetchone()
-        if row:
-            val = crypto.decrypt(row["value"], MASTER_KEY_PATH) if row["encrypted"] else row["value"]
-            creds[env_key] = val
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(
-                f"{AGENT_API_URL}/start",
-                json={
-                    "prompt": body.prompt,
-                    "max_budget_usd": body.max_budget_usd,
-                    "duration_minutes": body.duration_minutes,
-                    "base_branch": body.base_branch,
-                    **creds,
-                },
-            )
-            if res.status_code == 409:
-                raise HTTPException(status_code=409, detail=res.json().get("detail", "Run in progress"))
-            return res.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
 @app.get("/api/agent/branches")
@@ -554,59 +512,6 @@ async def get_run_diff(run_id: str):
         pass
 
     return {"files": [], "total_files": 0, "total_added": 0, "total_removed": 0, "source": "unavailable"}
-
-
-@app.post("/api/agent/stop")
-async def stop_agent_instant():
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.post(f"{AGENT_API_URL}/stop")
-            return res.json()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
-
-
-class ResumeRunRequest(BaseModel):
-    run_id: str
-    max_budget_usd: float = 0
-
-
-@app.post("/api/agent/resume")
-async def resume_agent_run(body: ResumeRunRequest):
-    """Resume a previous run. Passes decrypted credentials to agent."""
-    conn = await _get_db()
-
-    creds = {}
-    for key in ("claude_token", "git_token", "github_repo"):
-        cursor = await conn.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
-        row = await cursor.fetchone()
-        if row:
-            val = crypto.decrypt(row["value"], MASTER_KEY_PATH) if row["encrypted"] else row["value"]
-            creds[key] = val
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(
-                f"{AGENT_API_URL}/resume",
-                json={"run_id": body.run_id, "max_budget_usd": body.max_budget_usd, **creds},
-            )
-            if res.status_code == 409:
-                raise HTTPException(status_code=409, detail=res.json().get("detail", "Run in progress"))
-            return res.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
-
-
-@app.post("/api/agent/kill")
-async def kill_agent():
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.post(f"{AGENT_API_URL}/kill")
-            return res.json()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
 # ---------------------------------------------------------------------------

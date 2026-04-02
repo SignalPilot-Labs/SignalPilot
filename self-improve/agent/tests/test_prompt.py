@@ -100,6 +100,39 @@ def test_build_ceo_continuation_unlimited_duration():
     assert "unlimited" in result
 
 
+def test_build_ceo_continuation_caps_at_100_percent():
+    result = prompt.build_ceo_continuation(
+        round_num=10,
+        elapsed_minutes=45,
+        duration_minutes=30,  # Over time
+        tool_summary="none",
+        files_changed="none",
+        commits="none",
+        cost_so_far=5.0,
+        round_summary="Working overtime",
+        original_prompt="test",
+    )
+    assert "100%" in result
+    # Should NOT show >100%
+    assert "150%" not in result
+
+
+def test_build_ceo_continuation_empty_fields_use_defaults():
+    result = prompt.build_ceo_continuation(
+        round_num=1,
+        elapsed_minutes=0,
+        duration_minutes=10,
+        tool_summary="",
+        files_changed="",
+        commits="",
+        cost_so_far=0,
+        round_summary="",
+        original_prompt="",
+    )
+    assert "none" in result
+    assert "$0.00" in result
+
+
 def test_build_stop_prompt():
     result = prompt.build_stop_prompt()
     assert "commit" in result.lower()

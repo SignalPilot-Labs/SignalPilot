@@ -14,18 +14,20 @@ git diff origin/main --stat
 git diff origin/main
 ```
 
-## Step 2: Critical Pass
+## Step 2: Load Specialist Checklists
 
-Apply the checks from the **/code-quality** and **/security-audit** skills against the diff. In addition, check for these review-specific concerns:
+Determine which checklists to apply based on the file types in the diff:
 
-### SQL & Data Safety
-- Raw string interpolation in SQL queries (use parameterized queries)
-- DDL/DML statements that should be blocked by the engine
+```bash
+# Detect which checklists are relevant
+git diff origin/main --name-only | grep -q '\.py$' && echo "LOAD: checklists/python-backend.md"
+git diff origin/main --name-only | grep -qE '\.(tsx?|jsx?)$' && echo "LOAD: checklists/typescript-frontend.md"
+git diff origin/main --name-only | grep -qE 'engine/|governance/|connectors/' && echo "LOAD: checklists/sql-safety.md"
+```
 
-### Concurrency & State
-- Race conditions in async code (shared mutable state without locks)
-- Missing await on async calls
-- Database operations outside transactions where atomicity is needed
+For each matching checklist, read the file from `checklists/` relative to this skill and apply its checks against the diff. Checklists contain codebase-specific patterns — they are the primary review source.
+
+In addition to checklist-specific checks, apply the **/code-quality** and **/security-audit** skills. Also check for these cross-cutting concerns:
 
 ### Completeness
 - New enum values not handled in all switch/match statements

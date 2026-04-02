@@ -112,6 +112,14 @@ class TestGitPushChecks:
         result = permissions._check_git_push("git push -u origin signalpilot/improvements-123")
         assert result is None
 
+    def test_blocks_push_with_refspec_to_main(self):
+        result = permissions._check_git_push("git push origin HEAD:main")
+        assert result is not None
+
+    def test_blocks_push_with_u_flag_to_production(self):
+        result = permissions._check_git_push("git push -u origin production")
+        assert result is not None
+
     def test_non_push_command_allowed(self):
         result = permissions._check_git_push("git status")
         assert result is None

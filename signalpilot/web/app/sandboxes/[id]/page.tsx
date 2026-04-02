@@ -538,7 +538,7 @@ export default function SandboxDetailPage() {
           </span>
         </div>
 
-        <div className="flex gap-3 p-4 pt-2">
+        <div className="flex flex-col sm:flex-row gap-3 p-4 pt-2">
           <div className="flex-1 relative">
             {/* Input prompt indicator */}
             <div className="absolute left-3 top-3 text-[10px] text-[var(--color-success)] tracking-wider pointer-events-none select-none">
@@ -556,11 +556,11 @@ export default function SandboxDetailPage() {
               autoFocus
             />
           </div>
-          <div className="flex flex-col gap-2 self-end">
+          <div className="flex sm:flex-col gap-2 sm:self-end">
             <button
               onClick={handleExecute}
               disabled={running || !code.trim()}
-              className="flex items-center gap-2 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              className="flex items-center justify-center gap-2 w-full sm:w-auto px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
             >
               {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               run

@@ -16,17 +16,17 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-8">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
+            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)] flex-shrink-0">
               {subtitle}
             </span>
           </div>
           <p className="text-xs text-[var(--color-text-dim)] tracking-wider">{description}</p>
         </div>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
       </div>
       {/* Gradient accent line */}
       <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
@@ -49,26 +49,28 @@ export function TerminalBar({
 }) {
   return (
     <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-      <div className="px-4 py-2 flex items-center gap-3 border-b border-[var(--color-border)]">
-        {/* Terminal dots */}
-        <div className="flex items-center gap-1.5">
+      <div className="px-4 py-2 flex items-center gap-3 border-b border-[var(--color-border)] overflow-x-auto">
+        {/* Terminal dots — hidden on mobile to save space */}
+        <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-30" />
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-20" />
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
         </div>
         {/* Path */}
-        <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1">
+        <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1 whitespace-nowrap min-w-0 truncate">
           <span className="text-[var(--color-success)]">$</span>
           <span className="text-[var(--color-text-dim)]"> signalpilot </span>
           <span className="text-[var(--color-text-muted)]">{path}</span>
         </code>
-        {status}
+        {status && <span className="flex-shrink-0">{status}</span>}
       </div>
       {children && (
-        <div className="px-4 py-2.5 flex items-center justify-between">
-          {children}
+        <div className="px-4 py-2.5 flex items-center justify-between terminal-bar-content overflow-x-auto">
+          <div className="flex items-center gap-4 min-w-0 flex-shrink-0">
+            {children}
+          </div>
           {/* Animated data flow indicator */}
-          <div className="w-8 h-px ml-4 overflow-hidden opacity-30">
+          <div className="w-8 h-px ml-4 overflow-hidden opacity-30 flex-shrink-0 hidden sm:block">
             <div className="h-full animate-data-flow" />
           </div>
         </div>

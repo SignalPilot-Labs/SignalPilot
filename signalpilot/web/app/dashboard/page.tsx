@@ -149,7 +149,7 @@ export default function DashboardPage() {
     .reverse();
 
   return (
-    <div className="p-8 max-w-[1400px] animate-fade-in">
+    <div className="p-8 max-w-[1400px] animate-fade-in mx-auto">
       <PageHeader
         title="dashboard"
         subtitle="live overview"
@@ -167,7 +167,7 @@ export default function DashboardPage() {
           />
         }
       >
-        <div className="flex items-center gap-8 text-xs">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
           <div className="flex items-center gap-2">
             <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
@@ -182,12 +182,12 @@ export default function DashboardPage() {
             <StatusBadge ok={metrics ? metrics.kvm_available : null} />
           </div>
           {latencyValues.length > 3 && (
-            <div className="flex items-center gap-2 ml-auto">
+            <div className="flex items-center gap-2 sm:ml-auto">
               <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
               <Sparkline values={latencyValues} color="var(--color-success)" width={60} height={16} />
             </div>
           )}
-          <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
+          <div className={`${latencyValues.length <= 3 ? "sm:ml-auto" : ""} flex items-center gap-2`}>
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
             <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
               governance: active
@@ -197,7 +197,7 @@ export default function DashboardPage() {
       </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
         <MetricCard
           label="active sandboxes"
           value={metrics?.active_sandboxes ?? "—"}
@@ -225,7 +225,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats cards — second row ── */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
         <MetricCard
           label="queries"
           value={auditStats.queries}
@@ -257,8 +257,8 @@ export default function DashboardPage() {
 
       {/* ── Latency + Distribution row ── */}
       {latencyValues.length > 3 && (
-        <div className="grid grid-cols-3 gap-4 mb-8 stagger-fade-in">
-          <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8 stagger-fade-in">
+          <div className="sm:col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
@@ -322,9 +322,9 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Two-column layout ── */}
-      <div className="grid grid-cols-3 gap-4">
-        {/* Recent activity — takes 2 cols */}
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Recent activity — takes 2 cols on desktop */}
+        <div className="sm:col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -353,13 +353,13 @@ export default function DashboardPage() {
                     key={entry.id}
                     className="group/row hover:bg-[var(--color-bg-hover)] transition-all"
                   >
-                    <div className="flex items-center gap-3 px-4 py-2.5">
-                      <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 ${
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+                      <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 flex-shrink-0 ${
                         entry.blocked ? "text-[var(--color-error)]" : cfg.color
                       }`}>
                         {cfg.label}
                       </span>
-                      <span className="flex-1 text-xs truncate overflow-hidden">
+                      <span className="flex-1 text-xs truncate overflow-hidden min-w-0 basis-[120px]">
                         {entry.sql
                           ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
                           : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
@@ -367,17 +367,17 @@ export default function DashboardPage() {
                             : entry.connection_name || "—"}</span>}
                       </span>
                       {entry.blocked && (
-                        <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">
+                        <span className="text-[9px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase flex-shrink-0">
                           blocked
                         </span>
                       )}
                       {entry.rows_returned != null && (
-                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
                           {entry.rows_returned}r
                         </span>
                       )}
                       {entry.duration_ms != null && (
-                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
+                        <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
                           {entry.duration_ms.toFixed(0)}ms
                         </span>
                       )}

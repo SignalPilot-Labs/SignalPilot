@@ -171,7 +171,7 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center pt-[18vh]"
+      className="fixed inset-0 z-[100] flex items-start justify-center pt-[10vh] sm:pt-[18vh] px-4 sm:px-0"
       onClick={() => { setOpen(false); setQuery(""); }}
     >
       {/* Backdrop with blur */}
@@ -179,7 +179,7 @@ export function CommandPalette() {
 
       {/* Palette */}
       <div
-        className="relative w-[520px] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden"
+        className="relative w-full sm:w-[520px] max-h-[80vh] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top accent line */}

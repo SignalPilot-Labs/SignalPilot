@@ -116,7 +116,7 @@ export default function AuditPage() {
         description="full-chain audit trail of all governed operations"
         actions={<>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button onClick={exportCSV} disabled={filtered.length === 0}
             className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> csv
@@ -145,7 +145,7 @@ export default function AuditPage() {
 
       {/* Stats bar */}
       {entries.length > 0 && (
-        <div className="flex items-center gap-6 mb-6 px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-6 mb-6 px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           {[
             { label: "total", value: statsData.total, color: "" },
             { label: "queries", value: statsData.queries, color: "text-[var(--color-success)]" },
@@ -184,15 +184,15 @@ export default function AuditPage() {
       )}
 
       {/* Filters */}
-      <div className="flex items-center gap-3 mb-6">
-        <div className="flex items-center gap-2 flex-1">
-          <Filter className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+      <div className="flex flex-wrap items-center gap-3 mb-6">
+        <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+          <Filter className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
           <input
             type="text"
             placeholder="search sql, connection, or reason..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+            className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
           />
         </div>
         <select
@@ -214,8 +214,8 @@ export default function AuditPage() {
       </div>
 
       {/* Table */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-        <table className="w-full text-xs">
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-x-auto">
+        <table className="w-full text-xs min-w-[640px]">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
               {["time", "type", "connection", "detail", "duration"].map((h, i) => (

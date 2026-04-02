@@ -103,7 +103,7 @@ export default function SandboxesPage() {
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">create sandbox</span>
           </div>
           <div className="p-5">
-            <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">label</label>
                 <input
@@ -164,7 +164,7 @@ export default function SandboxesPage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] stagger-fade-in">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-[var(--color-border)] stagger-fade-in">
           {sandboxes.map((sb) => {
             const status = statusConfig[sb.status] || statusConfig.error;
             const budgetPct = sb.budget_usd > 0 ? (sb.budget_used / sb.budget_usd) * 100 : 0;

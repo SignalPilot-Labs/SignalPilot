@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Sidebar from "@/components/layout/sidebar";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
@@ -11,6 +11,19 @@ import { PageTransition } from "@/components/ui/page-transition";
 export const metadata: Metadata = {
   title: "SignalPilot",
   description: "Governed sandbox console for AI database access",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "SignalPilot",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: "#050505",
 };
 
 export default function RootLayout({
@@ -24,7 +37,7 @@ export default function RootLayout({
         <ToastProvider>
           <Sidebar />
           <GridBackground />
-          <main className="ml-56 min-h-screen relative z-10">
+          <main className="main-content min-h-screen relative z-10">
             <ErrorBoundary>
               <PageTransition>{children}</PageTransition>
             </ErrorBoundary>

@@ -308,9 +308,9 @@ export default function SandboxDetailPage() {
   const inputCount = history.filter(h => h.type === "input").length;
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col min-h-screen sm:h-screen">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0 gap-3">
         <div className="flex items-center gap-4">
           <button
             onClick={() => router.push("/sandboxes")}
@@ -351,11 +351,11 @@ export default function SandboxDetailPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {/* Budget indicator */}
           <div className="flex items-center gap-2">
             <DollarSign className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <div className="w-20">
+            <div className="w-16 sm:w-20">
               <div className="flex justify-between text-[9px] text-[var(--color-text-dim)] mb-0.5 tabular-nums">
                 <span>${sandbox.budget_used.toFixed(4)}</span>
                 <span>${sandbox.budget_usd.toFixed(2)}</span>
@@ -552,7 +552,7 @@ export default function SandboxDetailPage() {
               placeholder="python3"
               rows={expanded ? 12 : 4}
               spellCheck={false}
-              className="w-full pl-20 pr-4 py-3 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
+              className="w-full pl-16 sm:pl-20 pr-4 py-3 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
               autoFocus
             />
           </div>

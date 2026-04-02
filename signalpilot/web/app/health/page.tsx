@@ -175,7 +175,7 @@ export default function HealthPage() {
       </TerminalBar>
 
       {/* Overview cards */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
         {/* Connections */}
         <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
@@ -253,7 +253,7 @@ export default function HealthPage() {
           <div className="section-header">
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connection health</span>
           </div>
-          <div className="grid grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
             {healthData.map((health) => {
               const cfg = statusConfig[health.status] || statusConfig.unknown;
               const StatusIcon = cfg.icon;
@@ -363,7 +363,7 @@ export default function HealthPage() {
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">cache performance</span>
           </div>
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
-            <div className="grid grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
               <div>
                 <div className="text-[10px] text-[var(--color-text-dim)] mb-3 flex items-center gap-2 tracking-wider">
                   <BarChart3 className="w-3 h-3" strokeWidth={1.5} /> query cache

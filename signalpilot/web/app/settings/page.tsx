@@ -109,7 +109,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-8 max-w-3xl animate-fade-in">
+    <div className="p-8 max-w-3xl mx-auto animate-fade-in">
       <PageHeader
         title="settings"
         subtitle="config"
@@ -244,7 +244,7 @@ export default function SettingsPage() {
         <SectionHeader icon={Shield} title="governance defaults" iconColor="text-[var(--color-success)]" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="p-6">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
                 { label: "default row limit", key: "default_row_limit", desc: "max rows per query", type: "number" },
                 { label: "default budget (usd)", key: "default_budget_usd", desc: "per-session spending limit", type: "number", step: "0.01" },
@@ -414,7 +414,7 @@ export default function SettingsPage() {
                 </svg>
                 <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">available tools</span>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {[
                   { name: "query_database", desc: "governed sql queries" },
                   { name: "execute_code", desc: "sandbox code execution" },

@@ -213,7 +213,7 @@ export default function ConnectionsPage() {
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">new connection</span>
           </div>
           <div className="p-6">
-            <div className="grid grid-cols-2 gap-4 mb-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
               {[
                 { label: "name", key: "name", placeholder: "prod-analytics", type: "text" },
                 { label: "type", key: "db_type", type: "select" },
@@ -286,7 +286,7 @@ export default function ConnectionsPage() {
 
             return (
               <div key={conn.id} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all card-accent-top">
-                <div className="flex items-center gap-4 p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 p-4">
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
                     <StatusDot
@@ -324,7 +324,7 @@ export default function ConnectionsPage() {
                       {conn.description && <span className="ml-2 text-[var(--color-text-dim)]">— {conn.description}</span>}
                     </div>
                     {health && health.sample_count > 0 && (
-                      <div className="flex items-center gap-4 mt-1.5 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-1.5 text-[9px] text-[var(--color-text-dim)] tracking-wider">
                         <span className="flex items-center gap-1">
                           <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />
                           {health.sample_count} queries
@@ -374,7 +374,7 @@ export default function ConnectionsPage() {
                   )}
 
                   {/* Action buttons */}
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
                     <button onClick={(e) => { e.stopPropagation(); handleToggleSchema(conn.name); }}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -414,7 +414,7 @@ export default function ConnectionsPage() {
                         <p className="text-[10px] text-[var(--color-text-dim)] mb-3 tracking-wider">
                           {Object.keys(tables).length} tables
                         </p>
-                        <div className="grid grid-cols-2 gap-px max-h-80 overflow-auto bg-[var(--color-border)]">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-px max-h-80 overflow-auto bg-[var(--color-border)]">
                           {Object.values(tables).map((t) => (
                             <div key={t.name} className="p-3 bg-[var(--color-bg)]">
                               <div className="flex items-center gap-2 mb-2">

@@ -177,11 +177,11 @@ export default function SchemaExplorerPage() {
         subtitle="explorer"
         description="browse tables, columns, and types"
         actions={
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
-            className="px-3 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[200px] tracking-wide"
+            className="px-3 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[150px] sm:min-w-[200px] tracking-wide"
           >
             {connections.length === 0 ? (
               <option value="">no connections</option>
@@ -216,15 +216,15 @@ export default function SchemaExplorerPage() {
       {/* Search + stats + type legend */}
       {schema && (
         <div className="space-y-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 flex-1">
-              <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
               <input
                 type="text"
                 placeholder="search tables and columns..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
               />
             </div>
             <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">
@@ -237,19 +237,19 @@ export default function SchemaExplorerPage() {
                 {Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0)} cols
               </span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 flex-wrap">
               <button
                 onClick={scanPii}
                 disabled={scanningPii}
-                className="flex items-center gap-1 px-2 py-1 text-[10px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider"
+                className="flex items-center gap-1 px-2 py-1.5 sm:py-1 text-[10px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider"
               >
                 {scanningPii ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" strokeWidth={1.5} />}
                 {piiDetections ? `pii: ${Object.keys(piiDetections).length}` : "scan pii"}
               </button>
-              <button onClick={expandAll} className="px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={expandAll} className="px-2 py-1.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 expand
               </button>
-              <button onClick={collapseAll} className="px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={collapseAll} className="px-2 py-1.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 collapse
               </button>
             </div>
@@ -353,8 +353,8 @@ export default function SchemaExplorerPage() {
                   </button>
 
                   {expanded && (
-                    <div className="border-t border-[var(--color-border)]">
-                      <table className="w-full text-[11px]">
+                    <div className="border-t border-[var(--color-border)] overflow-x-auto">
+                      <table className="w-full text-[11px] min-w-[480px]">
                         <thead>
                           <tr className="border-b border-[var(--color-border)]/50">
                             <th className="text-left px-4 py-2 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-8">#</th>

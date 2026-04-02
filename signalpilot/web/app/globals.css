@@ -650,6 +650,19 @@ kbd {
   background: linear-gradient(90deg, transparent 0%, var(--color-border) 20%, var(--color-border) 80%, transparent 100%);
 }
 
+/* ── Layout: desktop sidebar offset, mobile full-width ── */
+.main-content {
+  margin-left: 14rem; /* 224px — matches sidebar width */
+}
+
+/* ── Mobile visibility toggles ── */
+.sidebar-desktop { display: flex; }
+.mobile-topbar { display: none; }
+.mobile-bottombar { display: none; }
+.mobile-menu-overlay { /* always rendered via JS */ }
+.mobile-only { display: none; }
+.desktop-only { display: block; }
+
 /* ── Responsive adjustments ── */
 
 /* Large screens — wider content */
@@ -669,6 +682,93 @@ kbd {
   .grid-cols-3,
   .grid-cols-2 { grid-template-columns: 1fr; }
   .col-span-2 { grid-column: span 1; }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Mobile breakpoint (<768px) */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* ── Layout ── */
+  .sidebar-desktop { display: none !important; }
+  .mobile-topbar { display: flex !important; }
+  .mobile-bottombar { display: flex !important; }
+  .mobile-only { display: block !important; }
+  .desktop-only { display: none !important; }
+
+  .main-content {
+    margin-left: 0;
+    padding-top: 3rem; /* space for top bar (48px) */
+    padding-bottom: 3.5rem; /* space for bottom bar (56px) */
+  }
+
+  /* ── Grid layouts collapse to single column ── */
+  .grid-cols-4,
+  .grid-cols-3,
+  .grid-cols-2 {
+    grid-template-columns: 1fr !important;
+  }
+  .col-span-2 {
+    grid-column: span 1 !important;
+  }
+
+  /* ── Page padding adjustments ── */
+  .p-8 { padding: 1rem !important; }
+  .px-8 { padding-left: 1rem !important; padding-right: 1rem !important; }
+  .py-8 { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+
+  /* ── Page header spacing ── */
+  .mb-8 { margin-bottom: 1.25rem; }
+
+  /* ── Touch-friendly targets — minimum 44px tap area ── */
+  nav a, nav button, .mobile-bottombar a {
+    min-height: 44px;
+  }
+
+  /* ── Tables: horizontal scroll ── */
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  thead, tbody, tr, th, td {
+    display: revert;
+  }
+
+  /* ── Terminal bar: scroll horizontally ── */
+  .terminal-bar-content {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Safe area for devices with notch/home indicator ── */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* ── Tooltip: disabled on mobile (touch doesn't hover well) ── */
+  .tooltip-container .tooltip-content {
+    display: none !important;
+  }
+
+  /* ── Card interactive: disable hover lift on touch ── */
+  .card-interactive:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* ── Reduce motion for mobile performance ── */
+  .card-radial-glow::before,
+  .card-accent-top::after,
+  .gradient-border::before {
+    display: none;
+  }
+
+  /* ── Font size bumps for readability on small screens ── */
+  .text-\[9px\] { font-size: 10px; }
+  .text-\[10px\] { font-size: 11px; }
+
+  /* ── Scrollbar: wider for touch ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
 }
 
 /* ── Smooth page load ── */

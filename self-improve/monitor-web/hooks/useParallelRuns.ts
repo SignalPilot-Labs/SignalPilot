@@ -5,6 +5,8 @@ import type { ParallelRunSlot, ParallelStatus } from "@/lib/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3401";
 
+const SAFE_ID = /^[\w-]+$/;
+
 export function useParallelRuns(pollInterval = 5000) {
   const [status, setStatus] = useState<ParallelStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -65,6 +67,11 @@ export function useParallelRuns(pollInterval = 5000) {
   }, [fetchStatus]);
 
   const sendSignal = useCallback(async (runId: string, signal: string, payload?: string) => {
+    if (!SAFE_ID.test(runId) || !SAFE_ID.test(signal)) {
+      setError("Invalid run ID or signal");
+      return;
+    }
+    setLoading(true);
     try {
       const res = await fetch(`${API}/api/parallel/runs/${runId}/${signal}`, {
         method: "POST",
@@ -79,6 +86,8 @@ export function useParallelRuns(pollInterval = 5000) {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setError(msg);
+    } finally {
+      setLoading(false);
     }
   }, [fetchStatus]);
 

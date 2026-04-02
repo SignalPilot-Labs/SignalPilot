@@ -931,6 +931,14 @@ def _compress_schema(schema: dict) -> dict:
             compressed[key]["engine"] = table["engine"]
         if table.get("sorting_key"):
             compressed[key]["sorting_key"] = table["sorting_key"]
+        # Redshift-specific
+        if table.get("diststyle"):
+            compressed[key]["diststyle"] = table["diststyle"]
+        if table.get("sortkey"):
+            compressed[key]["sortkey"] = table["sortkey"]
+        # Snowflake-specific
+        if table.get("clustering_key"):
+            compressed[key]["clustering_key"] = table["clustering_key"]
 
     return compressed
 
@@ -1479,6 +1487,10 @@ async def get_schema_ddl(
         sort_key = table.get("sortkey", "")
         if sort_key:
             comment_parts.append(f"SORTKEY({sort_key})")
+        # Snowflake-specific: clustering key
+        clustering_key = table.get("clustering_key", "")
+        if clustering_key:
+            comment_parts.append(f"CLUSTER BY({clustering_key})")
         # BigQuery-specific: partitioning and clustering
         partitioning = table.get("partitioning", {})
         if partitioning and partitioning.get("field"):
@@ -1747,6 +1759,12 @@ async def schema_link(
         diststyle = t.get("diststyle", "")
         if diststyle:
             meta_parts.append(f"DISTSTYLE={diststyle}")
+        sortkey = t.get("sortkey", "")
+        if sortkey:
+            meta_parts.append(f"SORTKEY({sortkey})")
+        clustering_key = t.get("clustering_key", "")
+        if clustering_key:
+            meta_parts.append(f"CLUSTER BY({clustering_key})")
         meta_parts.append(f"relevance={table_scores.get(key, 0):.1f}")
         rc_comment = f" -- {', '.join(meta_parts)}"
         ddl_lines.append(f"{header}CREATE TABLE {table_name} (\n{',\n'.join(col_parts)}\n);{rc_comment}")

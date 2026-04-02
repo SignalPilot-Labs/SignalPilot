@@ -6,9 +6,12 @@ Tier 1 connector matching HEX's Snowflake integration.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .base import BaseConnector
+
+logger = logging.getLogger(__name__)
 
 try:
     import snowflake.connector
@@ -215,22 +218,28 @@ class SnowflakeConnector(BaseConnector):
                 AND tc.TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
         """
 
-        # Run all metadata queries concurrently via thread pool (4 parallel queries)
-        def _fetch(query: str) -> list:
+        # Clustering keys — SHOW TABLES returns cluster_by (not in information_schema)
+        # Run as a 5th parallel query
+        cluster_sql = "SHOW TABLES IN DATABASE"
+
+        # Run all metadata queries concurrently via thread pool (5 parallel queries)
+        def _fetch(query: str, label: str = "") -> list:
             try:
                 cursor = self._conn.cursor(snowflake.connector.DictCursor)
                 cursor.execute(query)
                 result = cursor.fetchall()
                 cursor.close()
                 return result
-            except Exception:
+            except Exception as e:
+                logger.info("Snowflake metadata query failed (%s): %s", label, e)
                 return []
 
-        rows, rc_rows, fk_rows_raw, pk_rows = await asyncio.gather(
-            asyncio.to_thread(_fetch, col_sql),
-            asyncio.to_thread(_fetch, rc_sql),
-            asyncio.to_thread(_fetch, fk_sql),
-            asyncio.to_thread(_fetch, pk_sql),
+        rows, rc_rows, fk_rows_raw, pk_rows, cluster_rows = await asyncio.gather(
+            asyncio.to_thread(_fetch, col_sql, "columns"),
+            asyncio.to_thread(_fetch, rc_sql, "row_counts"),
+            asyncio.to_thread(_fetch, fk_sql, "foreign_keys"),
+            asyncio.to_thread(_fetch, pk_sql, "primary_keys"),
+            asyncio.to_thread(_fetch, cluster_sql, "clustering"),
         )
 
         # Build row count map
@@ -252,17 +261,31 @@ class SnowflakeConnector(BaseConnector):
                 "references_column": r["PK_COLUMN_NAME"],
             })
 
+        # Build clustering key map from SHOW TABLES result
+        clustering_keys: dict[str, str] = {}
+        for r in cluster_rows:
+            # SHOW TABLES returns: name, schema_name, cluster_by, rows, bytes, ...
+            schema_name = r.get("schema_name", "")
+            table_name = r.get("name", "")
+            cluster_by = r.get("cluster_by", "")
+            if schema_name and table_name and cluster_by:
+                clustering_keys[f"{schema_name}.{table_name}"] = cluster_by
+
         schema: dict[str, Any] = {}
         for row in rows:
             key = f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}"
             if key not in schema:
-                schema[key] = {
+                table_entry: dict[str, Any] = {
                     "schema": row["TABLE_SCHEMA"],
                     "name": row["TABLE_NAME"],
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
                     "row_count": row_counts.get(key, 0),
                 }
+                cluster_key = clustering_keys.get(key, "")
+                if cluster_key:
+                    table_entry["clustering_key"] = cluster_key
+                schema[key] = table_entry
             schema[key]["columns"].append({
                 "name": row["COLUMN_NAME"],
                 "type": row["DATA_TYPE"],

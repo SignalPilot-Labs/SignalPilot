@@ -756,7 +756,7 @@ kbd {
     display: revert;
   }
 
-  /* ── Terminal bar: scroll horizontally ── */
+  /* ── Terminal bar: scroll horizontally, tighter spacing ── */
   .terminal-bar-content {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -853,6 +853,35 @@ kbd {
     -webkit-backdrop-filter: blur(12px);
     background: rgba(3, 3, 3, 0.85);
   }
+
+  /* ── Overscroll: prevent accidental page pull on Chrome ── */
+  html {
+    overscroll-behavior-y: contain;
+  }
+
+  /* ── Code blocks: larger text for readability ── */
+  pre, code {
+    font-size: max(12px, 0.75rem);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Mobile landscape — wider but shorter, optimize layout      */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) and (orientation: landscape) {
+  .mobile-topbar {
+    height: 2.5rem;
+  }
+  .mobile-bottombar {
+    height: 2.75rem;
+  }
+  .main-content {
+    padding-top: 2.5rem;
+    padding-bottom: 2.75rem;
+  }
+  /* Reduce vertical spacing in landscape */
+  .mb-8 { margin-bottom: 0.75rem; }
+  .space-y-4 > * + * { margin-top: 0.75rem; }
 }
 
 /* ═══════════════════════════════════════════════════════════ */

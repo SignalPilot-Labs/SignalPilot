@@ -7,12 +7,13 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ## Round 20: Implicit Join Detection, Connector Metadata Enrichment (2026-04-02)
 
-**Summary:** 6 improvements — added implicit join detection for FK-less databases (critical for Spider2.0 on data lakes), enriched Databricks with PK/FK/row count metadata, added Snowflake table sizes and comments, improved Snowflake cost estimation, fixed Redshift SSL resource leak.
+**Summary:** 11 improvements — implicit join detection for FK-less databases (critical for Spider2.0 on data lakes), connector metadata enrichment (Databricks PK/FK, Snowflake sizes/comments), improved cost estimation, safety fixes, frontend VPN/PrivateLink guidance, and comprehensive test coverage.
 
 **Key metrics:**
-- 281 tests passing (8 new tests for implicit join detection)
+- 302 tests passing (29 new tests this round)
 - All 4 live Docker databases verified with implicit joins
 - Implicit joins found: ClickHouse (1 inferred, 0 explicit), MySQL (1 inferred, 1 explicit)
+- Gateway and frontend deployed to Docker containers
 
 ### 1. Implicit Join Detection via Column Name Pattern Matching
 **Files:** `main.py`
@@ -54,10 +55,37 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 - **After:** `_cleanup_temp_files()` called in exception handlers before re-raise
 - Extracted cleanup into reusable method shared by `close()` and error paths
 
-### 6. Test Coverage
-**Files:** `tests/test_implicit_joins.py` (new, 8 tests)
-- Tests: basic _id pattern, plural matching, skip existing FKs, no self-reference,
-  multiple inferred joins, confidence field, no match without target, empty schema
+### 6. Compact Schema Enrichment
+**Files:** `main.py`
+- Column comments now included in DDL compression (`-- comment` suffix)
+- Compact JSON format includes `desc` field per column
+- Table `size_mb` included in DDL compression output
+- Compact schema FK map now includes inferred joins (works for data lakes)
+- Schema overview reports `inferred_joins` count and `has_implicit_joins` flag
+
+### 7. MCP Tool Enhancements
+**Files:** `mcp_server.py`
+- `find_join_path` now passes `include_implicit=true` for data lake support
+- Updated tool docstrings to document implicit join capability
+- Both MCP tool instances (early and late registration) updated consistently
+
+### 8. Databricks Query Timeout Enforcement
+**Files:** `connectors/databricks.py`
+- `execute()` now falls back to stored `_query_timeout` when no explicit timeout passed
+- Previously: timeout stored in `set_credential_extras()` but never used
+
+### 9. Frontend VPN/PrivateLink Guidance
+**Files:** `page.tsx`
+- Snowflake: Added PrivateLink URL hint, network policy guidance, VPN note
+- BigQuery: Added VPC Service Controls guidance and 2026 pricing info
+- Databricks: Added PrivateLink hint and Unity Catalog FK discovery note
+
+### 10. Test Coverage
+**Files:** `tests/test_implicit_joins.py`, `tests/test_databricks_connector.py`, `tests/test_snowflake_connector.py`, `tests/test_redshift_ssl_cleanup.py`
+- 8 tests: implicit join detection (basic _id pattern, plural matching, skip existing FKs, no self-reference, multiple inferred, confidence field, no match without target, empty schema)
+- 8 tests: Databricks connector (parsing formats, credential extras, timeouts, schema structure, PK/FK SQL patterns)
+- 8 tests: Snowflake connector (parsing formats, credential extras, keepalive, OCSP, schema query columns)
+- 5 tests: Redshift SSL cleanup (temp file creation, removal, missing file handling, timeout defaults)
 
 ---
 

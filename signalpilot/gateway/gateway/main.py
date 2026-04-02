@@ -250,8 +250,10 @@ async def test_connection(name: str):
 
     try:
         connector = await pool_manager.acquire(info.db_type, conn_str)
-        ok = await connector.health_check()
-        await pool_manager.release(info.db_type, conn_str)
+        try:
+            ok = await connector.health_check()
+        finally:
+            await pool_manager.release(info.db_type, conn_str)
         return {"status": "healthy" if ok else "error", "message": "Connection test passed" if ok else "Health check failed"}
     except Exception as e:
         return {"status": "error", "message": _sanitize_db_error(str(e))}
@@ -290,8 +292,10 @@ async def get_connection_schema(name: str):
 
     try:
         connector = await pool_manager.acquire(info.db_type, conn_str)
-        schema = await connector.get_schema()
-        await pool_manager.release(info.db_type, conn_str)
+        try:
+            schema = await connector.get_schema()
+        finally:
+            await pool_manager.release(info.db_type, conn_str)
     except Exception as e:
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
@@ -476,40 +480,42 @@ async def query_database(req: DirectQueryRequest):
     # Acquire connector once for both cost estimation and query execution (perf optimization)
     connector = await pool_manager.acquire(info.db_type, conn_str)
 
-    # Cost estimation (Feature #13) — run EXPLAIN before execution
-    cost_estimate = None
     try:
-        from .governance.cost_estimator import CostEstimator
-        cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
+        # Cost estimation (Feature #13) — run EXPLAIN before execution
+        cost_estimate = None
+        try:
+            from .governance.cost_estimator import CostEstimator
+            cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
 
-        # Check budget before executing expensive queries
-        if cost_estimate.is_expensive and cost_estimate.estimated_usd > 0:
-            # Warn in audit log but don't block (policy-based blocking is a future feature)
-            await append_audit(AuditEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                event_type="query",
-                connection_name=req.connection_name,
-                sql=req.sql,
-                metadata={"cost_warning": True, "estimated_usd": cost_estimate.estimated_usd, "estimated_rows": cost_estimate.estimated_rows},
-            ))
-    except Exception:
-        pass  # Cost estimation is best-effort
+            # Check budget before executing expensive queries
+            if cost_estimate.is_expensive and cost_estimate.estimated_usd > 0:
+                # Warn in audit log but don't block (policy-based blocking is a future feature)
+                await append_audit(AuditEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    event_type="query",
+                    connection_name=req.connection_name,
+                    sql=req.sql,
+                    metadata={"cost_warning": True, "estimated_usd": cost_estimate.estimated_usd, "estimated_rows": cost_estimate.estimated_rows},
+                ))
+        except Exception:
+            pass  # Cost estimation is best-effort
 
-    start = time.monotonic()
-    try:
-        rows = await connector.execute(safe_sql, timeout=timeout)
+        start = time.monotonic()
+        try:
+            rows = await connector.execute(safe_sql, timeout=timeout)
+        except asyncio.TimeoutError:
+            health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, "timeout", info.db_type)
+            raise HTTPException(
+                status_code=408,
+                detail=f"Query timed out after {timeout}s. Consider adding more specific WHERE clauses or reducing the scope.",
+            )
+        except Exception as e:
+            health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, str(e)[:200], info.db_type)
+            sanitized = _sanitize_db_error(str(e))
+            raise HTTPException(status_code=500, detail=sanitized)
+    finally:
         await pool_manager.release(info.db_type, conn_str)
-    except asyncio.TimeoutError:
-        health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, "timeout", info.db_type)
-        raise HTTPException(
-            status_code=408,
-            detail=f"Query timed out after {timeout}s. Consider adding more specific WHERE clauses or reducing the scope.",
-        )
-    except Exception as e:
-        health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, str(e)[:200], info.db_type)
-        sanitized = _sanitize_db_error(str(e))
-        raise HTTPException(status_code=500, detail=sanitized)
 
     elapsed_ms = (time.monotonic() - start) * 1000
     health_monitor.record(req.connection_name, elapsed_ms, True, db_type=info.db_type)
@@ -728,8 +734,10 @@ async def generate_annotations(name: str):
 
     try:
         connector = await pool_manager.acquire(info.db_type, conn_str)
-        schema = await connector.get_schema()
-        await pool_manager.release(info.db_type, conn_str)
+        try:
+            schema = await connector.get_schema()
+        finally:
+            await pool_manager.release(info.db_type, conn_str)
     except Exception as e:
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
@@ -780,8 +788,10 @@ async def detect_pii(name: str):
     if cached_schema is None:
         try:
             connector = await pool_manager.acquire(info.db_type, conn_str)
-            cached_schema = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            try:
+                cached_schema = await connector.get_schema()
+            finally:
+                await pool_manager.release(info.db_type, conn_str)
             schema_cache.put(name, cached_schema)
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))

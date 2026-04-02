@@ -131,7 +131,7 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     category: "warehouse",
     supportsSSH: false,
     supportsSSL: false,
-    connectionModes: ["fields"],
+    connectionModes: ["fields", "url"],
     fields: ["host", "http_path", "access_token", "catalog", "schema_name"],
     description: "Unified analytics platform",
   },

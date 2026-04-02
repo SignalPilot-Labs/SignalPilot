@@ -337,7 +337,7 @@ export default function DashboardPage() {
                 recent activity
               </span>
             </div>
-            <a href="/audit" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            <a href="/audit" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-1 px-2 -mr-2 active:text-[var(--color-text)]">
               view all <ArrowRight className="w-3 h-3" />
             </a>
           </div>
@@ -448,7 +448,7 @@ export default function DashboardPage() {
                   connections
                 </span>
               </div>
-              <a href="/connections" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <a href="/connections" className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-1 px-2 -mr-2 active:text-[var(--color-text)]">
                 manage <ArrowRight className="w-3 h-3" />
               </a>
             </div>
@@ -464,9 +464,10 @@ export default function DashboardPage() {
                 connections.map((conn) => {
                   const health = connHealth[conn.name];
                   return (
-                    <div
+                    <a
                       key={conn.id}
-                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group"
+                      href="/connections"
+                      className="flex items-center gap-3 px-4 py-3 sm:py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group active:bg-[var(--color-bg-hover)]"
                     >
                       <StatusDot
                         status={
@@ -503,7 +504,7 @@ export default function DashboardPage() {
                           {conn.db_type}
                         </span>
                       </div>
-                    </div>
+                    </a>
                   );
                 })
               )}

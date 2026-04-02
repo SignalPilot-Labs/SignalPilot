@@ -301,13 +301,13 @@ export default function HealthPage() {
                     </div>
 
                     {/* Stats grid */}
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="flex gap-3">
                       {[
                         { label: "samples", value: health.sample_count, color: "" },
                         { label: "success", value: health.successes ?? "--", color: "text-[var(--color-success)]" },
                         { label: "failures", value: health.failures ?? 0, color: "text-[var(--color-error)]" },
                       ].map((stat) => (
-                        <div key={stat.label}>
+                        <div key={stat.label} className="flex-1">
                           <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{stat.label}</p>
                           <p className={`text-xs font-light tabular-nums ${stat.color}`}>{stat.value}</p>
                         </div>

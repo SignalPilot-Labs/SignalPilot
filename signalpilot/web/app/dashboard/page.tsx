@@ -528,16 +528,16 @@ export default function DashboardPage() {
                       <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-3 pt-1">
-                    <div>
+                  <div className="flex gap-3 pt-1">
+                    <div className="flex-1">
                       <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
                       <p className="text-xs font-light tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
                     </div>

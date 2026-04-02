@@ -681,11 +681,10 @@ kbd {
   .grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Small screens — stack everything */
+/* Small screens — stack wider grids */
 @media (max-width: 900px) {
   .grid-cols-4,
-  .grid-cols-3,
-  .grid-cols-2 { grid-template-columns: 1fr; }
+  .grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .col-span-2 { grid-column: span 1; }
 }
 
@@ -711,10 +710,11 @@ kbd {
     padding-top: 0;
   }
 
-  /* ── Grid layouts collapse to single column ── */
+  /* ── Grid layouts collapse on mobile ── */
+  /* Note: grid-cols-2 is NOT overridden — many components use
+     grid-cols-2 sm:grid-cols-4 to keep a 2-column layout on mobile */
   .grid-cols-4,
-  .grid-cols-3,
-  .grid-cols-2 {
+  .grid-cols-3 {
     grid-template-columns: 1fr !important;
   }
   .col-span-2 {

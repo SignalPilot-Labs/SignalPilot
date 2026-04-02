@@ -379,6 +379,7 @@ class ClickHouseConnector(BaseConnector):
                     "sorting_key": meta.get("sorting_key", ""),
                     "row_count": meta.get("row_count", 0),
                     "total_bytes": meta.get("total_bytes", 0),
+                    "size_mb": round((meta.get("total_bytes", 0) or 0) / (1024 * 1024), 2),
                 }
             # ClickHouse Nullable types contain 'Nullable(' wrapper
             data_type = row["data_type"]

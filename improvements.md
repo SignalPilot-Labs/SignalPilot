@@ -5,6 +5,79 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ---
 
+## Round 21: Security, Auth Flexibility, Schema Enrichment (2026-04-02)
+
+**Summary:** 7 improvements — Trino SQL injection fix (security), Snowflake OAuth support, AWS IAM auth for PostgreSQL/MySQL, table size metadata for PG/MySQL, Trino row counts, configurable connection pool sizing, and comprehensive tests.
+
+**Key metrics:**
+- 330 tests passing (16 new tests this round)
+- 5 git commits this round
+- Gateway and frontend deployed to Docker containers
+- Verified size_mb on live PostgreSQL (0.34 MB) and MySQL (0.02 MB) schemas
+
+### 1. Trino SQL Injection Fix (Security)
+**Files:** `connectors/trino.py`
+- **Impact:** Fixed SQL injection vulnerability — catalog/schema/table names were interpolated directly into SQL via f-strings
+- Added `_quote_ident()` method: proper double-quote identifier quoting with escape doubling
+- Applied to all 6 f-string SQL queries in `_fetch_schema_via_information_schema()`
+- Applied to all 3 `SHOW` commands in `_fetch_schema_via_show()`
+- Fixed `SET SESSION` timeout injection: cast to int before interpolation
+- 5 new tests for identifier quoting including SQL injection attempt neutralization
+
+### 2. PostgreSQL and MySQL Table Size Metadata
+**Files:** `connectors/postgres.py`, `connectors/mysql.py`
+- **Impact:** Spider2.0 agents can now estimate query cost from table sizes
+- PostgreSQL: Added `pg_total_relation_size()` to schema query, reporting `size_mb` per table
+- MySQL: Added `DATA_LENGTH + INDEX_LENGTH` from `information_schema.TABLES`, reporting `size_mb` per table
+- Verified on live databases: enterprise-pg tables 0.34 MB, MySQL tables 0.02 MB
+
+### 3. Trino Row Counts via SHOW STATS
+**Files:** `connectors/trino.py`
+- **Impact:** Trino tables now report `row_count` metadata (previously always 0)
+- Uses `SHOW STATS FOR <table>` — available across most Trino connectors (Hive, Iceberg, Delta)
+- Extracts `row_count` from last row of stats result (column index 6)
+- Capped at 50 tables to avoid excessive round trips
+- Best-effort: silently skips if connector doesn't support SHOW STATS
+- Initializes `row_count: 0` in schema entries for consistency
+
+### 4. Snowflake OAuth Authentication
+**Files:** `connectors/snowflake.py`, `web/app/connections/page.tsx`
+- **Impact:** Matches HEX's OAuth support — third auth method alongside password and key-pair
+- Backend: Accepts `auth_method=oauth` with `oauth_access_token` from credential_extras
+- Sets `authenticator='oauth'` and `token=<access_token>` on Snowflake connection
+- Supports external OAuth providers (Okta, Azure AD/Entra ID) and Snowflake's built-in `SNOWFLAKE$LOCAL_APPLICATION`
+- Frontend: Three-way auth method toggle (password / key pair / OAuth) with contextual form fields
+- OAuth setup guidance: security integration creation, local dev shortcut
+- 2 new tests: OAuth credential storage, missing token error
+
+### 5. AWS IAM Auth for PostgreSQL and MySQL (RDS)
+**Files:** `connectors/postgres.py`, `connectors/mysql.py`, `web/app/connections/page.tsx`
+- **Impact:** Enterprise auth method — no static passwords, uses short-lived IAM tokens
+- Backend: `_generate_iam_token()` via `boto3.client('rds').generate_db_auth_token()`
+- Supports explicit access key/secret or instance profile/env credentials
+- SSL auto-enabled when IAM auth is active (required by RDS)
+- Frontend: IAM auth toggle with AWS region, access key, and secret key fields
+- Hides password field when IAM is active
+- Setup guidance: rds_iam role (PG) / AWSAuthenticationPlugin (MySQL)
+- 9 new tests: defaults, extras parsing, region handling, method existence
+
+### 6. Configurable Connection Pool Size
+**Files:** `connectors/postgres.py`, `web/app/connections/page.tsx`
+- **Impact:** High-concurrency deployments can tune pool size
+- Backend: `pool_min_size` and `pool_max_size` configurable via credential_extras
+- Safety bounds: min clamped to 1-20, max clamped to 1-50
+- Default remains 1 min / 5 max
+- Frontend: Pool size controls in timeouts section (PostgreSQL only — the only asyncpg pool-capable connector)
+
+### 7. Industry Research (Spider2.0 & HEX 2026)
+- **Spider2.0 SOTA:** Genloop at 96.7% on Spider2-Lite (#1, March 2026), Databao Agent #1 on Spider2.0-DBT
+- **Key technique:** ReFoRCE — database info compression, format restriction, iterative column exploration
+- **HEX 2026:** OAuth data connections, ClickHouse/chDB 4 partnership, Claude Connector with reasoning display
+- **Industry standard:** Zero-trust database access (identity-centric via SSO/MFA) replacing SSH tunnels for production
+- **Applied learnings:** Added OAuth support, IAM auth, pool configuration — all standard in modern enterprise connectors
+
+---
+
 ## Round 20: Implicit Join Detection, Connector Metadata Enrichment (2026-04-02)
 
 **Summary:** 12 improvements — implicit join detection for FK-less databases (critical for Spider2.0 on data lakes), connector metadata enrichment (Databricks PK/FK, Snowflake sizes/comments), improved cost estimation, ENUM cardinality hints in DDL, safety fixes, frontend VPN/PrivateLink guidance, and comprehensive test coverage.

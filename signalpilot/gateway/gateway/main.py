@@ -3628,9 +3628,33 @@ async def schema_link(
 
     # ── Column pruning helper ──────────────────────────────────────────────
     # For each table, determine which columns to include.
-    # Always include: PK columns, FK columns, and columns with relevance score > 0.
+    # Always include: PK columns, FK columns, FK-referenced columns, and
+    # columns with relevance score > 0.
     # For high-scoring tables (>= 5.0), include ALL columns (they're clearly relevant).
     # For lower-scoring tables (FK-connected), only include structural + matched columns.
+    #
+    # RSL-SQL / EDBT 2026: "missing a column is fatal; extras are tolerable noise."
+    # We err on the side of keeping columns, especially join-path columns.
+
+    # Build a set of columns that are FK targets from linked tables
+    # (e.g., if orders.customer_id → customers.id, then customers.id must be kept)
+    _fk_target_cols: dict[str, set[str]] = {}
+    for lk in linked_keys:
+        if lk not in filtered:
+            continue
+        for fk in filtered[lk].get("foreign_keys", []):
+            ref_table = fk.get("references_table", "")
+            ref_col = fk.get("references_column", "")
+            ref_schema = fk.get("references_schema", "")
+            ref_key = f"{ref_schema}.{ref_table}" if ref_schema else ref_table
+            # Find the matching linked table key
+            for candidate_key in linked_keys:
+                if filtered.get(candidate_key, {}).get("name", "") == ref_table:
+                    if candidate_key not in _fk_target_cols:
+                        _fk_target_cols[candidate_key] = set()
+                    _fk_target_cols[candidate_key].add(ref_col)
+                    break
+
     def _prune_columns(table_key: str, table_data: dict) -> list[dict]:
         """Return only relevant columns for a table, keeping PKs and FKs always."""
         t_score = table_scores.get(table_key, 0)
@@ -3640,14 +3664,17 @@ async def schema_link(
 
         col_relevance = column_scores.get(table_key, {})
         fk_cols = {fk.get("column", "") for fk in table_data.get("foreign_keys", [])}
+        fk_targets = _fk_target_cols.get(table_key, set())
 
         kept = []
         for col in table_data.get("columns", []):
             col_name = col.get("name", "")
-            # Always keep: PKs, FK columns, and columns with question relevance
+            # Always keep: PKs, FK columns, FK-target columns, and columns with question relevance
             if col.get("primary_key"):
                 kept.append(col)
             elif col_name in fk_cols:
+                kept.append(col)
+            elif col_name in fk_targets:
                 kept.append(col)
             elif col_relevance.get(col_name, 0) > 0:
                 kept.append(col)

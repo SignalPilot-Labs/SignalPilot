@@ -14,6 +14,7 @@ The gateway is async-first (FastAPI). Sync I/O in async handlers blocks the even
 - Sync database drivers called without `BaseConnector._run_in_thread()` wrapper
   - Postgres uses native async (`asyncpg`) — no wrapping needed
   - MySQL, MSSQL, Trino, ClickHouse use sync drivers — MUST use `_run_in_thread()`
+  - For other connectors (BigQuery, Snowflake, Redshift, DuckDB, Databricks), check the specific connector's source for sync/async status
 - `time.sleep()` in async context — use `await asyncio.sleep()` instead
 - Missing `await` on coroutine calls (results in a coroutine object, not the result)
 
@@ -32,7 +33,7 @@ Models live in `gateway/models.py` using Pydantic v2.
 Error patterns are defined in `gateway/errors.py` and `api/deps.py`.
 
 - Bare `except:` or `except Exception: pass` — must catch specific types and log
-  - Known issue: `store.py:update_connection` has `except Exception: pass` on credential rebuild (line ~333)
+  - Known issue: `store.py` has a bare `except Exception:` in the credential rebuild logic (~line 330)
 - Database errors not passed through `sanitize_db_error()` before reaching the client
   - `sanitize_db_error()` in `api/deps.py` redacts credentials from error messages
 - `HTTPException` raised without appropriate status code (400 for validation, 404 for not found, 408 for timeout)

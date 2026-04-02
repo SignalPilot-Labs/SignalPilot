@@ -46,13 +46,13 @@ Connectors execute queries via driver-specific methods. Parameterization prevent
 
 ## PII Governance
 
-PII rules in `governance/pii.py` apply post-query via `annotations.yml`.
+PII rules in `governance/pii.py` apply post-query. Column annotations are loaded via `governance/annotations.py` from per-connection YAML files (`~/.signalpilot/annotations/{connection_name}.yml`).
 
 - `hash` rule uses truncated SHA-256 (12 hex chars = 48 bits) — insufficient for low-entropy data like short PINs
   - Use `drop` instead of `hash` for columns with fewer than 6 character values
 - `mask` preserves structure (e.g., `***-**-1234`) — verify new masking patterns don't leak identifiable info
 - `detect_pii_columns()` auto-detection uses 30+ column name patterns — new columns with PII-like names should be checked
-- Annotations cache has 60-second TTL (`SP_ANNOTATIONS_TTL`) — changes to `annotations.yml` take up to 60s to apply
+- Annotations cache has 60-second TTL (`SP_ANNOTATIONS_TTL`) — changes to annotation files take up to 60s to apply
 
 ## Query Cache Safety
 

@@ -22,12 +22,17 @@ Determine which checklists to apply based on the file types in the diff:
 # Detect which checklists are relevant
 git diff origin/main --name-only | grep -q '\.py$' && echo "LOAD: checklists/python-backend.md"
 git diff origin/main --name-only | grep -qE '\.(tsx?|jsx?)$' && echo "LOAD: checklists/typescript-frontend.md"
-git diff origin/main --name-only | grep -qE 'engine/|governance/|connectors/' && echo "LOAD: checklists/sql-safety.md"
+git diff origin/main --name-only | grep -qE 'gateway/(engine|governance|connectors)/' && echo "LOAD: checklists/sql-safety.md"
 ```
 
-For each matching checklist, read the file from `checklists/` relative to this skill and apply its checks against the diff. Checklists contain codebase-specific patterns — they are the primary review source.
+For each matching checklist, read it from `self-improve/.claude/skills/pre-commit-review/checklists/` and apply its checks against the diff. Checklists contain codebase-specific patterns — they are the primary review source.
 
 In addition to checklist-specific checks, apply the **/code-quality** and **/security-audit** skills. Also check for these cross-cutting concerns:
+
+### Concurrency & State
+- Race conditions in async code (shared mutable state without locks)
+- Missing await on async calls
+- Database operations outside transactions where atomicity is needed
 
 ### Completeness
 - New enum values not handled in all switch/match statements

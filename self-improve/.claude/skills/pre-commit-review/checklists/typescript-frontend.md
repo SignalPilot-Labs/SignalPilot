@@ -62,4 +62,4 @@ No global state library. All state is local `useState` or encapsulated in custom
 - State that should be in a hook (`useRuns`, `useSSE`, `useControl`) placed directly in a component
 - Polling intervals (`setInterval`) not cleared on unmount
 - `useRuns` polling (8s default) — new polling hooks should use similar intervals, not aggressive polling
-- Toast notifications: use `toast(msg, "error")` from `useToast()` for async failures, not `alert()` or `console.error()`
+- **signalpilot/web only:** Toast notifications: use `toast(msg, "error")` from `useToast()` for async failures, not `alert()` or `console.error()` (monitor-web has no toast system — errors appear as synthetic feed events via `useControl`)

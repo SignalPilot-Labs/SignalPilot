@@ -222,12 +222,15 @@ class TrinoConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        try:
+
+        effective_timeout = timeout or self._request_timeout
+
+        def _run():
             cursor = self._conn.cursor()
             # Set session-level query timeout if supported
-            if timeout:
+            if effective_timeout:
                 try:
-                    safe_timeout = int(timeout)  # Ensure integer to prevent injection
+                    safe_timeout = int(effective_timeout)
                     cursor.execute(f"SET SESSION query_max_run_time = '{safe_timeout}s'")
                 except Exception:
                     pass  # Older Trino versions may not support this
@@ -236,6 +239,15 @@ class TrinoConnector(BaseConnector):
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             return [dict(zip(columns, row)) for row in rows]
+
+        import asyncio
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run),
+                timeout=effective_timeout + 5 if effective_timeout else None,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Trino query timed out after {effective_timeout}s")
         except Exception as e:
             err_str = str(e)
             if "QUERY_EXCEEDED" in err_str or "exceeded" in err_str.lower():

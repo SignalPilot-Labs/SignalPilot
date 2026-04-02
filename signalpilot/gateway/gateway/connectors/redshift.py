@@ -197,15 +197,26 @@ class RedshiftConnector(BaseConnector):
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
-        try:
+
+        effective_timeout = timeout or self._query_timeout
+
+        def _run():
             with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                if timeout:
-                    cursor.execute(f"SET statement_timeout = {timeout * 1000}")
+                if effective_timeout:
+                    cursor.execute(f"SET statement_timeout = {effective_timeout * 1000}")
                 cursor.execute(sql, params or ())
                 rows = cursor.fetchall()
                 return [dict(r) for r in rows]
+
+        import asyncio
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run),
+                timeout=effective_timeout + 5 if effective_timeout else None,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Redshift query timed out after {effective_timeout}s")
         except psycopg2.Error as e:
-            # Reset the connection state after error
             try:
                 self._conn.rollback()
             except Exception:

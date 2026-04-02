@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { getConnections, getConnectionSchema, detectPII } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot, StackedBar } from "@/components/ui/data-viz";
@@ -171,6 +172,7 @@ export default function SchemaExplorerPage() {
     : [];
 
   return (
+    <PullToRefreshWrapper onRefresh={loadSchema}>
     <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="schema"
@@ -455,5 +457,6 @@ export default function SchemaExplorerPage() {
         </div>
       )}
     </div>
+    </PullToRefreshWrapper>
   );
 }

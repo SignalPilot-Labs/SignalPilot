@@ -420,11 +420,27 @@ export default function Sidebar() {
       {/* Mobile top bar — visible only on mobile */}
       {/* ═══════════════════════════════════════════════════════ */}
       <header className="mobile-topbar fixed top-0 left-0 right-0 h-12 bg-[var(--color-sidebar)] border-b border-[var(--color-border)] flex items-center justify-between px-4 z-50">
-        <Link href="/dashboard" className="flex items-center gap-2.5">
+        <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0">
           <SignalPilotLogoSmall />
-          <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
-            SignalPilot
-          </span>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
+              SP
+            </span>
+            {(() => {
+              const currentNav = nav.find(n => pathname.startsWith(n.href));
+              if (currentNav && currentNav.href !== "/dashboard") {
+                return (
+                  <>
+                    <span className="text-[10px] text-[var(--color-text-dim)]">/</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] tracking-wider truncate">
+                      {currentNav.label}
+                    </span>
+                  </>
+                );
+              }
+              return null;
+            })()}
+          </div>
         </Link>
         <div className="flex items-center gap-1.5">
           {/* Connection health compact indicator */}

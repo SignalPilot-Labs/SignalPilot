@@ -3547,6 +3547,8 @@ async def schema_link(
                 score += min(time_cols * 0.5, 2.0)
 
         # Check cached sample values for value-based linking (RSL-SQL bidirectional approach)
+        # EDBT 2026: value-based linking catches cases term-matching misses,
+        # e.g., "show orders from California" matches sample value "California" in state column
         cached_samples = schema_cache.get_sample_values(name, table_key)
         if cached_samples:
             for col_name, sample_vals in cached_samples.items():
@@ -3554,6 +3556,7 @@ async def schema_link(
                     sv_lower = str(sv).lower()
                     if len(sv_lower) >= 3 and sv_lower in question_lower:
                         score += 6.0  # Strong signal: question mentions actual data value
+                        col_scores[col_name] = col_scores.get(col_name, 0) + 4.0  # Also boost the column
                         break  # One match per column is enough
 
         # Boost tables with many FKs (hub tables are usually more relevant)

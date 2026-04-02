@@ -17,7 +17,7 @@ class SQLiteConnector(BaseConnector):
     async def connect(self, connection_string: str) -> None:
         # connection_string is the file path (or :memory:)
         self._db_path = connection_string
-        self._conn = sqlite3.connect(connection_string)
+        self._conn = sqlite3.connect(connection_string, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:

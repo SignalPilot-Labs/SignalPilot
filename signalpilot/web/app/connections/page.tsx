@@ -412,6 +412,8 @@ interface FormState {
   snowflake_auth_method: "password" | "key_pair";
   sf_private_key: string;
   sf_private_key_passphrase: string;
+  // DuckDB / MotherDuck
+  motherduck_token: string;
   // Tags
   tags: string[];
   tagInput: string;
@@ -438,7 +440,7 @@ const defaultForm: FormState = {
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
-  snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "",
+  snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", motherduck_token: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
   scope: "workspace", read_only: true,
@@ -585,6 +587,11 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
   if (form.db_type === "snowflake" && form.snowflake_auth_method === "key_pair") {
     payload.private_key = form.sf_private_key;
     if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
+  }
+
+  // DuckDB MotherDuck token
+  if (form.db_type === "duckdb" && form.motherduck_token) {
+    payload.motherduck_token = form.motherduck_token;
   }
 
   // Scheduled schema refresh
@@ -789,15 +796,29 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
 
   // DuckDB/SQLite — just path
   if (form.db_type === "duckdb" || form.db_type === "sqlite") {
+    const isMotherDuck = form.db_type === "duckdb" && form.database.startsWith("md:");
     return (
-      <FormInput
-        label="database path"
-        value={form.database}
-        onChange={(v) => setForm({ ...form, database: v })}
-        placeholder={form.db_type === "duckdb" ? ":memory: or /path/to/db.duckdb" : ":memory: or /path/to/db.sqlite"}
-        hint={form.db_type === "duckdb" ? "file path, :memory:, or md: for MotherDuck" : "file path or :memory:"}
-        className="col-span-2"
-      />
+      <>
+        <FormInput
+          label="database path"
+          value={form.database}
+          onChange={(v) => setForm({ ...form, database: v })}
+          placeholder={form.db_type === "duckdb" ? ":memory: or /path/to/db.duckdb or md:my_db" : ":memory: or /path/to/db.sqlite"}
+          hint={form.db_type === "duckdb" ? "file path, :memory:, or md:<db_name> for MotherDuck cloud" : "file path or :memory:"}
+          className="col-span-2"
+        />
+        {isMotherDuck && (
+          <FormInput
+            label="MotherDuck token"
+            value={form.motherduck_token}
+            onChange={(v) => setForm({ ...form, motherduck_token: v })}
+            type="password"
+            placeholder="eyJ..."
+            hint="personal access token from app.motherduck.com"
+            className="col-span-2"
+          />
+        )}
+      </>
     );
   }
 

@@ -123,14 +123,26 @@ class ClickHouseConnector(BaseConnector):
                     http_port = 8123
                 elif http_port == 9100:
                     http_port = 8124  # Our Docker mapping
-                self._http_client = clickhouse_connect.get_client(
-                    host=connect_args.get("host", "localhost"),
-                    port=http_port,
-                    username=connect_args.get("user", "default"),
-                    password=connect_args.get("password", ""),
-                    database=connect_args.get("database", "default"),
-                    connect_timeout=10,
-                )
+                http_kwargs = {
+                    "host": connect_args.get("host", "localhost"),
+                    "port": http_port,
+                    "username": connect_args.get("user", "default"),
+                    "password": connect_args.get("password", ""),
+                    "database": connect_args.get("database", "default"),
+                    "connect_timeout": 10,
+                }
+                # Pass SSL settings to HTTP client
+                if connect_args.get("secure"):
+                    http_kwargs["secure"] = True
+                    if connect_args.get("verify") is not None:
+                        http_kwargs["verify"] = connect_args["verify"]
+                    if connect_args.get("ca_certs"):
+                        http_kwargs["ca_cert"] = connect_args["ca_certs"]
+                    if connect_args.get("certfile"):
+                        http_kwargs["client_cert"] = connect_args["certfile"]
+                    if connect_args.get("keyfile"):
+                        http_kwargs["client_cert_key"] = connect_args["keyfile"]
+                self._http_client = clickhouse_connect.get_client(**http_kwargs)
                 self._http_client.query("SELECT 1")
                 self._use_http = True
                 return

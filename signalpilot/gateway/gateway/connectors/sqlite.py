@@ -18,6 +18,8 @@ class SQLiteConnector(BaseConnector):
         self._db_path = connection_string
         self._conn = sqlite3.connect(connection_string)
         self._conn.row_factory = sqlite3.Row
+        # Enable foreign keys (required for FK-related schema queries)
+        self._conn.execute("PRAGMA foreign_keys = ON")
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:

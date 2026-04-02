@@ -68,7 +68,25 @@ class DuckDBConnector(BaseConnector):
         cols_result = self._conn.execute(cols_sql)
         all_cols = cols_result.fetchall()
 
-        # Foreign keys (DuckDB supports them for constraint metadata)
+        # Primary keys
+        pk_sql = """
+            SELECT tc.table_schema, tc.table_name, kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+                AND tc.table_schema = kcu.table_schema
+            WHERE tc.constraint_type = 'PRIMARY KEY'
+                AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+        """
+        pk_cols: set[str] = set()
+        try:
+            pk_result = self._conn.execute(pk_sql)
+            for row in pk_result.fetchall():
+                pk_cols.add(f"{row[0]}.{row[1]}.{row[2]}")
+        except Exception:
+            pass
+
+        # Foreign keys
         fk_sql = """
             SELECT
                 tc.table_schema, tc.table_name,
@@ -99,7 +117,21 @@ class DuckDBConnector(BaseConnector):
                     "references_column": row[5],
                 })
         except Exception:
-            pass  # FK query may fail on older DuckDB versions
+            pass
+
+        # Row counts (DuckDB is fast enough for this)
+        row_counts: dict[str, int] = {}
+        try:
+            count_sql = """
+                SELECT table_schema, table_name, estimated_size
+                FROM duckdb_tables()
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+            """
+            count_result = self._conn.execute(count_sql)
+            for row in count_result.fetchall():
+                row_counts[f"{row[0]}.{row[1]}"] = row[2] or 0
+        except Exception:
+            pass
 
         schema: dict[str, Any] = {}
         for table_schema, table_name, col_name, data_type, is_nullable, col_default in all_cols:
@@ -110,12 +142,14 @@ class DuckDBConnector(BaseConnector):
                     "name": table_name,
                     "columns": [],
                     "foreign_keys": foreign_keys.get(key, []),
+                    "row_count": row_counts.get(key, 0),
                 }
             schema[key]["columns"].append({
                 "name": col_name,
                 "type": data_type,
                 "nullable": is_nullable == "YES",
                 "default": col_default,
+                "primary_key": f"{table_schema}.{table_name}.{col_name}" in pk_cols,
             })
         return schema
 

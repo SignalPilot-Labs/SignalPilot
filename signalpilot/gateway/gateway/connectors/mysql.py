@@ -83,8 +83,8 @@ class MySQLConnector(BaseConnector):
             if ssl_dict:
                 connect_kwargs["ssl"] = ssl_dict
             else:
-                # SSL enabled but no certs — use basic SSL
-                connect_kwargs["ssl"] = {"ssl": True}
+                # SSL enabled but no certs — enforce SSL with no cert verification
+                connect_kwargs["ssl"] = {"check_hostname": False}
 
         try:
             self._conn = pymysql.connect(**connect_kwargs)

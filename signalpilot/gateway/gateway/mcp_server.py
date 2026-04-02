@@ -228,8 +228,10 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         start = time.monotonic()
         try:
             connector = await pool_manager.acquire(conn_info.db_type, conn_str)
-            rows = await connector.execute(safe_sql)
-            await pool_manager.release(conn_info.db_type, conn_str)
+            try:
+                rows = await connector.execute(safe_sql)
+            finally:
+                await pool_manager.release(conn_info.db_type, conn_str)
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
@@ -393,8 +395,10 @@ async def describe_table(connection_name: str, table_name: str) -> str:
         from .connectors.pool_manager import pool_manager
         try:
             connector = await pool_manager.acquire(conn_info.db_type, conn_str)
-            schema = await connector.get_schema()
-            await pool_manager.release(conn_info.db_type, conn_str)
+            try:
+                schema = await connector.get_schema()
+            finally:
+                await pool_manager.release(conn_info.db_type, conn_str)
         except Exception as e:
             return f"Error: {e}"
         schema_cache.put(connection_name, schema)

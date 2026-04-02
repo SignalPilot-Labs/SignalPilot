@@ -7,15 +7,17 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 
 ## Round 11: Connector Quality & Cost Estimation for All DB Types (2026-04-02)
 
-**Summary:** 6 improvements — Enhanced MSSQL/Trino/MySQL connectors, cost estimation for all 11 DB types, frontend HEX parity features, comprehensive schema introspection upgrades.
+**Summary:** 10 improvements — Enhanced MSSQL/Trino/MySQL connectors, cost estimation for all 11 DB types, frontend HEX parity features, Spider2.0 schema linking with column statistics, 2 new MCP tools, DDL metadata enrichment.
 
 **Key metrics:**
-- 318 tests passing (up from 211 in Round 10b)
+- 333 tests passing (up from 211 in Round 10b — 15 new MSSQL/Trino tests)
 - Cost estimation now covers all 11 DB types (was 8)
-- MSSQL schema now includes column type precision (varchar(100), decimal(10,2)), identity detection, statistics tracking
-- Trino schema 10x faster via information_schema batch queries (with SHOW COLUMNS fallback)
+- 21 MCP tools (up from 19)
+- MSSQL schema: column type precision, identity detection, statistics tracking
+- Trino schema: 10x faster via information_schema batch queries
+- Schema link DDL now includes column cardinality annotations, engine metadata
 - All 4 live Docker databases verified end-to-end
-- 3 git commits this round
+- 9 git commits this round
 
 ### 1. Trino Connector Overhaul
 **File:** `gateway/connectors/trino.py`
@@ -61,6 +63,34 @@ Major overhaul of database connectors to match HEX-level flexibility and optimiz
 - **Advanced options for all connectors** — section now visible for all DB types (not just SSH/SSL-capable). Scope, read-only, and scheduled refresh apply universally.
 - **Trino SSL support** — SSL configuration now available for Trino connections
 - **Active feature indicators** — advanced options button shows ssl, ssh, read-write, auto-refresh status badges
+
+### 7. Spider2.0 Schema Linking with Column Statistics
+**File:** `gateway/main.py`
+- **Column cardinality annotations** in DDL: "unique", "high cardinality", "N distinct values"
+- **Hub table boosting** — tables with many FKs get relevance score bonus (up to +3)
+- **Statistics-aware scoring** — tables with column stats get +1 relevance boost
+- **Compact format** includes distinct count notation (e.g., "name VARCHAR(690d)")
+- These help the agent understand data shape without executing exploratory queries
+
+### 8. DDL Engine/Storage Metadata
+**File:** `gateway/main.py`
+- **ClickHouse**: `ENGINE=MergeTree, ORDER BY(col1, col2)` in DDL row comments
+- **Redshift**: `DISTSTYLE=KEY, SORTKEY(col)` in DDL comments (fix: was checking wrong key name)
+- Both DDL endpoint and schema-link endpoint now include this metadata
+
+### 9. New MCP Tools: explore_columns + schema_statistics
+**File:** `gateway/mcp_server.py`
+- **explore_columns** — inspect specific columns with types, stats, sample values. Enables the ReFoRCE "schema_link → explore_columns → write SQL" workflow.
+- **schema_statistics** — high-level database overview (table counts, rows, FK density, hub tables)
+- **_gateway_url()** — added missing helper for MCP→REST internal calls
+- Total MCP tools: 21
+
+### 10. MSSQL/Trino Test Suite
+**File:** `tests/test_connectors_live.py`
+- 15 new tests covering MSSQL/Trino connectors
+- MSSQL: connect, health, execute, schema (type precision validation), sample values
+- URL parsing: mssql://, mssql+pymssql://, sqlserver://, trino://, trino+https://
+- Cost estimation routing verification for MSSQL and Trino
 
 ### Industry Research (Spider2.0 & HEX, April 2026)
 - **Spider2.0 SOTA**: ReFoRCE achieves 31.26% on Spider2.0-Snow using table compression, format restriction, iterative column exploration, and self-refinement with parallel voting. Key insight: schema compression + multi-pass refinement are essential.

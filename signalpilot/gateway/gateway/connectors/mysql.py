@@ -23,6 +23,11 @@ class MySQLConnector(BaseConnector):
     def __init__(self):
         self._conn: pymysql.Connection | None = None
         self._connect_params: dict = {}
+        self._ssl_config: dict | None = None
+
+    def set_ssl_config(self, ssl_config: dict) -> None:
+        """Set SSL configuration for the connection."""
+        self._ssl_config = ssl_config
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PYMYSQL:
@@ -30,18 +35,53 @@ class MySQLConnector(BaseConnector):
 
         params = self._parse_connection_string(connection_string)
         self._connect_params = params
-        self._conn = pymysql.connect(
-            host=params.get("host", "localhost"),
-            port=int(params.get("port", 3306)),
-            user=params.get("user", "root"),
-            password=params.get("password", ""),
-            database=params.get("database", ""),
-            charset="utf8mb4",
-            cursorclass=pymysql.cursors.DictCursor,
-            connect_timeout=10,
-            read_timeout=30,
-            autocommit=True,
-        )
+
+        connect_kwargs: dict = {
+            "host": params.get("host", "localhost"),
+            "port": int(params.get("port", 3306)),
+            "user": params.get("user", "root"),
+            "password": params.get("password", ""),
+            "database": params.get("database", ""),
+            "charset": "utf8mb4",
+            "cursorclass": pymysql.cursors.DictCursor,
+            "connect_timeout": 10,
+            "read_timeout": 30,
+            "autocommit": True,
+        }
+
+        # SSL support — pymysql uses ssl dict with ca/cert/key paths or content
+        if self._ssl_config and self._ssl_config.get("enabled"):
+            import ssl as ssl_module
+            import tempfile
+            import os
+
+            ssl_ctx = ssl_module.create_default_context()
+
+            # Write PEM content to temp files if provided as strings
+            ssl_dict: dict = {}
+            if self._ssl_config.get("ca_cert"):
+                ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                ca_file.write(self._ssl_config["ca_cert"].encode())
+                ca_file.close()
+                ssl_dict["ca"] = ca_file.name
+            if self._ssl_config.get("client_cert"):
+                cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                cert_file.write(self._ssl_config["client_cert"].encode())
+                cert_file.close()
+                ssl_dict["cert"] = cert_file.name
+            if self._ssl_config.get("client_key"):
+                key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                key_file.write(self._ssl_config["client_key"].encode())
+                key_file.close()
+                ssl_dict["key"] = key_file.name
+
+            if ssl_dict:
+                connect_kwargs["ssl"] = ssl_dict
+            else:
+                # SSL enabled but no certs — use basic SSL
+                connect_kwargs["ssl"] = {"ssl": True}
+
+        self._conn = pymysql.connect(**connect_kwargs)
 
     def _parse_connection_string(self, conn_str: str) -> dict:
         """Parse mysql+pymysql://user:pass@host:port/db or mysql://... format."""

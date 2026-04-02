@@ -185,6 +185,12 @@ class PoolManager:
                 if isinstance(connector, DatabricksConnector):
                     connector.set_credential_extras(credential_extras)
 
+            # MySQL: pass SSL config if present in credential_extras
+            if db_type == "mysql" and credential_extras and credential_extras.get("ssl_config"):
+                from .mysql import MySQLConnector
+                if isinstance(connector, MySQLConnector):
+                    connector.set_ssl_config(credential_extras["ssl_config"])
+
             # SSH tunnel setup (for host:port-based databases)
             actual_conn_str = connection_string
             if (

@@ -830,5 +830,46 @@ class TestClickHouseURLParsing:
         assert params["port"] == 9000
 
 
+class TestMySQLSSLConfig:
+    """Test MySQL SSL configuration support."""
+
+    def test_ssl_config_sets_correctly(self):
+        from gateway.connectors.mysql import MySQLConnector
+        c = MySQLConnector()
+        ssl_config = {
+            "enabled": True,
+            "ca_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+        }
+        c.set_ssl_config(ssl_config)
+        assert c._ssl_config == ssl_config
+        assert c._ssl_config["enabled"] is True
+
+    def test_ssl_config_none_by_default(self):
+        from gateway.connectors.mysql import MySQLConnector
+        c = MySQLConnector()
+        assert c._ssl_config is None
+
+    def test_pool_manager_wires_ssl_for_mysql(self):
+        """Verify pool_manager passes ssl_config to MySQL connector."""
+        from gateway.connectors.pool_manager import PoolManager
+        from gateway.connectors.mysql import MySQLConnector
+        from unittest.mock import patch, AsyncMock, MagicMock
+
+        pm = PoolManager()
+        mock_connector = MySQLConnector()
+        mock_connector.connect = AsyncMock()
+        mock_connector.health_check = AsyncMock(return_value=True)
+
+        ssl_config = {"enabled": True, "ca_cert": "test-ca"}
+        credential_extras = {"ssl_config": ssl_config}
+
+        with patch("gateway.connectors.pool_manager.get_connector", return_value=mock_connector):
+            asyncio.get_event_loop().run_until_complete(
+                pm.acquire("mysql", "mysql://user:pass@localhost/db", credential_extras)
+            )
+
+        assert mock_connector._ssl_config == ssl_config
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

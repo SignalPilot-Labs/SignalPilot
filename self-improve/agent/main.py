@@ -75,6 +75,7 @@ def _is_workspace_same_repo(github_repo: str) -> bool:
 _current_run_id: str | None = None
 _current_task: asyncio.Task | None = None
 _signal_queue: asyncio.Queue | None = None  # Instant control signal delivery
+_audit_log_warned: bool = False  # Log audit failures once, then suppress
 
 
 # =============================================================================
@@ -162,7 +163,8 @@ async def run_agent(
     base_branch: str = "main",
 ):
     """Execute one improvement run."""
-    global _current_run_id
+    global _current_run_id, _audit_log_warned
+    _audit_log_warned = False
 
     model = os.environ.get("AGENT_MODEL", "opus")
     fallback_model = os.environ.get("AGENT_FALLBACK_MODEL", "sonnet")
@@ -380,13 +382,17 @@ async def run_agent(
                             if dtype == "text_delta" and delta.get("text"):
                                 try:
                                     await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
-                                except Exception:
-                                    pass
+                                except Exception as _audit_err:
+                                    if not _audit_log_warned:
+                                        print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                        _audit_log_warned = True
                             elif dtype == "thinking_delta" and delta.get("thinking"):
                                 try:
                                     await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
-                                except Exception:
-                                    pass
+                                except Exception as _audit_err:
+                                    if not _audit_log_warned:
+                                        print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                        _audit_log_warned = True
                         continue
 
                     # --- AssistantMessage ---
@@ -414,8 +420,10 @@ async def run_agent(
                                     "cache_creation_input_tokens": message.usage.get("cache_creation_input_tokens", 0),
                                     "cache_read_input_tokens": message.usage.get("cache_read_input_tokens", 0),
                                 })
-                            except Exception:
-                                pass
+                            except Exception as _audit_err:
+                                if not _audit_log_warned:
+                                    print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                    _audit_log_warned = True
 
                     # --- RateLimitEvent ---
                     elif isinstance(message, RateLimitEvent):
@@ -462,8 +470,8 @@ async def run_agent(
                         if message.session_id:
                             try:
                                 await db.save_session_id(run_id, message.session_id)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                print(f"[agent] Warning: failed to save session ID: {e}")
                         if message.total_cost_usd:
                             total_cost = message.total_cost_usd
                         if message.usage:
@@ -612,13 +620,17 @@ async def run_agent(
                                 if dtype == "text_delta" and delta.get("text"):
                                     try:
                                         await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": "ceo"})
-                                    except Exception:
-                                        pass
+                                    except Exception as _audit_err:
+                                        if not _audit_log_warned:
+                                            print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                            _audit_log_warned = True
                                 elif dtype == "thinking_delta" and delta.get("thinking"):
                                     try:
                                         await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": "ceo"})
-                                    except Exception:
-                                        pass
+                                    except Exception as _audit_err:
+                                        if not _audit_log_warned:
+                                            print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                            _audit_log_warned = True
                             continue
 
                         if isinstance(msg, AssistantMessage):
@@ -804,7 +816,8 @@ class ResumeRequest(BaseModel):
 
 async def resume_agent(run_id: str, max_budget: float = 0):
     """Resume a previous run using its SDK session ID."""
-    global _current_run_id
+    global _current_run_id, _audit_log_warned
+    _audit_log_warned = False
 
     run_info = await db.get_run_for_resume(run_id)
     if not run_info:
@@ -933,13 +946,17 @@ async def resume_agent(run_id: str, max_budget: float = 0):
                             if dtype == "text_delta" and delta.get("text"):
                                 try:
                                     await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
-                                except Exception:
-                                    pass
+                                except Exception as _audit_err:
+                                    if not _audit_log_warned:
+                                        print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                        _audit_log_warned = True
                             elif dtype == "thinking_delta" and delta.get("thinking"):
                                 try:
                                     await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
-                                except Exception:
-                                    pass
+                                except Exception as _audit_err:
+                                    if not _audit_log_warned:
+                                        print(f"[agent] Warning: audit logging failed (suppressing further): {_audit_err}")
+                                        _audit_log_warned = True
                         continue
 
                     if isinstance(message, AssistantMessage):
@@ -1001,8 +1018,8 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     diff_stats = None
     try:
         diff_stats = git_ops.get_branch_diff(branch_name, base_branch)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[agent] Warning: could not capture diff stats: {e}")
 
     await db.finish_run(
         run_id=run_id,
@@ -1100,8 +1117,8 @@ async def kill_run():
     # Force update DB in case the task didn't get to clean up
     try:
         await db.finish_run(run_id=run_id, status="killed")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[agent] Warning: failed to mark run as killed in DB: {e}")
     _current_run_id = None
     return {"ok": True, "signal": "kill", "run_id": run_id}
 

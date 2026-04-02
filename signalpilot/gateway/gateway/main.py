@@ -1199,6 +1199,116 @@ async def update_endorsements(name: str, body: dict):
     return result
 
 
+# ─── Column Name Correction (Spider2.0 hallucination fix) ──────────────────
+
+def _levenshtein(s1: str, s2: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    prev_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            curr_row.append(min(
+                prev_row[j + 1] + 1,
+                curr_row[j] + 1,
+                prev_row[j] + (0 if c1 == c2 else 1),
+            ))
+        prev_row = curr_row
+    return prev_row[-1]
+
+
+@app.post("/api/connections/{name}/schema/correct-columns")
+async def correct_columns(name: str, body: dict):
+    """Suggest corrections for hallucinated column names.
+
+    Spider2.0 research shows that LLM agents frequently hallucinate column names
+    (e.g., "customer_name" instead of "first_name"). This endpoint returns the
+    closest matching columns using Levenshtein distance.
+
+    Body: {"table": "public.customers", "columns": ["customer_name", "email_addr"]}
+    Returns corrections for columns that don't exist in the schema.
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    table_key = body.get("table", "")
+    candidate_columns = body.get("columns", [])
+    threshold = body.get("threshold", 0.5)  # Max edit distance as fraction of name length
+
+    if not table_key or not candidate_columns:
+        raise HTTPException(status_code=422, detail="table and columns are required")
+
+    # Get cached schema
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        try:
+            extras = get_credential_extras(name)
+            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+            cached = await connector.get_schema()
+            await pool_manager.release(info.db_type, conn_str)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+        schema_cache.put(name, cached)
+
+    # Find the table
+    table_info = cached.get(table_key)
+    if not table_info:
+        # Try fuzzy table match
+        best_table = None
+        best_dist = 999
+        for k in cached:
+            d = _levenshtein(table_key.lower(), k.lower())
+            if d < best_dist:
+                best_dist = d
+                best_table = k
+        if best_table and best_dist <= len(table_key) * threshold:
+            table_info = cached[best_table]
+        else:
+            return {"corrections": {}, "table_suggestion": best_table if best_table else None}
+
+    actual_columns = {col["name"].lower(): col["name"] for col in table_info.get("columns", [])}
+    corrections: dict = {}
+
+    for candidate in candidate_columns:
+        candidate_lower = candidate.lower()
+        # Exact match — no correction needed
+        if candidate_lower in actual_columns:
+            continue
+
+        # Find closest column by edit distance
+        best_match = None
+        best_dist = 999
+        for col_lower, col_name in actual_columns.items():
+            d = _levenshtein(candidate_lower, col_lower)
+            if d < best_dist:
+                best_dist = d
+                best_match = col_name
+
+        # Only suggest if within threshold
+        max_dist = max(len(candidate), 1) * threshold
+        if best_match and best_dist <= max_dist:
+            corrections[candidate] = {
+                "suggestion": best_match,
+                "distance": best_dist,
+                "confidence": round(1.0 - (best_dist / max(len(candidate), 1)), 2),
+            }
+        else:
+            corrections[candidate] = {"suggestion": None, "distance": best_dist, "confidence": 0.0}
+
+    return {
+        "table": table_key,
+        "corrections": corrections,
+        "total_columns": len(actual_columns),
+    }
+
+
 # ─── Sandboxes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sandboxes")

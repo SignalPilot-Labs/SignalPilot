@@ -1295,5 +1295,39 @@ class TestCredentialExtrasStandardization:
         assert mock_connector._ssl_config is not None
 
 
+class TestLevenshteinDistance:
+    """Tests for the Levenshtein distance used in column correction."""
+
+    def test_identical_strings(self):
+        from gateway.main import _levenshtein
+        assert _levenshtein("hello", "hello") == 0
+
+    def test_single_insertion(self):
+        from gateway.main import _levenshtein
+        assert _levenshtein("customer_name", "customer_names") == 1
+
+    def test_single_substitution(self):
+        from gateway.main import _levenshtein
+        assert _levenshtein("email", "emall") == 1
+
+    def test_common_hallucination(self):
+        from gateway.main import _levenshtein
+        # "customer_name" vs "first_name" — very different, should have high distance
+        dist = _levenshtein("customer_name", "first_name")
+        assert dist > 5
+
+    def test_typo_correction(self):
+        from gateway.main import _levenshtein
+        # "frist_name" vs "first_name" — single transposition
+        dist = _levenshtein("frist_name", "first_name")
+        assert dist <= 2
+
+    def test_empty_strings(self):
+        from gateway.main import _levenshtein
+        assert _levenshtein("", "hello") == 5
+        assert _levenshtein("hello", "") == 5
+        assert _levenshtein("", "") == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -108,9 +108,29 @@ Based on the retrospective, recommend 3-5 concrete tasks for the next session:
 
 Order recommendations by impact (user-facing improvements first, then reliability, then maintainability).
 
+## Step 6: Capture Learnings
+
+Extract non-obvious discoveries from this session. For each learning, classify as:
+
+- **Pattern:** A reusable approach that worked well (e.g., "running ruff with --fix before mypy reduces type errors by ~30%")
+- **Pitfall:** Something that wasted time or caused rework (e.g., "the sqlglot fallback silently passes queries — never assume validation ran")
+- **Architecture:** A structural insight about the codebase (e.g., "monitor-web and signalpilot/web share no code — changes must be duplicated")
+
+Include learnings in the retrospective output:
+
+```
+LEARNINGS
+  [pattern]       description
+  [pitfall]       description
+  [architecture]  description
+```
+
+Only capture genuinely surprising or non-obvious insights. Skip anything derivable from reading the code or docs.
+
 ## Using with the CEO/Worker Loop
 
 This skill is designed to be used by the CEO (Product Director) role when reviewing what the Worker accomplished. The CEO should:
 1. Run the retrospective after each Worker session
 2. Use the recommendations to assign the next concrete task
 3. Track progress across sessions by comparing retrospectives
+4. Review captured learnings to avoid repeating past pitfalls

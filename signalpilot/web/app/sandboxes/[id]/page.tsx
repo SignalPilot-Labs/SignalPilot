@@ -310,29 +310,36 @@ export default function SandboxDetailPage() {
   return (
     <div className="flex flex-col min-h-screen pb-14 sm:pb-0 sm:h-screen">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0 gap-3">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 sm:px-6 py-2 sm:py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0 gap-2 sm:gap-3">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
           <button
             onClick={() => router.push("/sandboxes")}
             className="p-2.5 sm:p-1.5 -ml-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors active:text-[var(--color-text)]"
           >
             <ArrowLeft className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
           </button>
-          <div>
-            <Breadcrumb items={[
-              { label: "sandboxes", href: "/sandboxes" },
-              { label: sandbox.label || sandbox.id.slice(0, 8) },
-            ]} />
-            <h1 className="text-xs font-medium tracking-wide">
-              {sandbox.label || sandbox.id.slice(0, 8)}
-            </h1>
-            <div className="flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+          <div className="min-w-0">
+            <div className="hidden sm:block">
+              <Breadcrumb items={[
+                { label: "sandboxes", href: "/sandboxes" },
+                { label: sandbox.label || sandbox.id.slice(0, 8) },
+              ]} />
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusDot
+                status={sandbox.status === "running" ? "healthy" : sandbox.status === "error" ? "error" : "idle"}
+                size={4}
+                pulse={sandbox.status === "running"}
+              />
+              <h1 className="text-xs font-medium tracking-wide truncate">
+                {sandbox.label || sandbox.id.slice(0, 8)}
+              </h1>
+              <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0 sm:hidden">
+                {sandbox.status}
+              </span>
+            </div>
+            <div className="hidden sm:flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">
               <span className="flex items-center gap-1.5">
-                <StatusDot
-                  status={sandbox.status === "running" ? "healthy" : sandbox.status === "error" ? "error" : "idle"}
-                  size={4}
-                  pulse={sandbox.status === "running"}
-                />
                 {sandbox.status}
               </span>
               {sandbox.vm_id && (
@@ -351,7 +358,7 @@ export default function SandboxDetailPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 -mx-1 sm:mx-0">
           {/* Budget indicator */}
           <div className="flex items-center gap-2">
             <DollarSign className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
@@ -388,29 +395,29 @@ export default function SandboxDetailPage() {
 
           <button
             onClick={copyOutput}
-            className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            className="p-2 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
             title="Copy output"
           >
             {copied ? <Check className="w-4 h-4 sm:w-3 sm:h-3 text-[var(--color-success)]" /> : <Copy className="w-4 h-4 sm:w-3 sm:h-3" />}
           </button>
           <button
             onClick={downloadOutput}
-            className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            className="p-2 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
             title="Download"
           >
             <Download className="w-4 h-4 sm:w-3 sm:h-3" />
           </button>
           <button
             onClick={() => setExpanded(!expanded)}
-            className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors hidden sm:block"
+            className="p-2 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors hidden sm:block"
           >
             {expanded ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
           </button>
           <button
             onClick={handleKill}
-            className="flex items-center gap-1.5 px-3 py-2 sm:py-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
+            className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
           >
-            <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" /> kill
+            <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" /> <span className="hidden sm:inline">kill</span>
           </button>
         </div>
       </div>
@@ -512,7 +519,7 @@ export default function SandboxDetailPage() {
       </div>
 
       {/* Input area */}
-      <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0">
+      <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0 mb-0 sm:mb-0">
         {/* Snippet bar */}
         <div className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-1">
           <button

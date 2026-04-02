@@ -174,8 +174,10 @@ class SnowflakeConnector(BaseConnector):
         if self._conn is None:
             raise RuntimeError("Not connected")
 
+        import asyncio
+
         # Use INFORMATION_SCHEMA for comprehensive metadata
-        sql = """
+        col_sql = """
             SELECT
                 TABLE_SCHEMA,
                 TABLE_NAME,
@@ -188,57 +190,67 @@ class SnowflakeConnector(BaseConnector):
             WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
             ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
         """
-        cursor = self._conn.cursor(snowflake.connector.DictCursor)
-        cursor.execute(sql)
-        rows = cursor.fetchall()
-        cursor.close()
+        rc_sql = """
+            SELECT TABLE_SCHEMA, TABLE_NAME, ROW_COUNT
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+                AND TABLE_TYPE = 'BASE TABLE'
+        """
+        fk_sql = """
+            SELECT
+                FK_SCHEMA_NAME, FK_TABLE_NAME, FK_COLUMN_NAME,
+                PK_SCHEMA_NAME, PK_TABLE_NAME, PK_COLUMN_NAME
+            FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+                ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+            WHERE rc.CONSTRAINT_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+        """
+        pk_sql = """
+            SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
+            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+            JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE ccu
+                USING (CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME)
+            WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                AND tc.TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
+        """
 
-        # Row count estimates from INFORMATION_SCHEMA.TABLES
+        # Run all metadata queries concurrently via thread pool (4 parallel queries)
+        def _fetch(query: str) -> list:
+            try:
+                cursor = self._conn.cursor(snowflake.connector.DictCursor)
+                cursor.execute(query)
+                result = cursor.fetchall()
+                cursor.close()
+                return result
+            except Exception:
+                return []
+
+        rows, rc_rows, fk_rows_raw, pk_rows = await asyncio.gather(
+            asyncio.to_thread(_fetch, col_sql),
+            asyncio.to_thread(_fetch, rc_sql),
+            asyncio.to_thread(_fetch, fk_sql),
+            asyncio.to_thread(_fetch, pk_sql),
+        )
+
+        # Build row count map
         row_counts: dict[str, int] = {}
-        try:
-            rc_sql = """
-                SELECT TABLE_SCHEMA, TABLE_NAME, ROW_COUNT
-                FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
-                    AND TABLE_TYPE = 'BASE TABLE'
-            """
-            cursor = self._conn.cursor(snowflake.connector.DictCursor)
-            cursor.execute(rc_sql)
-            for r in cursor.fetchall():
-                key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}"
-                row_counts[key] = r.get("ROW_COUNT", 0) or 0
-            cursor.close()
-        except Exception:
-            pass
+        for r in rc_rows:
+            key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}"
+            row_counts[key] = r.get("ROW_COUNT", 0) or 0
 
-        # Foreign keys — Snowflake supports FK metadata even though it doesn't enforce them
+        # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
-        try:
-            fk_sql = """
-                SELECT
-                    FK_SCHEMA_NAME, FK_TABLE_NAME, FK_COLUMN_NAME,
-                    PK_SCHEMA_NAME, PK_TABLE_NAME, PK_COLUMN_NAME
-                FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-                JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                    ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-                    AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-                WHERE rc.CONSTRAINT_SCHEMA NOT IN ('INFORMATION_SCHEMA')
-            """
-            cursor = self._conn.cursor(snowflake.connector.DictCursor)
-            cursor.execute(fk_sql)
-            for r in cursor.fetchall():
-                key = f"{r['FK_SCHEMA_NAME']}.{r['FK_TABLE_NAME']}"
-                if key not in foreign_keys:
-                    foreign_keys[key] = []
-                foreign_keys[key].append({
-                    "column": r["FK_COLUMN_NAME"],
-                    "references_schema": r["PK_SCHEMA_NAME"],
-                    "references_table": r["PK_TABLE_NAME"],
-                    "references_column": r["PK_COLUMN_NAME"],
-                })
-            cursor.close()
-        except Exception:
-            pass
+        for r in fk_rows_raw:
+            key = f"{r['FK_SCHEMA_NAME']}.{r['FK_TABLE_NAME']}"
+            if key not in foreign_keys:
+                foreign_keys[key] = []
+            foreign_keys[key].append({
+                "column": r["FK_COLUMN_NAME"],
+                "references_schema": r["PK_SCHEMA_NAME"],
+                "references_table": r["PK_TABLE_NAME"],
+                "references_column": r["PK_COLUMN_NAME"],
+            })
 
         schema: dict[str, Any] = {}
         for row in rows:
@@ -259,30 +271,14 @@ class SnowflakeConnector(BaseConnector):
                 "comment": row.get("COMMENT", ""),
             })
 
-        # Enrich with primary key info
-        try:
-            pk_sql = """
-                SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
-                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-                JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE ccu
-                    USING (CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME)
-                WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-                    AND tc.TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
-            """
-            cursor = self._conn.cursor(snowflake.connector.DictCursor)
-            cursor.execute(pk_sql)
-            pk_rows = cursor.fetchall()
-            cursor.close()
-
-            pk_set = {
-                (r["TABLE_SCHEMA"], r["TABLE_NAME"], r["COLUMN_NAME"]) for r in pk_rows
-            }
-            for table_data in schema.values():
-                for col in table_data["columns"]:
-                    if (table_data["schema"], table_data["name"], col["name"]) in pk_set:
-                        col["primary_key"] = True
-        except Exception:
-            pass  # PK enrichment is best-effort
+        # Enrich with primary key info (already fetched in parallel)
+        pk_set = {
+            (r["TABLE_SCHEMA"], r["TABLE_NAME"], r["COLUMN_NAME"]) for r in pk_rows
+        }
+        for table_data in schema.values():
+            for col in table_data["columns"]:
+                if (table_data["schema"], table_data["name"], col["name"]) in pk_set:
+                    col["primary_key"] = True
 
         return schema
 

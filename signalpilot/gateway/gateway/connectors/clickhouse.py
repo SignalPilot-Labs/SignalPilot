@@ -195,9 +195,7 @@ class ClickHouseConnector(BaseConnector):
             WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
             ORDER BY database, table, position
         """
-        result = self._client.execute(sql, with_column_types=True)
-        rows_data, columns_info = result
-        col_names = [c[0] for c in columns_info]
+        import asyncio
 
         # Table engine and sorting key info (critical for ClickHouse query optimization)
         table_meta_sql = """
@@ -208,50 +206,62 @@ class ClickHouseConnector(BaseConnector):
             FROM system.tables
             WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
         """
-        table_meta: dict[str, dict] = {}
-        try:
-            meta_result = self._client.execute(table_meta_sql, with_column_types=True)
-            meta_rows, meta_cols = meta_result
-            meta_col_names = [c[0] for c in meta_cols]
-            for r in meta_rows:
-                rd = dict(zip(meta_col_names, r))
-                key = f"{rd['database']}.{rd['table_name']}"
-                table_meta[key] = {
-                    "engine": rd.get("engine", ""),
-                    "sorting_key": rd.get("sorting_key", ""),
-                    "primary_key": rd.get("primary_key", ""),
-                    "row_count": rd.get("total_rows", 0),
-                    "total_bytes": rd.get("total_bytes", 0),
-                }
-        except Exception:
-            pass
 
         # Column-level statistics from system.parts_columns (data size per column)
+        col_stats_sql = """
+            SELECT
+                database, table, column,
+                sum(rows) AS total_rows,
+                sum(data_uncompressed_bytes) AS uncompressed_bytes,
+                sum(data_compressed_bytes) AS compressed_bytes
+            FROM system.parts_columns
+            WHERE active
+                AND database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+            GROUP BY database, table, column
+        """
+
+        # Run all three queries concurrently via thread pool (clickhouse-driver is synchronous)
+        def _fetch(query: str):
+            try:
+                return self._client.execute(query, with_column_types=True)
+            except Exception:
+                return ([], [])
+
+        col_result, meta_result, stats_result = await asyncio.gather(
+            asyncio.to_thread(_fetch, sql),
+            asyncio.to_thread(_fetch, table_meta_sql),
+            asyncio.to_thread(_fetch, col_stats_sql),
+        )
+
+        rows_data, columns_info = col_result
+        col_names = [c[0] for c in columns_info]
+
+        # Build table metadata map
+        table_meta: dict[str, dict] = {}
+        meta_rows, meta_cols = meta_result
+        meta_col_names = [c[0] for c in meta_cols] if meta_cols else []
+        for r in meta_rows:
+            rd = dict(zip(meta_col_names, r))
+            key = f"{rd['database']}.{rd['table_name']}"
+            table_meta[key] = {
+                "engine": rd.get("engine", ""),
+                "sorting_key": rd.get("sorting_key", ""),
+                "primary_key": rd.get("primary_key", ""),
+                "row_count": rd.get("total_rows", 0),
+                "total_bytes": rd.get("total_bytes", 0),
+            }
+
+        # Build column statistics map
         col_stats: dict[str, dict] = {}
-        try:
-            col_stats_sql = """
-                SELECT
-                    database, table, column,
-                    sum(rows) AS total_rows,
-                    sum(data_uncompressed_bytes) AS uncompressed_bytes,
-                    sum(data_compressed_bytes) AS compressed_bytes
-                FROM system.parts_columns
-                WHERE active
-                    AND database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
-                GROUP BY database, table, column
-            """
-            stats_result = self._client.execute(col_stats_sql, with_column_types=True)
-            stats_rows, stats_cols = stats_result
-            stats_col_names = [c[0] for c in stats_cols]
-            for r in stats_rows:
-                rd = dict(zip(stats_col_names, r))
-                stat_key = f"{rd['database']}.{rd['table']}.{rd['column']}"
-                col_stats[stat_key] = {
-                    "data_bytes": rd.get("uncompressed_bytes", 0),
-                    "compressed_bytes": rd.get("compressed_bytes", 0),
-                }
-        except Exception:
-            pass
+        stats_rows, stats_cols = stats_result
+        stats_col_names = [c[0] for c in stats_cols] if stats_cols else []
+        for r in stats_rows:
+            rd = dict(zip(stats_col_names, r))
+            stat_key = f"{rd['database']}.{rd['table']}.{rd['column']}"
+            col_stats[stat_key] = {
+                "data_bytes": rd.get("uncompressed_bytes", 0),
+                "compressed_bytes": rd.get("compressed_bytes", 0),
+            }
 
         schema: dict[str, Any] = {}
         for row_vals in rows_data:

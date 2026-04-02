@@ -173,51 +173,50 @@ class RedshiftConnector(BaseConnector):
             GROUP BY schemaname, tablename, diststyle, sortkey1
         """
 
-        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute(sql)
-            rows = cursor.fetchall()
+        import asyncio
 
-        # Best-effort metadata enrichment
+        # Run all metadata queries concurrently via thread pool
+        def _fetch(query: str) -> list:
+            try:
+                with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query)
+                    return cursor.fetchall()
+            except Exception:
+                return []
+
+        rows, fk_rows_raw, count_rows_raw, dist_sort_rows_raw = await asyncio.gather(
+            asyncio.to_thread(_fetch, sql),
+            asyncio.to_thread(_fetch, fk_sql),
+            asyncio.to_thread(_fetch, row_count_sql),
+            asyncio.to_thread(_fetch, dist_sort_sql),
+        )
+
+        # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
+        for r in fk_rows_raw:
+            key = f"{r['table_schema']}.{r['table_name']}"
+            if key not in foreign_keys:
+                foreign_keys[key] = []
+            foreign_keys[key].append({
+                "column": r["column_name"],
+                "references_schema": r["foreign_table_schema"],
+                "references_table": r["foreign_table_name"],
+                "references_column": r["foreign_column_name"],
+            })
+
+        # Build row count map
         row_counts: dict[str, int] = {}
+        for r in count_rows_raw:
+            row_counts[f"{r['table_schema']}.{r['table_name']}"] = r.get("estimated_row_count", 0)
 
-        try:
-            with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(fk_sql)
-                for r in cursor.fetchall():
-                    key = f"{r['table_schema']}.{r['table_name']}"
-                    if key not in foreign_keys:
-                        foreign_keys[key] = []
-                    foreign_keys[key].append({
-                        "column": r["column_name"],
-                        "references_schema": r["foreign_table_schema"],
-                        "references_table": r["foreign_table_name"],
-                        "references_column": r["foreign_column_name"],
-                    })
-        except Exception:
-            pass
-
-        try:
-            with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(row_count_sql)
-                for r in cursor.fetchall():
-                    row_counts[f"{r['table_schema']}.{r['table_name']}"] = r["estimated_row_count"]
-        except Exception:
-            pass
-
-        # Distribution and sort key info (Redshift-specific, like ClickHouse's sorting_key)
+        # Build distribution/sort key map
         dist_sort: dict[str, dict] = {}
-        try:
-            with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(dist_sort_sql)
-                for r in cursor.fetchall():
-                    key = f"{r['table_schema']}.{r['table_name']}"
-                    dist_sort[key] = {
-                        "diststyle": r.get("diststyle", ""),
-                        "sortkey1": r.get("sortkey1", ""),
-                    }
-        except Exception:
-            pass
+        for r in dist_sort_rows_raw:
+            key = f"{r['table_schema']}.{r['table_name']}"
+            dist_sort[key] = {
+                "diststyle": r.get("diststyle", ""),
+                "sortkey1": r.get("sortkey1", ""),
+            }
 
         schema: dict[str, Any] = {}
         for row in rows:

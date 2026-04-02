@@ -89,7 +89,7 @@ export default function SandboxesPage() {
         path="sandboxes --list --watch"
         status={<StatusDot status={sandboxes.some(s => s.status === "running") ? "healthy" : sandboxes.length > 0 ? "warning" : "unknown"} size={4} pulse={sandboxes.some(s => s.status === "running")} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">total: <code className="text-[10px] text-[var(--color-text)]">{sandboxes.length}</code></span>
           <span className="text-[var(--color-text-dim)]">running: <code className="text-[10px] text-[var(--color-success)]">{sandboxes.filter(s => s.status === "running").length}</code></span>
         </div>

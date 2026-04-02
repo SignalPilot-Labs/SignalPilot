@@ -168,7 +168,7 @@ export default function HealthPage() {
         path="health --monitor"
         status={<StatusDot status={overallHealthy === overallTotal && overallTotal > 0 ? "healthy" : overallTotal > 0 ? "warning" : "unknown"} size={4} pulse={autoRefresh} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">nodes: <code className="text-[10px] text-[var(--color-text)]">{overallHealthy}/{overallTotal}</code></span>
           <span className="text-[var(--color-text-dim)]">refresh: <code className="text-[10px] text-[var(--color-text)]">{autoRefresh ? "10s" : "manual"}</code></span>
         </div>

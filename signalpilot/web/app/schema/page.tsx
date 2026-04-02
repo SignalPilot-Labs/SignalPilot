@@ -207,7 +207,7 @@ export default function SchemaExplorerPage() {
         path={`schema ${selectedConn || "—"} --introspect`}
         status={<StatusDot status={schema ? "healthy" : loading ? "unknown" : "error"} size={4} pulse={loading} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">tables: <code className="text-[10px] text-[var(--color-text)]">{schema ? Object.keys(schema.tables).length : "—"}</code></span>
           <span className="text-[var(--color-text-dim)]">db: <code className="text-[10px] text-[var(--color-text)]">{schema?.db_type || "—"}</code></span>
         </div>

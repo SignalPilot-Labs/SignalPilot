@@ -200,7 +200,7 @@ export default function ConnectionsPage() {
         path="connections --list"
         status={<StatusDot status={connections.length > 0 ? "healthy" : "unknown"} size={4} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">registered: <code className="text-[10px] text-[var(--color-text)]">{connections.length}</code></span>
         </div>
       </TerminalBar>

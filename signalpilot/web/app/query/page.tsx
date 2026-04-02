@@ -218,7 +218,7 @@ export default function QueryExplorerPage() {
         path={`query ${selectedConn || "—"} --governed --read-only`}
         status={<StatusDot status={selectedConn ? "healthy" : "unknown"} size={4} pulse={executing} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">history: <code className="text-[10px] text-[var(--color-text)]">{history.length}</code></span>
           {result && <span className="text-[var(--color-success)]">rows: <code className="text-[10px]">{result.row_count}</code></span>}
         </div>

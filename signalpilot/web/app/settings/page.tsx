@@ -120,7 +120,7 @@ export default function SettingsPage() {
         path="settings --edit"
         status={<StatusDot status={settings ? "healthy" : "unknown"} size={4} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">instance: <code className="text-[10px] text-[var(--color-text)]">{settings ? "loaded" : "—"}</code></span>
         </div>
       </TerminalBar>

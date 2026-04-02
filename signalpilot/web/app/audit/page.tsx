@@ -137,7 +137,7 @@ export default function AuditPage() {
         path="audit --tail -f"
         status={<StatusDot status={entries.length > 0 ? "healthy" : "unknown"} size={4} pulse={loading} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">events: <code className="text-[10px] text-[var(--color-text)]">{entries.length}</code></span>
           {statsData.blocked > 0 && <span className="text-[var(--color-error)]">blocked: <code className="text-[10px]">{statsData.blocked}</code></span>}
         </div>

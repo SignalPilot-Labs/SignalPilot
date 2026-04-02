@@ -276,6 +276,33 @@ export default function QueryExplorerPage() {
         </button>
       </div>
 
+      {/* Mobile SQL keyword toolbar */}
+      <div className="sm:hidden flex items-center gap-1.5 mb-2 overflow-x-auto flex-shrink-0 -mx-1 px-1 [-webkit-overflow-scrolling:touch]">
+        {["SELECT", "FROM", "WHERE", "JOIN", "GROUP BY", "ORDER BY", "LIMIT", "AND", "OR", "AS", "ON", "LEFT", "COUNT(*)", "DISTINCT", "*"].map((kw) => (
+          <button
+            key={kw}
+            onClick={() => {
+              const ta = textareaRef.current;
+              if (!ta) return;
+              const start = ta.selectionStart;
+              const before = sql.slice(0, start);
+              const after = sql.slice(ta.selectionEnd);
+              const insert = (before.length > 0 && !before.endsWith(" ") && !before.endsWith("\n") ? " " : "") + kw + " ";
+              setSql(before + insert + after);
+              // Restore cursor position after insert
+              requestAnimationFrame(() => {
+                ta.focus();
+                const pos = start + insert.length;
+                ta.setSelectionRange(pos, pos);
+              });
+            }}
+            className="flex-shrink-0 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-card)] border border-[var(--color-border)] active:bg-[var(--color-bg-hover)] active:text-[var(--color-text)] tracking-wider font-mono whitespace-nowrap"
+          >
+            {kw}
+          </button>
+        ))}
+      </div>
+
       {/* SQL editor with line numbers */}
       <div className="relative mb-4 flex-shrink-0 border border-[var(--color-border)] bg-[var(--color-bg-card)] flex overflow-hidden card-radial-glow">
         {/* Line numbers gutter */}

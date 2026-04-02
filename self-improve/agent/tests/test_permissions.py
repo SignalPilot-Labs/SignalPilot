@@ -197,6 +197,21 @@ class TestRepoExploration:
         result = permissions._check_repo_exploration("cd /usr/local/bin")
         assert result is None
 
+    def test_blocks_clone_without_repo(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO", "")
+        result = permissions._check_repo_exploration("git clone https://github.com/other/repo")
+        assert result is not None
+
+    def test_blocks_clone_other_repo(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO", "SignalPilot-Labs/SignalPilot")
+        result = permissions._check_repo_exploration("git clone https://github.com/other/repo")
+        assert result is not None
+
+    def test_allows_clone_own_repo(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPO", "SignalPilot-Labs/SignalPilot")
+        result = permissions._check_repo_exploration("git clone https://github.com/SignalPilot-Labs/SignalPilot")
+        assert result is None
+
 
 # === Input summarization ===
 

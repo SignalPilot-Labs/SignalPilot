@@ -252,7 +252,7 @@ export function StartRunModal({
                   </div>
                   <div>
                     <h2 className="text-[12px] font-semibold text-[#e8e8e8]">
-                      {mode === "parallel" ? "Start Parallel Run" : "Start Improvement Run"}
+                      {mode === "parallel" ? "Launch Bot" : "Start Improvement Run"}
                     </h2>
                     <p className="text-[9px] text-[#999] mt-0.5">
                       {mode === "parallel" ? "Spawns an isolated container with its own sandbox" : "Creates a branch, makes improvements, opens a PR"}
@@ -421,7 +421,7 @@ export function StartRunModal({
                       </svg>
                     }
                   >
-                    {busy ? "Starting..." : mode === "parallel" ? "Start Parallel Run" : "Start Run"}
+                    {busy ? "Starting..." : mode === "parallel" ? "Launch Bot" : "Start Run"}
                   </Button>
                 </div>
               </div>

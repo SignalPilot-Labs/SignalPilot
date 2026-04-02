@@ -6,7 +6,7 @@ import { clsx } from "clsx";
 import Image from "next/image";
 import Link from "next/link";
 import type { Run, FeedEvent, RunStatus, ToolCall, SettingsStatus, RepoInfo } from "@/lib/types";
-import { fetchToolCalls, fetchAuditLog, startRun, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo } from "@/lib/api";
+import { fetchToolCalls, fetchAuditLog, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo, fetchRuns } from "@/lib/api";
 import type { AgentHealth } from "@/lib/api";
 import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
@@ -38,16 +38,23 @@ export default function MonitorPage() {
   const [historyEvents, setHistoryEvents] = useState<FeedEvent[]>([]);
   const [injectOpen, setInjectOpen] = useState(false);
   const [startModalOpen, setStartModalOpen] = useState(false);
-  const [parallelModalOpen, setParallelModalOpen] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [agentHealth, setAgentHealth] = useState<AgentHealth | null>(null);
   const [branches, setBranches] = useState<string[]>(["main"]);
   const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
-  const [activeView, setActiveView] = useState<"feed" | "parallel">("feed");
+  const [activeView, setActiveView] = useState<"feed" | "bots">("bots");
 
-  const { status: parallelStatus, startRun: startParallelRun } = useParallelRuns();
+  const {
+    status: parallelStatus,
+    startRun: startParallelRun,
+    stopRun: parallelStop,
+    killRun: parallelKill,
+    pauseRun: parallelPause,
+    resumeRun: parallelResume,
+    unlockRun: parallelUnlock,
+  } = useParallelRuns();
   const parallelActive = parallelStatus?.active ?? 0;
 
   const { events: liveEvents, connected, clearEvents } = useSSE(selectedRunId);
@@ -269,58 +276,45 @@ export default function MonitorPage() {
     }
   }, [runs, selectedRunId, handleSelectRun, suppressAutoSelect]);
 
-  // Start a new run
+  // Start a new bot run (always spawns an isolated container)
   const handleStartRun = useCallback(
     async (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => {
-      setStartBusy(true);
-      try {
-        const result = await startRun(prompt, budget, durationMinutes, baseBranch);
-        setStartModalOpen(false);
-        addEvent({
-          _kind: "control",
-          text: `New run started${prompt ? ` with custom prompt` : ""}`,
-          ts: new Date().toISOString(),
-        });
-        // Switch to the new run immediately
-        if (result.run_id) {
-          setSuppressAutoSelect(false);
-          setSelectedRunId(result.run_id);
-          setSelectedRun(null);
-          setHistoryEvents([]);
-          clearEvents();
-        }
-      } catch (err) {
-        addEvent({
-          _kind: "control",
-          text: `Failed to start run: ${err}`,
-          ts: new Date().toISOString(),
-        });
-      } finally {
-        setStartBusy(false);
-      }
-    },
-    [addEvent, refreshRuns, handleSelectRun]
-  );
+      // Close modal immediately — don't block on the API
+      setStartModalOpen(false);
+      const existingIds = new Set(runs.map((r) => r.id));
 
-  // Start a parallel run
-  const handleStartParallelRun = useCallback(
-    async (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => {
-      setStartBusy(true);
-      try {
-        await startParallelRun(prompt, budget, durationMinutes, baseBranch);
-        setParallelModalOpen(false);
-        setActiveView("parallel"); // Switch to parallel view to see the new run
-      } catch (err) {
+      // Fire API call in background
+      startParallelRun(prompt, budget, durationMinutes, baseBranch).catch((err) => {
         addEvent({
           _kind: "control",
-          text: `Failed to start parallel run: ${err}`,
+          text: `Failed to launch bot: ${err}`,
           ts: new Date().toISOString(),
         });
-      } finally {
-        setStartBusy(false);
+      });
+
+      addEvent({
+        _kind: "control",
+        text: `Bot launching${prompt ? ` with custom prompt` : ""}...`,
+        ts: new Date().toISOString(),
+      });
+
+      // Poll runs list until the new run appears in the sidebar
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const freshRuns = await fetchRuns(activeRepoFilter || undefined);
+          const newRun = freshRuns.find((r) => !existingIds.has(r.id));
+          if (newRun) {
+            setSuppressAutoSelect(false);
+            refreshRuns();  // Update sidebar immediately
+            handleSelectRun(newRun.id);
+            setActiveView("feed");
+            return;
+          }
+        } catch {}
       }
     },
-    [startParallelRun, addEvent]
+    [startParallelRun, addEvent, runs, activeRepoFilter, handleSelectRun]
   );
 
   const runStatus: RunStatus | null =
@@ -390,6 +384,22 @@ export default function MonitorPage() {
         {/* View toggle */}
         <div className="flex items-center gap-0.5 bg-white/[0.03] rounded p-0.5 border border-[#1a1a1a]">
           <button
+            onClick={() => setActiveView("bots")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
+              activeView === "bots"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]"
+            )}
+          >
+            Bots
+            {parallelActive > 0 && (
+              <span className="min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88] text-[9px] font-bold px-1">
+                {parallelActive}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setActiveView("feed")}
             className={clsx(
               "px-2.5 py-1 rounded text-[10px] font-medium transition-all",
@@ -399,22 +409,6 @@ export default function MonitorPage() {
             )}
           >
             Event Feed
-          </button>
-          <button
-            onClick={() => setActiveView("parallel")}
-            className={clsx(
-              "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
-              activeView === "parallel"
-                ? "bg-white/[0.08] text-[#e8e8e8]"
-                : "text-[#666] hover:text-[#aaa]"
-            )}
-          >
-            Parallel
-            {parallelActive > 0 && (
-              <span className="min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88] text-[9px] font-bold px-1">
-                {parallelActive}
-              </span>
-            )}
           </button>
         </div>
 
@@ -455,13 +449,9 @@ export default function MonitorPage() {
           size="md"
           onClick={() => {
             fetchBranches(activeRepoFilter || undefined).then(setBranches);
-            if (activeView === "parallel") {
-              setParallelModalOpen(true);
-            } else {
-              setStartModalOpen(true);
-            }
+            setStartModalOpen(true);
           }}
-          disabled={activeView === "parallel" ? !isConfigured : (!agentIdle || !agentReachable || !isConfigured)}
+          disabled={!isConfigured}
           title={!isConfigured ? "Configure credentials in Settings first" : undefined}
           icon={
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -469,30 +459,27 @@ export default function MonitorPage() {
             </svg>
           }
         >
-          {!isConfigured
-            ? "Setup Required"
-            : !agentReachable
-              ? "Offline"
-              : !agentIdle
-                ? "Running"
-                : activeView === "parallel" ? "New Parallel Run" : "New Run"}
+          {!isConfigured ? "Setup Required" : "New Bot"}
         </Button>
 
-        <div className="w-px h-4 bg-[#1a1a1a]" />
-
-        <ControlBar
-          status={runStatus}
-          onPause={pause}
-          onResume={resume}
-          onStop={stop}
-          onKill={kill}
-          onUnlock={unlock}
-          onToggleInject={() => setInjectOpen(!injectOpen)}
-          onResumeRun={resumeSession}
-          busy={busy}
-          sessionLocked={agentHealth?.session_unlocked === false}
-          timeRemaining={agentHealth?.time_remaining || null}
-        />
+        {activeView === "feed" && selectedRunId && (
+          <>
+            <div className="w-px h-4 bg-[#1a1a1a]" />
+            <ControlBar
+              status={runStatus}
+              onPause={() => parallelPause(selectedRunId)}
+              onResume={() => parallelResume(selectedRunId)}
+              onStop={() => parallelStop(selectedRunId)}
+              onKill={() => parallelKill(selectedRunId)}
+              onUnlock={() => parallelUnlock(selectedRunId)}
+              onToggleInject={() => setInjectOpen(!injectOpen)}
+              onResumeRun={() => parallelResume(selectedRunId)}
+              busy={busy}
+              sessionLocked={false}
+              timeRemaining={null}
+            />
+          </>
+        )}
       </header>
 
       {/* Inject Panel */}
@@ -508,15 +495,6 @@ export default function MonitorPage() {
         open={startModalOpen}
         onClose={() => setStartModalOpen(false)}
         onStart={handleStartRun}
-        busy={startBusy}
-        branches={branches}
-      />
-
-      {/* Parallel Start Run Modal */}
-      <StartRunModal
-        open={parallelModalOpen}
-        onClose={() => setParallelModalOpen(false)}
-        onStart={handleStartParallelRun}
         busy={startBusy}
         branches={branches}
         mode="parallel"
@@ -556,7 +534,7 @@ export default function MonitorPage() {
         <RunList
           runs={runs}
           activeId={selectedRunId}
-          onSelect={handleSelectRun}
+          onSelect={(id: string) => { handleSelectRun(id); setActiveView("feed"); }}
           loading={runsLoading}
         />
 
@@ -576,9 +554,10 @@ export default function MonitorPage() {
             <ParallelRunsView
               onStartNew={() => {
                 fetchBranches(activeRepoFilter || undefined).then(setBranches);
-                setParallelModalOpen(true);
+                setStartModalOpen(true);
               }}
               branches={branches}
+              label="Bots"
             />
           </main>
         )}

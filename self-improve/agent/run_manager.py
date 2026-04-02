@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from agent import db
+
 
 MAX_CONCURRENT = 10
 
@@ -53,6 +55,58 @@ class RunManager:
         self.slots: dict[str, RunSlot] = {}
         self._env_cache: dict[str, Any] | None = None
         self._start_lock = asyncio.Lock()
+
+    async def cleanup_orphans(self) -> int:
+        """Kill any improve-worker-* containers left from a previous process and mark them in DB."""
+        killed = 0
+        # Find all improve-worker-* containers (running or stopped)
+        try:
+            output = self._run_docker(
+                ["ps", "-a", "--filter", "name=improve-worker-", "--format", "{{.Names}} {{.Status}}"],
+                timeout=10,
+            )
+        except Exception as e:
+            print(f"[run_manager] Failed to list orphan containers: {e}")
+            output = ""
+
+        if output.strip():
+            for line in output.strip().split("\n"):
+                parts = line.split(" ", 1)
+                name = parts[0]
+                print(f"[run_manager] Killing orphan container: {name}")
+                try:
+                    self._run_docker(["rm", "-f", name], timeout=15)
+                    killed += 1
+                except Exception as e:
+                    print(f"[run_manager] Failed to remove {name}: {e}")
+
+        # Clean up orphaned volumes
+        try:
+            vol_output = self._run_docker(
+                ["volume", "ls", "--filter", "name=improve-worker-repo-", "--format", "{{.Name}}"],
+                timeout=10,
+            )
+            if vol_output.strip():
+                for vol in vol_output.strip().split("\n"):
+                    try:
+                        self._run_docker(["volume", "rm", vol], timeout=10)
+                        print(f"[run_manager] Removed orphan volume: {vol}")
+                    except Exception:
+                        pass  # Volume might be in use
+        except Exception:
+            pass
+
+        # Mark any active workers in DB as killed
+        try:
+            db_killed = await db.mark_orphaned_workers()
+            if db_killed:
+                print(f"[run_manager] Marked {db_killed} orphaned workers in DB")
+        except Exception as e:
+            print(f"[run_manager] DB orphan cleanup failed: {e}")
+
+        if killed:
+            print(f"[run_manager] Cleaned up {killed} orphan containers")
+        return killed
 
     def _detect_environment(self) -> dict[str, Any]:
         """Auto-detect image, network, and mounts from the current container."""
@@ -187,6 +241,13 @@ class RunManager:
             )
             self.slots[container_name] = slot
 
+        # Persist to DB immediately
+        await db.upsert_worker(
+            container_name=container_name, status="starting", prompt=prompt,
+            max_budget_usd=max_budget_usd, duration_minutes=duration_minutes,
+            base_branch=base_branch, volume_name=volume_name,
+        )
+
         env = self._detect_environment()
         mount_flags = self._build_worker_mounts(worker_id)
 
@@ -222,6 +283,7 @@ class RunManager:
         except Exception as e:
             slot.status = "error"
             slot.error_message = str(e)
+            await db.update_worker_status(container_name, "error", str(e))
             raise
         slot.container_id = container_id[:12]
         print(f"[run_manager] Started container {container_name} ({container_id[:12]})")
@@ -231,10 +293,12 @@ class RunManager:
         except Exception as e:
             slot.status = "error"
             slot.error_message = f"Health check failed: {e}"
+            await db.update_worker_status(container_name, "error", f"Health check failed: {e}")
             self.cleanup_container(container_name)
             raise
 
         slot.status = "running"
+        await db.update_worker_status(container_name, "running")
 
         # Send start request — credentials also passed via env vars above,
         # but the /start endpoint uses them from the POST body to set os.environ
@@ -253,6 +317,8 @@ class RunManager:
             data = resp.json()
 
         slot.run_id = data.get("run_id")
+        if slot.run_id:
+            await db.update_worker_run_id(container_name, slot.run_id)
         print(f"[run_manager] Worker {container_name} started run_id={slot.run_id}")
 
         task = asyncio.create_task(self._monitor_worker(container_name))
@@ -289,11 +355,17 @@ class RunManager:
         if not slot:
             return
 
+        # Terminal DB statuses — the run is truly finished
+        TERMINAL_DB_STATUSES = {"completed", "failed", "crashed", "stopped", "killed"}
+        idle_count = 0  # Require consecutive idle checks to avoid premature cleanup
+
         try:
             print(f"[run_manager] Monitoring {container_name}")
             async with httpx.AsyncClient(timeout=10) as client:
                 while slot.status in ("starting", "running"):
                     await asyncio.sleep(10)
+
+                    # Check if container is still alive
                     try:
                         state = self._run_docker(
                             ["inspect", "--format", "{{.State.Status}}", container_name],
@@ -309,14 +381,38 @@ class RunManager:
                         slot.error_message = str(e)
                         break
 
+                    # Check worker health + DB run status
                     try:
                         resp = await client.get(f"http://{container_name}:8500/health")
                         if resp.status_code == 200:
                             health = resp.json()
-                            if health.get("status") == "idle" and slot.status == "running":
-                                print(f"[run_manager] {container_name} idle — marking completed")
-                                slot.status = "completed"
-                                break
+                            if health.get("status") == "idle":
+                                # Agent is idle — but is the run truly done?
+                                # Check the DB run status to be sure (handles pause/interrupt)
+                                run_id = slot.run_id or health.get("current_run_id")
+                                if run_id:
+                                    try:
+                                        run_resp = await client.get(f"http://{container_name}:8500/health")
+                                        # Also check DB directly
+                                        run_info = await db.get_run_for_resume(run_id)
+                                        db_status = run_info.get("status", "") if run_info else ""
+                                        if db_status in TERMINAL_DB_STATUSES:
+                                            idle_count += 1
+                                        else:
+                                            idle_count = 0  # Reset — run is paused/resumable
+                                    except Exception:
+                                        idle_count += 1  # Can't check DB, count it
+                                else:
+                                    # No run_id and idle — never started or already cleaned up
+                                    idle_count += 1
+
+                                # Require 3 consecutive idle checks (30s) before cleanup
+                                if idle_count >= 3:
+                                    print(f"[run_manager] {container_name} confirmed idle (run done) — marking completed")
+                                    slot.status = "completed"
+                                    break
+                            else:
+                                idle_count = 0  # Still active
                     except Exception:
                         pass
         except Exception as e:
@@ -325,7 +421,10 @@ class RunManager:
                 slot.status = "error"
                 slot.error_message = f"Monitor failed: {e}"
 
-        print(f"[run_manager] Monitor done for {container_name}: status={slot.status}")
+        # Persist final status to DB and clean up container + volume
+        await db.update_worker_status(container_name, slot.status, slot.error_message)
+        self.cleanup_container(container_name, remove_volume=True)
+        print(f"[run_manager] Monitor done for {container_name}: status={slot.status} (cleaned up)")
 
     async def send_signal(
         self,
@@ -347,6 +446,7 @@ class RunManager:
         result = await self.send_signal(container_name, "stop", {"reason": reason})
         if slot:
             slot.status = "stopped"
+        await db.update_worker_status(container_name, "stopped")
         return result
 
     async def kill_run(self, container_name: str) -> dict[str, Any]:
@@ -358,6 +458,7 @@ class RunManager:
             result = {"ok": False, "error": str(e)}
         if slot:
             slot.status = "killed"
+        await db.update_worker_status(container_name, "killed")
         self.cleanup_container(container_name)
         return result
 

@@ -93,28 +93,19 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
 
   const slots = status?.slots ?? [];
   const activeSlots = slots.filter(s => ["starting", "running"].includes(s.status));
-  const finishedSlots = slots.filter(s => !["starting", "running"].includes(s.status));
-
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-[12px] font-semibold text-[#e8e8e8]">Parallel Runs</h3>
+          <h3 className="text-[12px] font-semibold text-[#e8e8e8]">Bots</h3>
           <p className="text-[10px] text-[#888] mt-0.5">
             {status ? `${status.active} active / ${status.max_concurrent} max` : "Loading…"}
           </p>
         </div>
-        <div className="flex gap-1.5">
-          <Button variant="success" onClick={onStartNew}>
-            + New Run
-          </Button>
-          {finishedSlots.length > 0 && (
-            <Button variant="ghost" onClick={cleanup}>
-              Cleanup
-            </Button>
-          )}
-        </div>
+        <Button variant="success" onClick={onStartNew}>
+          + New Bot
+        </Button>
       </div>
 
       {/* Summary bar */}
@@ -122,12 +113,9 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
         <SummaryBar active={status.active} max={status.max_concurrent} />
       )}
 
-      {/* Active runs */}
+      {/* Active runs only */}
       {activeSlots.length > 0 && (
         <div className="space-y-2">
-          <SectionLabel>
-            <span className="text-[#00ff88]">Active ({activeSlots.length})</span>
-          </SectionLabel>
           {activeSlots.map(slot => (
             <SlotCard
               key={slot.container_name}
@@ -145,32 +133,12 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
         </div>
       )}
 
-      {/* Finished runs */}
-      {finishedSlots.length > 0 && (
-        <div className="space-y-2">
-          <SectionLabel>
-            <span className="text-[#777]">Finished ({finishedSlots.length})</span>
-          </SectionLabel>
-          {finishedSlots.map(slot => (
-            <SlotCard
-              key={slot.container_name}
-              slot={slot}
-              onStop={() => {}}
-              onKill={() => {}}
-              onPause={() => {}}
-              onResume={() => {}}
-              onUnlock={() => {}}
-            />
-          ))}
-        </div>
-      )}
-
       {/* Empty state */}
-      {slots.length === 0 && (
+      {activeSlots.length === 0 && (
         <div className="text-center py-8">
-          <p className="text-[11px] text-[#888]">No parallel runs yet</p>
+          <p className="text-[11px] text-[#888]">No bots running</p>
           <p className="text-[10px] text-[#666] mt-1">
-            Start a new run to spawn an isolated agent container
+            Launch a bot to spawn an isolated agent container
           </p>
         </div>
       )}

@@ -803,12 +803,26 @@ class ParallelSignalRequest(BaseModel):
 
 
 @asynccontextmanager
+def _is_worker() -> bool:
+    """Check if this process is running inside a worker container (not the orchestrator)."""
+    try:
+        hostname = os.uname().nodename
+        return hostname.startswith("improve-worker-") or os.environ.get("WORKER_MODE") == "1"
+    except Exception:
+        return False
+
+
 async def lifespan(app: FastAPI):
     db_path = os.environ.get("DB_PATH", "/data/improve.db")
     await db.init_db(db_path)
-    crashed = await db.mark_crashed_runs()
-    if crashed:
-        print(f"[agent] Marked {crashed} stale run(s) as crashed from previous restart")
+    # Only the orchestrator (main agent) should clean up — workers must not touch other containers or runs
+    if not _is_worker():
+        crashed = await db.mark_crashed_runs()
+        if crashed:
+            print(f"[agent] Marked {crashed} stale run(s) as crashed from previous restart")
+        orphans = await _run_manager.cleanup_orphans()
+        if orphans:
+            print(f"[agent] Killed {orphans} orphan worker container(s)")
     print("[agent] Ready — waiting for start command on :8500")
     yield
     await db.close_db()
@@ -864,7 +878,11 @@ async def start_run(body: StartRequest = StartRequest()):
         )
     )
     _current_task.add_done_callback(_on_task_done)
-    await asyncio.sleep(2)
+    # Brief wait to see if run_id is set quickly, but don't block long
+    for _ in range(5):
+        await asyncio.sleep(1)
+        if _current_run_id is not None:
+            break
     return {
         "ok": True,
         "run_id": _current_run_id,

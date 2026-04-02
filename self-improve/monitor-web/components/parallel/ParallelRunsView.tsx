@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 export interface ParallelRunsViewProps {
   onStartNew: () => void;
   branches: string[];
+  label?: string;
 }
 
 function GridIcon() {
@@ -20,7 +21,7 @@ function GridIcon() {
   );
 }
 
-export function ParallelRunsView({ onStartNew, branches }: ParallelRunsViewProps) {
+export function ParallelRunsView({ onStartNew, branches, label = "Parallel Runners" }: ParallelRunsViewProps) {
   const { status } = useParallelRuns();
   const slots = status?.slots ?? [];
   const isEmpty = slots.length === 0;
@@ -32,15 +33,15 @@ export function ParallelRunsView({ onStartNew, branches }: ParallelRunsViewProps
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-[13px] font-semibold text-[#e8e8e8] tracking-tight">
-              Parallel Runners
+              {label}
             </h2>
             <p className="text-[10px] text-[#888] mt-0.5">
-              Manage multiple concurrent agent runs in isolated containers
+              Manage concurrent agent runs in isolated containers
             </p>
           </div>
           {!isEmpty && (
             <Button variant="success" size="md" onClick={onStartNew}>
-              + Launch Run
+              + New Bot
             </Button>
           )}
         </div>
@@ -53,13 +54,13 @@ export function ParallelRunsView({ onStartNew, branches }: ParallelRunsViewProps
           <div className="flex flex-col items-center justify-center h-full gap-5 px-6">
             <GridIcon />
             <div className="text-center">
-              <p className="text-[12px] font-medium text-[#e8e8e8]">No active runs</p>
+              <p className="text-[12px] font-medium text-[#e8e8e8]">No active bots</p>
               <p className="text-[10px] text-[#666] mt-1 max-w-[260px] leading-relaxed">
-                Launch a parallel run to spin up an isolated agent container on a separate branch.
+                Launch a bot to spin up an isolated agent container on a separate branch.
               </p>
             </div>
             <Button variant="success" size="md" onClick={onStartNew}>
-              Launch First Run
+              Launch Bot
             </Button>
           </div>
         ) : (

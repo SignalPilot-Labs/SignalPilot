@@ -285,8 +285,43 @@ function StyledToolOutput({ tool }: { tool: ToolCall }) {
    ═══════════════════════════════════════════════ */
 
 /* ── LLM Message ── */
+function ThinkingPreview({ thinking }: { thinking: string }) {
+  const [expanded, setExpanded] = useState(false);
+  // Get last 2 meaningful lines for preview
+  const lines = thinking.split("\n").filter((l) => l.trim().length > 0);
+  const preview = lines.slice(-2).join("\n");
+
+  return (
+    <div
+      className="mb-3 px-3 py-2 bg-[#cc88ff]/[0.03] rounded border border-[#cc88ff]/10 cursor-pointer hover:bg-[#cc88ff]/[0.05] transition-colors"
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div className="flex items-center gap-1.5 mb-1">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#cc88ff" strokeWidth="1.2" className="opacity-50">
+          <circle cx="5" cy="5" r="3.5" /><circle cx="5" cy="5" r="1" />
+        </svg>
+        <span className="text-[9px] text-[#cc88ff]/60 uppercase tracking-wider font-semibold">Reasoning</span>
+        <svg
+          width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="#cc88ff" strokeWidth="1.2"
+          className={clsx("ml-auto opacity-40 transition-transform", expanded && "rotate-180")}
+        >
+          <polyline points="1 3 4 5.5 7 3" />
+        </svg>
+      </div>
+      {expanded ? (
+        <div className="text-[10px] text-[#cc88ff]/50 italic leading-relaxed whitespace-pre-wrap break-words max-h-[400px] overflow-y-auto">
+          {thinking}
+        </div>
+      ) : (
+        <div className="text-[10px] text-[#cc88ff]/40 italic leading-relaxed line-clamp-2 whitespace-pre-wrap">
+          {preview}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LLMMessageCard({ role, text, thinking, ts, isLast }: { role: string; text: string; thinking: string; ts: string; isLast: boolean }) {
-  const [showThinking, setShowThinking] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const isCeo = role === "ceo";
   const isLong = text.length > 3000;
@@ -306,22 +341,9 @@ function LLMMessageCard({ role, text, thinking, ts, isLast }: { role: string; te
           {isCeo ? "CEO" : "Worker Agent"}
         </span>
         <span className="text-[9px] text-[#777] tabular-nums">{fmtTime(ts)}</span>
-        {thinking && (
-          <button onClick={() => setShowThinking(!showThinking)}
-            className="ml-auto text-[9px] text-[#888] hover:text-[#888] transition-colors flex items-center gap-1">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="5" cy="5" r="3.5" /><circle cx="5" cy="5" r="1" /></svg>
-            {showThinking ? "hide reasoning" : "show reasoning"}
-          </button>
-        )}
       </div>
 
-      {showThinking && thinking && (
-        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
-          className="mb-3 px-3 py-2 bg-black/20 rounded border border-white/[0.03] overflow-hidden">
-          <div className="text-[9px] text-[#888] uppercase tracking-wider font-semibold mb-1">Reasoning</div>
-          <div className="text-[10px] text-[#666] italic leading-relaxed whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto">{thinking}</div>
-        </motion.div>
-      )}
+      {thinking && <ThinkingPreview thinking={thinking} />}
 
       {text && (
         <div className="relative">

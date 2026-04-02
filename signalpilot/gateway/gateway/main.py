@@ -668,7 +668,7 @@ async def test_connection(name: str):
     has_tunnel = (
         extras.get("ssh_tunnel")
         and extras["ssh_tunnel"].get("enabled")
-        and info.db_type in ("postgres", "mysql", "redshift", "clickhouse")
+        and info.db_type in ("postgres", "mysql", "redshift", "clickhouse", "mssql")
     )
     if has_tunnel:
         try:
@@ -709,6 +709,7 @@ async def test_connection(name: str):
                 "snowflake": "SELECT CURRENT_VERSION()",
                 "mssql": "SELECT @@VERSION",
                 "trino": "SELECT version()",
+                "databricks": "SELECT current_version()",
                 "duckdb": "SELECT version()",
                 "sqlite": "SELECT sqlite_version()",
             }
@@ -1449,10 +1450,18 @@ async def get_schema_ddl(
             parts = [f"  {col['name']} {col_type}"]
             if not col.get("nullable", True):
                 parts.append("NOT NULL")
-            # Inline column comment (semantic hint for agent)
+            # Inline column annotations (semantic hints for agent)
+            annotations = []
             col_comment = col.get("comment", "")
             if col_comment:
-                parts.append(f"-- {col_comment}")
+                annotations.append(col_comment)
+            # Redshift: distribution key and encoding hints
+            if col.get("dist_key"):
+                annotations.append("DISTKEY")
+            if col.get("sort_key_position"):
+                annotations.append(f"SORTKEY#{col['sort_key_position']}")
+            if annotations:
+                parts.append(f"-- {'; '.join(annotations)}")
             col_lines.append(" ".join(parts))
             if col.get("primary_key"):
                 pk_cols.append(col["name"])
@@ -1736,6 +1745,13 @@ async def schema_link(
                     annotations.append("unique")
                 elif frac >= 0.5:
                     annotations.append("high cardinality")
+            # Redshift/warehouse column-level optimization hints
+            if col.get("dist_key"):
+                annotations.append("DISTKEY")
+            if col.get("sort_key_position"):
+                annotations.append(f"SORTKEY#{col['sort_key_position']}")
+            if col.get("low_cardinality"):
+                annotations.append("low cardinality")
             if annotations:
                 parts.append(f"-- {'; '.join(annotations)}")
             col_parts.append(" ".join(parts))

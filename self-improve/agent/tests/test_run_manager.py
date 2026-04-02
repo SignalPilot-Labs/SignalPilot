@@ -411,6 +411,10 @@ class TestCleanup:
         assert "active" not in cleaned_names
         assert "done" in cleaned_names
         assert "err" in cleaned_names
+        # Finished slots should be removed from dict
+        assert "done" not in mgr.slots
+        assert "err" not in mgr.slots
+        assert "active" in mgr.slots
 
 
 # ===========================================================================

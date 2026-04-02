@@ -255,8 +255,18 @@ class RunManager:
         slot.run_id = data.get("run_id")
         print(f"[run_manager] Worker {container_name} started run_id={slot.run_id}")
 
-        asyncio.create_task(self._monitor_worker(container_name))
+        task = asyncio.create_task(self._monitor_worker(container_name))
+        task.add_done_callback(self._on_monitor_done)
         return slot
+
+    def _on_monitor_done(self, task: asyncio.Task) -> None:
+        """Log any unhandled exception from a monitor task."""
+        try:
+            exc = task.exception()
+            if exc:
+                print(f"[run_manager] Monitor task failed: {exc}")
+        except asyncio.CancelledError:
+            pass
 
     async def _wait_for_health(self, container_name: str, timeout: int = 120) -> None:
         deadline = time.time() + timeout
@@ -279,35 +289,41 @@ class RunManager:
         if not slot:
             return
 
-        print(f"[run_manager] Monitoring {container_name}")
-        async with httpx.AsyncClient(timeout=10) as client:
-            while slot.status in ("starting", "running"):
-                await asyncio.sleep(10)
-                try:
-                    state = self._run_docker(
-                        ["inspect", "--format", "{{.State.Status}}", container_name],
-                        timeout=10,
-                    )
-                    if state not in ("running", "created"):
-                        print(f"[run_manager] {container_name} exited (state={state})")
-                        slot.status = "completed"
-                        break
-                except Exception as e:
-                    print(f"[run_manager] inspect error for {container_name}: {e}")
-                    slot.status = "error"
-                    slot.error_message = str(e)
-                    break
-
-                try:
-                    resp = await client.get(f"http://{container_name}:8500/health")
-                    if resp.status_code == 200:
-                        health = resp.json()
-                        if health.get("status") == "idle" and slot.status == "running":
-                            print(f"[run_manager] {container_name} idle — marking completed")
+        try:
+            print(f"[run_manager] Monitoring {container_name}")
+            async with httpx.AsyncClient(timeout=10) as client:
+                while slot.status in ("starting", "running"):
+                    await asyncio.sleep(10)
+                    try:
+                        state = self._run_docker(
+                            ["inspect", "--format", "{{.State.Status}}", container_name],
+                            timeout=10,
+                        )
+                        if state not in ("running", "created"):
+                            print(f"[run_manager] {container_name} exited (state={state})")
                             slot.status = "completed"
                             break
-                except Exception:
-                    pass
+                    except Exception as e:
+                        print(f"[run_manager] inspect error for {container_name}: {e}")
+                        slot.status = "error"
+                        slot.error_message = str(e)
+                        break
+
+                    try:
+                        resp = await client.get(f"http://{container_name}:8500/health")
+                        if resp.status_code == 200:
+                            health = resp.json()
+                            if health.get("status") == "idle" and slot.status == "running":
+                                print(f"[run_manager] {container_name} idle — marking completed")
+                                slot.status = "completed"
+                                break
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[run_manager] Monitor crashed for {container_name}: {e}")
+            if slot.status in ("starting", "running"):
+                slot.status = "error"
+                slot.error_message = f"Monitor failed: {e}"
 
         print(f"[run_manager] Monitor done for {container_name}: status={slot.status}")
 
@@ -384,10 +400,11 @@ class RunManager:
                     print(f"[run_manager] volume rm {slot.volume_name} (ignored): {e}")
 
     def cleanup_all_finished(self, remove_volumes: bool = False) -> int:
-        """Clean up containers for finished runs. Returns count cleaned."""
+        """Clean up containers and remove slots for finished runs. Returns count cleaned."""
         cleaned = 0
         for name, slot in list(self.slots.items()):
             if slot.status not in ("starting", "running"):
                 self.cleanup_container(name, remove_volume=remove_volumes)
+                del self.slots[name]
                 cleaned += 1
         return cleaned

@@ -316,6 +316,26 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ── Mobile quick actions ── */}
+      <div className="sm:hidden grid grid-cols-3 gap-px mb-8 bg-[var(--color-border)] border border-[var(--color-border)]">
+        {[
+          { href: "/query", label: "query", icon: <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" /> },
+          { href: "/sandboxes", label: "sandbox", icon: <><rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" /><path d="M4 5L6 7L4 9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" /></> },
+          { href: "/audit", label: "audit", icon: <><rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" /><line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" /><line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" /></> },
+        ].map(({ href, label, icon }) => (
+          <a
+            key={href}
+            href={href}
+            className="flex flex-col items-center justify-center gap-1.5 py-4 bg-[var(--color-bg-card)] active:bg-[var(--color-bg-hover)] transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-[var(--color-text-dim)]">
+              {icon}
+            </svg>
+            <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">{label}</span>
+          </a>
+        ))}
+      </div>
+
       {/* ── Governance Pipeline ── */}
       <div className="mb-8">
         <GovernancePipeline />

@@ -449,13 +449,41 @@ async def test_connection(name: str):
     try:
         connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
         ok = await connector.health_check()
+
+        # Fetch database version for diagnostic info
+        db_version = ""
+        try:
+            version_queries = {
+                "postgres": "SELECT version()",
+                "mysql": "SELECT version()",
+                "redshift": "SELECT version()",
+                "clickhouse": "SELECT version()",
+                "snowflake": "SELECT CURRENT_VERSION()",
+                "duckdb": "SELECT version()",
+                "sqlite": "SELECT sqlite_version()",
+            }
+            vq = version_queries.get(info.db_type)
+            if vq:
+                vrows = await connector.execute(vq)
+                if vrows:
+                    raw = str(list(vrows[0].values())[0]).split("\n")[0]
+                    # Extract just the product name and version number
+                    import re as _re_ver
+                    ver_match = _re_ver.match(r"([\w\s]+?\d+[\d.]+)", raw)
+                    db_version = ver_match.group(1).strip() if ver_match else raw[:60]
+        except Exception:
+            pass
+
         await pool_manager.release(info.db_type, conn_str)
         phase2_duration = round((time.monotonic() - t1) * 1000, 1)
         if ok:
+            msg = "Authentication and query test passed"
+            if db_version:
+                msg += f" ({db_version})"
             phases.append({
                 "phase": "database",
                 "status": "ok",
-                "message": "Authentication and query test passed",
+                "message": msg,
                 "duration_ms": phase2_duration,
             })
         else:

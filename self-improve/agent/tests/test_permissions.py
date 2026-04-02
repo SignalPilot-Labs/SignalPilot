@@ -7,11 +7,12 @@ requires a live DB and SDK types.
 
 import sys
 import os
+from pathlib import Path
 
 # Ensure the agent package root is importable without installing.
 # The agent package lives at /home/agentuser/repo/self-improve/agent,
 # which is the directory that contains permissions.py.
-sys.path.insert(0, "/home/agentuser/repo/self-improve/agent")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 

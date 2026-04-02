@@ -222,7 +222,8 @@ async def get_live_diff():
                 "total_added": sum(f["added"] for f in stats),
                 "total_removed": sum(f["removed"] for f in stats)}
     except Exception as e:
-        return {"files": [], "error": str(e)}
+        print(f"[agent] /diff/live error: {e}")
+        return {"files": [], "error": "Failed to compute diff"}
 
 
 @router.get("/diff/{branch}")
@@ -235,4 +236,5 @@ async def get_branch_diff(branch: str, base: str = "main"):
                 "total_added": sum(f["added"] for f in stats),
                 "total_removed": sum(f["removed"] for f in stats)}
     except Exception as e:
-        return {"files": [], "error": str(e)}
+        print(f"[agent] /diff/{branch} error: {e}")
+        return {"files": [], "error": "Failed to compute diff"}

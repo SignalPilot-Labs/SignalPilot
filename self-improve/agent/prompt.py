@@ -76,6 +76,8 @@ def build_ceo_continuation(
     template = _load("ceo-continuation")
     # Escape braces in user-derived content to prevent KeyError when diffs/commits
     # contain literal { or } characters (common in code snippets and JSON).
+    # NOTE: This escaping is specific to str.format(). If the template is changed
+    # to use f-strings or a different templating engine, this function must be updated.
     def _safe(val: str) -> str:
         return val.replace("{", "{{").replace("}", "}}")
 

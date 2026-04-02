@@ -154,16 +154,29 @@ def _check_repo_exploration(cmd: str) -> str | None:
 
 
 def _check_token_exposure(cmd: str) -> str | None:
-    """Block commands that would print or expose tokens/secrets."""
+    """Block commands that would print or expose tokens/secrets.
+
+    Covers direct shell builtins, subshell invocations, interpreter one-liners,
+    and /proc filesystem access to environment variables.
+    """
     _secret_vars = "GIT_TOKEN|ANTHROPIC_API_KEY|GH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|FGAT_GIT_TOKEN"
     exposure_patterns = [
+        # Direct shell builtins
         rf"echo\s+.*\$\{{?({_secret_vars})",
+        rf"printf\s+.*\$\{{?({_secret_vars})",
         r"cat\s+.*\.env",
         rf"printenv\s+({_secret_vars})",
         r"printenv\s*$",
         r"\benv\s*$",
         r"\bset\s*$",
         r"\bexport\s*$",
+        # Subshell and interpreter one-liners that could read env vars
+        rf"(python3?|node|perl|ruby)\s+(-[ce]|--eval)\s+.*({_secret_vars})",
+        rf"bash\s+-c\s+.*({_secret_vars})",
+        rf"sh\s+-c\s+.*({_secret_vars})",
+        # /proc filesystem access to environment
+        r"cat\s+.*/proc/.*/environ",
+        r"/proc/self/environ",
     ]
     for pattern in exposure_patterns:
         if re.search(pattern, cmd):

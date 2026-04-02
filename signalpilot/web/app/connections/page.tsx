@@ -1139,6 +1139,24 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           </div>
         </>
       )}
+      {/* Connection guidance (HEX pattern — contextual setup instructions) */}
+      <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        {form.db_type === "postgres" ? (
+          <>
+            <div><span className="text-[var(--color-text-muted)]">rds:</span> Use endpoint from RDS Console → Connectivity. Ensure security group allows this server&apos;s IP on port 5432.</div>
+            <div><span className="text-[var(--color-text-muted)]">supabase:</span> Project Settings → Database → Connection string. Use pooler for serverless (port 6543).</div>
+            <div><span className="text-[var(--color-text-muted)]">neon:</span> Use the connection string from Neon console. SSL is required (auto-enabled).</div>
+            <div><span className="text-[var(--color-text-muted)]">on-prem:</span> For databases behind a firewall, enable the SSH tunnel in Advanced settings.</div>
+          </>
+        ) : (
+          <>
+            <div><span className="text-[var(--color-text-muted)]">rds:</span> Use endpoint from RDS Console → Connectivity. Security group must allow port 3306 from this server.</div>
+            <div><span className="text-[var(--color-text-muted)]">planetscale:</span> Use the connection string from PlanetScale dashboard. SSL is required (auto-enabled).</div>
+            <div><span className="text-[var(--color-text-muted)]">cloud sql:</span> For Google Cloud SQL, use the Cloud SQL Auth Proxy or add this server&apos;s IP to authorized networks.</div>
+            <div><span className="text-[var(--color-text-muted)]">on-prem:</span> For MySQL behind a firewall, enable the SSH tunnel in Advanced settings.</div>
+          </>
+        )}
+      </div>
     </>
   );
 }

@@ -2,10 +2,10 @@ import Link from "next/link";
 
 export default function NotFound() {
   return (
-    <div className="flex items-center justify-center min-h-screen -ml-56">
-      <div className="text-center max-w-md">
+    <div className="flex items-center justify-center min-h-screen mobile-negate-offset px-4">
+      <div className="text-center max-w-md w-full">
         {/* Terminal-style 404 SVG */}
-        <svg width="240" height="140" viewBox="0 0 240 140" fill="none" className="mx-auto mb-8">
+        <svg width="240" height="140" viewBox="0 0 240 140" fill="none" className="mx-auto mb-8 max-w-full h-auto">
           {/* Terminal window */}
           <rect x="0.5" y="0.5" width="239" height="139" stroke="var(--color-border)" fill="var(--color-bg-card)" />
           {/* Title bar */}
@@ -51,7 +51,7 @@ export default function NotFound() {
           the route you requested doesn&apos;t exist in this instance
         </p>
 
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
           <Link
             href="/dashboard"
             className="flex items-center gap-2 px-5 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"

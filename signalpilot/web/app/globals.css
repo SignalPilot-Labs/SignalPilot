@@ -655,6 +655,11 @@ kbd {
   margin-left: 14rem; /* 224px — matches sidebar width */
 }
 
+/* Negate sidebar margin for full-screen centered pages (boot, 404) */
+.mobile-negate-offset {
+  margin-left: -14rem;
+}
+
 /* ── Mobile visibility toggles ── */
 .sidebar-desktop { display: flex; }
 .mobile-topbar { display: none; }
@@ -699,6 +704,11 @@ kbd {
     margin-left: 0;
     padding-top: 3rem; /* space for top bar (48px) */
     padding-bottom: 3.5rem; /* space for bottom bar (56px) */
+  }
+
+  .mobile-negate-offset {
+    margin-left: 0;
+    padding-top: 0;
   }
 
   /* ── Grid layouts collapse to single column ── */

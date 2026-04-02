@@ -45,12 +45,12 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-4"
       onClick={onCancel}
       onKeyDown={handleKeyDown}
     >
       <div
-        className="w-[360px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
+        className="w-full sm:w-[360px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in safe-area-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

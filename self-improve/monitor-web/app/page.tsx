@@ -325,8 +325,9 @@ export default function MonitorPage() {
             <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">
               SignalPilot
             </h1>
-            <p className="text-[9px] text-[#777] tracking-[0.1em] uppercase -mt-0.5">
+            <p className="text-[9px] text-[#777] tracking-[0.1em] uppercase -mt-0.5 flex items-center gap-1">
               Self-Improve Monitor
+              <Image src="/cat.svg" alt="meow" width={14} height={14} className="inline-block" title="I can haz improvements?" />
             </p>
           </div>
         </div>

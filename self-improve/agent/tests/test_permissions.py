@@ -210,10 +210,9 @@ class TestCheckPathConfinement:
         assert _check_path_confinement("/workspace/../etc/shadow") is not None
 
     def test_workspace_prefix_trick(self):
-        # The implementation uses a plain startswith check, so "/workspace-evil"
-        # is treated as allowed because it starts with the "/workspace" string.
-        # This test documents the actual behavior rather than an ideal one.
-        assert _check_path_confinement("/workspace-evil/secrets") is None
+        # Ensure /workspace-evil is blocked — the confinement check uses
+        # exact match or trailing-slash startswith to prevent prefix tricks.
+        assert _check_path_confinement("/workspace-evil/secrets") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +253,9 @@ class TestCheckGitPush:
     # --- pushing to feature branches (must return None) ---
 
     def test_push_feature_branch(self):
-        # The force-push regex (git\s+push\s+.*(-f|--force)) has a known false-positive:
-        # "feature" contains the letter "f" and is matched by the "-f" alternative.
-        # Document the actual behavior: this command is incorrectly blocked.
-        assert _check_git_push("git push origin feature/my-cool-feature") is not None
+        # Ensure branch names containing "f" or "force" are not false-positives
+        # for the force-push check — -f must be a standalone flag.
+        assert _check_git_push("git push origin feature/my-cool-feature") is None
 
     def test_push_branch_with_no_f_in_name(self):
         # A branch name that doesn't contain "f" or "force" is not caught by the
@@ -351,9 +349,8 @@ class TestCheckDangerousCommand:
         assert _check_dangerous_command("rm -rf / ") is not None
 
     def test_rm_fr_slash(self):
-        # The dangerous pattern requires the r flag before f (e.g. -rf, not -fr).
-        # rm -fr / is NOT caught by the current regex — document actual behavior.
-        assert _check_dangerous_command("rm -fr /") is None
+        # Both -rf and -fr orderings must be blocked.
+        assert _check_dangerous_command("rm -fr /") is not None
 
     def test_mkfs_ext4(self):
         assert _check_dangerous_command("mkfs.ext4 /dev/sda1") is not None

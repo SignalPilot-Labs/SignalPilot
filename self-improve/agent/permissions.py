@@ -50,7 +50,7 @@ _cred_re = re.compile("|".join(CREDENTIAL_PATTERNS), re.IGNORECASE)
 
 # Dangerous bash patterns
 DANGEROUS_PATTERNS = [
-    r"rm\s+(-\w*r\w*f|--force.*--recursive|--recursive.*--force)\s+/\s*$",
+    r"rm\s+(-\w*r\w*f|-\w*f\w*r|--force.*--recursive|--recursive.*--force)\s+/\s*$",
     r"mkfs\.",
     r"dd\s+.*of=/dev/",
     r">\s*/dev/sd[a-z]",
@@ -83,8 +83,9 @@ def _check_path_confinement(path: str) -> str | None:
         return None
     norm = os.path.normpath(path)
     # Allow: /workspace (host mount), /home/agentuser/repo (cloned repo), /tmp
-    allowed = ("/workspace", "/home/agentuser/repo", "/tmp")
-    if not any(norm.startswith(p) for p in allowed):
+    # Use trailing / to prevent prefix tricks (e.g. /workspace-evil matching /workspace)
+    allowed_exact = ("/workspace", "/home/agentuser/repo", "/tmp")
+    if not any(norm == p or norm.startswith(p + "/") for p in allowed_exact):
         return f"Path '{path}' is outside allowed directories — operations are confined to the repo"
     return None
 
@@ -114,8 +115,9 @@ def _check_git_push(cmd: str) -> str | None:
         if re.search(rf"git\s+push\s+.*\b{branch}\b", cmd):
             return f"Cannot push directly to protected branch '{branch}' — create a PR instead"
 
-    # Block force push entirely
-    if re.search(r"git\s+push\s+.*(-f|--force)", cmd):
+    # Block force push entirely — match -f/--force only as standalone flags preceded
+    # by whitespace, not as substrings in branch names like "cool-feature"
+    if re.search(r"git\s+push\s+.*(?<=\s)(-f\b|--force\b)", cmd):
         return "Force push is not allowed"
 
     return None

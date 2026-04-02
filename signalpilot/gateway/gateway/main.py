@@ -995,6 +995,134 @@ async def get_enriched_schema(
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
 
+@app.get("/api/connections/{name}/schema/compact")
+async def get_compact_schema(
+    name: str,
+    max_tables: int = Query(default=50, ge=1, le=500, description="Maximum tables to include"),
+    include_fk: bool = Query(default=True, description="Include foreign key relationships"),
+    include_types: bool = Query(default=True, description="Include column type info"),
+    format: str = Query(default="text", regex="^(text|json)$", description="Output format"),
+):
+    """Ultra-compact schema representation optimized for LLM context windows.
+
+    Based on EDBT 2026 schema compression research and RSL-SQL bidirectional linking.
+    Produces a minimal-token schema that preserves the most important signals:
+    - Table and column names (always)
+    - Primary keys and foreign keys (high-impact for Spider2.0)
+    - Column types (optional, helps with type-aware SQL generation)
+    - Row counts (helps agent estimate query cost)
+
+    Text format example:
+        public.customers (10000 rows): customer_id* INT, name VARCHAR, email VARCHAR
+        public.orders (50000 rows): order_id* INT, customer_id→customers.customer_id INT, total DECIMAL
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        extras = get_credential_extras(name)
+        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        cached = await connector.get_schema()
+        schema_cache.put(name, cached)
+        await pool_manager.release(info.db_type, conn_str)
+
+    filtered = apply_endorsement_filter(name, cached)
+
+    # Sort tables: endorsed first, then by name
+    table_keys = sorted(filtered.keys())[:max_tables]
+
+    # Build FK lookup for compact reference format
+    fk_map: dict[str, dict[str, str]] = {}  # table.col -> ref_table.ref_col
+    if include_fk:
+        for key, table in filtered.items():
+            for fk in table.get("foreign_keys", []):
+                fk_key = f"{key}.{fk['column']}"
+                ref = f"{fk.get('references_table', '')}.{fk.get('references_column', '')}"
+                fk_map[fk_key] = ref
+
+    if format == "json":
+        compact: dict[str, Any] = {}
+        for key in table_keys:
+            table = filtered[key]
+            cols = []
+            for col in table.get("columns", []):
+                entry: dict[str, Any] = {"n": col["name"]}
+                if include_types:
+                    entry["t"] = col.get("type", "")
+                if col.get("primary_key"):
+                    entry["pk"] = True
+                fk_ref = fk_map.get(f"{key}.{col['name']}")
+                if fk_ref:
+                    entry["fk"] = fk_ref
+                cols.append(entry)
+            compact[key] = {"c": cols, "r": table.get("row_count", 0)}
+        return {
+            "connection_name": name,
+            "format": "json",
+            "table_count": len(compact),
+            "token_estimate": sum(len(str(v)) for v in compact.values()) // 4,
+            "tables": compact,
+        }
+
+    # Text format — optimized for direct LLM consumption
+    lines = []
+    total_chars = 0
+    for key in table_keys:
+        table = filtered[key]
+        row_count = table.get("row_count", 0)
+        row_str = ""
+        if row_count:
+            if row_count >= 1_000_000:
+                row_str = f" ({row_count / 1_000_000:.1f}M rows)"
+            elif row_count >= 1_000:
+                row_str = f" ({row_count / 1_000:.0f}K rows)"
+            else:
+                row_str = f" ({row_count} rows)"
+
+        col_parts = []
+        for col in table.get("columns", []):
+            name_str = col["name"]
+            if col.get("primary_key"):
+                name_str += "*"
+            fk_ref = fk_map.get(f"{key}.{col['name']}")
+            if fk_ref:
+                name_str += f"→{fk_ref}"
+            if include_types:
+                col_type = col.get("type", "").upper()
+                # Shorten common types
+                type_map = {
+                    "CHARACTER VARYING": "VARCHAR",
+                    "TIMESTAMP WITHOUT TIME ZONE": "TIMESTAMP",
+                    "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
+                    "DOUBLE PRECISION": "DOUBLE",
+                    "BOOLEAN": "BOOL",
+                    "INTEGER": "INT",
+                    "BIGINT": "BIGINT",
+                    "SMALLINT": "SMALLINT",
+                }
+                col_type = type_map.get(col_type, col_type)
+                name_str += f" {col_type}"
+            col_parts.append(name_str)
+
+        line = f"{key}{row_str}: {', '.join(col_parts)}"
+        lines.append(line)
+        total_chars += len(line)
+
+    schema_text = "\n".join(lines)
+    return {
+        "connection_name": name,
+        "format": "text",
+        "table_count": len(lines),
+        "token_estimate": total_chars // 4,
+        "schema": schema_text,
+    }
+
+
 @app.get("/api/connections/{name}/schema/diff")
 async def get_schema_diff(name: str):
     """Compare current database schema against cached version.

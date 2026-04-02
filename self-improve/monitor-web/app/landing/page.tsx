@@ -1096,20 +1096,56 @@ result = await ceo.run(
 
       {/* ─── Footer ─── */}
       <footer className="border-t border-[var(--color-border)] px-6 md:px-12 lg:px-24 py-8">
-        <div className="flex items-center justify-between max-w-5xl mx-auto">
-          <div className="flex items-center gap-2">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#555" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M2 10L5 4L7 7L9 3L12 10" />
-            </svg>
-            <span className="text-[10px] text-[var(--color-text-dim)]">
-              SignalPilot · Self-Improving Infrastructure
-            </span>
+        <div className="max-w-5xl mx-auto">
+          {/* Footer nav */}
+          <div className="flex flex-wrap items-start justify-between gap-8 mb-8">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#00ff88" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M2 10L5 4L7 7L9 3L12 10" />
+                </svg>
+                <span className="text-[11px] font-semibold text-[var(--color-accent)]">SignalPilot</span>
+              </div>
+              <p className="text-[10px] text-[var(--color-text-dim)] max-w-[200px] leading-relaxed">
+                Self-improving infrastructure. Autonomous agents that ship code 24/7.
+              </p>
+            </div>
+            <div className="flex gap-12">
+              <div>
+                <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">Product</p>
+                <div className="space-y-1.5">
+                  <a href="/" className="block text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Monitor</a>
+                  <a href="#agents" className="block text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Agents</a>
+                  <a href="#features" className="block text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Features</a>
+                </div>
+              </div>
+              <div>
+                <p className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">Resources</p>
+                <div className="space-y-1.5">
+                  <a href="#stack" className="block text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">Integrations</a>
+                  <a href="https://github.com/nicholasmartin/signalpilot" target="_blank" rel="noopener" className="block text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors">GitHub</a>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-[10px] text-[var(--color-text-dim)]">
-              Powered by Claude Agent SDK
-            </span>
-            <Image src="/logos/anthropic-logo.svg" alt="Anthropic" width={60} height={16} className="opacity-30" />
+
+          {/* Bottom bar */}
+          <div className="flex items-center justify-between pt-4 border-t border-[var(--color-border)]">
+            <div className="flex items-center gap-4">
+              <span className="text-[9px] text-[var(--color-text-dim)]">
+                Powered by Claude Agent SDK
+              </span>
+              <Image src="/logos/anthropic-logo.svg" alt="Anthropic" width={56} height={14} className="opacity-25" />
+            </div>
+            <button
+              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider flex items-center gap-1"
+            >
+              Back to top
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M4 6V2M2 4l2-2 2 2" />
+              </svg>
+            </button>
           </div>
         </div>
       </footer>

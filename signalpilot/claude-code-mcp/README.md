@@ -93,27 +93,36 @@ Open Claude Code and start talking:
 > "What's the current query budget status?"
 ```
 
-## Available Tools
+## Available Tools (21)
 
 | Tool | Description |
 |------|-------------|
+| **Gateway** | |
 | `signalpilot_health` | Check gateway status and connectivity |
-| `query_database` | Run governed read-only SQL (with full governance pipeline) |
+| `get_settings` | View gateway configuration |
+| `update_settings` | Modify gateway settings |
+| **Queries** | |
+| `query_database` | Run governed read-only SQL (full governance pipeline) |
+| **Connections** | |
 | `list_connections` | List all configured database connections |
-| `add_connection` | Register a new database connection |
+| `add_connection` | Register a new connection (host/port/user/pass) |
+| `add_connection_uri` | Register a new connection (URI string) |
 | `remove_connection` | Remove a database connection |
 | `test_connection` | Test connectivity to a database |
-| `describe_schema` | Get full table/column schema for a connection |
+| `describe_schema` | Get full table/column schema |
 | `connection_health` | View latency percentiles and error rates |
+| **Sandboxes** | |
 | `list_sandboxes` | List active Firecracker microVM sandboxes |
 | `create_sandbox` | Launch a new isolated sandbox |
 | `destroy_sandbox` | Terminate a sandbox |
 | `execute_code` | Run Python code in a sandbox |
+| **Governance** | |
+| `get_annotations` | View schema annotations, PII flags, sensitivity levels |
+| `detect_pii` | Auto-detect PII columns in a database |
 | `audit_log` | View the query/execution audit trail |
 | `check_budget` | Check query cost budget status |
 | `cache_stats` | View query cache hit rates |
-| `get_settings` | View gateway configuration |
-| `update_settings` | Modify gateway settings |
+| `invalidate_cache` | Clear the query cache |
 
 ## Configuration
 

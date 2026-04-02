@@ -798,6 +798,19 @@ kbd {
     user-select: none;
   }
 
+  /* ── Larger checkboxes for touch ── */
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    min-height: auto;
+  }
+  input[type="checkbox"]:checked::after {
+    left: 5px;
+    top: 2px;
+    width: 5px;
+    height: 9px;
+  }
+
   /* ── Tap highlight color for dark theme ── */
   * {
     -webkit-tap-highlight-color: rgba(0, 255, 136, 0.08);

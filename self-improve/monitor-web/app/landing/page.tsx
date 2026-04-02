@@ -327,9 +327,9 @@ export default function LandingPage() {
             transition={{ duration: 0.6, delay: 0.2 }}
             className="text-[14px] md:text-[16px] text-[var(--color-text-muted)] leading-relaxed max-w-xl mb-10"
           >
-            CEO, PM, and Engineer agents collaborate in an autonomous loop —
-            planning improvements, writing code, running tests, and shipping PRs.
-            Every cycle makes your codebase better.
+            Autonomous agents that plan, code, test, and ship.
+            CEO sets direction. PM prioritizes. Engineer executes.
+            Your codebase gets better while you sleep.
           </motion.p>
 
           {/* CTA row */}

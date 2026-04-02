@@ -70,7 +70,8 @@ class SnowflakeConnector(BaseConnector):
         # Merge in credential_extras (takes precedence — they have the actual secrets)
         if self._credential_extras:
             for key in ("account", "username", "password", "warehouse", "schema_name", "role",
-                        "private_key", "private_key_passphrase"):
+                        "private_key", "private_key_passphrase",
+                        "oauth_access_token", "auth_method"):
                 val = self._credential_extras.get(key)
                 if val:
                     # Map schema_name -> schema for snowflake-connector
@@ -90,8 +91,15 @@ class SnowflakeConnector(BaseConnector):
             "disable_ocsp_checks": params.get("disable_ocsp_checks", False),
         }
 
-        # Key-pair auth takes precedence over password auth (HEX pattern)
-        if params.get("private_key"):
+        # Auth method priority: OAuth > Key-pair > Password (HEX pattern)
+        auth_method = params.get("auth_method", "").lower()
+        if auth_method == "oauth" or params.get("oauth_access_token"):
+            token = params.get("oauth_access_token")
+            if not token:
+                raise RuntimeError("OAuth auth requires an access token (oauth_access_token)")
+            connect_args["authenticator"] = "oauth"
+            connect_args["token"] = token
+        elif params.get("private_key"):
             try:
                 pk_bytes = self._load_private_key(
                     params["private_key"],

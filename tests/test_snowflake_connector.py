@@ -69,6 +69,26 @@ class TestSnowflakeConnectorParsing:
         result = connector._parse_connection("snowflake://user:pass@account/db/schema?disable_ocsp_checks=true")
         assert result.get("disable_ocsp_checks") is True
 
+    def test_oauth_credential_extras(self):
+        """OAuth token and auth method from credential extras should be stored."""
+        from gateway.connectors.snowflake import SnowflakeConnector
+        connector = SnowflakeConnector()
+        connector.set_credential_extras({
+            "auth_method": "oauth",
+            "oauth_access_token": "eyJhbGciOiJSUzI1NiJ9.test_token",
+        })
+        assert connector._credential_extras["auth_method"] == "oauth"
+        assert connector._credential_extras["oauth_access_token"].startswith("eyJ")
+
+    def test_oauth_missing_token_raises(self):
+        """OAuth auth without a token should raise RuntimeError."""
+        import asyncio
+        from gateway.connectors.snowflake import SnowflakeConnector
+        connector = SnowflakeConnector()
+        connector.set_credential_extras({"auth_method": "oauth"})
+        with pytest.raises(RuntimeError, match="OAuth auth requires an access token"):
+            asyncio.get_event_loop().run_until_complete(connector.connect("snowflake://xy12345.us-east-1"))
+
 
 class TestSnowflakeSchemaEnrichment:
     def test_tables_query_includes_bytes(self):

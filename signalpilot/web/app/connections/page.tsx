@@ -415,10 +415,11 @@ interface FormState {
   ssh_password: string;
   ssh_private_key: string;
   ssh_key_passphrase: string;
-  // Snowflake key-pair auth
-  snowflake_auth_method: "password" | "key_pair";
+  // Snowflake auth method (password, key-pair, or OAuth)
+  snowflake_auth_method: "password" | "key_pair" | "oauth";
   sf_private_key: string;
   sf_private_key_passphrase: string;
+  sf_oauth_token: string;
   // Trino HTTPS
   trino_https: boolean;
   // DuckDB / MotherDuck
@@ -452,7 +453,7 @@ const defaultForm: FormState = {
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
-  snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", trino_https: false, motherduck_token: "",
+  snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", sf_oauth_token: "", trino_https: false, motherduck_token: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
   scope: "workspace", read_only: true,
@@ -616,10 +617,15 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     payload.tags = form.tags;
   }
 
-  // Snowflake key-pair auth
-  if (form.db_type === "snowflake" && form.snowflake_auth_method === "key_pair") {
-    payload.private_key = form.sf_private_key;
-    if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
+  // Snowflake auth method
+  if (form.db_type === "snowflake") {
+    payload.auth_method = form.snowflake_auth_method;
+    if (form.snowflake_auth_method === "key_pair") {
+      payload.private_key = form.sf_private_key;
+      if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
+    } else if (form.snowflake_auth_method === "oauth") {
+      payload.oauth_access_token = form.sf_oauth_token;
+    }
   }
 
   // DuckDB MotherDuck token
@@ -737,7 +743,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         <div className="col-span-2 mb-1">
           <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
           <div className="flex gap-2">
-            {(["password", "key_pair"] as const).map((method) => (
+            {(["password", "key_pair", "oauth"] as const).map((method) => (
               <button
                 key={method}
                 type="button"
@@ -748,14 +754,14 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
                 }`}
               >
-                {method === "password" ? "password" : "key pair (RSA)"}
+                {method === "password" ? "password" : method === "key_pair" ? "key pair (RSA)" : "OAuth"}
               </button>
             ))}
           </div>
         </div>
         {form.snowflake_auth_method === "password" ? (
           <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required className="col-span-2" />
-        ) : (
+        ) : form.snowflake_auth_method === "key_pair" ? (
           <>
             <FormTextArea
               label="private key (PEM)"
@@ -767,6 +773,14 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
               className="col-span-2"
             />
             <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
+          </>
+        ) : (
+          <>
+            <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" />
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+              <div><span className="text-[var(--color-text-muted)]">setup:</span> Create a Snowflake security integration (CREATE SECURITY INTEGRATION ... TYPE = EXTERNAL_OAUTH) and configure your IdP to issue tokens.</div>
+              <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
+            </div>
           </>
         )}
         <FormInput label="warehouse" value={form.warehouse} onChange={(v) => setForm({ ...form, warehouse: v })} placeholder="COMPUTE_WH" hint="optional — default warehouse" />

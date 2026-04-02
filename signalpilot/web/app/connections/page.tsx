@@ -158,7 +158,7 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     defaultPort: 8080,
     category: "warehouse",
     supportsSSH: false,
-    supportsSSL: false,
+    supportsSSL: true,
     connectionModes: ["fields", "url"],
     fields: ["host", "port", "username", "password", "catalog", "schema_name"],
     description: "Distributed SQL query engine",
@@ -418,6 +418,9 @@ interface FormState {
   // Scheduled schema refresh
   schema_refresh_enabled: boolean;
   schema_refresh_interval: string; // seconds as string for form input
+  // Connection scoping (HEX pattern)
+  scope: "workspace" | "project";
+  read_only: boolean;
 }
 
 const defaultForm: FormState = {
@@ -434,6 +437,7 @@ const defaultForm: FormState = {
   snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
+  scope: "workspace", read_only: true,
 };
 
 function buildConnectionPreview(form: FormState): string {
@@ -1073,6 +1077,8 @@ export default function ConnectionsPage() {
       tags: conn.tags || [],
       schema_refresh_enabled: !!(conn as any).schema_refresh_interval,
       schema_refresh_interval: String((conn as any).schema_refresh_interval || 300),
+      scope: (conn as any).scope || "workspace",
+      read_only: (conn as any).read_only !== false,
     });
     setEditingConnection(conn.name);
     setShowForm(true);
@@ -1332,26 +1338,65 @@ export default function ConnectionsPage() {
               </div>
             )}
 
-            {/* Advanced: SSL + SSH */}
-            {(config.supportsSSL || config.supportsSSH) && (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
-                >
-                  {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                  advanced options
-                  {(form.ssl_enabled || form.ssh_enabled) && (
-                    <span className="text-[var(--color-success)] text-[9px] ml-1">
-                      {[form.ssl_enabled && "ssl", form.ssh_enabled && "ssh"].filter(Boolean).join(" + ")}
-                    </span>
-                  )}
-                </button>
+            {/* Advanced: SSL + SSH + Access Controls + Schema Refresh */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+              >
+                {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                advanced options
+                {(form.ssl_enabled || form.ssh_enabled || !form.read_only || form.schema_refresh_enabled) && (
+                  <span className="text-[var(--color-success)] text-[9px] ml-1">
+                    {[form.ssl_enabled && "ssl", form.ssh_enabled && "ssh", !form.read_only && "read-write", form.schema_refresh_enabled && "auto-refresh"].filter(Boolean).join(" + ")}
+                  </span>
+                )}
+              </button>
                 {showAdvanced && (
                   <div className="animate-fade-in">
                     <SSLSection form={form} setForm={setForm} />
                     <SSHSection form={form} setForm={setForm} />
+                    {/* Connection Scope + Read-only (HEX pattern) */}
+                    <div className="border-t border-[var(--color-border)] pt-4 mt-4">
+                      <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] tracking-wider mb-3">
+                        <Settings2 className="w-3 h-3" strokeWidth={1.5} />
+                        <span>access controls</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection scope</label>
+                          <select
+                            value={form.scope}
+                            onChange={(e) => setForm({ ...form, scope: e.target.value as "workspace" | "project" })}
+                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                          >
+                            <option value="workspace">workspace — all projects</option>
+                            <option value="project">project — current only</option>
+                          </select>
+                          <p className="text-[8px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">
+                            workspace connections are shared across all projects
+                          </p>
+                        </div>
+                        <div>
+                          <label className="flex items-center gap-2 cursor-pointer mt-5">
+                            <input
+                              type="checkbox"
+                              checked={form.read_only}
+                              onChange={(e) => setForm({ ...form, read_only: e.target.checked })}
+                              className="accent-[var(--color-text)]"
+                            />
+                            <span className="text-[10px] text-[var(--color-text-muted)] tracking-wider">
+                              read-only mode
+                            </span>
+                          </label>
+                          <p className="text-[8px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60 ml-5">
+                            only SELECT queries allowed (recommended)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
                     {/* IP Allowlist Info */}
                     <div className="border-t border-[var(--color-border)] pt-4 mt-4">
                       <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] tracking-wider mb-2">
@@ -1418,7 +1463,6 @@ export default function ConnectionsPage() {
                   </div>
                 )}
               </div>
-            )}
 
             {/* Action buttons */}
             <div className="flex items-center gap-3 mt-5 pt-4 border-t border-[var(--color-border)]">

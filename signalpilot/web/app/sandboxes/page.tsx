@@ -20,6 +20,7 @@ import type { SandboxInfo } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
 import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 import { TimeAgo } from "@/components/ui/time-ago";
@@ -70,7 +71,8 @@ export default function SandboxesPage() {
   }
 
   return (
-    <div className="p-8 animate-fade-in">
+    <PullToRefreshWrapper onRefresh={refresh}>
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="sandboxes"
         subtitle="microvms"
@@ -78,7 +80,7 @@ export default function SandboxesPage() {
         actions={
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="flex items-center gap-2 px-4 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 active:opacity-80"
           >
             <Plus className="w-3.5 h-3.5" /> new sandbox
           </button>
@@ -89,7 +91,7 @@ export default function SandboxesPage() {
         path="sandboxes --list --watch"
         status={<StatusDot status={sandboxes.some(s => s.status === "running") ? "healthy" : sandboxes.length > 0 ? "warning" : "unknown"} size={4} pulse={sandboxes.some(s => s.status === "running")} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">total: <code className="text-[12px] text-[var(--color-text)]">{sandboxes.length}</code></span>
           <span className="text-[var(--color-text-dim)]">running: <code className="text-[12px] text-[var(--color-success)]">{sandboxes.filter(s => s.status === "running").length}</code></span>
         </div>
@@ -103,7 +105,7 @@ export default function SandboxesPage() {
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">create sandbox</span>
           </div>
           <div className="p-5">
-            <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">label</label>
                 <input
@@ -111,7 +113,7 @@ export default function SandboxesPage() {
                   placeholder="my-analysis"
                   value={form.label}
                   onChange={(e) => setForm({ ...form, label: e.target.value })}
-                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                 />
               </div>
               <div>
@@ -119,7 +121,7 @@ export default function SandboxesPage() {
                 <select
                   value={form.connection_name}
                   onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
-                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                 >
                   <option value="">none</option>
                   {connections.map((c) => (
@@ -132,14 +134,14 @@ export default function SandboxesPage() {
               <button
                 onClick={handleCreate}
                 disabled={creating}
-                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                className="flex items-center gap-2 px-4 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30 active:opacity-80"
               >
                 {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                 create
               </button>
               <button
                 onClick={() => setShowCreate(false)}
-                className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="px-4 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 cancel
               </button>
@@ -157,14 +159,14 @@ export default function SandboxesPage() {
           action={
             <button
               onClick={() => setShowCreate(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+              className="flex items-center gap-2 px-4 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
             >
               <Plus className="w-3.5 h-3.5" /> create first sandbox
             </button>
           }
         />
       ) : (
-        <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] stagger-fade-in">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-[var(--color-border)] stagger-fade-in">
           {sandboxes.map((sb) => {
             const status = statusConfig[sb.status] || statusConfig.error;
             const budgetPct = sb.budget_usd > 0 ? (sb.budget_used / sb.budget_usd) * 100 : 0;
@@ -184,15 +186,15 @@ export default function SandboxesPage() {
                   </div>
                   <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{status.label}</span>
                   <div className="flex items-center gap-1">
-                    <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
                     <button
                       onClick={(e) => {
                         e.preventDefault();
                         handleDelete(sb.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
+                      className="sm:opacity-0 sm:group-hover:opacity-100 p-2 sm:p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all active:text-[var(--color-error)]"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
                     </button>
                   </div>
                 </div>
@@ -267,5 +269,6 @@ export default function SandboxesPage() {
         </div>
       )}
     </div>
+    </PullToRefreshWrapper>
   );
 }

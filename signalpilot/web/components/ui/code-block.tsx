@@ -37,7 +37,7 @@ export function CodeBlock({
         <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{language}</span>
         <button
           onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider flex items-center gap-1"
+          className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] active:text-[var(--color-text)] tracking-wider flex items-center gap-1 px-1.5 py-1.5 sm:py-0.5 -mr-1.5 sm:-mr-0"
         >
           {copied ? (
             <>
@@ -70,7 +70,7 @@ export function CodeBlock({
               ))}
             </div>
           )}
-          <pre className="flex-1 p-3 text-[13px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto">
+          <pre className="flex-1 p-3 text-[13px] sm:text-[13px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto [-webkit-overflow-scrolling:touch]">
             <code>{code}</code>
           </pre>
         </div>

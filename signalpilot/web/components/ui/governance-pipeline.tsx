@@ -161,7 +161,7 @@ export function GovernancePipeline() {
   return (
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden" style={{ overflow: "hidden" }}>
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M2 8h3l2-4 2 8 2-4h3" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -184,8 +184,94 @@ export function GovernancePipeline() {
         </div>
       </div>
 
-      {/* Pipeline visualization */}
-      <div className="px-4 py-5 overflow-hidden">
+      {/* Mobile vertical stepper */}
+      <div className="sm:hidden px-4 py-4">
+        <div className="flex items-center gap-2 mb-3">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="14" height="14" stroke={activeStage === 0 ? "var(--color-success)" : "var(--color-border-hover)"} strokeWidth="1" fill="none" />
+            <text x="8" y="11" textAnchor="middle" fill={activeStage === 0 ? "var(--color-success)" : "var(--color-text-dim)"} fontSize="7" fontFamily="monospace">SQL</text>
+          </svg>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M6 2V10M3 7L6 10L9 7" stroke="var(--color-border-hover)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div className="space-y-0">
+          {PIPELINE_STEPS.map((step, i) => {
+            const isActive = activeStage === i + 1;
+            const isPassed = activeStage > i + 1;
+            const isSelected = hoveredStep === step.id;
+            return (
+              <div key={step.id}>
+                <button
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 transition-all duration-200 text-left ${
+                    isActive
+                      ? "bg-[var(--color-success)]/5 border-l-2 border-l-[var(--color-success)]"
+                      : isSelected
+                        ? "bg-[var(--color-bg-hover)] border-l-2 border-l-[var(--color-border-active)]"
+                        : "border-l-2 border-l-[var(--color-border)]"
+                  }`}
+                  onClick={() => setHoveredStep(isSelected ? null : step.id)}
+                >
+                  <span className={`transition-colors duration-300 flex-shrink-0 ${
+                    isActive ? "text-[var(--color-success)]" : isPassed ? "text-[var(--color-success)]/60" : "text-[var(--color-text-dim)]"
+                  }`}>
+                    {step.icon}
+                  </span>
+                  <span className={`text-[9px] tabular-nums tracking-wider flex-shrink-0 ${
+                    isActive ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"
+                  }`}>
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span className={`text-[10px] font-medium tracking-wide flex-1 ${
+                    isActive ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"
+                  }`}>
+                    {step.label}
+                  </span>
+                  <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider hidden min-[400px]:inline">
+                    {step.description}
+                  </span>
+                  {isPassed && (
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0">
+                      <path d="M2 5L4 7L8 3" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.6" />
+                    </svg>
+                  )}
+                </button>
+                {isSelected && (
+                  <div className="ml-5 px-3 py-2 border-l-2 border-l-[var(--color-border)] animate-fade-in">
+                    <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider mb-1">{step.description}</p>
+                    <p className="text-[9px] text-[var(--color-text-muted)] tracking-wider leading-relaxed">{step.detail}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M6 2V10M3 7L6 10L9 7" stroke="var(--color-border-hover)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="14" height="14"
+              stroke={activeStage >= PIPELINE_STEPS.length + 1 ? "var(--color-success)" : "var(--color-border-hover)"}
+              strokeWidth="1"
+              fill={activeStage >= PIPELINE_STEPS.length + 1 ? "var(--color-success)" : "none"}
+              fillOpacity={activeStage >= PIPELINE_STEPS.length + 1 ? 0.15 : 0}
+            />
+            <path d="M5 8L7 10L11 6" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+              opacity={activeStage >= PIPELINE_STEPS.length + 1 ? 1 : 0.3}
+            />
+          </svg>
+          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">safe result</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-[var(--color-border)]">
+          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+            all 6 stages · ~2ms overhead
+          </span>
+        </div>
+      </div>
+
+      {/* Desktop horizontal pipeline */}
+      <div className="hidden sm:block px-4 py-5 overflow-hidden">
         <div className="flex items-center justify-between overflow-hidden">
           {/* Input indicator */}
           <div className="flex items-center gap-1.5 flex-shrink-0 mr-1">
@@ -213,6 +299,7 @@ export function GovernancePipeline() {
                   className="relative group cursor-default transition-all duration-200"
                   onMouseEnter={() => setHoveredStep(step.id)}
                   onMouseLeave={() => setHoveredStep(null)}
+                  onClick={() => setHoveredStep(hoveredStep === step.id ? null : step.id)}
                 >
                   {/* Step card */}
                   <div className={`relative px-3 py-2.5 border transition-all duration-300 ${
@@ -301,14 +388,14 @@ export function GovernancePipeline() {
         </div>
 
         {/* Footer note */}
-        <div className="flex items-center gap-2 mt-4 pt-3 border-t border-[var(--color-border)]">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-[var(--color-border)]">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
             <path d="M6 1v10M1 6h10" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" />
           </svg>
           <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
             every query passes through all 6 stages before results reach the agent
           </span>
-          <span className="ml-auto text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+          <span className="sm:ml-auto text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
             ~2ms overhead
           </span>
         </div>

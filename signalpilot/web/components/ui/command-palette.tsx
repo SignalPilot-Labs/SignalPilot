@@ -171,7 +171,7 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center pt-[18vh]"
+      className="fixed inset-0 z-[100] flex items-start justify-center pt-[5vh] sm:pt-[18vh] px-3 sm:px-0"
       onClick={() => { setOpen(false); setQuery(""); }}
     >
       {/* Backdrop with blur */}
@@ -179,7 +179,7 @@ export function CommandPalette() {
 
       {/* Palette */}
       <div
-        className="relative w-[520px] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden"
+        className="relative w-full sm:w-[520px] max-h-[70vh] sm:max-h-[80vh] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top accent line */}
@@ -198,7 +198,7 @@ export function CommandPalette() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleInputKeyDown}
             placeholder="type a command or search..."
-            className="flex-1 bg-transparent text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none tracking-wide"
+            className="flex-1 bg-transparent text-base sm:text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none tracking-wide"
             autoComplete="off"
             spellCheck={false}
           />
@@ -237,7 +237,7 @@ export function CommandPalette() {
                       data-selected={isSelected}
                       onClick={() => handleSelect(item.cmd)}
                       onMouseEnter={() => setSelectedIndex(flatIndex)}
-                      className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
+                      className={`w-full flex items-center gap-3 px-4 py-3 sm:py-2 text-left transition-colors ${
                         isSelected
                           ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
                           : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
@@ -255,7 +255,7 @@ export function CommandPalette() {
                         </span>
                       </div>
                       {item.cmd.shortcut && (
-                        <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
+                        <kbd className="hidden sm:inline px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
                           {item.cmd.shortcut}
                         </kbd>
                       )}
@@ -269,7 +269,7 @@ export function CommandPalette() {
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)] tracking-wider">
-          <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-3">
             <span className="flex items-center gap-1">
               <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↑↓</kbd>
               navigate
@@ -279,7 +279,7 @@ export function CommandPalette() {
               select
             </span>
           </div>
-          <span>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
+          <span className="sm:ml-0 ml-auto">{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
         </div>
       </div>
     </div>

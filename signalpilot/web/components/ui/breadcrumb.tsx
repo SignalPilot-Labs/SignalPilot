@@ -23,7 +23,7 @@ export function Breadcrumb({
           {item.href ? (
             <Link
               href={item.href}
-              className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors hover-underline"
+              className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] active:text-[var(--color-text)] transition-colors hover-underline py-1 -my-1"
             >
               {item.label}
             </Link>

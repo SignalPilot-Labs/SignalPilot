@@ -54,7 +54,7 @@ export default function Home() {
   }, [router]);
 
   return (
-    <div className="flex items-center justify-center min-h-screen -ml-56 relative">
+    <div className="flex items-center justify-center min-h-screen mobile-negate-offset relative">
       {/* Background grid pulse — centered radial */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
         <svg width="100%" height="100%" className="opacity-[0.025]">
@@ -74,7 +74,7 @@ export default function Home() {
         </svg>
       </div>
 
-      <div className="w-[520px] relative z-10">
+      <div className="w-full max-w-[520px] px-4 sm:px-0 relative z-10">
         {/* Terminal window */}
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           {/* Title bar */}
@@ -178,7 +178,7 @@ export default function Home() {
         <div className="mt-4 text-center">
           <button
             onClick={() => router.push("/dashboard")}
-            className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+            className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-3 px-6 active:text-[var(--color-text)]"
           >
             skip &rarr; dashboard
           </button>

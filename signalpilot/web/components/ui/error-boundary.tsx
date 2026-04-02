@@ -68,12 +68,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           <p className="text-[11px] text-[var(--color-text-dim)] mb-6 tracking-wider">
             try reloading the page to recover
           </p>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full max-w-xs sm:max-w-none sm:w-auto">
             <button
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90"
+              className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 active:opacity-80"
             >
-              <RefreshCw className="w-3 h-3" />
+              <RefreshCw className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
               retry
             </button>
             <button
@@ -81,7 +81,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 this.setState({ hasError: false, error: null });
                 window.location.reload();
               }}
-              className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-[var(--color-text-dim)] text-[12px] tracking-wider uppercase transition-all hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+              className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2 border border-[var(--color-border)] text-[var(--color-text-dim)] text-[12px] tracking-wider uppercase transition-all hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] active:bg-[var(--color-bg-hover)]"
             >
               reload page
             </button>

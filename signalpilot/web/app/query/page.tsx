@@ -290,7 +290,7 @@ export default function QueryExplorerPage() {
   }
 
   return (
-    <div className="p-8 flex flex-col h-screen max-h-screen animate-fade-in">
+    <div className="p-4 sm:p-8 flex flex-col min-h-screen sm:h-screen sm:max-h-screen animate-fade-in">
       <div className="flex-shrink-0">
         <PageHeader
           title="query"
@@ -311,19 +311,19 @@ export default function QueryExplorerPage() {
         path={`query ${selectedConn || "—"} --governed --read-only`}
         status={<StatusDot status={selectedConn ? "healthy" : "unknown"} size={4} pulse={executing} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">history: <code className="text-[12px] text-[var(--color-text)]">{history.length}</code></span>
           {result && <span className="text-[var(--color-success)]">rows: <code className="text-[12px]">{result.row_count}</code></span>}
         </div>
       </TerminalBar>
 
       {/* Connection bar + controls */}
-      <div className="flex items-center gap-3 mb-4 flex-shrink-0">
-        <div className="relative">
+      <div className="flex flex-wrap items-center gap-3 mb-4 flex-shrink-0">
+        <div className="relative flex-1 min-w-[120px] sm:min-w-[160px] sm:flex-none">
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
-            className="appearance-none pl-3 pr-8 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[200px] tracking-wide"
+            className="appearance-none w-full sm:w-auto pl-3 pr-8 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] sm:min-w-[200px] tracking-wide"
           >
             {connections.length === 0 ? (
               <option value="">no connections</option>
@@ -346,7 +346,7 @@ export default function QueryExplorerPage() {
             onChange={(e) =>
               setRowLimit(Math.max(1, Math.min(100000, Number(e.target.value) || 1000)))
             }
-            className="w-16 px-1 py-1 bg-transparent text-xs text-center focus:outline-none tabular-nums"
+            className="w-16 px-1 py-1 bg-transparent text-base sm:text-xs text-center focus:outline-none tabular-nums"
           />
         </div>
 
@@ -386,7 +386,7 @@ export default function QueryExplorerPage() {
           )}
         </div>
 
-        <div className="flex-1" />
+        <div className="hidden sm:block flex-1" />
 
         <Tooltip content="Show relevant tables for your query (schema linking)" position="bottom">
           <button
@@ -403,7 +403,7 @@ export default function QueryExplorerPage() {
         <button
           onClick={runQuery}
           disabled={executing || !sql.trim() || !selectedConn}
-          className="flex items-center gap-2 px-5 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+          className="flex items-center justify-center gap-2 w-full sm:w-auto px-5 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
         >
           {executing ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -411,10 +411,37 @@ export default function QueryExplorerPage() {
             <Play className="w-3.5 h-3.5" />
           )}
           execute
-          <kbd className="ml-1 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[10px] opacity-60 border border-[var(--color-bg)]/30">
+          <kbd className="ml-1 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[10px] opacity-60 border border-[var(--color-bg)]/30 hidden sm:inline">
             ctrl+⏎
           </kbd>
         </button>
+      </div>
+
+      {/* Mobile SQL keyword toolbar */}
+      <div className="sm:hidden flex items-center gap-1.5 mb-2 overflow-x-auto flex-shrink-0 -mx-1 px-1 [-webkit-overflow-scrolling:touch]">
+        {["SELECT", "FROM", "WHERE", "JOIN", "GROUP BY", "ORDER BY", "LIMIT", "AND", "OR", "AS", "ON", "LEFT", "COUNT(*)", "DISTINCT", "*"].map((kw) => (
+          <button
+            key={kw}
+            onClick={() => {
+              const ta = textareaRef.current;
+              if (!ta) return;
+              const start = ta.selectionStart;
+              const before = sql.slice(0, start);
+              const after = sql.slice(ta.selectionEnd);
+              const insert = (before.length > 0 && !before.endsWith(" ") && !before.endsWith("\n") ? " " : "") + kw + " ";
+              setSql(before + insert + after);
+              // Restore cursor position after insert
+              requestAnimationFrame(() => {
+                ta.focus();
+                const pos = start + insert.length;
+                ta.setSelectionRange(pos, pos);
+              });
+            }}
+            className="flex-shrink-0 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] bg-[var(--color-bg-card)] border border-[var(--color-border)] active:bg-[var(--color-bg-hover)] active:text-[var(--color-text)] tracking-wider font-mono whitespace-nowrap"
+          >
+            {kw}
+          </button>
+        ))}
       </div>
 
       {/* SQL editor with line numbers */}
@@ -422,8 +449,7 @@ export default function QueryExplorerPage() {
         {/* Line numbers gutter */}
         <div
           ref={lineNumbersRef}
-          className="flex-shrink-0 py-3 pr-0 pl-3 select-none overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-bg)]"
-          style={{ width: "3rem" }}
+          className="flex-shrink-0 py-3 pr-0 pl-2 sm:pl-3 select-none overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-bg)] w-8 sm:w-12"
         >
           {Array.from({ length: lineCount }, (_, i) => (
             <div key={i} className="text-[12px] text-[var(--color-text-dim)] text-right pr-2 leading-[1.65rem] tabular-nums opacity-50">
@@ -441,14 +467,14 @@ export default function QueryExplorerPage() {
           placeholder="SELECT * FROM users LIMIT 10;"
           rows={6}
           spellCheck={false}
-          className="flex-1 px-4 py-3 bg-transparent text-xs font-mono focus:outline-none resize-y placeholder:text-[var(--color-text-dim)] leading-[1.65rem] tracking-wide"
+          className="flex-1 px-4 py-3 bg-transparent text-base sm:text-xs font-mono focus:outline-none resize-y placeholder:text-[var(--color-text-dim)] leading-[1.65rem] tracking-wide"
         />
         {/* Bottom info bar */}
         <div className="absolute bottom-0 right-0 flex items-center gap-3 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] bg-[var(--color-bg-card)]">
           {sql.length > 0 && (
             <span className="tabular-nums">{sql.length} chars</span>
           )}
-          <span className="tracking-wider opacity-60">ctrl+enter</span>
+          <span className="tracking-wider opacity-60 hidden sm:inline">ctrl+enter</span>
         </div>
       </div>
 
@@ -515,8 +541,8 @@ export default function QueryExplorerPage() {
       {result && (
         <div className="flex-1 flex flex-col min-h-0 border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden animate-fade-in">
           {/* Result header */}
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
               <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
                 <Table2 className="w-3 h-3" strokeWidth={1.5} />
                 {result.row_count.toLocaleString()} row{result.row_count !== 1 ? "s" : ""}
@@ -553,20 +579,20 @@ export default function QueryExplorerPage() {
             <div className="flex items-center gap-1">
               <button
                 onClick={copyResults}
-                className="flex items-center gap-1.5 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]"
               >
                 {copied ? <Check className="w-3 h-3 text-[var(--color-success)]" /> : <Copy className="w-3 h-3" />}
                 {copied ? "copied" : "copy"}
               </button>
               <button
                 onClick={exportCSV}
-                className="flex items-center gap-1.5 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]"
               >
                 <Download className="w-3 h-3" /> csv
               </button>
               <button
                 onClick={exportJSON}
-                className="flex items-center gap-1.5 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]"
               >
                 <Download className="w-3 h-3" /> json
               </button>
@@ -580,77 +606,146 @@ export default function QueryExplorerPage() {
                 query returned 0 rows
               </div>
             ) : (
-              <table className="w-full text-[13px] table-fixed-header">
-                <thead className="sticky top-0 bg-[var(--color-bg-card)]">
-                  <tr className="border-b border-[var(--color-border)]">
-                    <th className="px-3 py-2 text-left text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-10">
-                      #
-                    </th>
-                    {Object.keys(result.rows[0]).map((col) => {
-                      const colType = inferColumnType(result.rows, col);
-                      return (
-                        <th
-                          key={col}
-                          className="px-3 py-2 text-left text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]"
-                        >
-                          <Tooltip content={`${colType.type}${result.pii_redacted?.includes(col) ? " · pii redacted" : ""}`} position="top">
-                            <span className="inline-flex items-center gap-1.5 cursor-default">
-                              <span className={`w-1 h-1 flex-shrink-0 ${colType.dot}`} />
-                              {col}
-                              {result.pii_redacted?.includes(col) && (
-                                <Shield className="w-2.5 h-2.5 text-[var(--color-warning)]" />
-                              )}
-                            </span>
-                          </Tooltip>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-border)]/30">
+              <>
+                {/* Mobile card view */}
+                <div className="sm:hidden divide-y divide-[var(--color-border)]/30">
                   {result.rows.map((row, i) => (
-                    <tr key={i} className="table-row-hover">
-                      <td className="px-3 py-1.5 text-[var(--color-text-dim)] tabular-nums text-[11px]">{i + 1}</td>
-                      {Object.entries(row).map(([col, val], j) => (
-                        <td
-                          key={j}
-                          className="px-3 py-1.5 text-[var(--color-text-muted)] max-w-[300px] truncate cursor-default group/cell relative"
-                          title={val == null ? "NULL" : String(val)}
+                    <div key={i} className="px-3 py-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider">row {i + 1}</span>
+                        <button
                           onClick={() => {
-                            if (val != null) {
-                              navigator.clipboard.writeText(String(val)).then(() => {
-                                toast(`copied: ${String(val).slice(0, 50)}`, "info");
-                              }).catch(() => {});
-                            }
+                            const text = Object.entries(row).map(([k, v]) => `${k}: ${v ?? "null"}`).join("\n");
+                            navigator.clipboard.writeText(text).then(() => {
+                              toast(`row ${i + 1} copied`, "info");
+                            }).catch(() => {});
                           }}
+                          className="text-[11px] text-[var(--color-text-dim)] tracking-wider flex items-center gap-1 p-1.5 -m-1.5 active:text-[var(--color-text)]"
                         >
-                          {val == null ? (
-                            <span className="text-[var(--color-text-dim)] italic opacity-50">null</span>
-                          ) : typeof val === "number" ? (
-                            <span className="tabular-nums text-[var(--color-text)]">{val.toLocaleString()}</span>
-                          ) : typeof val === "boolean" ? (
-                            <span className={`font-medium ${val ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
-                              {String(val)}
-                            </span>
-                          ) : typeof val === "object" ? (
-                            <span className="text-orange-400/80 font-mono text-[12px]">{JSON.stringify(val).slice(0, 60)}</span>
-                          ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
-                            <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
-                          ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
-                            <span className="text-pink-400/70 font-mono text-[12px]">{String(val)}</span>
-                          ) : (
-                            String(val)
-                          )}
-                          {/* Click-to-copy hint */}
-                          <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity text-[10px] text-[var(--color-text-dim)]">
-                            <Copy className="w-2.5 h-2.5" />
-                          </span>
-                        </td>
-                      ))}
-                    </tr>
+                          <Copy className="w-3 h-3" /> copy
+                        </button>
+                      </div>
+                      <div className="space-y-1.5">
+                        {Object.entries(row).map(([col, val], j) => {
+                          const colType = inferColumnType(result.rows, col);
+                          return (
+                            <div key={j} className="flex items-start gap-2">
+                              <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider min-w-[80px] max-w-[100px] truncate flex-shrink-0 pt-0.5 flex items-center gap-1">
+                                <span className={`w-1 h-1 flex-shrink-0 ${colType.dot}`} />
+                                {col}
+                                {result.pii_redacted?.includes(col) && (
+                                  <Shield className="w-2 h-2 text-[var(--color-warning)] flex-shrink-0" />
+                                )}
+                              </span>
+                              <span
+                                className="text-[11px] text-[var(--color-text-muted)] break-all flex-1 min-w-0"
+                                onClick={() => {
+                                  if (val != null) {
+                                    navigator.clipboard.writeText(String(val)).then(() => {
+                                      toast(`copied: ${String(val).slice(0, 50)}`, "info");
+                                    }).catch(() => {});
+                                  }
+                                }}
+                              >
+                                {val == null ? (
+                                  <span className="text-[var(--color-text-dim)] italic opacity-50">null</span>
+                                ) : typeof val === "number" ? (
+                                  <span className="tabular-nums text-[var(--color-text)]">{val.toLocaleString()}</span>
+                                ) : typeof val === "boolean" ? (
+                                  <span className={`font-medium ${val ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
+                                    {String(val)}
+                                  </span>
+                                ) : typeof val === "object" ? (
+                                  <span className="text-orange-400/80 font-mono text-[12px]">{JSON.stringify(val).slice(0, 80)}</span>
+                                ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
+                                  <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
+                                ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
+                                  <span className="text-pink-400/70 font-mono text-[12px]">{String(val)}</span>
+                                ) : (
+                                  String(val)
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+
+                {/* Desktop table view */}
+                <table className="hidden sm:table w-full text-[12px] table-fixed-header">
+                  <thead className="sticky top-0 bg-[var(--color-bg-card)]">
+                    <tr className="border-b border-[var(--color-border)]">
+                      <th className="px-3 py-2 text-left text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-10">
+                        #
+                      </th>
+                      {Object.keys(result.rows[0]).map((col) => {
+                        const colType = inferColumnType(result.rows, col);
+                        return (
+                          <th
+                            key={col}
+                            className="px-3 py-2 text-left text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]"
+                          >
+                            <Tooltip content={`${colType.type}${result.pii_redacted?.includes(col) ? " · pii redacted" : ""}`} position="top">
+                              <span className="inline-flex items-center gap-1.5 cursor-default">
+                                <span className={`w-1 h-1 flex-shrink-0 ${colType.dot}`} />
+                                {col}
+                                {result.pii_redacted?.includes(col) && (
+                                  <Shield className="w-2.5 h-2.5 text-[var(--color-warning)]" />
+                                )}
+                              </span>
+                            </Tooltip>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-border)]/30">
+                    {result.rows.map((row, i) => (
+                      <tr key={i} className="table-row-hover">
+                        <td className="px-3 py-1.5 text-[var(--color-text-dim)] tabular-nums text-[11px]">{i + 1}</td>
+                        {Object.entries(row).map(([col, val], j) => (
+                          <td
+                            key={j}
+                            className="px-3 py-1.5 text-[var(--color-text-muted)] max-w-[300px] truncate cursor-default group/cell relative"
+                            title={val == null ? "NULL" : String(val)}
+                            onClick={() => {
+                              if (val != null) {
+                                navigator.clipboard.writeText(String(val)).then(() => {
+                                  toast(`copied: ${String(val).slice(0, 50)}`, "info");
+                                }).catch(() => {});
+                              }
+                            }}
+                          >
+                            {val == null ? (
+                              <span className="text-[var(--color-text-dim)] italic opacity-50">null</span>
+                            ) : typeof val === "number" ? (
+                              <span className="tabular-nums text-[var(--color-text)]">{val.toLocaleString()}</span>
+                            ) : typeof val === "boolean" ? (
+                              <span className={`font-medium ${val ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
+                                {String(val)}
+                              </span>
+                            ) : typeof val === "object" ? (
+                              <span className="text-orange-400/80 font-mono text-[12px]">{JSON.stringify(val).slice(0, 60)}</span>
+                            ) : /^\d{4}-\d{2}-\d{2}/.test(String(val)) ? (
+                              <span className="text-purple-400/80 tabular-nums">{String(val)}</span>
+                            ) : /^[0-9a-f]{8}-[0-9a-f]{4}/.test(String(val)) ? (
+                              <span className="text-pink-400/70 font-mono text-[12px]">{String(val)}</span>
+                            ) : (
+                              String(val)
+                            )}
+                            {/* Click-to-copy hint */}
+                            <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity text-[10px] text-[var(--color-text-dim)]">
+                              <Copy className="w-2.5 h-2.5" />
+                            </span>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </div>
 
@@ -703,7 +798,7 @@ export default function QueryExplorerPage() {
                   setSql(h.sql);
                   setSelectedConn(h.connection);
                 }}
-                className="w-full text-left px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group flex items-start gap-3"
+                className="w-full text-left px-4 py-3.5 sm:py-2.5 hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-hover)] transition-colors group flex items-start gap-3"
               >
                 <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-40 select-none">
                   {String(i + 1).padStart(2, "0")}
@@ -744,9 +839,23 @@ export default function QueryExplorerPage() {
           <EmptyState
             icon={EmptyQuery}
             title="ready for queries"
-            description="write sql above and press ctrl+enter to execute governed queries"
+            description="write sql above and tap execute to run governed queries"
           />
         </div>
+      )}
+
+      {/* Mobile floating execute button — visible when results/history are showing */}
+      {(result || error || history.length > 0) && (
+        <button
+          onClick={() => {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            setTimeout(() => textareaRef.current?.focus(), 400);
+          }}
+          className="sm:hidden fixed right-4 bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+0.75rem)] z-40 flex items-center gap-2 px-4 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase shadow-lg active:scale-95 transition-transform"
+        >
+          <Play className="w-4 h-4" />
+          edit query
+        </button>
       )}
     </div>
   );

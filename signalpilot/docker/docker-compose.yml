@@ -11,6 +11,8 @@ services:
     environment:
       - SP_DATA_DIR=/data
       - SP_SANDBOX_MANAGER_URL=http://sandbox:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - sp-data:/data
     command: ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]

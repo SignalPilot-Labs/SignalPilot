@@ -60,11 +60,11 @@ export function KeyboardShortcuts() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-4"
       onClick={() => setShowHelp(false)}
     >
       <div
-        className="bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl w-80 animate-scale-in"
+        className="bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl w-full sm:w-80 max-h-[85vh] overflow-y-auto animate-scale-in safe-area-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -88,7 +88,7 @@ export function KeyboardShortcuts() {
           <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">navigation</p>
           <div className="space-y-0.5">
             {NAV_SHORTCUTS.map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-1.5 group">
+              <div key={s.key} className="flex items-center justify-between py-2.5 sm:py-1.5 group">
                 <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors tracking-wide">{s.label}</span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] font-mono text-[var(--color-text-dim)] tabular-nums">
                   ctrl+{s.key}
@@ -103,7 +103,7 @@ export function KeyboardShortcuts() {
           <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">actions</p>
           <div className="space-y-0.5">
             {ACTION_SHORTCUTS.map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-1.5">
+              <div key={s.key} className="flex items-center justify-between py-2.5 sm:py-1.5">
                 <span className="text-xs text-[var(--color-text-muted)] tracking-wide">{s.label}</span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] font-mono text-[var(--color-text-dim)]">
                   {s.modifier ? `${s.modifier}+` : ""}{s.key}

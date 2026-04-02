@@ -650,6 +650,24 @@ kbd {
   background: linear-gradient(90deg, transparent 0%, var(--color-border) 20%, var(--color-border) 80%, transparent 100%);
 }
 
+/* ── Layout: desktop sidebar offset, mobile full-width ── */
+.main-content {
+  margin-left: 14rem; /* 224px — matches sidebar width */
+}
+
+/* Negate sidebar margin for full-screen centered pages (boot, 404) */
+.mobile-negate-offset {
+  margin-left: -14rem;
+}
+
+/* ── Mobile visibility toggles ── */
+.sidebar-desktop { display: flex; }
+.mobile-topbar { display: none; }
+.mobile-bottombar { display: none; }
+.mobile-menu-overlay { /* always rendered via JS */ }
+.mobile-only { display: none; }
+.desktop-only { display: block; }
+
 /* ── Responsive adjustments ── */
 
 /* Large screens — wider content */
@@ -663,12 +681,368 @@ kbd {
   .grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Small screens — stack everything */
+/* Small screens — stack wider grids */
 @media (max-width: 900px) {
   .grid-cols-4,
-  .grid-cols-3,
-  .grid-cols-2 { grid-template-columns: 1fr; }
+  .grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .col-span-2 { grid-column: span 1; }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Mobile breakpoint (<768px) */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* ── Layout ── */
+  .sidebar-desktop { display: none !important; }
+  .mobile-topbar { display: flex !important; }
+  .mobile-bottombar { display: flex !important; }
+  .mobile-only { display: block !important; }
+  .desktop-only { display: none !important; }
+
+  .main-content {
+    margin-left: 0;
+    padding-top: calc(3rem + env(safe-area-inset-top, 0px)); /* space for top bar + notch */
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px)); /* space for bottom bar + home indicator */
+  }
+
+  .mobile-negate-offset {
+    margin-left: 0;
+    padding-top: 0;
+  }
+
+  /* ── Grid layouts collapse on mobile ── */
+  /* Note: grid-cols-2 is NOT overridden — many components use
+     grid-cols-2 sm:grid-cols-4 to keep a 2-column layout on mobile */
+  .grid-cols-4,
+  .grid-cols-3 {
+    grid-template-columns: 1fr !important;
+  }
+  .col-span-2 {
+    grid-column: span 1 !important;
+  }
+
+  /* ── Page padding adjustments ── */
+  .p-8 { padding: 1rem !important; }
+  .px-8 { padding-left: 1rem !important; padding-right: 1rem !important; }
+  .py-8 { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+
+  /* ── Page header spacing ── */
+  .mb-8 { margin-bottom: 1.25rem; }
+
+  /* ── Touch-friendly targets — minimum 44px tap area ── */
+  nav a, nav button, .mobile-bottombar a {
+    min-height: 44px;
+  }
+
+  /* ── Form inputs: taller for touch ── */
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="email"],
+  input[type="url"],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px !important; /* prevents iOS zoom on focus */
+  }
+
+  /* ── Tables: horizontal scroll ── */
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  thead, tbody, tr, th, td {
+    display: revert;
+  }
+
+  /* ── Terminal bar: scroll horizontally, tighter spacing ── */
+  .terminal-bar-content {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Safe area for devices with notch/home indicator ── */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* ── Extend background behind home indicator ── */
+  body::after {
+    content: "";
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-bottom, 0px);
+    background: rgba(3, 3, 3, 0.95);
+    z-index: 51;
+    pointer-events: none;
+  }
+
+  /* ── Tooltip: disabled on mobile (touch doesn't hover well) ── */
+  .tooltip-container .tooltip-content {
+    display: none !important;
+  }
+
+  /* ── Card interactive: disable hover lift on touch ── */
+  .card-interactive:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* ── Reduce motion for mobile performance ── */
+  .card-radial-glow::before,
+  .card-accent-top::after,
+  .gradient-border::before {
+    display: none;
+  }
+
+  /* ── Font size bumps for readability on small screens ── */
+  .text-\[9px\] { font-size: 10px; }
+  .text-\[10px\] { font-size: 11px; }
+
+  /* ── Scrollbar: wider for touch ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+
+  /* ── Prevent text selection on interactive elements ── */
+  nav, .mobile-bottombar, .mobile-topbar {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ── Larger checkboxes for touch ── */
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    min-height: auto;
+  }
+  input[type="checkbox"]:checked::after {
+    left: 5px;
+    top: 2px;
+    width: 5px;
+    height: 9px;
+  }
+
+  /* ── Tap highlight color for dark theme ── */
+  * {
+    -webkit-tap-highlight-color: rgba(0, 255, 136, 0.08);
+  }
+
+  /* ── Touch feedback for interactive elements ── */
+  button:active, a:active, [role="button"]:active {
+    opacity: 0.85;
+    transition: opacity 0.05s ease-out;
+  }
+
+  /* ── Card press effect on touch ── */
+  .card-accent-top:active {
+    transform: scale(0.99);
+    transition: transform 0.1s ease-out;
+  }
+
+  /* ── Smooth momentum scrolling ── */
+  .overflow-auto, .overflow-x-auto, .overflow-y-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Active nav indicator: top bar instead of left bar on mobile ── */
+  .nav-active::before {
+    left: 6px;
+    right: 6px;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 2px;
+  }
+
+  /* ── Scroll shadow hints for horizontal overflow ── */
+  .overflow-x-auto {
+    background:
+      linear-gradient(to right, var(--color-bg-card) 30%, transparent) left center,
+      linear-gradient(to left, var(--color-bg-card) 30%, transparent) right center,
+      linear-gradient(to right, rgba(255,255,255,0.06), transparent) left center,
+      linear-gradient(to left, rgba(255,255,255,0.06), transparent) right center;
+    background-size: 20px 100%, 20px 100%, 10px 100%, 10px 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  /* ── Bottom bar frosted glass effect ── */
+  .mobile-bottombar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(3, 3, 3, 0.88);
+  }
+  .mobile-topbar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(3, 3, 3, 0.88);
+    padding-top: env(safe-area-inset-top, 0px);
+    height: calc(3rem + env(safe-area-inset-top, 0px));
+  }
+
+  /* ── Bottom tab active press feedback ── */
+  .mobile-bottombar a:active {
+    transform: scale(0.92);
+    transition: transform 0.08s ease-out;
+  }
+  .mobile-bottombar a {
+    transition: transform 0.15s ease-out;
+  }
+
+  /* ── Overscroll: prevent accidental page pull on Chrome ── */
+  html {
+    overscroll-behavior-y: contain;
+  }
+
+  /* ── Code blocks: larger text for readability ── */
+  pre, code {
+    font-size: max(12px, 0.75rem);
+  }
+
+  /* ── Textareas: cap height on mobile to show more content below ── */
+  textarea {
+    max-height: 30vh;
+  }
+
+  /* ── Focus-visible: outline for keyboard/screen-reader nav on mobile ── */
+  :focus-visible {
+    outline: 2px solid var(--color-success);
+    outline-offset: 2px;
+  }
+
+  /* ── Selection color — matches theme ── */
+  ::selection {
+    background: rgba(0, 255, 136, 0.2);
+    color: var(--color-text);
+  }
+
+  /* ── Smooth scroll for in-page navigation ── */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* ── Prevent long-press context menu on interactive elements ── */
+  nav, .mobile-bottombar, .mobile-topbar, button {
+    -webkit-touch-callout: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Mobile landscape — wider but shorter, optimize layout      */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) and (orientation: landscape) {
+  .mobile-topbar {
+    height: calc(2.5rem + env(safe-area-inset-top, 0px));
+  }
+  .mobile-bottombar {
+    height: calc(2.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Hide tab labels in landscape — icons only */
+  .mobile-bottombar a span:last-child {
+    display: none;
+  }
+  .mobile-bottombar a {
+    gap: 0;
+  }
+  .main-content {
+    padding-top: calc(2.5rem + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(2.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Reduce vertical spacing in landscape */
+  .mb-8 { margin-bottom: 0.75rem; }
+  .space-y-4 > * + * { margin-top: 0.75rem; }
+  /* Tighter page padding + safe area for side notch */
+  .p-4 { padding: 0.5rem !important; }
+  .main-content {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Extra-small phones (<400px) — iPhone SE, Galaxy S mini     */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 400px) {
+  /* Tighter padding */
+  .p-4 { padding: 0.75rem !important; }
+  .px-4 { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+  .gap-3 { gap: 0.5rem; }
+
+  /* Smaller metric card text */
+  .text-xl { font-size: 1.125rem; }
+
+  /* Stack 2-col grids to single column on tiny phones */
+  .grid-cols-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reduce bottom bar height for more content space */
+  .mobile-bottombar {
+    height: calc(3rem + env(safe-area-inset-bottom, 0px));
+  }
+  .main-content {
+    padding-bottom: calc(3rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Reduced motion — respect user accessibility preferences    */
+/* ═══════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-fade-in,
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-scale-in,
+  .animate-count-up {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .stagger-fade-in > * {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+
+  .pulse-dot,
+  .animate-ping,
+  .animate-spin {
+    animation: none !important;
+  }
+
+  /* Keep spin on loading indicators but reduce visual noise */
+  .animate-spin {
+    animation: spin 2s linear infinite !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* PWA standalone mode — installed on home screen              */
+/* ═══════════════════════════════════════════════════════════ */
+@media (display-mode: standalone) {
+  /* Remove browser chrome margin — we control the full viewport */
+  body {
+    overscroll-behavior: none;
+  }
+
+  /* Disable pull-to-refresh browser gesture in standalone */
+  html {
+    overscroll-behavior-y: none;
+  }
+
+  /* Disable text selection on nav elements in app mode */
+  nav, header, footer {
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 /* ── Smooth page load ── */

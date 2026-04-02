@@ -27,6 +27,7 @@ import {
 import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
 import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { RingGauge, StatusDot, Sparkline, MiniBar } from "@/components/ui/data-viz";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TimeAgo } from "@/components/ui/time-ago";
@@ -144,14 +145,15 @@ export default function HealthPage() {
     : null;
 
   return (
-    <div className="p-8 animate-fade-in">
+    <PullToRefreshWrapper onRefresh={refresh}>
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="health"
         subtitle="monitoring"
         description="connection health, latency, and cache performance"
         actions={
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-2 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
+            <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-3 py-2.5 sm:py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
               <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-none" />
               auto (10s)
             </label>
@@ -168,16 +170,16 @@ export default function HealthPage() {
         path="health --monitor"
         status={<StatusDot status={overallHealthy === overallTotal && overallTotal > 0 ? "healthy" : overallTotal > 0 ? "warning" : "unknown"} size={4} pulse={autoRefresh} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">nodes: <code className="text-[12px] text-[var(--color-text)]">{overallHealthy}/{overallTotal}</code></span>
           <span className="text-[var(--color-text-dim)]">refresh: <code className="text-[12px] text-[var(--color-text)]">{autoRefresh ? "10s" : "manual"}</code></span>
         </div>
       </TerminalBar>
 
       {/* Overview cards */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
         {/* Connections */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Wifi className={`w-3.5 h-3.5 ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connections</span>
@@ -197,7 +199,7 @@ export default function HealthPage() {
           </div>
         </div>
         {/* Avg Latency */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Clock className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">avg latency</span>
@@ -206,7 +208,7 @@ export default function HealthPage() {
           <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
         </div>
         {/* Query Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Zap className={`w-3.5 h-3.5 ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query cache</span>
@@ -226,7 +228,7 @@ export default function HealthPage() {
           </div>
         </div>
         {/* Schema Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
@@ -253,7 +255,7 @@ export default function HealthPage() {
           <div className="section-header">
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connection health</span>
           </div>
-          <div className="grid grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
             {healthData.map((health) => {
               const cfg = statusConfig[health.status] || statusConfig.unknown;
               const StatusIcon = cfg.icon;
@@ -262,16 +264,16 @@ export default function HealthPage() {
 
               return (
                 <div key={health.connection_name} className="bg-[var(--color-bg-card)] overflow-hidden">
-                  <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
-                    <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-[var(--color-border)]">
+                    <div className="flex items-center gap-3 min-w-0">
                       <StatusDot
                         status={health.status === "healthy" ? "healthy" : health.status === "warning" || health.status === "degraded" ? "warning" : health.status === "unhealthy" ? "error" : "unknown"}
                         size={5}
                         pulse={health.status === "healthy"}
                       />
-                      <div>
-                        <h3 className="text-xs text-[var(--color-text)]">{health.connection_name}</h3>
-                        <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="min-w-0">
+                        <h3 className="text-xs text-[var(--color-text)] truncate">{health.connection_name}</h3>
+                        <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider truncate block">
                           {health.db_type}{conn ? ` — ${conn.host}:${conn.port}` : ""}
                         </span>
                       </div>
@@ -281,14 +283,14 @@ export default function HealthPage() {
                         <StatusIcon className="w-3 h-3" strokeWidth={1.5} /> {cfg.label}
                       </span>
                       <button onClick={() => handleTest(health.connection_name)} disabled={testing === health.connection_name}
-                        className="flex items-center gap-1 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider">
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider active:bg-[var(--color-bg-hover)]">
                         {testing === health.connection_name ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />}
                         test
                       </button>
                     </div>
                   </div>
 
-                  <div className="px-5 py-4 space-y-4">
+                  <div className="px-4 sm:px-5 py-4 space-y-4">
                     {/* Latency bars + distribution */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
@@ -301,13 +303,13 @@ export default function HealthPage() {
                     </div>
 
                     {/* Stats grid */}
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="flex flex-wrap gap-3">
                       {[
                         { label: "samples", value: health.sample_count, color: "" },
                         { label: "success", value: health.successes ?? "--", color: "text-[var(--color-success)]" },
                         { label: "failures", value: health.failures ?? 0, color: "text-[var(--color-error)]" },
                       ].map((stat) => (
-                        <div key={stat.label}>
+                        <div key={stat.label} className="flex-1">
                           <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{stat.label}</p>
                           <p className={`text-xs font-light tabular-nums ${stat.color}`}>{stat.value}</p>
                         </div>
@@ -363,7 +365,7 @@ export default function HealthPage() {
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">cache performance</span>
           </div>
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
-            <div className="grid grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
               <div>
                 <div className="text-[12px] text-[var(--color-text-dim)] mb-3 flex items-center gap-2 tracking-wider">
                   <BarChart3 className="w-3 h-3" strokeWidth={1.5} /> query cache
@@ -423,5 +425,6 @@ export default function HealthPage() {
         </div>
       )}
     </div>
+    </PullToRefreshWrapper>
   );
 }

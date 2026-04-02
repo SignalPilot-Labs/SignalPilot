@@ -12,8 +12,8 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 from .models import ConnectionUpdate
@@ -23,6 +23,7 @@ from .store import (
     get_connection_string,
     get_credential_extras,
     list_connections,
+    load_tunnels,
     update_connection,
 )
 from .api import register_routers
@@ -35,7 +36,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage background tasks: pool cleanup and scheduled schema refresh."""
+    """Manage background tasks: pool cleanup, schema refresh, and tunnel lifecycle."""
+    # Load persisted tunnels (all as stopped)
+    load_tunnels()
 
     async def _pool_cleanup_loop():
         while True:
@@ -96,6 +99,9 @@ async def lifespan(app: FastAPI):
     finally:
         cleanup_task.cancel()
         refresh_task.cancel()
+        # Stop all tunnel processes
+        from .api.tunnels import get_tunnel_manager
+        await get_tunnel_manager().stop_all()
         await pool_manager.close_all()
         from .api.deps import _sandbox_client
         if _sandbox_client:
@@ -111,24 +117,51 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
-_ALLOWED_ORIGINS = [
+# CORS — dynamic origin allowlist (supports tunnel URLs added at runtime)
+_ALLOWED_ORIGINS: set[str] = {
     "http://localhost:3200",
     "http://localhost:3000",
     "http://127.0.0.1:3200",
     "http://127.0.0.1:3000",
-]
+}
 _extra_origins = os.getenv("SP_ALLOWED_ORIGINS", "")
 if _extra_origins:
-    _ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
+    _ALLOWED_ORIGINS.update(o.strip() for o in _extra_origins.split(",") if o.strip())
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
-    allow_credentials=True,
-)
+_CORS_METHODS = "GET, POST, PUT, DELETE, OPTIONS"
+_CORS_HEADERS = "Content-Type, Authorization, X-API-Key"
+
+
+def add_tunnel_origin(url: str):
+    _ALLOWED_ORIGINS.add(url.rstrip("/"))
+
+
+def remove_tunnel_origin(url: str):
+    _ALLOWED_ORIGINS.discard(url.rstrip("/"))
+
+
+class DynamicCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        origin = request.headers.get("origin", "")
+        if request.method == "OPTIONS" and origin in _ALLOWED_ORIGINS:
+            return Response(
+                status_code=204,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Methods": _CORS_METHODS,
+                    "Access-Control-Allow-Headers": _CORS_HEADERS,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "600",
+                },
+            )
+        response = await call_next(request)
+        if origin in _ALLOWED_ORIGINS:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+
+
+app.add_middleware(DynamicCORSMiddleware)
 
 # Security middleware stack (order matters: outermost runs first)
 app.add_middleware(SecurityHeadersMiddleware)

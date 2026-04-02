@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { useConnection } from "@/lib/connection-context";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
@@ -42,7 +43,7 @@ function MetricCard({
   sparkValues?: number[];
 }) {
   return (
-    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
+    <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
       <div className="flex items-center gap-2 mb-3">
         <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
         <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
@@ -89,6 +90,7 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
+  const [expandedActivity, setExpandedActivity] = useState<string | null>(null);
   const [budgetData, setBudgetData] = useState<{
     sessions: Record<string, unknown>[];
     total_spent_usd: number;
@@ -109,37 +111,41 @@ export default function DashboardPage() {
   } | null>(null);
   const [connHealth, setConnHealth] = useState<Record<string, ConnectionHealthStats>>({});
 
+  async function fetchData() {
+    await Promise.all([
+      getAudit({ limit: 50 })
+        .then((res) => {
+          setRecentAudit(res.entries);
+          const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
+          for (const e of res.entries) {
+            if (e.event_type === "query") stats.queries++;
+            else if (e.event_type === "execute") stats.executions++;
+            if (e.blocked) stats.blocks++;
+          }
+          setAuditStats(stats);
+        })
+        .catch(() => {}),
+      getBudgets().then(setBudgetData).catch(() => {}),
+      getCacheStats().then(setCacheStats).catch(() => {}),
+      getConnectionsHealth()
+        .then((res) => {
+          const map: Record<string, ConnectionHealthStats> = {};
+          for (const h of res.connections) {
+            map[h.connection_name] = h;
+          }
+          setConnHealth(map);
+        })
+        .catch(() => {}),
+    ]);
+  }
+
   useEffect(() => {
     const unsub = subscribeMetrics((data) => {
       setMetrics(data);
     });
-
-    getAudit({ limit: 50 })
-      .then((res) => {
-        setRecentAudit(res.entries);
-        const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
-        for (const e of res.entries) {
-          if (e.event_type === "query") stats.queries++;
-          else if (e.event_type === "execute") stats.executions++;
-          if (e.blocked) stats.blocks++;
-        }
-        setAuditStats(stats);
-      })
-      .catch(() => {});
-
-    getBudgets().then(setBudgetData).catch(() => {});
-    getCacheStats().then(setCacheStats).catch(() => {});
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) {
-          map[h.connection_name] = h;
-        }
-        setConnHealth(map);
-      })
-      .catch(() => {});
-
+    fetchData();
     return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const latencyValues = recentAudit
@@ -149,7 +155,8 @@ export default function DashboardPage() {
     .reverse();
 
   return (
-    <div className="p-8 max-w-[1400px] animate-fade-in">
+    <PullToRefreshWrapper onRefresh={fetchData}>
+    <div className="p-4 sm:p-8 max-w-[1400px] animate-fade-in mx-auto">
       <PageHeader
         title="dashboard"
         subtitle="live overview"
@@ -167,7 +174,7 @@ export default function DashboardPage() {
           />
         }
       >
-        <div className="flex items-center gap-8 text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 sm:gap-x-6 gap-y-2 text-xs">
           <div className="flex items-center gap-2">
             <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
@@ -182,12 +189,12 @@ export default function DashboardPage() {
             <StatusBadge ok={metrics ? metrics.kvm_available : null} />
           </div>
           {latencyValues.length > 3 && (
-            <div className="flex items-center gap-2 ml-auto">
+            <div className="flex items-center gap-2 sm:ml-auto">
               <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
               <Sparkline values={latencyValues} color="var(--color-success)" width={60} height={16} />
             </div>
           )}
-          <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
+          <div className={`${latencyValues.length <= 3 ? "sm:ml-auto" : ""} flex items-center gap-2`}>
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
             <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
               governance: active
@@ -197,7 +204,7 @@ export default function DashboardPage() {
       </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
         <MetricCard
           label="active sandboxes"
           value={metrics?.active_sandboxes ?? "—"}
@@ -225,7 +232,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats cards — second row ── */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
         <MetricCard
           label="queries"
           value={auditStats.queries}
@@ -257,8 +264,8 @@ export default function DashboardPage() {
 
       {/* ── Latency + Distribution row ── */}
       {latencyValues.length > 3 && (
-        <div className="grid grid-cols-3 gap-4 mb-8 stagger-fade-in">
-          <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8 stagger-fade-in">
+          <div className="sm:col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
@@ -274,15 +281,17 @@ export default function DashboardPage() {
               <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
             </div>
             <div className="space-y-3">
-              <StackedBar
-                segments={[
-                  { value: auditStats.queries, color: "var(--color-success)", label: "queries" },
-                  { value: auditStats.executions, color: "#60a5fa", label: "executions" },
-                  { value: auditStats.blocks, color: "var(--color-error)", label: "blocked" },
-                ]}
-                width={200}
-                height={8}
-              />
+              <div className="w-full [&>svg]:w-full">
+                <StackedBar
+                  segments={[
+                    { value: auditStats.queries, color: "var(--color-success)", label: "queries" },
+                    { value: auditStats.executions, color: "#60a5fa", label: "executions" },
+                    { value: auditStats.blocks, color: "var(--color-error)", label: "blocked" },
+                  ]}
+                  width={200}
+                  height={8}
+                />
+              </div>
               <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-success)]" />queries</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400" />exec</span>
@@ -307,6 +316,26 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ── Mobile quick actions ── */}
+      <div className="sm:hidden grid grid-cols-3 gap-px mb-8 bg-[var(--color-border)] border border-[var(--color-border)]">
+        {[
+          { href: "/query", label: "query", icon: <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" /> },
+          { href: "/sandboxes", label: "sandbox", icon: <><rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" /><path d="M4 5L6 7L4 9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" /></> },
+          { href: "/audit", label: "audit", icon: <><rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" /><line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" /><line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" /></> },
+        ].map(({ href, label, icon }) => (
+          <a
+            key={href}
+            href={href}
+            className="flex flex-col items-center justify-center gap-1.5 py-4 bg-[var(--color-bg-card)] active:bg-[var(--color-bg-hover)] transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-[var(--color-text-dim)]">
+              {icon}
+            </svg>
+            <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">{label}</span>
+          </a>
+        ))}
+      </div>
+
       {/* ── Governance Pipeline ── */}
       <div className="mb-8">
         <GovernancePipeline />
@@ -322,9 +351,9 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Two-column layout ── */}
-      <div className="grid grid-cols-3 gap-4">
-        {/* Recent activity — takes 2 cols */}
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Recent activity — takes 2 cols on desktop */}
+        <div className="sm:col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -334,7 +363,7 @@ export default function DashboardPage() {
                 recent activity
               </span>
             </div>
-            <a href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            <a href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-1 px-2 -mr-2 active:text-[var(--color-text)]">
               view all <ArrowRight className="w-3 h-3" />
             </a>
           </div>
@@ -348,47 +377,57 @@ export default function DashboardPage() {
             ) : (
               recentAudit.slice(0, 12).map((entry) => {
                 const cfg = eventTypeConfig[entry.event_type] || eventTypeConfig.query;
+                const isExpanded = expandedActivity === entry.id;
                 return (
                   <div
                     key={entry.id}
-                    className="group/row hover:bg-[var(--color-bg-hover)] transition-all"
+                    className="group/row hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
+                    onClick={() => setExpandedActivity(isExpanded ? null : entry.id)}
                   >
-                    <div className="flex items-center gap-3 px-4 py-2.5">
-                      <span className={`text-[11px] font-medium uppercase tracking-[0.15em] w-8 ${
-                        entry.blocked ? "text-[var(--color-error)]" : cfg.color
-                      }`}>
-                        {cfg.label}
-                      </span>
-                      <span className="flex-1 text-xs truncate overflow-hidden">
-                        {entry.sql
-                          ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
-                          : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
-                            ? String(entry.metadata.code_preview).slice(0, 80)
-                            : entry.connection_name || "—"}</span>}
-                      </span>
-                      {entry.blocked && (
-                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">
-                          blocked
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-y-1 sm:gap-x-3 px-4 py-3 sm:py-2.5">
+                      <div className="flex items-center gap-2 sm:contents min-w-0">
+                        <span className={`text-[11px] font-medium uppercase tracking-[0.15em] w-8 flex-shrink-0 ${
+                          entry.blocked ? "text-[var(--color-error)]" : cfg.color
+                        }`}>
+                          {cfg.label}
                         </span>
-                      )}
-                      {entry.rows_returned != null && (
-                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
-                          {entry.rows_returned}r
+                        <span className="flex-1 text-xs truncate overflow-hidden min-w-0 sm:basis-[120px]">
+                          {entry.sql
+                            ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
+                            : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
+                              ? String(entry.metadata.code_preview).slice(0, 80)
+                              : entry.connection_name || "—"}</span>}
                         </span>
-                      )}
-                      {entry.duration_ms != null && (
-                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
-                          {entry.duration_ms.toFixed(0)}ms
-                        </span>
-                      )}
-                      <TimeAgo
-                        timestamp={entry.timestamp}
-                        live
-                        className="text-[12px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
-                      />
+                        <TimeAgo
+                          timestamp={entry.timestamp}
+                          live
+                          className="text-[12px] text-[var(--color-text-dim)] flex-shrink-0 sm:order-last sm:w-10 sm:text-right"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 pl-10 sm:pl-0 sm:contents">
+                        {entry.blocked && (
+                          <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase flex-shrink-0">
+                            blocked
+                          </span>
+                        )}
+                        {entry.rows_returned != null && (
+                          <span className="text-[12px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
+                            {entry.rows_returned}r
+                          </span>
+                        )}
+                        {entry.duration_ms != null && (
+                          <span className="text-[12px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0">
+                            {entry.duration_ms.toFixed(0)}ms
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    {/* Hover-reveal detail row */}
-                    <div className="grid grid-cols-[2rem_1fr] gap-3 px-4 max-h-0 overflow-hidden opacity-0 group-hover/row:max-h-16 group-hover/row:opacity-100 group-hover/row:pb-2.5 transition-all duration-200 ease-out">
+                    {/* Detail row — tap on mobile, hover on desktop */}
+                    <div className={`grid grid-cols-[2rem_1fr] gap-3 px-4 overflow-hidden transition-all duration-200 ease-out ${
+                      isExpanded
+                        ? "max-h-16 opacity-100 pb-2.5"
+                        : "max-h-0 opacity-0 sm:group-hover/row:max-h-16 sm:group-hover/row:opacity-100 sm:group-hover/row:pb-2.5"
+                    }`}>
                       <span />
                       <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                         {entry.connection_name && (
@@ -435,7 +474,7 @@ export default function DashboardPage() {
                   connections
                 </span>
               </div>
-              <a href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <a href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-1 px-2 -mr-2 active:text-[var(--color-text)]">
                 manage <ArrowRight className="w-3 h-3" />
               </a>
             </div>
@@ -451,9 +490,10 @@ export default function DashboardPage() {
                 connections.map((conn) => {
                   const health = connHealth[conn.name];
                   return (
-                    <div
+                    <a
                       key={conn.id}
-                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group"
+                      href="/connections"
+                      className="flex items-center gap-3 px-4 py-3 sm:py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group active:bg-[var(--color-bg-hover)]"
                     >
                       <StatusDot
                         status={
@@ -490,7 +530,7 @@ export default function DashboardPage() {
                           {conn.db_type}
                         </span>
                       </div>
-                    </div>
+                    </a>
                   );
                 })
               )}
@@ -528,16 +568,16 @@ export default function DashboardPage() {
                       <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-3 pt-1">
-                    <div>
+                  <div className="flex gap-3 pt-1">
+                    <div className="flex-1">
                       <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
                       <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
                       <p className="text-xs font-light tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
                     </div>
@@ -553,5 +593,6 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+    </PullToRefreshWrapper>
   );
 }

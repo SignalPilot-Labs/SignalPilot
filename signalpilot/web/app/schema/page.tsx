@@ -13,7 +13,9 @@ import {
   Key,
   Shield,
 } from "lucide-react";
-import { getConnectionSchema, getSchemaRefreshStatus, detectPII, getConnectionSchemaDDL } from "@/lib/api";
+import { getConnections, getConnectionSchema, getSchemaRefreshStatus, detectPII, getConnectionSchemaDDL } from "@/lib/api";
+import type { ConnectionInfo } from "@/lib/types";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { useConnection } from "@/lib/connection-context";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -92,7 +94,7 @@ function TypeLegend() {
     { label: "json", color: "text-orange-400" },
   ];
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       {types.map(t => (
         <div key={t.label} className="flex items-center gap-1">
           <span className={`w-1.5 h-1.5 ${t.color.replace("text-", "bg-")}`} />
@@ -210,17 +212,18 @@ export default function SchemaExplorerPage() {
     : [];
 
   return (
-    <div className="p-8 animate-fade-in">
+    <PullToRefreshWrapper onRefresh={loadSchema}>
+    <div className="p-4 sm:p-8 animate-fade-in">
       <PageHeader
         title="schema"
         subtitle="explorer"
         description="browse tables, columns, and types"
         actions={
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             value={selectedConn}
             onChange={(e) => setSelectedConn(e.target.value)}
-            className="px-3 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[200px] tracking-wide"
+            className="px-3 py-2.5 sm:py-2 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[150px] sm:min-w-[200px] tracking-wide"
           >
             {connections.length === 0 ? (
               <option value="">no connections</option>
@@ -246,7 +249,7 @@ export default function SchemaExplorerPage() {
         path={`schema ${selectedConn || "—"} --introspect`}
         status={<StatusDot status={schema ? "healthy" : loading ? "unknown" : "error"} size={4} pulse={loading} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">tables: <code className="text-[12px] text-[var(--color-text)]">{schema ? Object.keys(schema.tables).length : "—"}</code></span>
           <span className="text-[var(--color-text-dim)]">columns: <code className="text-[12px] text-[var(--color-text)]">{schema ? Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0) : "—"}</code></span>
           <span className="text-[var(--color-text-dim)]">db: <code className="text-[12px] text-[var(--color-text)]">{schema?.db_type || "—"}</code></span>
@@ -262,15 +265,15 @@ export default function SchemaExplorerPage() {
       {/* Search + stats + type legend */}
       {schema && (
         <div className="space-y-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 flex-1">
-              <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 flex-1 min-w-0 sm:min-w-[200px]">
+              <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
               <input
                 type="text"
                 placeholder="search tables and columns..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                className="flex-1 px-3 py-2.5 sm:py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
               />
             </div>
             <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-dim)] tracking-wider">
@@ -283,7 +286,7 @@ export default function SchemaExplorerPage() {
                 {Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0)} cols
               </span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 flex-wrap">
               {/* View mode toggle */}
               <div className="flex items-center border border-[var(--color-border)] mr-2">
                 <button
@@ -302,17 +305,17 @@ export default function SchemaExplorerPage() {
               <button
                 onClick={scanPii}
                 disabled={scanningPii}
-                className="flex items-center gap-1 px-2 py-1 text-[12px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider"
+                className="flex items-center gap-1 px-3 py-2.5 sm:py-1 text-[12px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider active:bg-[var(--color-warning)]/10"
               >
                 {scanningPii ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" strokeWidth={1.5} />}
                 {piiDetections ? `pii: ${Object.keys(piiDetections).length}` : "scan pii"}
               </button>
               {viewMode === "table" && (
                 <>
-                  <button onClick={expandAll} className="px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                  <button onClick={expandAll} className="px-3 py-2.5 sm:py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
                     expand
                   </button>
-                  <button onClick={collapseAll} className="px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                  <button onClick={collapseAll} className="px-3 py-2.5 sm:py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
                     collapse
                   </button>
                 </>
@@ -350,7 +353,7 @@ export default function SchemaExplorerPage() {
             if (segments.length === 0) return null;
             return (
               <Tooltip content={segments.map(s => s.label).join(" · ")} position="bottom">
-                <div className="cursor-default">
+                <div className="cursor-default w-full max-w-[400px] [&>svg]:w-full">
                   <StackedBar segments={segments} width={400} height={4} />
                 </div>
               </Tooltip>
@@ -424,7 +427,7 @@ export default function SchemaExplorerPage() {
                 <div key={key} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-hidden card-accent-top">
                   <button
                     onClick={() => toggleTable(key)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left group"
+                    className="w-full flex items-center gap-3 px-4 py-3.5 sm:py-2.5 hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-hover)] transition-colors text-left group"
                   >
                     {expanded ? (
                       <ChevronDown className="w-3 h-3 text-[var(--color-text-dim)]" />
@@ -506,116 +509,157 @@ export default function SchemaExplorerPage() {
 
                   {expanded && (
                     <div className="border-t border-[var(--color-border)]">
-                      <table className="w-full text-[13px]">
-                        <thead>
-                          <tr className="border-b border-[var(--color-border)]/50">
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-8">#</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">column</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">type</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">nullable</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">references</th>
-                            {table.columns.some(c => c.stats) && (
-                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">cardinality</th>
-                            )}
-                            {table.columns.some(c => c.comment) && (
-                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">comment</th>
-                            )}
-                            {piiDetections && (
-                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-20">pii</th>
-                            )}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--color-border)]/20">
-                          {table.columns.map((col, i) => (
-                            <tr key={col.name} className="table-row-hover">
-                              <td className="px-4 py-1.5 text-[var(--color-text-dim)] tabular-nums">{i + 1}</td>
-                              <td className="px-4 py-1.5">
-                                <span className="flex items-center gap-2">
-                                  {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)]" />}
-                                  <span className="text-[var(--color-text-muted)]">{col.name}</span>
-                                  {col.dist_key && (
-                                    <span className="text-[10px] px-1 py-0.5 border border-orange-500/30 text-orange-400 tracking-wider leading-none">DK</span>
-                                  )}
-                                  {col.sort_key_position != null && col.sort_key_position > 0 && (
-                                    <span className="text-[10px] px-1 py-0.5 border border-amber-500/30 text-amber-400 tracking-wider leading-none">SK{col.sort_key_position}</span>
-                                  )}
-                                  {col.low_cardinality && (
-                                    <span className="text-[10px] px-1 py-0.5 border border-teal-500/30 text-teal-400 tracking-wider leading-none">LC</span>
-                                  )}
-                                </span>
-                              </td>
-                              <td className="px-4 py-1.5">
-                                <span className={`${getTypeColor(col.type)} flex items-center gap-1.5`}>
+                      {/* Mobile column list */}
+                      <div className="sm:hidden divide-y divide-[var(--color-border)]/20">
+                        {table.columns.map((col, i) => (
+                          <div key={col.name} className="px-3 py-2.5 flex items-start gap-3">
+                            <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums w-5 text-right flex-shrink-0 mt-0.5 opacity-50">{i + 1}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)] flex-shrink-0" />}
+                                <span className="text-[11px] text-[var(--color-text-muted)] truncate">{col.name}</span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`${getTypeColor(col.type)} text-[12px] flex items-center gap-1`}>
                                   <span className={`w-1 h-1 ${getTypeColor(col.type).replace("text-", "bg-")}`} />
                                   {col.type}
                                   {col.encoding && col.encoding !== "none" && (
                                     <span className="text-[10px] text-[var(--color-text-dim)] opacity-60">{col.encoding}</span>
                                   )}
                                 </span>
-                              </td>
-                              <td className="px-4 py-1.5">
-                                {col.nullable ? (
-                                  <span className="text-[var(--color-text-dim)]">nullable</span>
-                                ) : (
-                                  <span className="text-[var(--color-warning)]">NOT NULL</span>
+                                {!col.nullable && (
+                                  <span className="text-[11px] text-[var(--color-warning)] tracking-wider">NOT NULL</span>
                                 )}
-                              </td>
-                              <td className="px-4 py-1.5">
-                                {(() => {
-                                  const fk = table.foreign_keys?.find(f => f.column === col.name);
-                                  if (fk) {
-                                    return (
-                                      <span className="text-[11px] text-blue-400 tracking-wider">
-                                        → {fk.references_table}.{fk.references_column}
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })()}
-                              </td>
+                                {piiDetections && piiDetections[col.name.toLowerCase()] && (
+                                  <span className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                    piiDetections[col.name.toLowerCase()] === "drop"
+                                      ? "badge-error"
+                                      : piiDetections[col.name.toLowerCase()] === "hash"
+                                        ? "border-purple-500/30 text-purple-400"
+                                        : "badge-warning"
+                                  }`}>
+                                    {piiDetections[col.name.toLowerCase()]}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Desktop column table */}
+                      <div className="hidden sm:block overflow-x-auto">
+                        <table className="w-full text-[13px] min-w-[480px]">
+                          <thead>
+                            <tr className="border-b border-[var(--color-border)]/50">
+                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-8">#</th>
+                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">column</th>
+                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">type</th>
+                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">nullable</th>
+                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">references</th>
                               {table.columns.some(c => c.stats) && (
-                                <td className="px-4 py-1.5">
-                                  {col.stats && (
-                                    <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
-                                      {col.stats.distinct_count != null
-                                        ? col.stats.distinct_count >= 1000
-                                          ? `${(col.stats.distinct_count / 1000).toFixed(0)}K`
-                                          : col.stats.distinct_count
-                                        : col.stats.distinct_fraction != null
-                                          ? `${(col.stats.distinct_fraction * 100).toFixed(0)}%`
-                                          : ""}
-                                    </span>
-                                  )}
-                                </td>
+                                <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-24">cardinality</th>
                               )}
                               {table.columns.some(c => c.comment) && (
-                                <td className="px-4 py-1.5">
-                                  {col.comment && (
-                                    <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider italic">
-                                      {col.comment.length > 60 ? col.comment.slice(0, 60) + "..." : col.comment}
-                                    </span>
-                                  )}
-                                </td>
+                                <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">comment</th>
                               )}
                               {piiDetections && (
-                                <td className="px-4 py-1.5">
-                                  {piiDetections[col.name.toLowerCase()] && (
-                                    <span className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
-                                      piiDetections[col.name.toLowerCase()] === "drop"
-                                        ? "badge-error"
-                                        : piiDetections[col.name.toLowerCase()] === "hash"
-                                          ? "border-purple-500/30 text-purple-400"
-                                          : "badge-warning"
-                                    }`}>
-                                      {piiDetections[col.name.toLowerCase()]}
-                                    </span>
-                                  )}
-                                </td>
+                                <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] w-20">pii</th>
                               )}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-[var(--color-border)]/20">
+                            {table.columns.map((col, i) => (
+                              <tr key={col.name} className="table-row-hover">
+                                <td className="px-4 py-1.5 text-[var(--color-text-dim)] tabular-nums">{i + 1}</td>
+                                <td className="px-4 py-1.5">
+                                  <span className="flex items-center gap-2">
+                                    {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)]" />}
+                                    <span className="text-[var(--color-text-muted)]">{col.name}</span>
+                                    {col.dist_key && (
+                                      <span className="text-[10px] px-1 py-0.5 border border-orange-500/30 text-orange-400 tracking-wider leading-none">DK</span>
+                                    )}
+                                    {col.sort_key_position != null && col.sort_key_position > 0 && (
+                                      <span className="text-[10px] px-1 py-0.5 border border-amber-500/30 text-amber-400 tracking-wider leading-none">SK{col.sort_key_position}</span>
+                                    )}
+                                    {col.low_cardinality && (
+                                      <span className="text-[10px] px-1 py-0.5 border border-teal-500/30 text-teal-400 tracking-wider leading-none">LC</span>
+                                    )}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-1.5">
+                                  <span className={`${getTypeColor(col.type)} flex items-center gap-1.5`}>
+                                    <span className={`w-1 h-1 ${getTypeColor(col.type).replace("text-", "bg-")}`} />
+                                    {col.type}
+                                    {col.encoding && col.encoding !== "none" && (
+                                      <span className="text-[10px] text-[var(--color-text-dim)] opacity-60">{col.encoding}</span>
+                                    )}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-1.5">
+                                  {col.nullable ? (
+                                    <span className="text-[var(--color-text-dim)]">nullable</span>
+                                  ) : (
+                                    <span className="text-[var(--color-warning)]">NOT NULL</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-1.5">
+                                  {(() => {
+                                    const fk = table.foreign_keys?.find(f => f.column === col.name);
+                                    if (fk) {
+                                      return (
+                                        <span className="text-[11px] text-blue-400 tracking-wider">
+                                          → {fk.references_table}.{fk.references_column}
+                                        </span>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
+                                </td>
+                                {table.columns.some(c => c.stats) && (
+                                  <td className="px-4 py-1.5">
+                                    {col.stats && (
+                                      <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+                                        {col.stats.distinct_count != null
+                                          ? col.stats.distinct_count >= 1000
+                                            ? `${(col.stats.distinct_count / 1000).toFixed(0)}K`
+                                            : col.stats.distinct_count
+                                          : col.stats.distinct_fraction != null
+                                            ? `${(col.stats.distinct_fraction * 100).toFixed(0)}%`
+                                            : ""}
+                                      </span>
+                                    )}
+                                  </td>
+                                )}
+                                {table.columns.some(c => c.comment) && (
+                                  <td className="px-4 py-1.5">
+                                    {col.comment && (
+                                      <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider italic">
+                                        {col.comment.length > 60 ? col.comment.slice(0, 60) + "..." : col.comment}
+                                      </span>
+                                    )}
+                                  </td>
+                                )}
+                                {piiDetections && (
+                                  <td className="px-4 py-1.5">
+                                    {piiDetections[col.name.toLowerCase()] && (
+                                      <span className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                        piiDetections[col.name.toLowerCase()] === "drop"
+                                          ? "badge-error"
+                                          : piiDetections[col.name.toLowerCase()] === "hash"
+                                            ? "border-purple-500/30 text-purple-400"
+                                            : "badge-warning"
+                                      }`}>
+                                        {piiDetections[col.name.toLowerCase()]}
+                                      </span>
+                                    )}
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -625,5 +669,6 @@ export default function SchemaExplorerPage() {
         </div>
       )}
     </div>
+    </PullToRefreshWrapper>
   );
 }

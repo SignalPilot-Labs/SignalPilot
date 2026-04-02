@@ -25,7 +25,7 @@ export function SystemDiagram({
         </svg>
         <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">system topology</span>
       </div>
-      <div className="p-6 flex items-center justify-center w-full">
+      <div className="p-4 sm:p-6 flex items-center justify-center w-full overflow-x-auto">
         <svg className="w-full" style={{ minHeight: 280, maxHeight: 420 }} viewBox="0 0 680 280" fill="none" preserveAspectRatio="xMidYMid meet">
           {/* Agent/Client */}
           <g>

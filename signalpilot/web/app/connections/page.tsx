@@ -58,6 +58,7 @@ import {
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { StatusDot, MiniBar, Sparkline } from "@/components/ui/data-viz";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
@@ -2132,7 +2133,8 @@ export default function ConnectionsPage() {
   const config = DB_CONFIGS[form.db_type];
 
   return (
-    <div className="p-8 animate-fade-in">
+    <PullToRefreshWrapper onRefresh={refresh}>
+    <div className="p-4 sm:p-8 animate-fade-in">
       <input
         ref={importFileRef}
         type="file"
@@ -2174,7 +2176,7 @@ export default function ConnectionsPage() {
         path="connections --list"
         status={<StatusDot status={connections.length > 0 ? "healthy" : "unknown"} size={4} />}
       >
-        <div className="flex items-center gap-6 text-xs">
+        <div className="flex items-center gap-3 sm:gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">registered: <code className="text-[12px] text-[var(--color-text)]">{connections.length}</code></span>
         </div>
       </TerminalBar>
@@ -2182,14 +2184,14 @@ export default function ConnectionsPage() {
       {/* ─── Create Connection Form ─── */}
       {showForm && (
         <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
-          <div className="px-6 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
+          <div className="px-4 sm:px-6 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
             <div className="flex items-center gap-2">
               <DbTypeIcon type={form.db_type} />
               <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                 {editingConnection ? `edit ${editingConnection}` : `new ${DB_CONFIGS[form.db_type].label} connection`}
               </span>
             </div>
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider opacity-50">
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider opacity-50 hidden sm:inline">
               {DB_CONFIGS[form.db_type].description}
             </span>
           </div>
@@ -2692,7 +2694,7 @@ export default function ConnectionsPage() {
               <button onClick={handleSaveAndTest} disabled={saving || preTesting || (!editingConnection && !form.name) || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingConnection ? "update & test" : "save & test"}
               </button>
-              <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 cancel
               </button>
               {editingConnection && (
@@ -2768,7 +2770,7 @@ export default function ConnectionsPage() {
 
             return (
               <div key={conn.id} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all card-accent-top">
-                <div className="flex items-center gap-4 p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 p-4">
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
                     <StatusDot
@@ -2831,7 +2833,7 @@ export default function ConnectionsPage() {
                       )}
                     </div>
                     {health && health.sample_count > 0 && (
-                      <div className="flex items-center gap-4 mt-1.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-1.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                         <span className="flex items-center gap-1">
                           <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />
                           {health.sample_count} queries
@@ -2953,14 +2955,14 @@ export default function ConnectionsPage() {
                   )}
 
                   {/* Action buttons */}
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-1 w-full sm:w-auto border-t sm:border-t-0 border-[var(--color-border)]/30 pt-2 sm:pt-0">
                     <button onClick={(e) => { e.stopPropagation(); handleToggleSchema(conn.name); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" strokeWidth={1.5} />}
                       pii
                       {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
@@ -2970,7 +2972,7 @@ export default function ConnectionsPage() {
                       )}
                     </button>
                     <button onClick={() => handleTest(conn.name)} disabled={testing === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {testing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" strokeWidth={1.5} />}
                       test
                     </button>
@@ -2988,8 +2990,8 @@ export default function ConnectionsPage() {
                       <Copy className="w-3 h-3" strokeWidth={1.5} /> clone
                     </button>
                     <button onClick={() => handleDelete(conn.name)}
-                      className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-all">
-                      <Trash2 className="w-3 h-3" />
+                      className="p-2.5 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-all ml-auto sm:ml-0 active:text-[var(--color-error)]">
+                      <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
                     </button>
                   </div>
                 </div>
@@ -3130,7 +3132,7 @@ export default function ConnectionsPage() {
                             )}
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-px max-h-96 overflow-auto bg-[var(--color-border)]">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-px max-h-96 overflow-auto bg-[var(--color-border)]">
                           {Object.entries(schemaSearchResults[conn.name]?.tables || tables).map(([key, t]: [string, any]) => (
                             <div key={t.name} className="p-3 bg-[var(--color-bg)]">
                               <div className="flex items-center gap-2 mb-2">
@@ -3349,5 +3351,6 @@ export default function ConnectionsPage() {
         onCancel={() => setDeleteTarget(null)}
       />
     </div>
+    </PullToRefreshWrapper>
   );
 }

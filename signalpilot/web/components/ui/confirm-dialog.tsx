@@ -45,12 +45,12 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-4"
       onClick={onCancel}
       onKeyDown={handleKeyDown}
     >
       <div
-        className="w-[360px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
+        className="w-full sm:w-[360px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in safe-area-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -82,17 +82,17 @@ export function ConfirmDialog({
         </div>
 
         {/* Actions */}
-        <div className="px-5 py-3 border-t border-[var(--color-border)] flex items-center justify-end gap-2">
+        <div className="px-5 py-3 sm:py-3 border-t border-[var(--color-border)] flex flex-col-reverse sm:flex-row items-stretch sm:items-center sm:justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
+            className="px-4 py-3 sm:py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase text-center"
           >
             {cancelLabel}
           </button>
           <button
             ref={confirmRef}
             onClick={onConfirm}
-            className={`px-4 py-2 text-[12px] font-medium tracking-wider uppercase transition-all ${
+            className={`px-4 py-3 sm:py-2 text-[12px] font-medium tracking-wider uppercase transition-all text-center ${
               isDanger
                 ? "bg-[var(--color-error)] text-white hover:opacity-90"
                 : "bg-[var(--color-text)] text-[var(--color-bg)] hover:opacity-90"

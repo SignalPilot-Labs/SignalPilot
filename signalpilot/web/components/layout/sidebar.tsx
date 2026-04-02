@@ -502,6 +502,7 @@ export default function Sidebar() {
                   <Link
                     key={href}
                     href={href}
+                    onClick={() => setMobileMenuOpen(false)}
                     className={`group flex items-center gap-3 px-4 py-3 text-sm transition-all active:bg-[var(--color-bg-hover)] ${
                       active
                         ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"

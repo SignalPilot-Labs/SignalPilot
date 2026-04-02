@@ -69,7 +69,7 @@ function TypeLegend() {
     { label: "json", color: "text-orange-400" },
   ];
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       {types.map(t => (
         <div key={t.label} className="flex items-center gap-1">
           <span className={`w-1.5 h-1.5 ${t.color.replace("text-", "bg-")}`} />
@@ -285,7 +285,7 @@ export default function SchemaExplorerPage() {
             if (segments.length === 0) return null;
             return (
               <Tooltip content={segments.map(s => s.label).join(" · ")} position="bottom">
-                <div className="cursor-default">
+                <div className="cursor-default w-full max-w-[400px] [&>svg]:w-full">
                   <StackedBar segments={segments} width={400} height={4} />
                 </div>
               </Tooltip>

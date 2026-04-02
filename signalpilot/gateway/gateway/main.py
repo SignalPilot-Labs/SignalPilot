@@ -4310,6 +4310,7 @@ _CONNECTOR_TIERS = {
             "sample_values": True, "read_only_transactions": True,
             "query_timeout": True, "cost_estimation": True,
             "connection_pooling": True, "parallel_schema": True,
+            "table_sizes": True, "iam_auth": True,
         },
     },
     "mysql": {
@@ -4322,6 +4323,7 @@ _CONNECTOR_TIERS = {
             "sample_values": True, "read_only_transactions": False,
             "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": False,
+            "table_sizes": True, "iam_auth": True,
         },
     },
     "snowflake": {
@@ -4334,7 +4336,8 @@ _CONNECTOR_TIERS = {
             "sample_values": True, "read_only_transactions": False,
             "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": True,
-            "key_pair_auth": True, "warehouse_config": True,
+            "key_pair_auth": True, "oauth_auth": True, "warehouse_config": True,
+            "table_sizes": True,
         },
     },
     "bigquery": {
@@ -4372,10 +4375,10 @@ _CONNECTOR_TIERS = {
             "foreign_keys": False, "indexes": False, "row_counts": True,
             "column_stats": True, "primary_keys": True, "comments": True,
             "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
+            "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": False,
             "engine_info": True, "sorting_key_info": True,
-            "native_and_http": True,
+            "native_and_http": True, "table_sizes": True,
         },
     },
     "databricks": {
@@ -4383,12 +4386,12 @@ _CONNECTOR_TIERS = {
         "label": "Tier 2 — Stable",
         "features": {
             "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": False, "indexes": False, "row_counts": False,
-            "column_stats": False, "primary_keys": False, "comments": True,
+            "foreign_keys": True, "indexes": False, "row_counts": False,
+            "column_stats": False, "primary_keys": True, "comments": True,
             "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
+            "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": False,
-            "unity_catalog": True, "pat_auth": True,
+            "unity_catalog": True, "pat_auth": True, "table_sizes": True,
         },
     },
     "mssql": {
@@ -4397,10 +4400,11 @@ _CONNECTOR_TIERS = {
         "features": {
             "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
             "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
+            "column_stats": True, "primary_keys": True, "comments": True,
             "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
+            "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": False,
+            "table_sizes": True,
         },
     },
     "trino": {
@@ -4408,10 +4412,10 @@ _CONNECTOR_TIERS = {
         "label": "Tier 2 — Stable",
         "features": {
             "ssl": True, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": False, "indexes": False, "row_counts": False,
+            "foreign_keys": True, "indexes": False, "row_counts": True,
             "column_stats": False, "primary_keys": True, "comments": True,
             "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
+            "query_timeout": True, "cost_estimation": True,
             "connection_pooling": False, "parallel_schema": False,
             "federated_query": True,
         },

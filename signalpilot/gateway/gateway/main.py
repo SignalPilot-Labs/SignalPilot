@@ -370,6 +370,13 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
     if sandbox.status == "stopped":
         raise HTTPException(status_code=409, detail="Sandbox has been stopped")
 
+    # Budget enforcement — reject if sandbox budget is exhausted
+    if sandbox.budget_used >= sandbox.budget_usd:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Sandbox budget exhausted (${sandbox.budget_used:.4f} / ${sandbox.budget_usd:.2f})",
+        )
+
     settings = load_settings()
     session_token = str(uuid.uuid4())  # In production, this is tied to the session
 
@@ -380,6 +387,11 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
         session_token=session_token,
         timeout=req.timeout,
     )
+
+    # Track execution cost against sandbox budget
+    if result.execution_ms:
+        exec_cost = (result.execution_ms / 1000) * 0.000014
+        sandbox.budget_used = round(sandbox.budget_used + exec_cost, 8)
 
     # Update sandbox state
     upsert_sandbox(sandbox)

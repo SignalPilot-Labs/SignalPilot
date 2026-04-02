@@ -1308,7 +1308,7 @@ async def get_compact_schema(
     def _table_relevance(key: str) -> tuple:
         table = filtered[key]
         fk_count = len(table.get("foreign_keys", []))
-        row_count = table.get("row_count", 0)
+        row_count = table.get("row_count", 0) or 0
         col_count = len(table.get("columns", []))
         # Higher FK count = higher relevance (join hubs are critical for Spider2.0)
         # Higher row count = higher relevance (larger tables are usually more important)
@@ -1446,7 +1446,7 @@ async def get_schema_ddl(
     def _table_relevance(key: str) -> tuple:
         table = filtered[key]
         fk_count = len(table.get("foreign_keys", []))
-        row_count = table.get("row_count", 0)
+        row_count = table.get("row_count", 0) or 0
         return (-fk_count, -row_count, key)
 
     table_keys = sorted(filtered.keys(), key=_table_relevance)[:max_tables]
@@ -1758,7 +1758,7 @@ async def schema_link(
     if not linked_keys:
         def _fb_relevance(key: str) -> tuple:
             t = filtered[key]
-            return (-len(t.get("foreign_keys", [])), -t.get("row_count", 0), key)
+            return (-len(t.get("foreign_keys", [])), -(t.get("row_count", 0) or 0), key)
         linked_keys = set(sorted(filtered.keys(), key=_fb_relevance)[:min(max_tables, 10)])
 
     # Build response

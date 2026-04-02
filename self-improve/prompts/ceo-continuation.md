@@ -51,6 +51,8 @@ The worker has access to these skills that provide structured methodologies:
 - **gateway-hardening** — Auth, rate limiting, SQL engine improvements
 - **performance** — Connection pooling, latency reduction, profiling
 - **connector-development** — Database connector interface patterns
+- **benchmark-improvement** — Spider2 text-to-SQL benchmark accuracy improvements
+- **frontend-debug** — Browser-based UI testing via Playwright MCP
 
 When assigning tasks, consider suggesting the worker use a relevant skill (e.g., "use the /health skill to assess the codebase first" or "follow the /investigate methodology to debug the failing tests").
 

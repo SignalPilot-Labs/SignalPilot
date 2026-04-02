@@ -36,7 +36,7 @@ export function ConfirmDialog({
       if (e.key === "Escape") onCancel();
       if (e.key === "Enter") onConfirm();
     },
-    [onCancel, onConfirm]
+    [onCancel, onConfirm],
   );
 
   if (!open) return null;
@@ -58,14 +58,43 @@ export function ConfirmDialog({
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             {isDanger ? (
               <>
-                <path d="M7 1L13 13H1L7 1Z" stroke="var(--color-error)" strokeWidth="1" fill="none" />
-                <line x1="7" y1="5" x2="7" y2="9" stroke="var(--color-error)" strokeWidth="1.5" strokeLinecap="round" />
+                <path
+                  d="M7 1L13 13H1L7 1Z"
+                  stroke="var(--color-error)"
+                  strokeWidth="1"
+                  fill="none"
+                />
+                <line
+                  x1="7"
+                  y1="5"
+                  x2="7"
+                  y2="9"
+                  stroke="var(--color-error)"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
                 <circle cx="7" cy="11" r="0.75" fill="var(--color-error)" />
               </>
             ) : (
               <>
-                <circle cx="7" cy="7" r="6" stroke="var(--color-text-dim)" strokeWidth="1" fill="none" />
-                <text x="7" y="10" textAnchor="middle" fill="var(--color-text-dim)" fontSize="8" fontFamily="monospace">?</text>
+                <circle
+                  cx="7"
+                  cy="7"
+                  r="6"
+                  stroke="var(--color-text-dim)"
+                  strokeWidth="1"
+                  fill="none"
+                />
+                <text
+                  x="7"
+                  y="10"
+                  textAnchor="middle"
+                  fill="var(--color-text-dim)"
+                  fontSize="8"
+                  fontFamily="monospace"
+                >
+                  ?
+                </text>
               </>
             )}
           </svg>

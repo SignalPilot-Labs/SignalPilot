@@ -294,6 +294,17 @@ async def explore_column_values(
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
+    # ── Validate table and column against schema cache to prevent SQL injection ──
+    cached = await get_or_fetch_schema(name, info)
+
+    table_info = cached.get(table)
+    if not table_info:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' not found in schema")
+
+    known_columns = {c["name"].lower() for c in table_info.get("columns", [])}
+    if column.lower() not in known_columns:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found in table '{table}'")
+
     db_type = info.db_type
     # Build exploration query with dialect-aware quoting
     quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino") else '`'
@@ -303,13 +314,26 @@ async def explore_column_values(
     else:
         close_quote = quote
 
-    q_col = f"{quote}{column}{close_quote}"
+    # Escape the column name by doubling the close-quote character inside the name
+    safe_col = column.replace(close_quote, close_quote + close_quote)
+    q_col = f"{quote}{safe_col}{close_quote}"
+
+    # Quote the table name — handle schema.table or catalog.schema.table notation
+    if "." in table:
+        q_table = ".".join(
+            f"{quote}{part.replace(close_quote, close_quote + close_quote)}{close_quote}"
+            for part in table.split(".")
+        )
+    else:
+        q_table = f"{quote}{table.replace(close_quote, close_quote + close_quote)}{close_quote}"
 
     # Construct safe exploration query
     parts = []
     if filter_pattern:
+        # Escape single quotes in filter pattern to prevent SQL injection
+        safe_pattern = filter_pattern.replace("'", "''")
         like_op = "ILIKE" if db_type in ("postgres", "redshift", "snowflake") else "LIKE"
-        parts.append(f"WHERE {q_col} {like_op} :pattern")
+        parts.append(f"WHERE {q_col} {like_op} '{safe_pattern}'")
 
     where_clause = parts[0] if parts else ""
 
@@ -319,7 +343,7 @@ async def explore_column_values(
 SELECT TOP {limit}
     {q_col} AS value,
     COUNT(*) AS [count]
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY [count] DESC
@@ -329,7 +353,7 @@ ORDER BY [count] DESC
 SELECT
     {q_col} AS value,
     COUNT(*) AS count
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY count DESC
@@ -342,14 +366,13 @@ SELECT
     COUNT(*) AS total_rows,
     SUM(CASE WHEN {q_col} IS NULL THEN 1 ELSE 0 END) AS null_count,
     COUNT(DISTINCT {q_col}) AS distinct_count
-FROM {table}
+FROM {q_table}
 """
 
     try:
         extras = get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
-            # Replace :pattern placeholder with parameterized query
-            actual_sql = explore_sql.replace(":pattern", f"'{filter_pattern}'") if filter_pattern else explore_sql
+            actual_sql = explore_sql
 
             values_rows = await connector.execute(actual_sql, timeout=30)
             stats_rows = await connector.execute(null_sql, timeout=30)
@@ -3287,9 +3310,14 @@ async def explore_columns_deep(name: str, body: dict):
                     stat_parts.append(f"MAX({qo}{safe}{qc})")
                     stat_parts.append(f"AVG(CAST({qo}{safe}{qc} AS FLOAT))")
                 try:
-                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {table_key}"
+                    # Quote the table name to prevent SQL injection from cache-poisoned table names
+                    safe_table = table_key.replace(qc, qc + qc)
+                    q_table = f"{qo}{safe_table}{qc}" if "." not in table_key else ".".join(
+                        f"{qo}{part.replace(qc, qc + qc)}{qc}" for part in table_key.split(".")
+                    )
+                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {q_table}"
                     if db_type == "mssql":
-                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {table_key}"
+                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {q_table}"
                     rows = await connector.execute(stat_sql, timeout=15)
                     if rows:
                         row = rows[0]

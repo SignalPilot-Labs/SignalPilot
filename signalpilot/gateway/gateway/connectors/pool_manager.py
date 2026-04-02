@@ -193,13 +193,13 @@ class PoolManager:
                         tunnel_ok = self._tunnels[key].check_tunnel()
                     if tunnel_ok and await connector.health_check():
                         return connector
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Health check failed for pooled connector %s, will recreate: %s", key[:40], e)
                 # Stale — close and recreate
                 try:
                     await connector.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Error closing stale connector for %s during pool eviction: %s", key[:40], e)
                 if key in self._tunnels:
                     self._tunnels[key].stop()
                     del self._tunnels[key]
@@ -316,8 +316,8 @@ class PoolManager:
                             logger.warning("Keepalive ping failed for %s — removing from pool", key[:40])
                             try:
                                 await connector.close()
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug("Error closing connector for %s after failed keepalive ping: %s", key[:40], e)
                             del self._pools[key]
                             self._keepalive_intervals.pop(key, None)
                             self._last_keepalive.pop(key, None)
@@ -368,8 +368,8 @@ class PoolManager:
                 connector, _ = self._pools.pop(key)
                 try:
                     await connector.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Error closing idle connector for %s during cleanup: %s", key[:40], e)
                 # Close associated tunnel
                 if key in self._tunnels:
                     self._tunnels[key].stop()
@@ -389,8 +389,8 @@ class PoolManager:
             for connector, _ in self._pools.values():
                 try:
                     await connector.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Error closing connector during close_all shutdown: %s", e)
             self._pools.clear()
             # Close all tunnels
             for tunnel in self._tunnels.values():
@@ -413,8 +413,8 @@ class PoolManager:
                 connector, _ = self._pools.pop(key)
                 try:
                     await connector.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Error closing connector for %s during close_pool: %s", key[:40], e)
                 if key in self._tunnels:
                     self._tunnels[key].stop()
                     del self._tunnels[key]

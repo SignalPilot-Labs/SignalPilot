@@ -42,7 +42,10 @@ function BranchPicker({
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
         setOpen(false);
         setQuery("");
       }
@@ -61,7 +64,15 @@ function BranchPicker({
         className="mt-1.5 w-full flex items-center justify-between px-3 py-2 bg-black/30 border border-[#1a1a1a] rounded text-[11px] text-left hover:border-[#2a2a2a] transition-colors"
       >
         <span className="font-mono text-[#e8e8e8]">{selected}</span>
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#999" strokeWidth="1.5" strokeLinecap="round">
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          fill="none"
+          stroke="#999"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        >
           <polyline points="2 4 5 6 8 4" />
         </svg>
       </button>
@@ -77,7 +88,10 @@ function BranchPicker({
               placeholder="Search branches..."
               className="w-full bg-black/30 border border-[#1a1a1a] rounded px-2.5 py-1.5 text-[10px] text-[#ccc] placeholder-[#666] focus:outline-none focus:border-[#00ff88]/30"
               onKeyDown={(e) => {
-                if (e.key === "Escape") { setOpen(false); setQuery(""); }
+                if (e.key === "Escape") {
+                  setOpen(false);
+                  setQuery("");
+                }
                 if (e.key === "Enter" && sorted.length > 0) {
                   onSelect(sorted[0]);
                   setOpen(false);
@@ -88,21 +102,35 @@ function BranchPicker({
           </div>
           <div className="max-h-48 overflow-y-auto">
             {sorted.length === 0 ? (
-              <div className="px-3 py-2 text-[9px] text-[#888]">No branches match</div>
+              <div className="px-3 py-2 text-[9px] text-[#888]">
+                No branches match
+              </div>
             ) : (
               sorted.map((b) => (
                 <button
                   key={b}
-                  onClick={() => { onSelect(b); setOpen(false); setQuery(""); }}
+                  onClick={() => {
+                    onSelect(b);
+                    setOpen(false);
+                    setQuery("");
+                  }}
                   className={clsx(
                     "w-full flex items-center gap-2 px-3 py-1.5 text-left text-[10px] font-mono transition-colors",
                     b === selected
                       ? "bg-[#00ff88]/[0.06] text-[#00ff88]"
-                      : "text-[#888] hover:bg-white/[0.03] hover:text-[#ccc]"
+                      : "text-[#888] hover:bg-white/[0.03] hover:text-[#ccc]",
                   )}
                 >
                   {b === selected ? (
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#00ff88" strokeWidth="1.5" className="shrink-0">
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 10 10"
+                      fill="none"
+                      stroke="#00ff88"
+                      strokeWidth="1.5"
+                      className="shrink-0"
+                    >
                       <polyline points="2 5 4 7 8 3" />
                     </svg>
                   ) : (
@@ -122,7 +150,12 @@ function BranchPicker({
 interface StartRunModalProps {
   open: boolean;
   onClose: () => void;
-  onStart: (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => void;
+  onStart: (
+    prompt: string | undefined,
+    budget: number,
+    durationMinutes: number,
+    baseBranch: string,
+  ) => void;
   busy: boolean;
   branches: string[];
   mode?: "single" | "parallel";
@@ -187,7 +220,9 @@ export function StartRunModal({
   useEffect(() => {
     if (open) {
       document.body.style.overflow = "hidden";
-      return () => { document.body.style.overflow = ""; };
+      return () => {
+        document.body.style.overflow = "";
+      };
     }
   }, [open]);
 
@@ -233,9 +268,7 @@ export function StartRunModal({
           />
 
           {/* Centering wrapper — uses flexbox, no transforms */}
-          <div
-            className="fixed inset-0 z-[9991] flex items-center justify-center pointer-events-none"
-          >
+          <div className="fixed inset-0 z-[9991] flex items-center justify-center pointer-events-none">
             <motion.div
               key="modal-content"
               initial={{ opacity: 0, scale: 0.95 }}
@@ -248,14 +281,23 @@ export function StartRunModal({
               <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a]">
                 <div className="flex items-center gap-2.5">
                   <div className="flex items-center justify-center h-7 w-7 rounded bg-white/[0.04] border border-white/[0.08]">
-                    <Image src="/logo.svg" alt="SignalPilot" width={16} height={16} />
+                    <Image
+                      src="/logo.svg"
+                      alt="SignalPilot"
+                      width={16}
+                      height={16}
+                    />
                   </div>
                   <div>
                     <h2 className="text-[12px] font-semibold text-[#e8e8e8]">
-                      {mode === "parallel" ? "Launch Bot" : "Start Improvement Run"}
+                      {mode === "parallel"
+                        ? "Launch Bot"
+                        : "Start Improvement Run"}
                     </h2>
                     <p className="text-[9px] text-[#999] mt-0.5">
-                      {mode === "parallel" ? "Spawns an isolated container with its own sandbox" : "Creates a branch, makes improvements, opens a PR"}
+                      {mode === "parallel"
+                        ? "Spawns an isolated container with its own sandbox"
+                        : "Creates a branch, makes improvements, opens a PR"}
                     </p>
                   </div>
                 </div>
@@ -263,8 +305,16 @@ export function StartRunModal({
                   onClick={onClose}
                   className="p-1 rounded hover:bg-white/[0.04] text-[#999] hover:text-[#aaa] transition-colors"
                 >
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <line x1="3" y1="3" x2="9" y2="9" /><line x1="9" y1="3" x2="3" y2="9" />
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <line x1="3" y1="3" x2="9" y2="9" />
+                    <line x1="9" y1="3" x2="3" y2="9" />
                   </svg>
                 </button>
               </div>
@@ -293,7 +343,7 @@ export function StartRunModal({
                           "text-left p-3 rounded border transition-all",
                           selectedQuick === i
                             ? "border-[#00ff88]/30 bg-[#00ff88]/[0.04]"
-                            : "border-[#1a1a1a] bg-white/[0.01] hover:bg-white/[0.03]"
+                            : "border-[#1a1a1a] bg-white/[0.01] hover:bg-white/[0.03]",
                         )}
                       >
                         <div className="text-[10px] font-medium text-[#ccc]">
@@ -346,7 +396,7 @@ export function StartRunModal({
                           "text-[9px] px-2 py-1.5 rounded border transition-all",
                           duration === d.minutes
                             ? "border-[#00ff88]/30 bg-[#00ff88]/[0.06] text-[#00ff88]"
-                            : "border-[#1a1a1a] bg-white/[0.01] text-[#777] hover:bg-white/[0.03]"
+                            : "border-[#1a1a1a] bg-white/[0.01] text-[#777] hover:bg-white/[0.03]",
                         )}
                       >
                         {d.label}
@@ -366,11 +416,18 @@ export function StartRunModal({
                         "flex items-center justify-center h-3 w-3 rounded border transition-all",
                         budgetEnabled
                           ? "bg-[#00ff88] border-[#00ff88]"
-                          : "border-[#666] bg-transparent"
+                          : "border-[#666] bg-transparent",
                       )}
                     >
                       {budgetEnabled && (
-                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="white" strokeWidth="1.5">
+                        <svg
+                          width="8"
+                          height="8"
+                          viewBox="0 0 8 8"
+                          fill="none"
+                          stroke="white"
+                          strokeWidth="1.5"
+                        >
                           <polyline points="1.5 4 3 5.5 6.5 2" />
                         </svg>
                       )}
@@ -416,12 +473,23 @@ export function StartRunModal({
                     onClick={handleStart}
                     disabled={busy}
                     icon={
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <svg
+                        width="10"
+                        height="10"
+                        viewBox="0 0 10 10"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                      >
                         <polygon points="3 2 8 5 3 8" />
                       </svg>
                     }
                   >
-                    {busy ? "Starting..." : mode === "parallel" ? "Launch Bot" : "Start Run"}
+                    {busy
+                      ? "Starting..."
+                      : mode === "parallel"
+                        ? "Launch Bot"
+                        : "Start Run"}
                   </Button>
                 </div>
               </div>
@@ -430,6 +498,6 @@ export function StartRunModal({
         </>
       )}
     </AnimatePresence>,
-    document.body
+    document.body,
   );
 }

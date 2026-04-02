@@ -415,7 +415,7 @@ class TrinoConnector(BaseConnector):
         tables_to_stat = list(schema.keys())[:50]
         for tkey in tables_to_stat:
             entry = schema[tkey]
-            qualified = f"{qcat}.{self._quote_ident(entry['schema'].split('.')[-1])}.{self._quote_ident(entry['name'])}"
+            qualified = f"{qcat}.{self._quote_ident(entry['schema'].rsplit('.', 1)[-1])}.{self._quote_ident(entry['name'])}"
             try:
                 cursor.execute(f"SHOW STATS FOR {qualified}")
                 stat_rows = cursor.fetchall()

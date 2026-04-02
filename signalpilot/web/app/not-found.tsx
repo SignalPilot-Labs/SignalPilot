@@ -5,43 +5,142 @@ export default function NotFound() {
     <div className="flex items-center justify-center min-h-screen mobile-negate-offset px-4">
       <div className="text-center max-w-md w-full">
         {/* Terminal-style 404 SVG */}
-        <svg width="240" height="140" viewBox="0 0 240 140" fill="none" className="mx-auto mb-8 max-w-full h-auto">
+        <svg
+          width="240"
+          height="140"
+          viewBox="0 0 240 140"
+          fill="none"
+          className="mx-auto mb-8 max-w-full h-auto"
+        >
           {/* Terminal window */}
-          <rect x="0.5" y="0.5" width="239" height="139" stroke="var(--color-border)" fill="var(--color-bg-card)" />
+          <rect
+            x="0.5"
+            y="0.5"
+            width="239"
+            height="139"
+            stroke="var(--color-border)"
+            fill="var(--color-bg-card)"
+          />
           {/* Title bar */}
-          <rect x="1" y="1" width="238" height="24" fill="var(--color-bg-elevated)" />
+          <rect
+            x="1"
+            y="1"
+            width="238"
+            height="24"
+            fill="var(--color-bg-elevated)"
+          />
           <line x1="1" y1="25" x2="239" y2="25" stroke="var(--color-border)" />
           {/* Window dots */}
-          <rect x="10" y="9" width="6" height="6" fill="var(--color-text-dim)" opacity="0.3" />
-          <rect x="20" y="9" width="6" height="6" fill="var(--color-text-dim)" opacity="0.2" />
-          <rect x="30" y="9" width="6" height="6" fill="var(--color-text-dim)" opacity="0.1" />
+          <rect
+            x="10"
+            y="9"
+            width="6"
+            height="6"
+            fill="var(--color-text-dim)"
+            opacity="0.3"
+          />
+          <rect
+            x="20"
+            y="9"
+            width="6"
+            height="6"
+            fill="var(--color-text-dim)"
+            opacity="0.2"
+          />
+          <rect
+            x="30"
+            y="9"
+            width="6"
+            height="6"
+            fill="var(--color-text-dim)"
+            opacity="0.1"
+          />
 
           {/* 404 text - large */}
-          <text x="120" y="72" textAnchor="middle" fill="var(--color-text)" fontSize="28" fontFamily="monospace" fontWeight="300" letterSpacing="0.15em" opacity="0.8">
+          <text
+            x="120"
+            y="72"
+            textAnchor="middle"
+            fill="var(--color-text)"
+            fontSize="28"
+            fontFamily="monospace"
+            fontWeight="300"
+            letterSpacing="0.15em"
+            opacity="0.8"
+          >
             404
           </text>
 
           {/* Prompt line */}
-          <text x="40" y="100" fill="var(--color-success)" fontSize="10" fontFamily="monospace">$</text>
-          <text x="52" y="100" fill="var(--color-text-dim)" fontSize="10" fontFamily="monospace">
+          <text
+            x="40"
+            y="100"
+            fill="var(--color-success)"
+            fontSize="10"
+            fontFamily="monospace"
+          >
+            $
+          </text>
+          <text
+            x="52"
+            y="100"
+            fill="var(--color-text-dim)"
+            fontSize="10"
+            fontFamily="monospace"
+          >
             route not found
           </text>
 
           {/* Blinking cursor */}
-          <rect x="155" y="91" width="6" height="11" fill="var(--color-text-dim)" opacity="0.5">
-            <animate attributeName="opacity" values="0.5;0;0.5" dur="1.2s" repeatCount="indefinite" />
+          <rect
+            x="155"
+            y="91"
+            width="6"
+            height="11"
+            fill="var(--color-text-dim)"
+            opacity="0.5"
+          >
+            <animate
+              attributeName="opacity"
+              values="0.5;0;0.5"
+              dur="1.2s"
+              repeatCount="indefinite"
+            />
           </rect>
 
           {/* Error line */}
-          <text x="40" y="118" fill="var(--color-error)" fontSize="9" fontFamily="monospace" opacity="0.6">
+          <text
+            x="40"
+            y="118"
+            fill="var(--color-error)"
+            fontSize="9"
+            fontFamily="monospace"
+            opacity="0.6"
+          >
             ERR: the requested path does not exist
           </text>
 
           {/* Corner markers */}
-          <path d="M1 6V1H6" stroke="var(--color-border-hover)" strokeWidth="1" />
-          <path d="M234 1H239V6" stroke="var(--color-border-hover)" strokeWidth="1" />
-          <path d="M239 134V139H234" stroke="var(--color-border-hover)" strokeWidth="1" />
-          <path d="M6 139H1V134" stroke="var(--color-border-hover)" strokeWidth="1" />
+          <path
+            d="M1 6V1H6"
+            stroke="var(--color-border-hover)"
+            strokeWidth="1"
+          />
+          <path
+            d="M234 1H239V6"
+            stroke="var(--color-border-hover)"
+            strokeWidth="1"
+          />
+          <path
+            d="M239 134V139H234"
+            stroke="var(--color-border-hover)"
+            strokeWidth="1"
+          />
+          <path
+            d="M6 139H1V134"
+            stroke="var(--color-border-hover)"
+            strokeWidth="1"
+          />
         </svg>
 
         <h2 className="text-lg font-light text-[var(--color-text)] tracking-wide mb-2">
@@ -67,7 +166,9 @@ export default function NotFound() {
         </div>
 
         <p className="mt-8 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-          <code className="text-[var(--color-text-dim)]">signalpilot v0.1.0</code>
+          <code className="text-[var(--color-text-dim)]">
+            signalpilot v0.1.0
+          </code>
         </p>
       </div>
     </div>

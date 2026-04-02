@@ -28,7 +28,11 @@ export function KeyboardShortcuts() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT"
+      ) {
         return;
       }
 
@@ -71,8 +75,24 @@ export function KeyboardShortcuts() {
         <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <rect x="1" y="1" width="12" height="12" rx="0" stroke="var(--color-text-dim)" strokeWidth="1" />
-              <rect x="4" y="5" width="6" height="4" rx="0" fill="var(--color-text-dim)" opacity="0.4" />
+              <rect
+                x="1"
+                y="1"
+                width="12"
+                height="12"
+                rx="0"
+                stroke="var(--color-text-dim)"
+                strokeWidth="1"
+              />
+              <rect
+                x="4"
+                y="5"
+                width="6"
+                height="4"
+                rx="0"
+                fill="var(--color-text-dim)"
+                opacity="0.4"
+              />
             </svg>
             <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
               keyboard shortcuts
@@ -85,11 +105,18 @@ export function KeyboardShortcuts() {
 
         {/* Navigation */}
         <div className="px-5 py-3">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">navigation</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">
+            navigation
+          </p>
           <div className="space-y-0.5">
             {NAV_SHORTCUTS.map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-2.5 sm:py-1.5 group">
-                <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors tracking-wide">{s.label}</span>
+              <div
+                key={s.key}
+                className="flex items-center justify-between py-2.5 sm:py-1.5 group"
+              >
+                <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors tracking-wide">
+                  {s.label}
+                </span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] font-mono text-[var(--color-text-dim)] tabular-nums">
                   ctrl+{s.key}
                 </kbd>
@@ -100,13 +127,21 @@ export function KeyboardShortcuts() {
 
         {/* Actions */}
         <div className="px-5 py-3 border-t border-[var(--color-border)]">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">actions</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">
+            actions
+          </p>
           <div className="space-y-0.5">
             {ACTION_SHORTCUTS.map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-2.5 sm:py-1.5">
-                <span className="text-xs text-[var(--color-text-muted)] tracking-wide">{s.label}</span>
+              <div
+                key={s.key}
+                className="flex items-center justify-between py-2.5 sm:py-1.5"
+              >
+                <span className="text-xs text-[var(--color-text-muted)] tracking-wide">
+                  {s.label}
+                </span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] font-mono text-[var(--color-text-dim)]">
-                  {s.modifier ? `${s.modifier}+` : ""}{s.key}
+                  {s.modifier ? `${s.modifier}+` : ""}
+                  {s.key}
                 </kbd>
               </div>
             ))}
@@ -116,7 +151,15 @@ export function KeyboardShortcuts() {
         {/* Footer */}
         <div className="px-5 py-3 border-t border-[var(--color-border)]">
           <p className="text-[11px] text-[var(--color-text-dim)] text-center tracking-wider">
-            press <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono mx-0.5">?</kbd> or <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono mx-0.5">esc</kbd> to close
+            press{" "}
+            <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono mx-0.5">
+              ?
+            </kbd>{" "}
+            or{" "}
+            <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono mx-0.5">
+              esc
+            </kbd>{" "}
+            to close
           </p>
         </div>
       </div>

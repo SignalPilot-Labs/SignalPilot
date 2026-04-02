@@ -32,7 +32,7 @@ export function PullToRefresh({
       startY.current = e.touches[0].clientY;
       pulling.current = true;
     },
-    [disabled, refreshing, isAtTop]
+    [disabled, refreshing, isAtTop],
   );
 
   const handleTouchMove = useCallback(
@@ -51,7 +51,7 @@ export function PullToRefresh({
         pulling.current = false;
       }
     },
-    [disabled, refreshing, isAtTop, threshold]
+    [disabled, refreshing, isAtTop, threshold],
   );
 
   const handleTouchEnd = useCallback(async () => {
@@ -94,7 +94,9 @@ export function PullToRefresh({
       <div
         className="absolute left-0 right-0 flex items-center justify-center overflow-hidden pointer-events-none z-20 transition-opacity duration-150"
         style={{
-          height: showIndicator ? `${Math.max(pullDistance, refreshing ? 40 : 0)}px` : 0,
+          height: showIndicator
+            ? `${Math.max(pullDistance, refreshing ? 40 : 0)}px`
+            : 0,
           opacity: showIndicator ? 1 : 0,
         }}
       >
@@ -163,7 +165,11 @@ export function PullToRefreshWrapper({
   }
 
   return (
-    <PullToRefresh onRefresh={onRefresh} threshold={threshold} disabled={disabled}>
+    <PullToRefresh
+      onRefresh={onRefresh}
+      threshold={threshold}
+      disabled={disabled}
+    >
       {children}
     </PullToRefresh>
   );

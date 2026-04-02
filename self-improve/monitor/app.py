@@ -101,31 +101,38 @@ CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id
 """
 
 db: aiosqlite.Connection | None = None
+_db_lock = asyncio.Lock()
 
 
 async def _get_db() -> aiosqlite.Connection:
-    """Get or create the SQLite connection."""
+    """Get or create the SQLite connection (concurrency-safe)."""
     global db
-    if db is None:
+    if db is not None:
+        return db
+    async with _db_lock:
+        # Double-check after acquiring lock
+        if db is not None:
+            return db
         Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        db = await aiosqlite.connect(DB_PATH)
-        db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA busy_timeout=5000")
-        await db.executescript(SCHEMA)
+        conn = await aiosqlite.connect(DB_PATH)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
+        await conn.executescript(SCHEMA)
         # Migrate: add github_repo column to runs if missing
-        cursor = await db.execute("PRAGMA table_info(runs)")
+        cursor = await conn.execute("PRAGMA table_info(runs)")
         cols = {row[1] for row in await cursor.fetchall()}
         if "github_repo" not in cols:
-            await db.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
+            await conn.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
         # Migrate: add session_id and agent_id to tool_calls if missing
-        cursor = await db.execute("PRAGMA table_info(tool_calls)")
+        cursor = await conn.execute("PRAGMA table_info(tool_calls)")
         tc_cols = {row[1] for row in await cursor.fetchall()}
         if "session_id" not in tc_cols:
-            await db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
+            await conn.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
         if "agent_id" not in tc_cols:
-            await db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
-        await db.commit()
+            await conn.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
+        await conn.commit()
+        db = conn
     return db
 
 
@@ -167,9 +174,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SignalPilot Self-Improve Monitor API", lifespan=lifespan)
+
+# Restrict CORS to known frontends — do not use wildcard in production
+_CORS_ORIGINS = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:3401,http://localhost:3400,http://127.0.0.1:3401,http://127.0.0.1:3400",
+).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _CORS_ORIGINS],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -193,6 +206,15 @@ def _row_to_dict(row: aiosqlite.Row) -> dict:
     if "permitted" in d:
         d["permitted"] = bool(d["permitted"])
     return d
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

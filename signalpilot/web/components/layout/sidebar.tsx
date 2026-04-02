@@ -20,8 +20,18 @@ function NavIconDashboard({ active }: { active: boolean }) {
 function NavIconQuery({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <path d="M10 8L12 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+      <path
+        d="M2 3H12M2 7H8M2 11H10"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      <path
+        d="M10 8L12 10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="square"
+      />
       {active && <circle cx="11" cy="9" r="1" fill="var(--color-success)" />}
     </svg>
   );
@@ -29,35 +39,99 @@ function NavIconQuery({ active }: { active: boolean }) {
 function NavIconSchema({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="1" y1="5" x2="13" y2="5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" strokeWidth="0.75" />
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <line
+        x1="1"
+        y1="5"
+        x2="13"
+        y2="5"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+      <line
+        x1="5"
+        y1="1"
+        x2="5"
+        y2="13"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
     </svg>
   );
 }
 function NavIconSandbox({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <path d="M4 5L6 7L4 9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <line x1="7" y1="9" x2="10" y2="9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <path
+        d="M4 5L6 7L4 9"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      <line
+        x1="7"
+        y1="9"
+        x2="10"
+        y2="9"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      {active && (
+        <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />
+      )}
     </svg>
   );
 }
 function NavIconDatabase({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <ellipse cx="7" cy="3" rx="5" ry="2" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 3V11C2 12.1 4.24 13 7 13C9.76 13 12 12.1 12 11V3" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 7C2 8.1 4.24 9 7 9C9.76 9 12 8.1 12 7" stroke="currentColor" strokeWidth="0.75" />
+      <ellipse
+        cx="7"
+        cy="3"
+        rx="5"
+        ry="2"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <path
+        d="M2 3V11C2 12.1 4.24 13 7 13C9.76 13 12 12.1 12 11V3"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <path
+        d="M2 7C2 8.1 4.24 9 7 9C9.76 9 12 8.1 12 7"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
     </svg>
   );
 }
 function NavIconHealth({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 7H3L5 3L7 11L9 5L11 7H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M1 7H3L5 3L7 11L9 5L11 7H13"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
       {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
     </svg>
   );
@@ -65,18 +139,60 @@ function NavIconHealth({ active }: { active: boolean }) {
 function NavIconAudit({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="9" x2="8" y2="9" stroke="currentColor" strokeWidth="0.75" />
+      <rect
+        x="2"
+        y="1"
+        width="10"
+        height="12"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <line
+        x1="4"
+        y1="4"
+        x2="10"
+        y2="4"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+      <line
+        x1="4"
+        y1="6.5"
+        x2="10"
+        y2="6.5"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+      <line
+        x1="4"
+        y1="9"
+        x2="8"
+        y2="9"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
     </svg>
   );
 }
 function NavIconTunnel({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 7H4M10 7H13" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <rect x="4" y="3" width="6" height="8" rx="3" stroke="currentColor" strokeWidth="1" fill="none" />
+      <path
+        d="M1 7H4M10 7H13"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      <rect
+        x="4"
+        y="3"
+        width="6"
+        height="8"
+        rx="3"
+        stroke="currentColor"
+        strokeWidth="1"
+        fill="none"
+      />
       {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
     </svg>
   );
@@ -85,23 +201,53 @@ function NavIconSettings({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <circle cx="7" cy="7" r="2.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M7 1V3M7 11V13M1 7H3M11 7H13M2.5 2.5L4 4M10 10L11.5 11.5M11.5 2.5L10 4M4 10L2.5 11.5" stroke="currentColor" strokeWidth="0.75" strokeLinecap="square" />
+      <path
+        d="M7 1V3M7 11V13M1 7H3M11 7H13M2.5 2.5L4 4M10 10L11.5 11.5M11.5 2.5L10 4M4 10L2.5 11.5"
+        stroke="currentColor"
+        strokeWidth="0.75"
+        strokeLinecap="square"
+      />
     </svg>
   );
 }
 
 type NavIconComponent = React.FC<{ active: boolean }>;
 
-const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
-  { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
+const nav: {
+  href: string;
+  label: string;
+  icon: NavIconComponent;
+  shortcut: string;
+}[] = [
+  {
+    href: "/dashboard",
+    label: "dashboard",
+    icon: NavIconDashboard,
+    shortcut: "1",
+  },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "2" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
-  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "4" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "5" },
+  {
+    href: "/sandboxes",
+    label: "sandboxes",
+    icon: NavIconSandbox,
+    shortcut: "4",
+  },
+  {
+    href: "/connections",
+    label: "connections",
+    icon: NavIconDatabase,
+    shortcut: "5",
+  },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "6" },
   { href: "/tunnels", label: "tunnels", icon: NavIconTunnel, shortcut: "7" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
+  {
+    href: "/settings",
+    label: "settings",
+    icon: NavIconSettings,
+    shortcut: "9",
+  },
 ];
 
 /* Primary tabs shown in bottom nav on mobile (limit to 5 for thumb reach) */
@@ -111,16 +257,50 @@ function SignalPilotLogo() {
   return (
     <div className="relative">
       {/* Status ring */}
-      <svg width="38" height="38" viewBox="0 0 38 38" fill="none" className="absolute -inset-[3px]">
-        <circle cx="19" cy="19" r="17" stroke="var(--color-border)" strokeWidth="0.5" fill="none" />
-        <circle cx="19" cy="19" r="17" stroke="var(--color-success)" strokeWidth="1" fill="none"
-          strokeDasharray="80 27" strokeLinecap="square" opacity="0.3"
+      <svg
+        width="38"
+        height="38"
+        viewBox="0 0 38 38"
+        fill="none"
+        className="absolute -inset-[3px]"
+      >
+        <circle
+          cx="19"
+          cy="19"
+          r="17"
+          stroke="var(--color-border)"
+          strokeWidth="0.5"
+          fill="none"
+        />
+        <circle
+          cx="19"
+          cy="19"
+          r="17"
+          stroke="var(--color-success)"
+          strokeWidth="1"
+          fill="none"
+          strokeDasharray="80 27"
+          strokeLinecap="square"
+          opacity="0.3"
           className="-rotate-90 origin-center"
         >
-          <animateTransform attributeName="transform" type="rotate" from="0 19 19" to="360 19 19" dur="20s" repeatCount="indefinite" />
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 19 19"
+            to="360 19 19"
+            dur="20s"
+            repeatCount="indefinite"
+          />
         </circle>
       </svg>
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg
+        width="32"
+        height="32"
+        viewBox="0 0 32 32"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
         {/* Outer frame */}
         <rect x="1" y="1" width="30" height="30" fill="white" />
         <rect x="2" y="2" width="28" height="28" fill="black" />
@@ -133,11 +313,29 @@ function SignalPilotLogo() {
           strokeLinejoin="miter"
         />
         {/* Cursor line */}
-        <line x1="16" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2.5" strokeLinecap="square" />
+        <line
+          x1="16"
+          y1="23"
+          x2="24"
+          y2="23"
+          stroke="white"
+          strokeWidth="2.5"
+          strokeLinecap="square"
+        />
         {/* Signal dot with pulse */}
         <circle cx="24" cy="9" r="3" fill="#00ff88" opacity="0.15">
-          <animate attributeName="r" values="3;5;3" dur="3s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.15;0;0.15" dur="3s" repeatCount="indefinite" />
+          <animate
+            attributeName="r"
+            values="3;5;3"
+            dur="3s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.15;0;0.15"
+            dur="3s"
+            repeatCount="indefinite"
+          />
         </circle>
         <circle cx="24" cy="9" r="2" fill="#00ff88" />
       </svg>
@@ -147,11 +345,31 @@ function SignalPilotLogo() {
 
 function SignalPilotLogoSmall() {
   return (
-    <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 32 32"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
       <rect x="1" y="1" width="30" height="30" fill="white" />
       <rect x="2" y="2" width="28" height="28" fill="black" />
-      <path d="M8 9L14 16L8 23" stroke="white" strokeWidth="2.5" strokeLinecap="square" strokeLinejoin="miter" />
-      <line x1="16" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2.5" strokeLinecap="square" />
+      <path
+        d="M8 9L14 16L8 23"
+        stroke="white"
+        strokeWidth="2.5"
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+      />
+      <line
+        x1="16"
+        y1="23"
+        x2="24"
+        y2="23"
+        stroke="white"
+        strokeWidth="2.5"
+        strokeLinecap="square"
+      />
       <circle cx="24" cy="9" r="2" fill="#00ff88" />
     </svg>
   );
@@ -161,7 +379,10 @@ function UptimeCounter() {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const start = Date.now();
-    const interval = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    const interval = setInterval(
+      () => setElapsed(Math.floor((Date.now() - start) / 1000)),
+      1000,
+    );
     return () => clearInterval(interval);
   }, []);
   const h = Math.floor(elapsed / 3600);
@@ -169,13 +390,20 @@ function UptimeCounter() {
   const s = elapsed % 60;
   return (
     <span className="tabular-nums">
-      {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:{String(s).padStart(2, "0")}
+      {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:
+      {String(s).padStart(2, "0")}
     </span>
   );
 }
 
 /* ── Badge for nav items ── */
-function NavBadge({ count, color = "var(--color-success)" }: { count: number; color?: string }) {
+function NavBadge({
+  count,
+  color = "var(--color-success)",
+}: {
+  count: number;
+  color?: string;
+}) {
   if (count <= 0) return null;
   return (
     <span
@@ -202,7 +430,10 @@ export default function Sidebar() {
   const router = useRouter();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [activeTunnels, setActiveTunnels] = useState(0);
-  const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
+  const [connHealth, setConnHealth] = useState<{
+    total: number;
+    healthy: number;
+  }>({ total: 0, healthy: 0 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
@@ -220,12 +451,18 @@ export default function Sidebar() {
     }
     function handleTouchEnd(e: TouchEvent) {
       const deltaX = e.changedTouches[0].clientX - touchStartX.current;
-      const deltaY = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+      const deltaY = Math.abs(
+        e.changedTouches[0].clientY - touchStartY.current,
+      );
       // Only trigger on horizontal swipes (not vertical scrolling)
       if (deltaY > 50) return;
       const screenW = window.innerWidth;
       // Swipe left from right edge to open
-      if (!mobileMenuOpen && touchStartX.current > screenW - 30 && deltaX < -60) {
+      if (
+        !mobileMenuOpen &&
+        touchStartX.current > screenW - 30 &&
+        deltaX < -60
+      ) {
         setMobileMenuOpen(true);
       }
       // Swipe right to close
@@ -235,7 +472,9 @@ export default function Sidebar() {
     }
     // Only on mobile (< 768px)
     if (typeof window !== "undefined" && window.innerWidth < 768) {
-      document.addEventListener("touchstart", handleTouchStart, { passive: true });
+      document.addEventListener("touchstart", handleTouchStart, {
+        passive: true,
+      });
       document.addEventListener("touchend", handleTouchEnd, { passive: true });
       return () => {
         document.removeEventListener("touchstart", handleTouchStart);
@@ -251,30 +490,42 @@ export default function Sidebar() {
     } else {
       document.body.style.overflow = "";
     }
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [mobileMenuOpen]);
 
   // Poll for active sandbox count and connection health
   const fetchCounts = useCallback(() => {
-    const isRemote = typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
-    const url = isRemote ? "" : (typeof window !== "undefined" ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300" : "");
-    const key = typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
+    const isRemote =
+      typeof window !== "undefined" &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1";
+    const url = isRemote
+      ? ""
+      : typeof window !== "undefined"
+        ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300"
+        : "";
+    const key =
+      typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
     const headers: Record<string, string> = {};
     if (key) headers["Authorization"] = `Bearer ${key}`;
     fetch(`${url}/api/sandboxes`, { headers })
-      .then((r) => r.ok ? r.json() : [])
+      .then((r) => (r.ok ? r.json() : []))
       .then((sandboxes: { status: string }[]) => {
-        setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
+        setActiveSandboxes(
+          sandboxes.filter((s) => s.status === "running").length,
+        );
       })
       .catch(() => {});
     fetch(`${url}/api/tunnels`, { headers })
-      .then((r) => r.ok ? r.json() : [])
+      .then((r) => (r.ok ? r.json() : []))
       .then((tunnels: { status: string }[]) => {
         setActiveTunnels(tunnels.filter((t) => t.status === "running").length);
       })
       .catch(() => {});
     fetch(`${url}/api/health/connections`, { headers })
-      .then((r) => r.ok ? r.json() : { connections: [] })
+      .then((r) => (r.ok ? r.json() : { connections: [] }))
       .then((data: { connections: { status: string }[] }) => {
         const conns = data.connections || [];
         setConnHealth({
@@ -333,12 +584,31 @@ export default function Sidebar() {
           <button
             className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
             onClick={() => {
-              window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
+              );
             }}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
-              <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1" />
-              <path d="M8 8L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              className="flex-shrink-0"
+            >
+              <circle
+                cx="5"
+                cy="5"
+                r="3.5"
+                stroke="currentColor"
+                strokeWidth="1"
+              />
+              <path
+                d="M8 8L10.5 10.5"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+              />
             </svg>
             <span className="flex-1 text-left">search</span>
             <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono">
@@ -367,7 +637,9 @@ export default function Sidebar() {
                 {badge > 0 ? (
                   <NavBadge count={badge} />
                 ) : (
-                  <span className={`text-[9px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}>
+                  <span
+                    className={`text-[9px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}
+                  >
                     ^{shortcut}
                   </span>
                 )}
@@ -384,15 +656,35 @@ export default function Sidebar() {
                 <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
                 <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
               </span>
-              <span className="tracking-[0.15em] uppercase">governance active</span>
+              <span className="tracking-[0.15em] uppercase">
+                governance active
+              </span>
             </div>
           </Tooltip>
           {connHealth.total > 0 && (
-            <Tooltip content={`${connHealth.healthy}/${connHealth.total} connections healthy`} position="right">
-              <Link href="/connections" className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors cursor-pointer">
+            <Tooltip
+              content={`${connHealth.healthy}/${connHealth.total} connections healthy`}
+              position="right"
+            >
+              <Link
+                href="/connections"
+                className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors cursor-pointer"
+              >
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <ellipse cx="5" cy="3" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
-                  <path d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3" stroke="currentColor" strokeWidth="0.75" />
+                  <ellipse
+                    cx="5"
+                    cy="3"
+                    rx="3.5"
+                    ry="1.5"
+                    stroke="currentColor"
+                    strokeWidth="0.75"
+                    fill="none"
+                  />
+                  <path
+                    d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3"
+                    stroke="currentColor"
+                    strokeWidth="0.75"
+                  />
                 </svg>
                 <span className="tracking-[0.15em] uppercase">
                   db {connHealth.healthy}/{connHealth.total}
@@ -406,10 +698,24 @@ export default function Sidebar() {
           <Tooltip content="session uptime since page load" position="right">
             <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)] cursor-default">
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <circle cx="5" cy="5" r="4" stroke="var(--color-border-hover)" strokeWidth="1" fill="none" />
-                <path d="M5 2.5V5L6.5 6.5" stroke="var(--color-text-dim)" strokeWidth="0.8" strokeLinecap="round" />
+                <circle
+                  cx="5"
+                  cy="5"
+                  r="4"
+                  stroke="var(--color-border-hover)"
+                  strokeWidth="1"
+                  fill="none"
+                />
+                <path
+                  d="M5 2.5V5L6.5 6.5"
+                  stroke="var(--color-text-dim)"
+                  strokeWidth="0.8"
+                  strokeLinecap="round"
+                />
               </svg>
-              <span className="tracking-wider">uptime <UptimeCounter /></span>
+              <span className="tracking-wider">
+                uptime <UptimeCounter />
+              </span>
             </div>
           </Tooltip>
           {/* System info line */}
@@ -418,7 +724,13 @@ export default function Sidebar() {
             <Tooltip content="signalpilot gateway version" position="right">
               <div className="flex items-center gap-1.5 cursor-default">
                 <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                  <path d="M1 4H3L4 2L5 6L6 4H7" stroke="var(--color-text-dim)" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" />
+                  <path
+                    d="M1 4H3L4 2L5 6L6 4H7"
+                    stroke="var(--color-text-dim)"
+                    strokeWidth="0.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
                 <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
                   v0.1.0
@@ -445,11 +757,13 @@ export default function Sidebar() {
               SP
             </span>
             {(() => {
-              const currentNav = nav.find(n => pathname.startsWith(n.href));
+              const currentNav = nav.find((n) => pathname.startsWith(n.href));
               if (currentNav && currentNav.href !== "/dashboard") {
                 return (
                   <>
-                    <span className="text-[10px] text-[var(--color-text-dim)]">/</span>
+                    <span className="text-[10px] text-[var(--color-text-dim)]">
+                      /
+                    </span>
                     <span className="text-[10px] text-[var(--color-text-muted)] tracking-wider truncate">
                       {currentNav.label}
                     </span>
@@ -464,7 +778,9 @@ export default function Sidebar() {
           {/* Connection health compact indicator */}
           {connHealth.total > 0 && (
             <span className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] tracking-wider mr-1">
-              <span className={`w-1.5 h-1.5 ${connHealth.healthy === connHealth.total ? "bg-[var(--color-success)]" : "bg-[var(--color-warning)]"}`} />
+              <span
+                className={`w-1.5 h-1.5 ${connHealth.healthy === connHealth.total ? "bg-[var(--color-success)]" : "bg-[var(--color-warning)]"}`}
+              />
               {connHealth.healthy}/{connHealth.total}
             </span>
           )}
@@ -476,14 +792,33 @@ export default function Sidebar() {
           {/* Search button — opens command palette */}
           <button
             onClick={() => {
-              window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
+              );
             }}
             className="flex items-center justify-center w-10 h-10 -mr-1"
             aria-label="Search"
           >
-            <svg width="16" height="16" viewBox="0 0 14 14" fill="none" className="text-[var(--color-text-dim)]">
-              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1" />
-              <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 14 14"
+              fill="none"
+              className="text-[var(--color-text-dim)]"
+            >
+              <circle
+                cx="6"
+                cy="6"
+                r="4.5"
+                stroke="currentColor"
+                strokeWidth="1"
+              />
+              <path
+                d="M9.5 9.5L12.5 12.5"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+              />
             </svg>
           </button>
           {/* Hamburger / more menu */}
@@ -492,9 +827,15 @@ export default function Sidebar() {
             className="flex flex-col items-center justify-center w-10 h-10 gap-1"
             aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
           >
-            <span className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "rotate-45 translate-y-[3px]" : ""}`} />
-            <span className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "opacity-0" : ""}`} />
-            <span className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "-rotate-45 -translate-y-[3px]" : ""}`} />
+            <span
+              className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "rotate-45 translate-y-[3px]" : ""}`}
+            />
+            <span
+              className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "opacity-0" : ""}`}
+            />
+            <span
+              className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "-rotate-45 -translate-y-[3px]" : ""}`}
+            />
           </button>
         </div>
       </header>
@@ -503,7 +844,10 @@ export default function Sidebar() {
       {/* Mobile slide-out menu overlay */}
       {/* ═══════════════════════════════════════════════════════ */}
       {mobileMenuOpen && (
-        <div className="mobile-menu-overlay fixed inset-0 z-[60]" onClick={() => setMobileMenuOpen(false)}>
+        <div
+          className="mobile-menu-overlay fixed inset-0 z-[60]"
+          onClick={() => setMobileMenuOpen(false)}
+        >
           {/* Backdrop */}
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           {/* Menu panel */}
@@ -542,13 +886,27 @@ export default function Sidebar() {
                   <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
                   <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
                 </span>
-                <span className="tracking-[0.15em] uppercase">governance active</span>
+                <span className="tracking-[0.15em] uppercase">
+                  governance active
+                </span>
               </div>
               {connHealth.total > 0 && (
                 <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                    <ellipse cx="5" cy="3" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
-                    <path d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3" stroke="currentColor" strokeWidth="0.75" />
+                    <ellipse
+                      cx="5"
+                      cy="3"
+                      rx="3.5"
+                      ry="1.5"
+                      stroke="currentColor"
+                      strokeWidth="0.75"
+                      fill="none"
+                    />
+                    <path
+                      d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3"
+                      stroke="currentColor"
+                      strokeWidth="0.75"
+                    />
                   </svg>
                   <span className="tracking-[0.15em] uppercase">
                     db {connHealth.healthy}/{connHealth.total}
@@ -556,7 +914,9 @@ export default function Sidebar() {
                 </div>
               )}
               <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)]">
-                <span className="tracking-wider">uptime <UptimeCounter /></span>
+                <span className="tracking-wider">
+                  uptime <UptimeCounter />
+                </span>
                 <span className="ml-auto tracking-wider">v0.1.0</span>
               </div>
             </div>
@@ -571,7 +931,12 @@ export default function Sidebar() {
         {mobileTabItems.map((idx) => {
           const { href, label, icon: Icon } = nav[idx];
           const active = pathname.startsWith(href);
-          const badge = href === "/sandboxes" ? activeSandboxes : href === "/tunnels" ? activeTunnels : 0;
+          const badge =
+            href === "/sandboxes"
+              ? activeSandboxes
+              : href === "/tunnels"
+                ? activeTunnels
+                : 0;
           return (
             <Link
               key={href}
@@ -585,11 +950,17 @@ export default function Sidebar() {
               {active && (
                 <span className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-[3px] bg-[var(--color-success)] tab-active-indicator" />
               )}
-              <span className={`relative transition-transform duration-150 ${active ? "scale-110" : ""}`}>
+              <span
+                className={`relative transition-transform duration-150 ${active ? "scale-110" : ""}`}
+              >
                 <Icon active={active} />
                 {badge > 0 && <MobileNavBadge count={badge} />}
               </span>
-              <span className={`text-[9px] tracking-[0.1em] uppercase transition-colors duration-150 ${active ? "text-[var(--color-text)]" : ""}`}>{label}</span>
+              <span
+                className={`text-[9px] tracking-[0.1em] uppercase transition-colors duration-150 ${active ? "text-[var(--color-text)]" : ""}`}
+              >
+                {label}
+              </span>
             </Link>
           );
         })}

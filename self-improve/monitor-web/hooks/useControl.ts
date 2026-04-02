@@ -13,7 +13,7 @@ import type { FeedEvent } from "@/lib/types";
 
 export function useControl(
   runId: string | null,
-  addEvent: (event: FeedEvent) => void
+  addEvent: (event: FeedEvent) => void,
 ) {
   const [busy, setBusy] = useState(false);
 
@@ -38,56 +38,52 @@ export function useControl(
         setBusy(false);
       }
     },
-    [busy, addEvent]
+    [busy, addEvent],
   );
 
   const pause = useCallback(
     () => exec(() => sendSignal(runId!, "pause"), "Pause signal sent"),
-    [exec, runId]
+    [exec, runId],
   );
 
   const resume = useCallback(
     () => exec(() => sendSignal(runId!, "resume"), "Resume signal sent"),
-    [exec, runId]
+    [exec, runId],
   );
 
   // Instant stop — pushes directly to the agent's in-process queue
   const stop = useCallback(
     () => exec(() => stopAgentInstant(), "STOP sent (instant)"),
-    [exec]
+    [exec],
   );
 
   // Kill — immediately cancels the asyncio task, no cleanup
   const kill = useCallback(
     () => exec(() => killAgent(), "KILL sent — task cancelled immediately"),
-    [exec]
+    [exec],
   );
 
   const inject = useCallback(
     (prompt: string) =>
       exec(
         () => injectPrompt(runId!, prompt),
-        `Prompt injected (${prompt.length} chars)`
+        `Prompt injected (${prompt.length} chars)`,
       ),
-    [exec, runId]
+    [exec, runId],
   );
 
   const unlock = useCallback(
     () =>
       exec(
         () => unlockSession(runId!),
-        "Session gate unlocked — agent can now call end_session"
+        "Session gate unlocked — agent can now call end_session",
       ),
-    [exec, runId]
+    [exec, runId],
   );
 
   const resumeSession = useCallback(
-    () =>
-      exec(
-        () => resumeRun(runId!),
-        "Resuming previous session..."
-      ),
-    [exec, runId]
+    () => exec(() => resumeRun(runId!), "Resuming previous session..."),
+    [exec, runId],
   );
 
   return { pause, resume, stop, kill, inject, unlock, resumeSession, busy };

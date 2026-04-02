@@ -484,8 +484,9 @@ class MSSQLConnector(BaseConnector):
             parts = []
             for i, col in enumerate(columns[:20]):
                 safe_col = self._quote_identifier(col)
+                safe_label = col.replace("'", "''")
                 parts.append(
-                    f"SELECT '{col}' AS _col, CAST({safe_col} AS NVARCHAR(MAX)) AS _val "
+                    f"SELECT '{safe_label}' AS _col, CAST({safe_col} AS NVARCHAR(MAX)) AS _val "
                     f"FROM (SELECT DISTINCT TOP {limit} {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL) t{i}"
                 )
             sql = "\n UNION ALL \n".join(parts)

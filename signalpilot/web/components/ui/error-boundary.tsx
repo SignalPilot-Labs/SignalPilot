@@ -15,12 +15,38 @@ interface ErrorBoundaryState {
 
 function ErrorSVG() {
   return (
-    <svg width="80" height="80" viewBox="0 0 80 80" fill="none" className="mb-6">
+    <svg
+      width="80"
+      height="80"
+      viewBox="0 0 80 80"
+      fill="none"
+      className="mb-6"
+    >
       {/* Outer frame with animated stroke */}
-      <rect x="4" y="4" width="72" height="72" stroke="var(--color-error)" strokeWidth="1" opacity="0.2" />
+      <rect
+        x="4"
+        y="4"
+        width="72"
+        height="72"
+        stroke="var(--color-error)"
+        strokeWidth="1"
+        opacity="0.2"
+      />
       {/* Scan line effect */}
-      <rect x="4" y="4" width="72" height="2" fill="var(--color-error)" opacity="0.1">
-        <animate attributeName="y" values="4;72;4" dur="3s" repeatCount="indefinite" />
+      <rect
+        x="4"
+        y="4"
+        width="72"
+        height="2"
+        fill="var(--color-error)"
+        opacity="0.1"
+      >
+        <animate
+          attributeName="y"
+          values="4;72;4"
+          dur="3s"
+          repeatCount="indefinite"
+        />
       </rect>
       {/* Inner warning triangle */}
       <path
@@ -31,20 +57,61 @@ function ErrorSVG() {
         opacity="0.5"
       />
       {/* Exclamation mark */}
-      <line x1="40" y1="30" x2="40" y2="44" stroke="var(--color-error)" strokeWidth="2" strokeLinecap="round" />
+      <line
+        x1="40"
+        y1="30"
+        x2="40"
+        y2="44"
+        stroke="var(--color-error)"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
       <circle cx="40" cy="50" r="1.5" fill="var(--color-error)" />
       {/* Corner marks */}
-      <path d="M4 14V4H14" stroke="var(--color-error)" strokeWidth="1" opacity="0.4" />
-      <path d="M66 4H76V14" stroke="var(--color-error)" strokeWidth="1" opacity="0.4" />
-      <path d="M76 66V76H66" stroke="var(--color-error)" strokeWidth="1" opacity="0.4" />
-      <path d="M14 76H4V66" stroke="var(--color-error)" strokeWidth="1" opacity="0.4" />
+      <path
+        d="M4 14V4H14"
+        stroke="var(--color-error)"
+        strokeWidth="1"
+        opacity="0.4"
+      />
+      <path
+        d="M66 4H76V14"
+        stroke="var(--color-error)"
+        strokeWidth="1"
+        opacity="0.4"
+      />
+      <path
+        d="M76 66V76H66"
+        stroke="var(--color-error)"
+        strokeWidth="1"
+        opacity="0.4"
+      />
+      <path
+        d="M14 76H4V66"
+        stroke="var(--color-error)"
+        strokeWidth="1"
+        opacity="0.4"
+      />
       {/* Error code */}
-      <text x="40" y="72" textAnchor="middle" fill="var(--color-error)" fontSize="8" fontFamily="monospace" opacity="0.4">ERR</text>
+      <text
+        x="40"
+        y="72"
+        textAnchor="middle"
+        fill="var(--color-error)"
+        fontSize="8"
+        fontFamily="monospace"
+        opacity="0.4"
+      >
+        ERR
+      </text>
     </svg>
   );
 }
 
-export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -61,7 +128,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return (
         <div className="flex flex-col items-center justify-center py-24 px-8 animate-fade-in">
           <ErrorSVG />
-          <h2 className="text-xs tracking-wider mb-2 text-[var(--color-text)]">something went wrong</h2>
+          <h2 className="text-xs tracking-wider mb-2 text-[var(--color-text)]">
+            something went wrong
+          </h2>
           <p className="text-[12px] text-[var(--color-text-dim)] mb-2 max-w-md text-center tracking-wider leading-relaxed">
             {this.state.error?.message || "an unexpected error occurred."}
           </p>

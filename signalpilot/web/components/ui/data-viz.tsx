@@ -33,11 +33,16 @@ export function Sparkline({
     y: height - ((v - min) / range) * height,
   }));
 
-  const linePoints = points.map(p => `${p.x},${p.y}`).join(" ");
+  const linePoints = points.map((p) => `${p.x},${p.y}`).join(" ");
   const fillPoints = `0,${height} ${linePoints} ${width},${height}`;
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="flex-shrink-0"
+    >
       {/* Fill area */}
       <polygon points={fillPoints} fill={color} opacity={fillOpacity} />
       {/* Line */}
@@ -84,7 +89,12 @@ export function RingGauge({
   const dashOffset = circumference * (1 - pct);
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="flex-shrink-0 -rotate-90">
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className="flex-shrink-0 -rotate-90"
+    >
       {/* Background ring */}
       <circle
         cx={size / 2}
@@ -132,7 +142,12 @@ export function MiniBar({
   const pct = Math.min(value / max, 1);
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="flex-shrink-0"
+    >
       <rect width={width} height={height} fill={bgColor} />
       <rect
         width={width * pct}
@@ -169,7 +184,12 @@ export function ActivityDots({
   const totalH = rows * (dotSize + gap) - gap;
 
   return (
-    <svg width={totalW} height={totalH} viewBox={`0 0 ${totalW} ${totalH}`} className="flex-shrink-0">
+    <svg
+      width={totalW}
+      height={totalH}
+      viewBox={`0 0 ${totalW} ${totalH}`}
+      className="flex-shrink-0"
+    >
       {Array.from({ length: rows * cols }, (_, i) => {
         const row = Math.floor(i / cols);
         const col = i % cols;
@@ -216,7 +236,12 @@ export function MiniBarChart({
   const gap = 1;
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="flex-shrink-0"
+    >
       {values.map((v, i) => {
         const barH = Math.max(1, (v / max) * height);
         const isLast = highlightLast && i === values.length - 1;
@@ -257,14 +282,22 @@ export function TrendIndicator({
   const isDown = pctChange < -1;
 
   const upColor = invertColors ? "var(--color-error)" : "var(--color-success)";
-  const downColor = invertColors ? "var(--color-success)" : "var(--color-error)";
+  const downColor = invertColors
+    ? "var(--color-success)"
+    : "var(--color-error)";
   const flatColor = "var(--color-text-dim)";
 
   const color = isUp ? upColor : isDown ? downColor : flatColor;
 
   return (
     <span className="inline-flex items-center gap-0.5">
-      <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 12 12"
+        fill="none"
+        className="flex-shrink-0"
+      >
         {isUp ? (
           <path d="M6 2L10 8H2L6 2Z" fill={color} />
         ) : isDown ? (
@@ -296,7 +329,12 @@ export function StackedBar({
   let offset = 0;
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="flex-shrink-0"
+    >
       <rect width={width} height={height} fill="var(--color-bg)" rx="0" />
       {segments.map((seg, i) => {
         const w = (seg.value / total) * width;
@@ -313,7 +351,11 @@ export function StackedBar({
             opacity={0.8}
             className="transition-all duration-300"
           >
-            {seg.label && <title>{seg.label}: {seg.value}</title>}
+            {seg.label && (
+              <title>
+                {seg.label}: {seg.value}
+              </title>
+            )}
           </rect>
         );
       })}
@@ -350,15 +392,28 @@ export function AreaChart({
     y: padding + chartH - ((v - min) / range) * chartH,
   }));
 
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
-  const fillPath = `M${padding},${height - padding} ${points.map(p => `L${p.x},${p.y}`).join(" ")} L${width - padding},${height - padding}Z`;
+  const linePath = points
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`)
+    .join(" ");
+  const fillPath = `M${padding},${height - padding} ${points.map((p) => `L${p.x},${p.y}`).join(" ")} L${width - padding},${height - padding}Z`;
 
   const gridLines = showGrid ? [0.25, 0.5, 0.75] : [];
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="flex-shrink-0"
+    >
       <defs>
-        <linearGradient id={`area-grad-${color.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient
+          id={`area-grad-${color.replace(/[^a-z0-9]/gi, "")}`}
+          x1="0"
+          y1="0"
+          x2="0"
+          y2="1"
+        >
           <stop offset="0%" stopColor={color} stopOpacity="0.15" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
@@ -377,14 +432,45 @@ export function AreaChart({
         />
       ))}
       {/* Fill */}
-      <path d={fillPath} fill={`url(#area-grad-${color.replace(/[^a-z0-9]/gi, "")})`} />
+      <path
+        d={fillPath}
+        fill={`url(#area-grad-${color.replace(/[^a-z0-9]/gi, "")})`}
+      />
       {/* Line */}
-      <path d={linePath} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d={linePath}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
       {/* End dot */}
-      <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="2.5" fill={color} />
-      <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="4" fill={color} opacity="0.2">
-        <animate attributeName="r" values="4;7;4" dur="3s" repeatCount="indefinite" />
-        <animate attributeName="opacity" values="0.2;0;0.2" dur="3s" repeatCount="indefinite" />
+      <circle
+        cx={points[points.length - 1].x}
+        cy={points[points.length - 1].y}
+        r="2.5"
+        fill={color}
+      />
+      <circle
+        cx={points[points.length - 1].x}
+        cy={points[points.length - 1].y}
+        r="4"
+        fill={color}
+        opacity="0.2"
+      >
+        <animate
+          attributeName="r"
+          values="4;7;4"
+          dur="3s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.2;0;0.2"
+          dur="3s"
+          repeatCount="indefinite"
+        />
       </circle>
     </svg>
   );
@@ -413,11 +499,28 @@ export function StatusDot({
   const color = colors[status] || colors.unknown;
 
   return (
-    <svg width={size * 2} height={size * 2} viewBox={`0 0 ${size * 2} ${size * 2}`} className="flex-shrink-0">
+    <svg
+      width={size * 2}
+      height={size * 2}
+      viewBox={`0 0 ${size * 2} ${size * 2}`}
+      className="flex-shrink-0"
+    >
       {pulse && (
         <circle cx={size} cy={size} r={size} fill={color} opacity="0.15">
-          <animate attributeName="r" from={size * 0.6} to={size} dur="2s" repeatCount="indefinite" />
-          <animate attributeName="opacity" from="0.3" to="0" dur="2s" repeatCount="indefinite" />
+          <animate
+            attributeName="r"
+            from={size * 0.6}
+            to={size}
+            dur="2s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            from="0.3"
+            to="0"
+            dur="2s"
+            repeatCount="indefinite"
+          />
         </circle>
       )}
       <circle cx={size} cy={size} r={size * 0.4} fill={color} />
@@ -457,7 +560,13 @@ export function ResponsiveAreaChart({
   return (
     <div ref={containerRef} className="w-full">
       {width > 0 && (
-        <AreaChart values={values} width={width} height={height} color={color} showGrid={showGrid} />
+        <AreaChart
+          values={values}
+          width={width}
+          height={height}
+          color={color}
+          showGrid={showGrid}
+        />
       )}
     </div>
   );

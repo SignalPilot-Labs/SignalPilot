@@ -19,14 +19,20 @@ export function PageHeader({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg sm:text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
+            <h1 className="text-lg sm:text-xl font-light tracking-wide text-[var(--color-text)]">
+              {title}
+            </h1>
             <span className="text-[12px] text-[var(--color-text-muted)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)] flex-shrink-0">
               {subtitle}
             </span>
           </div>
-          <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
+          <p className="text-sm text-[var(--color-text-muted)] tracking-wider">
+            {description}
+          </p>
         </div>
-        {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
+        {actions && (
+          <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>
+        )}
       </div>
       {/* Gradient accent line */}
       <div className="mt-3 sm:mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
@@ -59,7 +65,10 @@ export function TerminalBar({
         {/* Path */}
         <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider flex-1 whitespace-nowrap min-w-0 truncate">
           <span className="text-[var(--color-success)]">$</span>
-          <span className="text-[var(--color-text-dim)] hidden sm:inline"> signalpilot </span>
+          <span className="text-[var(--color-text-dim)] hidden sm:inline">
+            {" "}
+            signalpilot{" "}
+          </span>
           <span className="text-[var(--color-text-dim)] sm:hidden"> </span>
           <span className="text-[var(--color-text-muted)]">{path}</span>
         </code>

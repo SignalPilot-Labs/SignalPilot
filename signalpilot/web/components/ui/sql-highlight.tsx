@@ -6,26 +6,120 @@
  */
 
 const SQL_KEYWORDS = new Set([
-  "select", "from", "where", "and", "or", "not", "in", "is", "null", "as",
-  "join", "left", "right", "inner", "outer", "cross", "on", "group", "by",
-  "order", "having", "limit", "offset", "union", "all", "distinct", "case",
-  "when", "then", "else", "end", "insert", "into", "values", "update", "set",
-  "delete", "create", "alter", "drop", "table", "index", "view", "exists",
-  "between", "like", "ilike", "asc", "desc", "count", "sum", "avg", "min",
-  "max", "with", "recursive", "true", "false", "cast", "coalesce", "nullif",
-  "extract", "interval", "over", "partition", "row_number", "rank",
+  "select",
+  "from",
+  "where",
+  "and",
+  "or",
+  "not",
+  "in",
+  "is",
+  "null",
+  "as",
+  "join",
+  "left",
+  "right",
+  "inner",
+  "outer",
+  "cross",
+  "on",
+  "group",
+  "by",
+  "order",
+  "having",
+  "limit",
+  "offset",
+  "union",
+  "all",
+  "distinct",
+  "case",
+  "when",
+  "then",
+  "else",
+  "end",
+  "insert",
+  "into",
+  "values",
+  "update",
+  "set",
+  "delete",
+  "create",
+  "alter",
+  "drop",
+  "table",
+  "index",
+  "view",
+  "exists",
+  "between",
+  "like",
+  "ilike",
+  "asc",
+  "desc",
+  "count",
+  "sum",
+  "avg",
+  "min",
+  "max",
+  "with",
+  "recursive",
+  "true",
+  "false",
+  "cast",
+  "coalesce",
+  "nullif",
+  "extract",
+  "interval",
+  "over",
+  "partition",
+  "row_number",
+  "rank",
 ]);
 
 const SQL_FUNCTIONS = new Set([
-  "count", "sum", "avg", "min", "max", "coalesce", "nullif", "cast",
-  "extract", "row_number", "rank", "dense_rank", "lag", "lead", "first_value",
-  "last_value", "now", "current_timestamp", "current_date", "length",
-  "lower", "upper", "trim", "substring", "replace", "concat", "abs",
-  "round", "floor", "ceil", "array_agg", "string_agg", "json_agg",
+  "count",
+  "sum",
+  "avg",
+  "min",
+  "max",
+  "coalesce",
+  "nullif",
+  "cast",
+  "extract",
+  "row_number",
+  "rank",
+  "dense_rank",
+  "lag",
+  "lead",
+  "first_value",
+  "last_value",
+  "now",
+  "current_timestamp",
+  "current_date",
+  "length",
+  "lower",
+  "upper",
+  "trim",
+  "substring",
+  "replace",
+  "concat",
+  "abs",
+  "round",
+  "floor",
+  "ceil",
+  "array_agg",
+  "string_agg",
+  "json_agg",
 ]);
 
 interface Token {
-  type: "keyword" | "function" | "string" | "number" | "comment" | "operator" | "identifier";
+  type:
+    | "keyword"
+    | "function"
+    | "string"
+    | "number"
+    | "comment"
+    | "operator"
+    | "identifier";
   value: string;
 }
 
@@ -113,7 +207,13 @@ const TOKEN_COLORS: Record<Token["type"], string> = {
   identifier: "text-[var(--color-text-muted)]",
 };
 
-export function SqlHighlight({ sql, className = "" }: { sql: string; className?: string }) {
+export function SqlHighlight({
+  sql,
+  className = "",
+}: {
+  sql: string;
+  className?: string;
+}) {
   const tokens = tokenize(sql);
 
   return (

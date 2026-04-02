@@ -5,7 +5,9 @@ description: "Use when working on the gateway module — adding auth, rate limit
 # Gateway Hardening Guide
 
 ## Architecture
+
 The gateway (`/workspace/signalpilot/gateway/gateway/`) is a FastAPI app that:
+
 - Receives SQL queries and code execution requests
 - Validates SQL through the governance engine (`engine/__init__.py`)
 - Routes queries to database connectors (`connectors/postgres.py`)
@@ -14,22 +16,25 @@ The gateway (`/workspace/signalpilot/gateway/gateway/`) is a FastAPI app that:
 - Exposes MCP tools via `mcp_server.py`
 
 ## Key Files
-| File | Purpose | Critical Issues |
-|------|---------|-----------------|
-| `main.py` | FastAPI app, all endpoints | No auth on any endpoint |
-| `engine/__init__.py` | SQL validation | sqlglot fallback bypasses all checks |
-| `connectors/postgres.py` | DB connector | New pool per query |
-| `store.py` | Credential vault | Plain dict, settings.json has plaintext keys |
-| `sandbox_client.py` | Firecracker client | Optional auth never validated server-side |
-| `models.py` | Pydantic models | budget_usd exists but never enforced |
+
+| File                     | Purpose                    | Critical Issues                              |
+| ------------------------ | -------------------------- | -------------------------------------------- |
+| `main.py`                | FastAPI app, all endpoints | No auth on any endpoint                      |
+| `engine/__init__.py`     | SQL validation             | sqlglot fallback bypasses all checks         |
+| `connectors/postgres.py` | DB connector               | New pool per query                           |
+| `store.py`               | Credential vault           | Plain dict, settings.json has plaintext keys |
+| `sandbox_client.py`      | Firecracker client         | Optional auth never validated server-side    |
+| `models.py`              | Pydantic models            | budget_usd exists but never enforced         |
 
 ## Auth Implementation Plan
+
 1. Add API key middleware to `main.py`
 2. Validate `api_key` from `models.py:GatewaySettings`
 3. Require auth header on all `/api/*` endpoints
 4. Exempt health check endpoints
 
 ## Rate Limiting
+
 ```python
 from collections import defaultdict
 import time
@@ -50,6 +55,7 @@ class RateLimiter:
 ```
 
 ## SQL Engine Improvements
+
 - Make sqlglot a hard dependency, not optional
 - Add parameterized query support
 - Improve stacking detection (current regex bypassed with comments)

@@ -40,18 +40,22 @@ export async function fetchRun(id: string): Promise<Run> {
 
 export async function fetchToolCalls(
   runId: string,
-  limit = 500
+  limit = 500,
 ): Promise<ToolCall[]> {
-  const res = await fetch(`${getApiBase()}/api/runs/${runId}/tools?limit=${limit}`);
+  const res = await fetch(
+    `${getApiBase()}/api/runs/${runId}/tools?limit=${limit}`,
+  );
   if (!res.ok) throw new Error("Failed to fetch tool calls");
   return res.json();
 }
 
 export async function fetchAuditLog(
   runId: string,
-  limit = 500
+  limit = 500,
 ): Promise<AuditEvent[]> {
-  const res = await fetch(`${getApiBase()}/api/runs/${runId}/audit?limit=${limit}`);
+  const res = await fetch(
+    `${getApiBase()}/api/runs/${runId}/audit?limit=${limit}`,
+  );
   if (!res.ok) throw new Error("Failed to fetch audit log");
   return res.json();
 }
@@ -59,7 +63,7 @@ export async function fetchAuditLog(
 export async function sendSignal(
   runId: string,
   signal: "pause" | "resume" | "stop",
-  payload?: string
+  payload?: string,
 ): Promise<{ ok: boolean }> {
   const res = await fetch(`${getApiBase()}/api/runs/${runId}/${signal}`, {
     method: "POST",
@@ -71,7 +75,7 @@ export async function sendSignal(
 
 export async function injectPrompt(
   runId: string,
-  prompt: string
+  prompt: string,
 ): Promise<{ ok: boolean }> {
   const res = await fetch(`${getApiBase()}/api/runs/${runId}/inject`, {
     method: "POST",
@@ -93,10 +97,10 @@ export interface PollResult {
 export async function pollEvents(
   runId: string,
   afterTool: number,
-  afterAudit: number
+  afterAudit: number,
 ): Promise<PollResult> {
   const res = await fetch(
-    `${getApiBase()}/api/poll/${runId}?after_tool=${afterTool}&after_audit=${afterAudit}`
+    `${getApiBase()}/api/poll/${runId}?after_tool=${afterTool}&after_audit=${afterAudit}`,
   );
   if (!res.ok) throw new Error("Failed to poll events");
   return res.json();
@@ -124,7 +128,7 @@ export async function startRun(
   prompt?: string,
   maxBudgetUsd = 0,
   durationMinutes = 0,
-  baseBranch = "main"
+  baseBranch = "main",
 ): Promise<{ ok: boolean; run_id?: string }> {
   const res = await fetch(`${getApiBase()}/api/agent/start`, {
     method: "POST",
@@ -145,7 +149,7 @@ export async function startRun(
 
 export async function resumeRun(
   runId: string,
-  maxBudgetUsd = 0
+  maxBudgetUsd = 0,
 ): Promise<{ ok: boolean; run_id?: string }> {
   const res = await fetch(`${getApiBase()}/api/agent/resume`, {
     method: "POST",
@@ -169,9 +173,7 @@ export async function killAgent(): Promise<{ ok: boolean }> {
   return res.json();
 }
 
-export async function unlockSession(
-  runId: string
-): Promise<{ ok: boolean }> {
+export async function unlockSession(runId: string): Promise<{ ok: boolean }> {
   const res = await fetch(`${getApiBase()}/api/runs/${runId}/unlock`, {
     method: "POST",
   });
@@ -196,10 +198,23 @@ export interface DiffStats {
 export async function fetchRunDiff(runId: string): Promise<DiffStats> {
   try {
     const res = await fetch(`${getApiBase()}/api/runs/${runId}/diff`);
-    if (!res.ok) return { files: [], total_files: 0, total_added: 0, total_removed: 0, source: "unavailable" };
+    if (!res.ok)
+      return {
+        files: [],
+        total_files: 0,
+        total_added: 0,
+        total_removed: 0,
+        source: "unavailable",
+      };
     return res.json();
   } catch {
-    return { files: [], total_files: 0, total_added: 0, total_removed: 0, source: "unavailable" };
+    return {
+      files: [],
+      total_files: 0,
+      total_added: 0,
+      total_removed: 0,
+      source: "unavailable",
+    };
   }
 }
 

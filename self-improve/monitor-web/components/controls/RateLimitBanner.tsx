@@ -24,7 +24,7 @@ export function RateLimitBanner({
   busy: boolean;
 }) {
   const [remaining, setRemaining] = useState(() =>
-    Math.max(0, resetsAt - Date.now() / 1000)
+    Math.max(0, resetsAt - Date.now() / 1000),
   );
 
   useEffect(() => {
@@ -48,7 +48,16 @@ export function RateLimitBanner({
       }`}
     >
       <div className="flex items-center gap-3">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={isReady ? "#00ff88" : "#ffaa00"} strokeWidth="1.5" strokeLinecap="round" className="shrink-0">
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 14 14"
+          fill="none"
+          stroke={isReady ? "#00ff88" : "#ffaa00"}
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          className="shrink-0"
+        >
           <circle cx="7" cy="7" r="5.5" />
           <line x1="7" y1="3.5" x2="7" y2="7" />
           <line x1="7" y1="7" x2="9.5" y2="9" />
@@ -56,10 +65,14 @@ export function RateLimitBanner({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className={`text-[10px] font-semibold ${isReady ? "text-[#00ff88]" : "text-[#ffaa00]"}`}>
+            <span
+              className={`text-[10px] font-semibold ${isReady ? "text-[#00ff88]" : "text-[#ffaa00]"}`}
+            >
               {isReady ? "Rate limit cleared" : "Rate limited"}
             </span>
-            <span className={`text-[11px] font-bold tabular-nums ${isReady ? "text-[#00ff88]" : "text-[#ffaa00]"}`}>
+            <span
+              className={`text-[11px] font-bold tabular-nums ${isReady ? "text-[#00ff88]" : "text-[#ffaa00]"}`}
+            >
               {formatCountdown(remaining)}
             </span>
           </div>
@@ -82,7 +95,15 @@ export function RateLimitBanner({
           disabled={busy}
           onClick={onResume}
           icon={
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            >
               <path d="M1 5a4 4 0 017-2" />
               <polyline points="6 1 8 3 6 5" />
             </svg>

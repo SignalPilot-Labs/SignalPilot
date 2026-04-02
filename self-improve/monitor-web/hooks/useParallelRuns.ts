@@ -32,61 +32,83 @@ export function useParallelRuns(pollInterval = 5000) {
     };
   }, [fetchStatus, pollInterval]);
 
-  const startRun = useCallback(async (
-    prompt: string | undefined,
-    budget: number,
-    durationMinutes: number,
-    baseBranch: string,
-  ) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API}/api/parallel/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          max_budget_usd: budget,
-          duration_minutes: durationMinutes,
-          base_branch: baseBranch,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to start parallel run");
-      await fetchStatus();
-      return data;
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      setError(msg);
-      throw e;
-    } finally {
-      setLoading(false);
-    }
-  }, [fetchStatus]);
-
-  const sendSignal = useCallback(async (runId: string, signal: string, payload?: string) => {
-    try {
-      const res = await fetch(`${API}/api/parallel/runs/${runId}/${signal}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload }),
-      });
-      if (!res.ok) {
+  const startRun = useCallback(
+    async (
+      prompt: string | undefined,
+      budget: number,
+      durationMinutes: number,
+      baseBranch: string,
+    ) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`${API}/api/parallel/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            max_budget_usd: budget,
+            duration_minutes: durationMinutes,
+            base_branch: baseBranch,
+          }),
+        });
         const data = await res.json();
-        throw new Error(data.detail || `Failed to ${signal}`);
+        if (!res.ok)
+          throw new Error(data.detail || "Failed to start parallel run");
+        await fetchStatus();
+        return data;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Unknown error";
+        setError(msg);
+        throw e;
+      } finally {
+        setLoading(false);
       }
-      await fetchStatus();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      setError(msg);
-    }
-  }, [fetchStatus]);
+    },
+    [fetchStatus],
+  );
 
-  const stopRun = useCallback((runId: string) => sendSignal(runId, "stop"), [sendSignal]);
-  const killRun = useCallback((runId: string) => sendSignal(runId, "kill"), [sendSignal]);
-  const pauseRun = useCallback((runId: string) => sendSignal(runId, "pause"), [sendSignal]);
-  const resumeRun = useCallback((runId: string) => sendSignal(runId, "resume"), [sendSignal]);
-  const unlockRun = useCallback((runId: string) => sendSignal(runId, "unlock"), [sendSignal]);
+  const sendSignal = useCallback(
+    async (runId: string, signal: string, payload?: string) => {
+      try {
+        const res = await fetch(`${API}/api/parallel/runs/${runId}/${signal}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ payload }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.detail || `Failed to ${signal}`);
+        }
+        await fetchStatus();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Unknown error";
+        setError(msg);
+      }
+    },
+    [fetchStatus],
+  );
+
+  const stopRun = useCallback(
+    (runId: string) => sendSignal(runId, "stop"),
+    [sendSignal],
+  );
+  const killRun = useCallback(
+    (runId: string) => sendSignal(runId, "kill"),
+    [sendSignal],
+  );
+  const pauseRun = useCallback(
+    (runId: string) => sendSignal(runId, "pause"),
+    [sendSignal],
+  );
+  const resumeRun = useCallback(
+    (runId: string) => sendSignal(runId, "resume"),
+    [sendSignal],
+  );
+  const unlockRun = useCallback(
+    (runId: string) => sendSignal(runId, "unlock"),
+    [sendSignal],
+  );
   const injectPrompt = useCallback(
     (runId: string, prompt: string) => sendSignal(runId, "inject", prompt),
     [sendSignal],

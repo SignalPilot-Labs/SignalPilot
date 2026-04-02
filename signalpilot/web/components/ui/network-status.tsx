@@ -64,9 +64,28 @@ export function NetworkStatus() {
     <div className="sm:hidden fixed top-[calc(3rem+env(safe-area-inset-top,0px))] left-0 right-0 z-[45] animate-fade-in">
       <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20">
         <div className="flex items-center gap-2">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
-            <path d="M1 9L6 3L11 9" stroke="var(--color-error)" strokeWidth="1" fill="none" />
-            <line x1="6" y1="5.5" x2="6" y2="7" stroke="var(--color-error)" strokeWidth="1" strokeLinecap="round" />
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            className="flex-shrink-0"
+          >
+            <path
+              d="M1 9L6 3L11 9"
+              stroke="var(--color-error)"
+              strokeWidth="1"
+              fill="none"
+            />
+            <line
+              x1="6"
+              y1="5.5"
+              x2="6"
+              y2="7"
+              stroke="var(--color-error)"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
             <circle cx="6" cy="8" r="0.5" fill="var(--color-error)" />
           </svg>
           <span className="text-[10px] text-[var(--color-error)] tracking-wider">
@@ -78,7 +97,12 @@ export function NetworkStatus() {
           className="p-1.5 -mr-1 text-[var(--color-error)] active:opacity-60"
         >
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-            <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            <path
+              d="M2 2L8 8M8 2L2 8"
+              stroke="currentColor"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
           </svg>
         </button>
       </div>

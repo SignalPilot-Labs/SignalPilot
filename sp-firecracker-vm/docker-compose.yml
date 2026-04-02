@@ -18,8 +18,8 @@ services:
     ports:
       - "8080:8080"
     cap_add:
-      - SYS_PTRACE      # runsc ptrace sandbox processes
-      - SYS_ADMIN        # runsc mount overlay filesystem
+      - SYS_PTRACE # runsc ptrace sandbox processes
+      - SYS_ADMIN # runsc mount overlay filesystem
     security_opt:
       - apparmor:unconfined
     environment:

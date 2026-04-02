@@ -15,7 +15,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - sp-data:/data
-    command: ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]
+    command:
+      ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]
     depends_on:
       postgres:
         condition: service_healthy

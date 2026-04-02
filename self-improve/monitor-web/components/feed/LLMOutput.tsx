@@ -23,18 +23,34 @@ export function LLMTextBlock({
         "relative border-l-[3px] rounded-r px-3 py-2",
         isCeo
           ? "border-l-[#ff8844]/60 bg-[#ff8844]/[0.02]"
-          : "border-l-[#555]/40 bg-white/[0.01]"
+          : "border-l-[#555]/40 bg-white/[0.01]",
       )}
     >
       <div className="flex items-start gap-2">
         {/* Icon */}
         {isCeo ? (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#ff8844" strokeWidth="1.5" className="mt-0.5 shrink-0 opacity-60">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="#ff8844"
+            strokeWidth="1.5"
+            className="mt-0.5 shrink-0 opacity-60"
+          >
             <path d="M2 9l2-4 2 2.5 2-3.5 2 5" />
             <rect x="1" y="9" width="10" height="1.5" rx="0.5" />
           </svg>
         ) : (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#999" strokeWidth="1.5" className="mt-0.5 shrink-0 opacity-60">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="#999"
+            strokeWidth="1.5"
+            className="mt-0.5 shrink-0 opacity-60"
+          >
             <path d="M6 1l1 3h3l-2.5 2 1 3L6 7.5 3.5 9l1-3L2 4h3L6 1z" />
           </svg>
         )}
@@ -64,7 +80,7 @@ export function LLMTextBlock({
                 exit={{ opacity: 0 }}
                 className={clsx(
                   "text-[11px] leading-relaxed whitespace-pre-wrap break-words block",
-                  isCeo ? "text-[#cc8855]" : "text-[#bbb]"
+                  isCeo ? "text-[#cc8855]" : "text-[#bbb]",
                 )}
               >
                 {text}
@@ -77,7 +93,10 @@ export function LLMTextBlock({
                 exit={{ opacity: 0 }}
                 className="text-[11px] text-[#666] block"
               >
-                {text.slice(0, 200)}… <span className="text-[9px] text-[#999]">({text.length} chars)</span>
+                {text.slice(0, 200)}…{" "}
+                <span className="text-[9px] text-[#999]">
+                  ({text.length} chars)
+                </span>
               </motion.span>
             )}
           </AnimatePresence>
@@ -115,12 +134,20 @@ export function LLMThinkingBlock({
         "relative border-l-[3px] rounded-r px-3 py-2",
         isCeo
           ? "border-l-[#ff8844]/30 bg-[#ff8844]/[0.01]"
-          : "border-l-[#333]/50 bg-[#111]/30"
+          : "border-l-[#333]/50 bg-[#111]/30",
       )}
     >
       <div className="flex items-start gap-2">
         {/* Lightbulb icon */}
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke={isCeo ? "#774422" : "#444"} strokeWidth="1.5" className="mt-0.5 shrink-0 opacity-60">
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke={isCeo ? "#774422" : "#444"}
+          strokeWidth="1.5"
+          className="mt-0.5 shrink-0 opacity-60"
+        >
           <path d="M4 9h4M4.5 9c0 1 .5 2 1.5 2s1.5-1 1.5-2M6 1a3.5 3.5 0 00-2 6.3V9h4V7.3A3.5 3.5 0 006 1z" />
         </svg>
         <div className="min-w-0 flex-1">
@@ -148,7 +175,7 @@ export function LLMThinkingBlock({
                 exit={{ opacity: 0 }}
                 className={clsx(
                   "text-[10px] italic leading-relaxed whitespace-pre-wrap break-words block opacity-60",
-                  isCeo ? "text-[#885533]" : "text-[#777]"
+                  isCeo ? "text-[#885533]" : "text-[#777]",
                 )}
               >
                 {text}
@@ -161,7 +188,10 @@ export function LLMThinkingBlock({
                 exit={{ opacity: 0 }}
                 className="text-[10px] italic text-[#999] block"
               >
-                {text.slice(0, 150)}… <span className="text-[9px] not-italic text-[#888]">({text.length} chars)</span>
+                {text.slice(0, 150)}…{" "}
+                <span className="text-[9px] not-italic text-[#888]">
+                  ({text.length} chars)
+                </span>
               </motion.span>
             )}
           </AnimatePresence>

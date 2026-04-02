@@ -67,7 +67,8 @@ services:
       - "max_wal_size=2GB"
     shm_size: "1g"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U warehouse_admin -d analytics_warehouse"]
+      test:
+        ["CMD-SHELL", "pg_isready -U warehouse_admin -d analytics_warehouse"]
       interval: 5s
       timeout: 5s
       retries: 10

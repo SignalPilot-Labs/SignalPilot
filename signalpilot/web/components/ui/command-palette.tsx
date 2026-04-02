@@ -14,7 +14,10 @@ interface CommandItem {
 }
 
 /* ── Fuzzy match with highlighted spans ── */
-function fuzzyMatch(query: string, text: string): { matches: boolean; indices: number[] } {
+function fuzzyMatch(
+  query: string,
+  text: string,
+): { matches: boolean; indices: number[] } {
   const lower = text.toLowerCase();
   const q = query.toLowerCase();
   const indices: number[] = [];
@@ -28,16 +31,24 @@ function fuzzyMatch(query: string, text: string): { matches: boolean; indices: n
   return { matches: qi === q.length, indices };
 }
 
-function HighlightedText({ text, indices }: { text: string; indices: number[] }) {
+function HighlightedText({
+  text,
+  indices,
+}: {
+  text: string;
+  indices: number[];
+}) {
   const set = new Set(indices);
   return (
     <span>
       {text.split("").map((char, i) =>
         set.has(i) ? (
-          <span key={i} className="text-[var(--color-text)]">{char}</span>
+          <span key={i} className="text-[var(--color-text)]">
+            {char}
+          </span>
         ) : (
           <span key={i}>{char}</span>
-        )
+        ),
       )}
     </span>
   );
@@ -47,7 +58,13 @@ function HighlightedText({ text, indices }: { text: string; indices: number[] })
 function IconNav() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-      <path d="M2 6H10M7 3L10 6L7 9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M2 6H10M7 3L10 6L7 9"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -55,7 +72,12 @@ function IconNav() {
 function IconAction() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-      <path d="M6 2V10M2 6H10" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+      <path
+        d="M6 2V10M2 6H10"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -68,24 +90,117 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const commands: CommandItem[] = useMemo(() => [
-    // Navigation
-    { id: "nav-dashboard", label: "dashboard", description: "overview and metrics", shortcut: "^1", action: () => router.push("/dashboard"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-query", label: "query explorer", description: "governed sql queries", shortcut: "^2", action: () => router.push("/query"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-schema", label: "schema explorer", description: "browse tables and columns", shortcut: "^3", action: () => router.push("/schema"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-sandboxes", label: "sandboxes", description: "firecracker microvms", shortcut: "^4", action: () => router.push("/sandboxes"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-connections", label: "connections", description: "database connections", shortcut: "^5", action: () => router.push("/connections"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-health", label: "health monitoring", description: "connection health and latency", shortcut: "^6", action: () => router.push("/health"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-audit", label: "audit log", description: "compliance audit trail", shortcut: "^7", action: () => router.push("/audit"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-settings", label: "settings", description: "instance configuration", shortcut: "^8", action: () => router.push("/settings"), icon: <IconNav />, category: "navigate" },
-    // Actions
-    { id: "action-new-sandbox", label: "create sandbox", description: "spin up a new microvm", action: () => router.push("/sandboxes"), icon: <IconAction />, category: "actions" },
-    { id: "action-new-connection", label: "add connection", description: "configure a new database", action: () => router.push("/connections"), icon: <IconAction />, category: "actions" },
-    { id: "action-export-audit", label: "export audit log", description: "download compliance data", action: () => router.push("/audit"), icon: <IconAction />, category: "actions" },
-  ], [router]);
+  const commands: CommandItem[] = useMemo(
+    () => [
+      // Navigation
+      {
+        id: "nav-dashboard",
+        label: "dashboard",
+        description: "overview and metrics",
+        shortcut: "^1",
+        action: () => router.push("/dashboard"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-query",
+        label: "query explorer",
+        description: "governed sql queries",
+        shortcut: "^2",
+        action: () => router.push("/query"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-schema",
+        label: "schema explorer",
+        description: "browse tables and columns",
+        shortcut: "^3",
+        action: () => router.push("/schema"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-sandboxes",
+        label: "sandboxes",
+        description: "firecracker microvms",
+        shortcut: "^4",
+        action: () => router.push("/sandboxes"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-connections",
+        label: "connections",
+        description: "database connections",
+        shortcut: "^5",
+        action: () => router.push("/connections"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-health",
+        label: "health monitoring",
+        description: "connection health and latency",
+        shortcut: "^6",
+        action: () => router.push("/health"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-audit",
+        label: "audit log",
+        description: "compliance audit trail",
+        shortcut: "^7",
+        action: () => router.push("/audit"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      {
+        id: "nav-settings",
+        label: "settings",
+        description: "instance configuration",
+        shortcut: "^8",
+        action: () => router.push("/settings"),
+        icon: <IconNav />,
+        category: "navigate",
+      },
+      // Actions
+      {
+        id: "action-new-sandbox",
+        label: "create sandbox",
+        description: "spin up a new microvm",
+        action: () => router.push("/sandboxes"),
+        icon: <IconAction />,
+        category: "actions",
+      },
+      {
+        id: "action-new-connection",
+        label: "add connection",
+        description: "configure a new database",
+        action: () => router.push("/connections"),
+        icon: <IconAction />,
+        category: "actions",
+      },
+      {
+        id: "action-export-audit",
+        label: "export audit log",
+        description: "download compliance data",
+        action: () => router.push("/audit"),
+        icon: <IconAction />,
+        category: "actions",
+      },
+    ],
+    [router],
+  );
 
   const filtered = useMemo(() => {
-    if (!query) return commands.map((cmd) => ({ cmd, labelIndices: [] as number[], descIndices: [] as number[] }));
+    if (!query)
+      return commands.map((cmd) => ({
+        cmd,
+        labelIndices: [] as number[],
+        descIndices: [] as number[],
+      }));
     return commands
       .map((cmd) => {
         const labelMatch = fuzzyMatch(query, cmd.label);
@@ -171,15 +286,18 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center pt-[18vh]"
-      onClick={() => { setOpen(false); setQuery(""); }}
+      className="fixed inset-0 z-[100] flex items-start justify-center pt-[5vh] sm:pt-[18vh] px-3 sm:px-0"
+      onClick={() => {
+        setOpen(false);
+        setQuery("");
+      }}
     >
       {/* Backdrop with blur */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
 
       {/* Palette */}
       <div
-        className="relative w-[520px] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden"
+        className="relative w-full sm:w-[520px] max-h-[70vh] sm:max-h-[80vh] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top accent line */}
@@ -187,9 +305,26 @@ export function CommandPalette() {
 
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)]">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0 text-[var(--color-text-dim)]">
-            <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1" />
-            <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            className="flex-shrink-0 text-[var(--color-text-dim)]"
+          >
+            <circle
+              cx="6"
+              cy="6"
+              r="4.5"
+              stroke="currentColor"
+              strokeWidth="1"
+            />
+            <path
+              d="M9.5 9.5L12.5 12.5"
+              stroke="currentColor"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
           </svg>
           <input
             ref={inputRef}
@@ -198,7 +333,7 @@ export function CommandPalette() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleInputKeyDown}
             placeholder="type a command or search..."
-            className="flex-1 bg-transparent text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none tracking-wide"
+            className="flex-1 bg-transparent text-base sm:text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none tracking-wide"
             autoComplete="off"
             spellCheck={false}
           />
@@ -211,10 +346,32 @@ export function CommandPalette() {
         <div ref={listRef} className="max-h-80 overflow-auto py-1">
           {filtered.length === 0 ? (
             <div className="px-4 py-10 text-center">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="mx-auto mb-2 text-[var(--color-text-dim)] opacity-40">
-                <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
-                <path d="M15 15L21 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                <path d="M7 10H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                className="mx-auto mb-2 text-[var(--color-text-dim)] opacity-40"
+              >
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="7"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <path
+                  d="M15 15L21 21"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M7 10H13"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                />
               </svg>
               <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
                 no results for &ldquo;{query}&rdquo;
@@ -237,25 +394,41 @@ export function CommandPalette() {
                       data-selected={isSelected}
                       onClick={() => handleSelect(item.cmd)}
                       onMouseEnter={() => setSelectedIndex(flatIndex)}
-                      className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
+                      className={`w-full flex items-center gap-3 px-4 py-3 sm:py-2 text-left transition-colors ${
                         isSelected
                           ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
                           : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
                       }`}
                     >
-                      <span className={`flex-shrink-0 ${isSelected ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
+                      <span
+                        className={`flex-shrink-0 ${isSelected ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}
+                      >
                         {item.cmd.icon}
                       </span>
                       <div className="flex-1 min-w-0">
                         <span className="text-xs tracking-wide">
-                          {query ? <HighlightedText text={item.cmd.label} indices={item.labelIndices} /> : item.cmd.label}
+                          {query ? (
+                            <HighlightedText
+                              text={item.cmd.label}
+                              indices={item.labelIndices}
+                            />
+                          ) : (
+                            item.cmd.label
+                          )}
                         </span>
                         <span className="ml-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">
-                          {query ? <HighlightedText text={item.cmd.description} indices={item.descIndices} /> : item.cmd.description}
+                          {query ? (
+                            <HighlightedText
+                              text={item.cmd.description}
+                              indices={item.descIndices}
+                            />
+                          ) : (
+                            item.cmd.description
+                          )}
                         </span>
                       </div>
                       {item.cmd.shortcut && (
-                        <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
+                        <kbd className="hidden sm:inline px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
                           {item.cmd.shortcut}
                         </kbd>
                       )}
@@ -269,17 +442,23 @@ export function CommandPalette() {
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)] tracking-wider">
-          <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↑↓</kbd>
+              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">
+                ↑↓
+              </kbd>
               navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↵</kbd>
+              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">
+                ↵
+              </kbd>
               select
             </span>
           </div>
-          <span>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
+          <span className="sm:ml-0 ml-auto">
+            {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+          </span>
         </div>
       </div>
     </div>

@@ -5,10 +5,12 @@ description: "Use when writing tests, improving test coverage, or setting up tes
 # Test Coverage Guide
 
 ## Project Test Locations
+
 - Gateway tests: `/workspace/signalpilot/gateway/tests/`
 - Sandbox tests: `/workspace/sp-firecracker-vm/test/`
 
 ## What to Test (Priority Order)
+
 1. **SQL validation engine** (`gateway/engine/__init__.py`) — the security gatekeeper
    - Blocked statement types (DROP, DELETE, INSERT, etc.)
    - LIMIT injection/clamping
@@ -21,6 +23,7 @@ description: "Use when writing tests, improving test coverage, or setting up tes
 ## Testing Patterns
 
 ### Unit Test Template
+
 ```python
 import pytest
 from gateway.engine import validate_sql
@@ -37,6 +40,7 @@ def test_injects_limit():
 ```
 
 ### Async Test Template
+
 ```python
 import pytest
 import asyncio
@@ -48,6 +52,7 @@ async def test_query_database():
 ```
 
 ### Running Tests
+
 ```bash
 cd /workspace/signalpilot/gateway
 pip install -e ".[dev]" 2>/dev/null || pip install pytest pytest-asyncio
@@ -55,6 +60,7 @@ python -m pytest tests/ -v
 ```
 
 ## Rules
+
 - Each test file tests ONE module
 - Use descriptive test names: `test_blocks_sql_injection_via_union`
 - Test both success AND failure paths

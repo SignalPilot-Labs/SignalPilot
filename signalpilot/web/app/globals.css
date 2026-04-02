@@ -19,7 +19,9 @@
   --color-error: #ff4444;
   --color-sidebar: #030303;
   --color-glow: rgba(255, 255, 255, 0.03);
-  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", ui-monospace,
+    monospace;
 }
 
 @font-face {
@@ -27,7 +29,8 @@
   font-style: normal;
   font-weight: 100 800;
   font-display: swap;
-  src: url("https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@latest/fonts/variable/JetBrainsMono[wght].woff2") format("woff2");
+  src: url("https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@latest/fonts/variable/JetBrainsMono[wght].woff2")
+    format("woff2");
 }
 
 body {
@@ -39,126 +42,257 @@ body {
 }
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 0; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-border-hover); }
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-hover);
+}
 
 /* ── Terminal styling ── */
-.terminal-container .xterm { padding: 12px; }
-.terminal-container .xterm-viewport { overflow-y: auto !important; }
+.terminal-container .xterm {
+  padding: 12px;
+}
+.terminal-container .xterm-viewport {
+  overflow-y: auto !important;
+}
 
 /* ── Animations ── */
 
 /* Blinking cursor */
 @keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
-.cursor-blink { animation: blink 1s step-end infinite; }
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+}
 
 /* Subtle scan-line effect */
 @keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
 }
 
 /* Empty state float */
 @keyframes empty-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
 }
 
 /* Fade in */
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
-.animate-fade-in { animation: fade-in 0.4s ease-out forwards; }
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out forwards;
+}
 
 /* Staggered fade-in for lists */
 .stagger-fade-in > * {
   opacity: 0;
   animation: fade-in 0.4s ease-out forwards;
 }
-.stagger-fade-in > *:nth-child(1) { animation-delay: 0ms; }
-.stagger-fade-in > *:nth-child(2) { animation-delay: 50ms; }
-.stagger-fade-in > *:nth-child(3) { animation-delay: 100ms; }
-.stagger-fade-in > *:nth-child(4) { animation-delay: 150ms; }
-.stagger-fade-in > *:nth-child(5) { animation-delay: 200ms; }
-.stagger-fade-in > *:nth-child(6) { animation-delay: 250ms; }
-.stagger-fade-in > *:nth-child(7) { animation-delay: 300ms; }
-.stagger-fade-in > *:nth-child(8) { animation-delay: 350ms; }
-.stagger-fade-in > *:nth-child(9) { animation-delay: 400ms; }
-.stagger-fade-in > *:nth-child(10) { animation-delay: 450ms; }
-.stagger-fade-in > *:nth-child(11) { animation-delay: 500ms; }
-.stagger-fade-in > *:nth-child(12) { animation-delay: 550ms; }
+.stagger-fade-in > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger-fade-in > *:nth-child(2) {
+  animation-delay: 50ms;
+}
+.stagger-fade-in > *:nth-child(3) {
+  animation-delay: 100ms;
+}
+.stagger-fade-in > *:nth-child(4) {
+  animation-delay: 150ms;
+}
+.stagger-fade-in > *:nth-child(5) {
+  animation-delay: 200ms;
+}
+.stagger-fade-in > *:nth-child(6) {
+  animation-delay: 250ms;
+}
+.stagger-fade-in > *:nth-child(7) {
+  animation-delay: 300ms;
+}
+.stagger-fade-in > *:nth-child(8) {
+  animation-delay: 350ms;
+}
+.stagger-fade-in > *:nth-child(9) {
+  animation-delay: 400ms;
+}
+.stagger-fade-in > *:nth-child(10) {
+  animation-delay: 450ms;
+}
+.stagger-fade-in > *:nth-child(11) {
+  animation-delay: 500ms;
+}
+.stagger-fade-in > *:nth-child(12) {
+  animation-delay: 550ms;
+}
 
 /* Slide in from left */
 @keyframes slide-in-left {
-  from { opacity: 0; transform: translateX(-8px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
-.animate-slide-in-left { animation: slide-in-left 0.3s ease-out forwards; }
+.animate-slide-in-left {
+  animation: slide-in-left 0.3s ease-out forwards;
+}
 
 /* Slide in from right */
 @keyframes slide-in-right {
-  from { opacity: 0; transform: translateX(8px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
-.animate-slide-in-right { animation: slide-in-right 0.3s ease-out forwards; }
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out forwards;
+}
 
 /* Slide out to right */
 @keyframes slide-out-right {
-  from { opacity: 1; transform: translateX(0); }
-  to { opacity: 0; transform: translateX(8px); }
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(8px);
+  }
 }
-.animate-slide-out-right { animation: slide-out-right 0.2s ease-in forwards; }
+.animate-slide-out-right {
+  animation: slide-out-right 0.2s ease-in forwards;
+}
 
 /* Scale in */
 @keyframes scale-in {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
-.animate-scale-in { animation: scale-in 0.2s ease-out forwards; }
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out forwards;
+}
 
 /* Status pulse */
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
-.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
 
 /* Glow pulse for active elements */
 @keyframes glow-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
-  50% { box-shadow: 0 0 8px 0 rgba(0, 255, 136, 0.1); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 255, 136, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px 0 rgba(0, 255, 136, 0.1);
+  }
 }
-.glow-pulse { animation: glow-pulse 3s ease-in-out infinite; }
+.glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
 
 /* Typing cursor */
 @keyframes typing-cursor {
-  0%, 100% { border-right-color: var(--color-text); }
-  50% { border-right-color: transparent; }
+  0%,
+  100% {
+    border-right-color: var(--color-text);
+  }
+  50% {
+    border-right-color: transparent;
+  }
 }
 
 /* Data flow animation for pipeline */
 @keyframes data-flow {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 .animate-data-flow {
-  background: linear-gradient(90deg, transparent 0%, var(--color-border-hover) 50%, transparent 100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-border-hover) 50%,
+    transparent 100%
+  );
   background-size: 200% 100%;
   animation: data-flow 3s linear infinite;
 }
 
 /* Counter increment animation */
 @keyframes count-up {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
-.animate-count-up { animation: count-up 0.6s ease-out forwards; }
+.animate-count-up {
+  animation: count-up 0.6s ease-out forwards;
+}
 
 /* ── Background patterns ── */
 
@@ -172,7 +306,10 @@ body {
 
 /* Dot grid pattern */
 .bg-dots {
-  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.04) 1px,
+    transparent 1px
+  );
   background-size: 20px 20px;
 }
 
@@ -210,7 +347,11 @@ select {
 }
 
 /* ── Smooth transitions ── */
-a, button, input, select, textarea {
+a,
+button,
+input,
+select,
+textarea {
   transition: all 0.15s ease;
 }
 
@@ -283,7 +424,9 @@ input[type="number"] {
   transition: all 0.2s ease;
 }
 .card-glow:hover {
-  box-shadow: 0 0 0 1px var(--color-border-hover), 0 0 20px -10px rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 0 0 1px var(--color-border-hover),
+    0 0 20px -10px rgba(255, 255, 255, 0.05);
 }
 
 /* Card with top accent line */
@@ -297,7 +440,12 @@ input[type="number"] {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--color-border-hover), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-border-hover),
+    transparent
+  );
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -330,7 +478,11 @@ input[type="number"] {
   left: -50%;
   width: 200%;
   height: 200%;
-  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255,255,255,0.02) 0%, transparent 50%);
+  background: radial-gradient(
+    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(255, 255, 255, 0.02) 0%,
+    transparent 50%
+  );
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.3s ease;
@@ -407,10 +559,22 @@ input:focus::placeholder {
 }
 
 /* ── Status badge variants ── */
-.badge-success { border-color: rgba(0, 255, 136, 0.2); color: var(--color-success); }
-.badge-warning { border-color: rgba(255, 170, 0, 0.2); color: var(--color-warning); }
-.badge-error { border-color: rgba(255, 68, 68, 0.2); color: var(--color-error); }
-.badge-info { border-color: rgba(96, 165, 250, 0.2); color: #60a5fa; }
+.badge-success {
+  border-color: rgba(0, 255, 136, 0.2);
+  color: var(--color-success);
+}
+.badge-warning {
+  border-color: rgba(255, 170, 0, 0.2);
+  color: var(--color-warning);
+}
+.badge-error {
+  border-color: rgba(255, 68, 68, 0.2);
+  color: var(--color-error);
+}
+.badge-info {
+  border-color: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+}
 
 /* ── Metric value highlight ── */
 .metric-value {
@@ -433,8 +597,12 @@ input:focus::placeholder {
 
 /* ── Pipeline connector animation ── */
 @keyframes pipeline-flow {
-  0% { stroke-dashoffset: 12; }
-  100% { stroke-dashoffset: 0; }
+  0% {
+    stroke-dashoffset: 12;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
 }
 .pipeline-connector {
   stroke-dasharray: 4 4;
@@ -497,11 +665,20 @@ input:focus::placeholder {
 
 /* ── Loading shimmer ── */
 @keyframes shimmer {
-  0% { background-position: -200px 0; }
-  100% { background-position: calc(200px + 100%) 0; }
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
 }
 .animate-shimmer {
-  background: linear-gradient(90deg, var(--color-border) 0px, var(--color-bg-hover) 40px, var(--color-border) 80px);
+  background: linear-gradient(
+    90deg,
+    var(--color-border) 0px,
+    var(--color-bg-hover) 40px,
+    var(--color-border) 80px
+  );
   background-size: 200px 100%;
   animation: shimmer 1.5s ease-in-out infinite;
 }
@@ -514,7 +691,13 @@ input:focus::placeholder {
   content: "";
   position: absolute;
   inset: -1px;
-  background: linear-gradient(135deg, var(--color-border-hover) 0%, transparent 40%, transparent 60%, var(--color-border-hover) 100%);
+  background: linear-gradient(
+    135deg,
+    var(--color-border-hover) 0%,
+    transparent 40%,
+    transparent 60%,
+    var(--color-border-hover) 100%
+  );
   z-index: -1;
   opacity: 0;
   transition: opacity 0.3s ease;
@@ -536,7 +719,11 @@ input:focus::placeholder {
   width: 120%;
   height: 120%;
   transform: translate(-50%, -50%);
-  background: radial-gradient(ellipse at center, rgba(0, 255, 136, 0.015), transparent 70%);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 255, 136, 0.015),
+    transparent 70%
+  );
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.4s ease;
@@ -547,21 +734,37 @@ input:focus::placeholder {
 
 /* ── Subtle inset glow ── */
 .inset-glow:hover {
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04), inset 0 -1px 0 0 rgba(255, 255, 255, 0.02);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.02);
 }
 
 /* ── Matrix/code rain effect ── */
 @keyframes matrix-fall {
-  0% { transform: translateY(-100%); opacity: 0; }
-  10% { opacity: 0.3; }
-  90% { opacity: 0.3; }
-  100% { transform: translateY(100vh); opacity: 0; }
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.3;
+  }
+  90% {
+    opacity: 0.3;
+  }
+  100% {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
 }
 
 /* ── Typing effect ── */
 @keyframes typing {
-  from { width: 0; }
-  to { width: 100%; }
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
 }
 .animate-typing {
   overflow: hidden;
@@ -571,11 +774,22 @@ input:focus::placeholder {
 
 /* ── Border trace animation ── */
 @keyframes border-trace {
-  0% { background-position: 0% 0%; }
-  100% { background-position: 200% 0%; }
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 200% 0%;
+  }
 }
 .border-trace {
-  background: linear-gradient(90deg, transparent, var(--color-border-hover), var(--color-success), var(--color-border-hover), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-border-hover),
+    var(--color-success),
+    var(--color-border-hover),
+    transparent
+  );
   background-size: 200% 1px;
   background-repeat: no-repeat;
   background-position: 0% 100%;
@@ -584,8 +798,13 @@ input:focus::placeholder {
 
 /* ── Subtle float ── */
 @keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 .animate-float {
   animation: float 6s ease-in-out infinite;
@@ -593,19 +812,33 @@ input:focus::placeholder {
 
 /* ── Glow text ── */
 .glow-text {
-  text-shadow: 0 0 20px rgba(0, 255, 136, 0.15), 0 0 40px rgba(0, 255, 136, 0.05);
+  text-shadow:
+    0 0 20px rgba(0, 255, 136, 0.15),
+    0 0 40px rgba(0, 255, 136, 0.05);
 }
 
 /* ── Grid fade mask ── */
 .grid-fade {
-  mask-image: radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 100%);
-  -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 100%);
+  mask-image: radial-gradient(
+    ellipse 60% 50% at 50% 50%,
+    black 30%,
+    transparent 100%
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse 60% 50% at 50% 50%,
+    black 30%,
+    transparent 100%
+  );
 }
 
 /* ── Dash border animated ── */
 @keyframes dash-move {
-  0% { stroke-dashoffset: 0; }
-  100% { stroke-dashoffset: -16; }
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -16;
+  }
 }
 .dash-animate {
   animation: dash-move 1s linear infinite;
@@ -647,34 +880,516 @@ kbd {
 /* ── Subtle separator ── */
 .separator-subtle {
   height: 1px;
-  background: linear-gradient(90deg, transparent 0%, var(--color-border) 20%, var(--color-border) 80%, transparent 100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-border) 20%,
+    var(--color-border) 80%,
+    transparent 100%
+  );
+}
+
+/* ── Layout: desktop sidebar offset, mobile full-width ── */
+.main-content {
+  margin-left: 14rem; /* 224px — matches sidebar width */
+}
+
+/* Negate sidebar margin for full-screen centered pages (boot, 404) */
+.mobile-negate-offset {
+  margin-left: -14rem;
+}
+
+/* ── Mobile visibility toggles ── */
+.sidebar-desktop {
+  display: flex;
+}
+.mobile-topbar {
+  display: none;
+}
+.mobile-bottombar {
+  display: none;
+}
+.mobile-menu-overlay {
+  /* always rendered via JS */
+}
+.mobile-only {
+  display: none;
+}
+.desktop-only {
+  display: block;
 }
 
 /* ── Responsive adjustments ── */
 
 /* Large screens — wider content */
 @media (min-width: 1600px) {
-  .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 /* Medium screens — collapse grid columns */
 @media (max-width: 1200px) {
-  .grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .grid-cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-/* Small screens — stack everything */
+/* Small screens — stack wider grids */
 @media (max-width: 900px) {
   .grid-cols-4,
-  .grid-cols-3,
-  .grid-cols-2 { grid-template-columns: 1fr; }
-  .col-span-2 { grid-column: span 1; }
+  .grid-cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .col-span-2 {
+    grid-column: span 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Mobile breakpoint (<768px) */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* ── Layout ── */
+  .sidebar-desktop {
+    display: none !important;
+  }
+  .mobile-topbar {
+    display: flex !important;
+  }
+  .mobile-bottombar {
+    display: flex !important;
+  }
+  .mobile-only {
+    display: block !important;
+  }
+  .desktop-only {
+    display: none !important;
+  }
+
+  .main-content {
+    margin-left: 0;
+    padding-top: calc(
+      3rem + env(safe-area-inset-top, 0px)
+    ); /* space for top bar + notch */
+    padding-bottom: calc(
+      3.5rem + env(safe-area-inset-bottom, 0px)
+    ); /* space for bottom bar + home indicator */
+  }
+
+  .mobile-negate-offset {
+    margin-left: 0;
+    padding-top: 0;
+  }
+
+  /* ── Grid layouts collapse on mobile ── */
+  /* Note: grid-cols-2 is NOT overridden — many components use
+     grid-cols-2 sm:grid-cols-4 to keep a 2-column layout on mobile */
+  .grid-cols-4,
+  .grid-cols-3 {
+    grid-template-columns: 1fr !important;
+  }
+  .col-span-2 {
+    grid-column: span 1 !important;
+  }
+
+  /* ── Page padding adjustments ── */
+  .p-8 {
+    padding: 1rem !important;
+  }
+  .px-8 {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+  .py-8 {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+
+  /* ── Page header spacing ── */
+  .mb-8 {
+    margin-bottom: 1.25rem;
+  }
+
+  /* ── Touch-friendly targets — minimum 44px tap area ── */
+  nav a,
+  nav button,
+  .mobile-bottombar a {
+    min-height: 44px;
+  }
+
+  /* ── Form inputs: taller for touch ── */
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="email"],
+  input[type="url"],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px !important; /* prevents iOS zoom on focus */
+  }
+
+  /* ── Tables: horizontal scroll ── */
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  thead,
+  tbody,
+  tr,
+  th,
+  td {
+    display: revert;
+  }
+
+  /* ── Terminal bar: scroll horizontally, tighter spacing ── */
+  .terminal-bar-content {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Safe area for devices with notch/home indicator ── */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* ── Extend background behind home indicator ── */
+  body::after {
+    content: "";
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-bottom, 0px);
+    background: rgba(3, 3, 3, 0.95);
+    z-index: 51;
+    pointer-events: none;
+  }
+
+  /* ── Tooltip: disabled on mobile (touch doesn't hover well) ── */
+  .tooltip-container .tooltip-content {
+    display: none !important;
+  }
+
+  /* ── Card interactive: disable hover lift on touch ── */
+  .card-interactive:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* ── Reduce motion for mobile performance ── */
+  .card-radial-glow::before,
+  .card-accent-top::after,
+  .gradient-border::before {
+    display: none;
+  }
+
+  /* ── Font size bumps for readability on small screens ── */
+  .text-\[9px\] {
+    font-size: 10px;
+  }
+  .text-\[10px\] {
+    font-size: 11px;
+  }
+
+  /* ── Scrollbar: wider for touch ── */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  /* ── Prevent text selection on interactive elements ── */
+  nav,
+  .mobile-bottombar,
+  .mobile-topbar {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ── Larger checkboxes for touch ── */
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    min-height: auto;
+  }
+  input[type="checkbox"]:checked::after {
+    left: 5px;
+    top: 2px;
+    width: 5px;
+    height: 9px;
+  }
+
+  /* ── Tap highlight color for dark theme ── */
+  * {
+    -webkit-tap-highlight-color: rgba(0, 255, 136, 0.08);
+  }
+
+  /* ── Touch feedback for interactive elements ── */
+  button:active,
+  a:active,
+  [role="button"]:active {
+    opacity: 0.85;
+    transition: opacity 0.05s ease-out;
+  }
+
+  /* ── Card press effect on touch ── */
+  .card-accent-top:active {
+    transform: scale(0.99);
+    transition: transform 0.1s ease-out;
+  }
+
+  /* ── Smooth momentum scrolling ── */
+  .overflow-auto,
+  .overflow-x-auto,
+  .overflow-y-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Active nav indicator: top bar instead of left bar on mobile ── */
+  .nav-active::before {
+    left: 6px;
+    right: 6px;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 2px;
+  }
+
+  /* ── Scroll shadow hints for horizontal overflow ── */
+  .overflow-x-auto {
+    background:
+      linear-gradient(to right, var(--color-bg-card) 30%, transparent) left
+        center,
+      linear-gradient(to left, var(--color-bg-card) 30%, transparent) right
+        center,
+      linear-gradient(to right, rgba(255, 255, 255, 0.06), transparent) left
+        center,
+      linear-gradient(to left, rgba(255, 255, 255, 0.06), transparent) right
+        center;
+    background-size:
+      20px 100%,
+      20px 100%,
+      10px 100%,
+      10px 100%;
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  /* ── Bottom bar frosted glass effect ── */
+  .mobile-bottombar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(3, 3, 3, 0.88);
+  }
+  .mobile-topbar {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(3, 3, 3, 0.88);
+    padding-top: env(safe-area-inset-top, 0px);
+    height: calc(3rem + env(safe-area-inset-top, 0px));
+  }
+
+  /* ── Bottom tab active press feedback ── */
+  .mobile-bottombar a:active {
+    transform: scale(0.92);
+    transition: transform 0.08s ease-out;
+  }
+  .mobile-bottombar a {
+    transition: transform 0.15s ease-out;
+  }
+
+  /* ── Overscroll: prevent accidental page pull on Chrome ── */
+  html {
+    overscroll-behavior-y: contain;
+  }
+
+  /* ── Code blocks: larger text for readability ── */
+  pre,
+  code {
+    font-size: max(12px, 0.75rem);
+  }
+
+  /* ── Textareas: cap height on mobile to show more content below ── */
+  textarea {
+    max-height: 30vh;
+  }
+
+  /* ── Focus-visible: outline for keyboard/screen-reader nav on mobile ── */
+  :focus-visible {
+    outline: 2px solid var(--color-success);
+    outline-offset: 2px;
+  }
+
+  /* ── Selection color — matches theme ── */
+  ::selection {
+    background: rgba(0, 255, 136, 0.2);
+    color: var(--color-text);
+  }
+
+  /* ── Smooth scroll for in-page navigation ── */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* ── Prevent long-press context menu on interactive elements ── */
+  nav,
+  .mobile-bottombar,
+  .mobile-topbar,
+  button {
+    -webkit-touch-callout: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Mobile landscape — wider but shorter, optimize layout      */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) and (orientation: landscape) {
+  .mobile-topbar {
+    height: calc(2.5rem + env(safe-area-inset-top, 0px));
+  }
+  .mobile-bottombar {
+    height: calc(2.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Hide tab labels in landscape — icons only */
+  .mobile-bottombar a span:last-child {
+    display: none;
+  }
+  .mobile-bottombar a {
+    gap: 0;
+  }
+  .main-content {
+    padding-top: calc(2.5rem + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(2.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Reduce vertical spacing in landscape */
+  .mb-8 {
+    margin-bottom: 0.75rem;
+  }
+  .space-y-4 > * + * {
+    margin-top: 0.75rem;
+  }
+  /* Tighter page padding + safe area for side notch */
+  .p-4 {
+    padding: 0.5rem !important;
+  }
+  .main-content {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Extra-small phones (<400px) — iPhone SE, Galaxy S mini     */
+/* ═══════════════════════════════════════════════════════════ */
+@media (max-width: 400px) {
+  /* Tighter padding */
+  .p-4 {
+    padding: 0.75rem !important;
+  }
+  .px-4 {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+  .gap-3 {
+    gap: 0.5rem;
+  }
+
+  /* Smaller metric card text */
+  .text-xl {
+    font-size: 1.125rem;
+  }
+
+  /* Stack 2-col grids to single column on tiny phones */
+  .grid-cols-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Reduce bottom bar height for more content space */
+  .mobile-bottombar {
+    height: calc(3rem + env(safe-area-inset-bottom, 0px));
+  }
+  .main-content {
+    padding-bottom: calc(3rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Reduced motion — respect user accessibility preferences    */
+/* ═══════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-fade-in,
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-scale-in,
+  .animate-count-up {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .stagger-fade-in > * {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+
+  .pulse-dot,
+  .animate-ping,
+  .animate-spin {
+    animation: none !important;
+  }
+
+  /* Keep spin on loading indicators but reduce visual noise */
+  .animate-spin {
+    animation: spin 2s linear infinite !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/* PWA standalone mode — installed on home screen              */
+/* ═══════════════════════════════════════════════════════════ */
+@media (display-mode: standalone) {
+  /* Remove browser chrome margin — we control the full viewport */
+  body {
+    overscroll-behavior: none;
+  }
+
+  /* Disable pull-to-refresh browser gesture in standalone */
+  html {
+    overscroll-behavior-y: none;
+  }
+
+  /* Disable text selection on nav elements in app mode */
+  nav,
+  header,
+  footer {
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 /* ── Smooth page load ── */
 @keyframes page-enter {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .page-enter {
   animation: page-enter 0.3s ease-out forwards;
@@ -714,8 +1429,12 @@ kbd {
 
 /* ── Tab indicator animation ── */
 @keyframes tab-indicator {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
 }
 .tab-active-indicator {
   animation: tab-indicator 0.2s ease-out forwards;

@@ -91,11 +91,26 @@ export function useParallelRuns(pollInterval = 5000) {
     }
   }, [fetchStatus]);
 
-  const stopRun = useCallback((runId: string) => sendSignal(runId, "stop"), [sendSignal]);
-  const killRun = useCallback((runId: string) => sendSignal(runId, "kill"), [sendSignal]);
-  const pauseRun = useCallback((runId: string) => sendSignal(runId, "pause"), [sendSignal]);
-  const resumeRun = useCallback((runId: string) => sendSignal(runId, "resume"), [sendSignal]);
-  const unlockRun = useCallback((runId: string) => sendSignal(runId, "unlock"), [sendSignal]);
+  const stopRun = useCallback(
+    (runId: string) => sendSignal(runId, "stop"),
+    [sendSignal],
+  );
+  const killRun = useCallback(
+    (runId: string) => sendSignal(runId, "kill"),
+    [sendSignal],
+  );
+  const pauseRun = useCallback(
+    (runId: string) => sendSignal(runId, "pause"),
+    [sendSignal],
+  );
+  const resumeRun = useCallback(
+    (runId: string) => sendSignal(runId, "resume"),
+    [sendSignal],
+  );
+  const unlockRun = useCallback(
+    (runId: string) => sendSignal(runId, "unlock"),
+    [sendSignal],
+  );
   const injectPrompt = useCallback(
     (runId: string, prompt: string) => sendSignal(runId, "inject", prompt),
     [sendSignal],

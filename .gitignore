@@ -17,5 +17,13 @@ self-improve/monitor-web/node_modules/
 self-improve/monitor-web/package-lock.json
 self-improve/monitor/static/
 
+# Secrets and credentials
+*.enc
+.encryption_key
+*.pem
+*.key
+*.pfx
+id_rsa*
+
 # Docker volumes / runtime
 *.log

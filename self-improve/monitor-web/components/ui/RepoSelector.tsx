@@ -10,7 +10,11 @@ interface RepoSelectorProps {
   onSelect: (repo: string) => void;
 }
 
-export function RepoSelector({ repos, activeRepo, onSelect }: RepoSelectorProps) {
+export function RepoSelector({
+  repos,
+  activeRepo,
+  onSelect,
+}: RepoSelectorProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -39,7 +43,10 @@ export function RepoSelector({ repos, activeRepo, onSelect }: RepoSelectorProps)
       >
         {/* Repo icon */}
         <svg
-          width="12" height="12" viewBox="0 0 16 16" fill="currentColor"
+          width="12"
+          height="12"
+          viewBox="0 0 16 16"
+          fill="currentColor"
           className="text-[#888] group-hover:text-[#aaa] transition-colors"
         >
           <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z" />
@@ -48,8 +55,12 @@ export function RepoSelector({ repos, activeRepo, onSelect }: RepoSelectorProps)
           {displayName}
         </span>
         <svg
-          width="8" height="8" viewBox="0 0 8 8" fill="none"
-          stroke="currentColor" strokeWidth="1.5"
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
           className={`text-[#666] transition-transform ${open ? "rotate-180" : ""}`}
         >
           <polyline points="2 3 4 5 6 3" />
@@ -104,8 +115,12 @@ export function RepoSelector({ repos, activeRepo, onSelect }: RepoSelectorProps)
                   </div>
                   {r.repo === activeRepo && (
                     <svg
-                      width="10" height="10" viewBox="0 0 10 10"
-                      fill="none" stroke="#00ff88" strokeWidth="1.5"
+                      width="10"
+                      height="10"
+                      viewBox="0 0 10 10"
+                      fill="none"
+                      stroke="#00ff88"
+                      strokeWidth="1.5"
                     >
                       <polyline points="2 5 4 7 8 3" />
                     </svg>
@@ -130,7 +145,9 @@ export function RepoSelector({ repos, activeRepo, onSelect }: RepoSelectorProps)
                     !activeRepo ? "bg-[#88ccff]" : "bg-transparent"
                   }`}
                 />
-                <span className="text-[10px] text-[#888]">All repositories</span>
+                <span className="text-[10px] text-[#888]">
+                  All repositories
+                </span>
               </button>
             </div>
           </motion.div>

@@ -50,7 +50,7 @@ _cred_re = re.compile("|".join(CREDENTIAL_PATTERNS), re.IGNORECASE)
 
 # Dangerous bash patterns
 DANGEROUS_PATTERNS = [
-    r"rm\s+(-\w*r\w*f|--force.*--recursive|--recursive.*--force)\s+/\s*$",
+    r"rm\s+(-\w*r\w*f|-\w*f\w*r|--force.*--recursive|--recursive.*--force)\s+/\s*$",
     r"mkfs\.",
     r"dd\s+.*of=/dev/",
     r">\s*/dev/sd[a-z]",
@@ -83,8 +83,9 @@ def _check_path_confinement(path: str) -> str | None:
         return None
     norm = os.path.normpath(path)
     # Allow: /workspace (host mount), /home/agentuser/repo (cloned repo), /tmp
-    allowed = ("/workspace", "/home/agentuser/repo", "/tmp")
-    if not any(norm.startswith(p) for p in allowed):
+    # Use trailing / to prevent prefix tricks (e.g. /workspace-evil matching /workspace)
+    allowed_exact = ("/workspace", "/home/agentuser/repo", "/tmp")
+    if not any(norm == p or norm.startswith(p + "/") for p in allowed_exact):
         return f"Path '{path}' is outside allowed directories — operations are confined to the repo"
     return None
 
@@ -114,8 +115,9 @@ def _check_git_push(cmd: str) -> str | None:
         if re.search(rf"git\s+push\s+.*\b{branch}\b", cmd):
             return f"Cannot push directly to protected branch '{branch}' — create a PR instead"
 
-    # Block force push entirely
-    if re.search(r"git\s+push\s+.*(-f|--force)", cmd):
+    # Block force push entirely — match -f/--force only as standalone flags preceded
+    # by whitespace, not as substrings in branch names like "cool-feature"
+    if re.search(r"git\s+push\s+.*(?<=\s)(-f\b|--force\b)", cmd):
         return "Force push is not allowed"
 
     return None
@@ -143,8 +145,8 @@ def _check_repo_exploration(cmd: str) -> str | None:
     if cd_match:
         target = cd_match.group(1)
         if target.startswith("/") and not target.startswith("/workspace"):
-            # Allow common system paths needed for builds
-            allowed_system = ("/tmp", "/usr", "/var", "/etc/apt")
+            # Allow: repo clone dir, common system paths needed for builds
+            allowed_system = ("/home/agentuser/repo", "/tmp", "/usr", "/var", "/etc/apt")
             if not any(target.startswith(p) for p in allowed_system):
                 return f"Cannot cd to '{target}' — operations confined to /workspace"
 
@@ -152,16 +154,29 @@ def _check_repo_exploration(cmd: str) -> str | None:
 
 
 def _check_token_exposure(cmd: str) -> str | None:
-    """Block commands that would print or expose tokens/secrets."""
+    """Block commands that would print or expose tokens/secrets.
+
+    Covers direct shell builtins, subshell invocations, interpreter one-liners,
+    and /proc filesystem access to environment variables.
+    """
     _secret_vars = "GIT_TOKEN|ANTHROPIC_API_KEY|GH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|FGAT_GIT_TOKEN"
     exposure_patterns = [
+        # Direct shell builtins
         rf"echo\s+.*\$\{{?({_secret_vars})",
+        rf"printf\s+.*\$\{{?({_secret_vars})",
         r"cat\s+.*\.env",
         rf"printenv\s+({_secret_vars})",
         r"printenv\s*$",
         r"\benv\s*$",
         r"\bset\s*$",
         r"\bexport\s*$",
+        # Subshell and interpreter one-liners that could read env vars
+        rf"(python3?|node|perl|ruby)\s+(-[ce]|--eval)\s+.*({_secret_vars})",
+        rf"bash\s+-c\s+.*({_secret_vars})",
+        rf"sh\s+-c\s+.*({_secret_vars})",
+        # /proc filesystem access to environment
+        r"cat\s+.*/proc/.*/environ",
+        r"/proc/self/environ",
     ]
     for pattern in exposure_patterns:
         if re.search(pattern, cmd):
@@ -214,8 +229,8 @@ async def check_tool_permission(
                     "deny_reason": deny_reason,
                 },
             )
-        except Exception:
-            pass  # Don't let audit failures block the agent
+        except Exception as e:
+            print(f"[permissions] Failed to log audit: {e}")
 
     if deny_reason:
         return PermissionResultDeny(message=deny_reason)

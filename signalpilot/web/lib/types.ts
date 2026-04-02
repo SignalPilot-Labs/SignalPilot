@@ -37,7 +37,13 @@ export interface SSHTunnelConfig {
 
 export interface SSLConfig {
   enabled: boolean;
-  mode: "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
+  mode:
+    | "disable"
+    | "allow"
+    | "prefer"
+    | "require"
+    | "verify-ca"
+    | "verify-full";
   ca_cert: string | null;
   client_cert: string | null;
   client_key: string | null;

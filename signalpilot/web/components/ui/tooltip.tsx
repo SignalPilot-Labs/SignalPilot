@@ -45,6 +45,18 @@ export function Tooltip({
       className="relative inline-flex"
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
+      onTouchStart={(e) => {
+        // On mobile, toggle tooltip on tap
+        e.stopPropagation();
+        if (visible) {
+          handleLeave();
+        } else {
+          clearTimeout(timeoutRef.current);
+          setVisible(true);
+          // Auto-hide after 2 seconds on touch
+          timeoutRef.current = setTimeout(() => setVisible(false), 2000);
+        }
+      }}
     >
       {children}
       {visible && (

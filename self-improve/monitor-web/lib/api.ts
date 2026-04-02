@@ -1,14 +1,8 @@
 import type { Run, ToolCall, AuditEvent, RepoInfo } from "./types";
 
-// FastAPI backend runs on port 3401.
-// On localhost: call port 3401 directly.
-// Via tunnel/remote: use relative URLs so Next.js rewrites proxy to the backend.
+// All /api/* requests are routed to FastAPI by nginx on the same port.
 function getApiBase(): string {
   if (typeof window === "undefined") return "http://localhost:3401";
-  const host = window.location.hostname;
-  if (host === "localhost" || host === "127.0.0.1") {
-    return `${window.location.protocol}//${host}:3401`;
-  }
   return "";
 }
 
@@ -46,24 +40,45 @@ export async function fetchRun(id: string): Promise<Run> {
 
 export async function fetchToolCalls(
   runId: string,
-  limit = 500
+  limit = 500,
 ): Promise<ToolCall[]> {
-  const res = await fetch(`${getApiBase()}/api/runs/${runId}/tools?limit=${limit}`);
+  const res = await fetch(
+    `${getApiBase()}/api/runs/${runId}/tools?limit=${limit}`,
+  );
   if (!res.ok) throw new Error("Failed to fetch tool calls");
   return res.json();
 }
 
 export async function fetchAuditLog(
   runId: string,
-  limit = 500
+  limit = 500,
 ): Promise<AuditEvent[]> {
-  const res = await fetch(`${getApiBase()}/api/runs/${runId}/audit?limit=${limit}`);
+  const res = await fetch(
+    `${getApiBase()}/api/runs/${runId}/audit?limit=${limit}`,
+  );
   if (!res.ok) throw new Error("Failed to fetch audit log");
   return res.json();
 }
 
 export function createSSE(runId: string): EventSource {
   return new EventSource(`${getApiBase()}/api/stream/${runId}`);
+}
+
+export interface PollResult {
+  tool_calls: ToolCall[];
+  audit_events: AuditEvent[];
+}
+
+export async function pollEvents(
+  runId: string,
+  afterTool: number,
+  afterAudit: number,
+): Promise<PollResult> {
+  const res = await fetch(
+    `${getApiBase()}/api/poll/${runId}?after_tool=${afterTool}&after_audit=${afterAudit}`,
+  );
+  if (!res.ok) throw new Error("Failed to poll events");
+  return res.json();
 }
 
 export interface AgentHealth {
@@ -102,10 +117,23 @@ export interface DiffStats {
 export async function fetchRunDiff(runId: string): Promise<DiffStats> {
   try {
     const res = await fetch(`${getApiBase()}/api/runs/${runId}/diff`);
-    if (!res.ok) return { files: [], total_files: 0, total_added: 0, total_removed: 0, source: "unavailable" };
+    if (!res.ok)
+      return {
+        files: [],
+        total_files: 0,
+        total_added: 0,
+        total_removed: 0,
+        source: "unavailable",
+      };
     return res.json();
   } catch {
-    return { files: [], total_files: 0, total_added: 0, total_removed: 0, source: "unavailable" };
+    return {
+      files: [],
+      total_files: 0,
+      total_added: 0,
+      total_removed: 0,
+      source: "unavailable",
+    };
   }
 }
 

@@ -407,8 +407,9 @@ class ClickHouseConnector(BaseConnector):
             safe_table = self._quote_table(table)
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     data = self._raw_execute(
-                        f'SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                     )
                     if isinstance(data, tuple) and len(data) == 2:
                         rows = data[0]

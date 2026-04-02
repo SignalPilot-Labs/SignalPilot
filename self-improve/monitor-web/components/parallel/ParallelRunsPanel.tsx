@@ -19,7 +19,12 @@ type HealthMap = Record<string, "ok" | "degraded" | "unknown">;
 
 function SummaryBar({ active, max }: { active: number; max: number }) {
   const pct = max > 0 ? Math.round((active / max) * 100) : 0;
-  const barColor = active === 0 ? "bg-[#333]" : active >= max ? "bg-[#ffaa00]" : "bg-[#00ff88]";
+  const barColor =
+    active === 0
+      ? "bg-[#333]"
+      : active >= max
+        ? "bg-[#ffaa00]"
+        : "bg-[#00ff88]";
 
   return (
     <div className="rounded-lg border border-[#1a1a1a] bg-[#0d0d0d] px-4 py-3">
@@ -56,7 +61,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 /* ── Main Panel ─────────────────────────────────────────────────────── */
 
-export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPanelProps) {
+export function ParallelRunsPanel({
+  onStartNew,
+  onInjectPrompt,
+}: ParallelRunsPanelProps) {
   const {
     status,
     stopRun,
@@ -77,9 +85,9 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3401"}/api/parallel/runs/${key}/health`,
       );
-      setHealthMap(prev => ({ ...prev, [key]: res.ok ? "ok" : "degraded" }));
+      setHealthMap((prev) => ({ ...prev, [key]: res.ok ? "ok" : "degraded" }));
     } catch {
-      setHealthMap(prev => ({ ...prev, [key]: "degraded" }));
+      setHealthMap((prev) => ({ ...prev, [key]: "degraded" }));
     }
   }, []);
 
@@ -92,7 +100,9 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
   );
 
   const slots = status?.slots ?? [];
-  const activeSlots = slots.filter(s => ["starting", "running"].includes(s.status));
+  const activeSlots = slots.filter((s) =>
+    ["starting", "running"].includes(s.status),
+  );
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -100,7 +110,9 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
         <div>
           <h3 className="text-[12px] font-semibold text-[#e8e8e8]">Bots</h3>
           <p className="text-[10px] text-[#888] mt-0.5">
-            {status ? `${status.active} active / ${status.max_concurrent} max` : "Loading…"}
+            {status
+              ? `${status.active} active / ${status.max_concurrent} max`
+              : "Loading…"}
           </p>
         </div>
         <Button variant="success" onClick={onStartNew}>
@@ -116,7 +128,7 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
       {/* Active runs only */}
       {activeSlots.length > 0 && (
         <div className="space-y-2">
-          {activeSlots.map(slot => (
+          {activeSlots.map((slot) => (
             <SlotCard
               key={slot.container_name}
               slot={slot}
@@ -125,9 +137,13 @@ export function ParallelRunsPanel({ onStartNew, onInjectPrompt }: ParallelRunsPa
               onPause={() => slot.run_id && pauseRun(slot.run_id)}
               onResume={() => slot.run_id && resumeRun(slot.run_id)}
               onUnlock={() => slot.run_id && unlockRun(slot.run_id)}
-              onInject={slot.run_id ? (p) => handleInject(slot.run_id!, p) : undefined}
+              onInject={
+                slot.run_id ? (p) => handleInject(slot.run_id!, p) : undefined
+              }
               onHealthCheck={() => handleHealthCheck(slot)}
-              health={slot.run_id ? (healthMap[slot.run_id] ?? "unknown") : "unknown"}
+              health={
+                slot.run_id ? (healthMap[slot.run_id] ?? "unknown") : "unknown"
+              }
             />
           ))}
         </div>

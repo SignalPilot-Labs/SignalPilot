@@ -45,7 +45,9 @@ function Stat({
     <div className="flex items-center gap-1.5">
       <span className="text-[#777]">{icon}</span>
       <span className="text-[10px] text-[#777]">{label}</span>
-      <span className={`text-[10px] font-semibold tabular-nums ${accent || "text-[#e8e8e8]"}`}>
+      <span
+        className={`text-[10px] font-semibold tabular-nums ${accent || "text-[#e8e8e8]"}`}
+      >
         {value}
       </span>
     </div>
@@ -80,34 +82,60 @@ export function StatsBar({
     >
       <Stat
         icon={
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
             <path d="M6.5 1L9 3.5 3.5 9H1V6.5L6.5 1z" />
           </svg>
         }
         label="Tools"
-        value={String(isActive ? live.toolCount : (run.total_tool_calls || 0))}
+        value={String(isActive ? live.toolCount : run.total_tool_calls || 0)}
       />
       <Stat
         icon={
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
             <circle cx="5" cy="5" r="4" />
             <path d="M3.5 5h3M5 3.5v3" />
           </svg>
         }
         label="Cost"
-        value={isActive && !run.total_cost_usd ? "—" : `$${(run.total_cost_usd || 0).toFixed(2)}`}
+        value={
+          isActive && !run.total_cost_usd
+            ? "—"
+            : `$${(run.total_cost_usd || 0).toFixed(2)}`
+        }
         accent="text-[#00ff88]"
       />
       <Stat
         icon={
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
             <path d="M1 5h3l1.5-3 2 6L9 5" />
           </svg>
         }
         label="In/Out"
-        value={isActive
-          ? `${formatTokens(live.inputTokens)} / ${formatTokens(live.outputTokens)}`
-          : `${formatTokens(run.total_input_tokens)} / ${formatTokens(run.total_output_tokens)}`
+        value={
+          isActive
+            ? `${formatTokens(live.inputTokens)} / ${formatTokens(live.outputTokens)}`
+            : `${formatTokens(run.total_input_tokens)} / ${formatTokens(run.total_output_tokens)}`
         }
       />
       {run.pr_url && (
@@ -117,7 +145,14 @@ export function StatsBar({
           rel="noopener noreferrer"
           className="flex items-center gap-1 text-[10px] text-[#88ccff] hover:text-[#aaddff] transition-colors"
         >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
             <circle cx="3" cy="3" r="1.5" />
             <circle cx="7" cy="3" r="1.5" />
             <circle cx="3" cy="7" r="1.5" />
@@ -135,7 +170,11 @@ export function StatsBar({
           className={`h-1.5 w-1.5 rounded-full ${
             connected ? "bg-[#00ff88]" : "bg-[#444]"
           }`}
-          style={connected ? { boxShadow: "0 0 4px rgba(0, 255, 136, 0.4)" } : undefined}
+          style={
+            connected
+              ? { boxShadow: "0 0 4px rgba(0, 255, 136, 0.4)" }
+              : undefined
+          }
         />
         <span className="text-[10px] text-[#888]">
           {connected ? "Live" : "Disconnected"}

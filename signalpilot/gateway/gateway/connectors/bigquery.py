@@ -383,9 +383,9 @@ class BigQueryConnector(BaseConnector):
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
-                    safe_col = col.replace('`', '``')
+                    safe_col = self._quote_identifier(col)
                     safe_table = self._quote_table(table)
-                    query = f"SELECT DISTINCT `{safe_col}` FROM {safe_table} WHERE `{safe_col}` IS NOT NULL LIMIT {limit}"
+                    query = f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
 
                     def _run_col(q=query, c=col):
                         job = self._client.query(q, timeout=10)

@@ -93,7 +93,7 @@ class SQLiteConnector(BaseConnector):
         row_counts: dict[str, int] = {}
         if tables:
             # Build a UNION ALL query for all table counts at once
-            count_parts = [f"SELECT '{t.replace(chr(39), chr(39)+chr(39))}' AS t, COUNT(*) AS c FROM [{t}]" for t in tables]
+            count_parts = [f"SELECT '{t.replace(chr(39), chr(39)+chr(39))}' AS t, COUNT(*) AS c FROM [{t.replace(']', ']]')}]" for t in tables]
             try:
                 count_sql = " UNION ALL ".join(count_parts)
                 for row in self._conn.execute(count_sql).fetchall():
@@ -104,7 +104,7 @@ class SQLiteConnector(BaseConnector):
         schema: dict[str, Any] = {}
         for table in tables:
             # Column info
-            cursor = self._conn.execute(f"PRAGMA table_info([{table}])")
+            cursor = self._conn.execute(f"PRAGMA table_info([{table.replace(']', ']]')}])")
             columns = []
             for row in cursor.fetchall():
                 columns.append({
@@ -119,7 +119,7 @@ class SQLiteConnector(BaseConnector):
             # Foreign keys — critical for Spider2.0-Lite join path discovery
             foreign_keys = []
             try:
-                cursor = self._conn.execute(f"PRAGMA foreign_key_list([{table}])")
+                cursor = self._conn.execute(f"PRAGMA foreign_key_list([{table.replace(']', ']]')}])")
                 for fk_row in cursor.fetchall():
                     foreign_keys.append({
                         "column": fk_row[3],  # from column

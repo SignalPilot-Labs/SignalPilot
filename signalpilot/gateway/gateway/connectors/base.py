@@ -52,3 +52,38 @@ class BaseConnector(ABC):
         Default implementation uses a generic SQL query.
         """
         return {}
+
+    @staticmethod
+    def _build_sample_union_sql(
+        table: str, columns: list[str], limit: int = 5, quote: str = '"'
+    ) -> str:
+        """Build a UNION ALL query to fetch sample values for multiple columns in one round trip.
+
+        Returns SQL like:
+          SELECT 'col1' AS _col, CAST("col1" AS VARCHAR) AS _val FROM (SELECT DISTINCT "col1" FROM tbl WHERE "col1" IS NOT NULL LIMIT 5) t
+          UNION ALL
+          SELECT 'col2' AS _col, CAST("col2" AS VARCHAR) AS _val FROM (SELECT DISTINCT "col2" FROM tbl WHERE "col2" IS NOT NULL LIMIT 5) t
+        """
+        parts = []
+        for i, col in enumerate(columns[:20]):
+            q = quote
+            parts.append(
+                f"SELECT '{col}' AS _col, CAST({q}{col}{q} AS VARCHAR) AS _val "
+                f"FROM (SELECT DISTINCT {q}{col}{q} FROM {table} WHERE {q}{col}{q} IS NOT NULL LIMIT {limit}) t{i}"
+            )
+        return "\n UNION ALL \n".join(parts)
+
+    @staticmethod
+    def _parse_sample_union_result(rows: list[dict] | list[tuple]) -> dict[str, list]:
+        """Parse UNION ALL sample query result into {column: [values]} dict."""
+        result: dict[str, list] = {}
+        for row in rows:
+            if isinstance(row, dict):
+                col, val = row.get("_col", ""), row.get("_val", "")
+            else:
+                col, val = row[0], row[1]
+            if col and val is not None:
+                if col not in result:
+                    result[col] = []
+                result[col].append(str(val))
+        return result

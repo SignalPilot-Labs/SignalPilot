@@ -304,23 +304,40 @@ class MSSQLConnector(BaseConnector):
         return schema
 
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
-        if self._conn is None:
+        """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        if self._conn is None or not columns:
             return {}
-        result: dict[str, list] = {}
-        for col in columns[:20]:
-            try:
-                cursor = self._conn.cursor(as_dict=True)
-                cursor.execute(
-                    f"SELECT DISTINCT TOP {limit} [{col}] FROM {table} WHERE [{col}] IS NOT NULL"
+        try:
+            # MSSQL uses TOP N instead of LIMIT, and [] quoting
+            parts = []
+            for i, col in enumerate(columns[:20]):
+                parts.append(
+                    f"SELECT '{col}' AS _col, CAST([{col}] AS NVARCHAR(MAX)) AS _val "
+                    f"FROM (SELECT DISTINCT TOP {limit} [{col}] FROM {table} WHERE [{col}] IS NOT NULL) t{i}"
                 )
-                rows = cursor.fetchall()
-                cursor.close()
-                values = [str(r[col]) for r in rows if r[col] is not None]
-                if values:
-                    result[col] = values
-            except Exception:
-                continue
-        return result
+            sql = "\n UNION ALL \n".join(parts)
+            cursor = self._conn.cursor(as_dict=True)
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            cursor.close()
+            return self._parse_sample_union_result(rows)
+        except Exception:
+            # Fallback to per-column queries
+            result: dict[str, list] = {}
+            for col in columns[:20]:
+                try:
+                    cursor = self._conn.cursor(as_dict=True)
+                    cursor.execute(
+                        f"SELECT DISTINCT TOP {limit} [{col}] FROM {table} WHERE [{col}] IS NOT NULL"
+                    )
+                    rows = cursor.fetchall()
+                    cursor.close()
+                    values = [str(r[col]) for r in rows if r[col] is not None]
+                    if values:
+                        result[col] = values
+                except Exception:
+                    continue
+            return result
 
     async def health_check(self) -> bool:
         if self._conn is None:

@@ -377,25 +377,35 @@ class ClickHouseConnector(BaseConnector):
         return schema
 
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
-        """Get sample distinct values for schema linking optimization."""
-        if self._client is None and self._http_client is None:
+        """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        if (self._client is None and self._http_client is None) or not columns:
             return {}
-        result: dict[str, list] = {}
-        for col in columns[:20]:
-            try:
-                data = self._raw_execute(
-                    f'SELECT DISTINCT `{col}` FROM {table} WHERE `{col}` IS NOT NULL LIMIT {limit}'
-                )
-                if isinstance(data, tuple) and len(data) == 2:
-                    rows = data[0]
-                else:
-                    rows = data
-                values = [str(row[0]) for row in rows]
-                if values:
-                    result[col] = values
-            except Exception:
-                continue
-        return result
+        try:
+            sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            data = self._raw_execute(sql)
+            if isinstance(data, tuple) and len(data) == 2:
+                rows = data[0]
+            else:
+                rows = data
+            return self._parse_sample_union_result(rows)
+        except Exception:
+            # Fallback to per-column queries
+            result: dict[str, list] = {}
+            for col in columns[:20]:
+                try:
+                    data = self._raw_execute(
+                        f'SELECT DISTINCT `{col}` FROM {table} WHERE `{col}` IS NOT NULL LIMIT {limit}'
+                    )
+                    if isinstance(data, tuple) and len(data) == 2:
+                        rows = data[0]
+                    else:
+                        rows = data
+                    values = [str(row[0]) for row in rows]
+                    if values:
+                        result[col] = values
+                except Exception:
+                    continue
+            return result
 
     async def health_check(self) -> bool:
         if self._client is None and self._http_client is None:

@@ -1,6 +1,7 @@
 """Tests for the monitor's parallel run proxy endpoints (/api/parallel/*)."""
 
 import pytest
+import pytest_asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client():
     """Create an async test client for the monitor FastAPI app."""
     mock_conn = AsyncMock()

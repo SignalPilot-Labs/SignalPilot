@@ -652,6 +652,9 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="PROD_DB" hint="optional — default database" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="PUBLIC" hint="optional — default schema" />
         <FormInput label="role" value={form.role} onChange={(v) => setForm({ ...form, role: v })} placeholder="ANALYST_ROLE" hint="optional — Snowflake role" />
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="text-[var(--color-text-muted)]">access:</span> If using a network policy, add this server&apos;s IP to the ALLOWED_IP_LIST. Snowflake Admin → Security → Network Policies.
+        </div>
       </>
     );
   }
@@ -671,6 +674,9 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           rows={6}
           className="col-span-2"
         />
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="text-[var(--color-text-muted)]">setup:</span> GCP Console → IAM → Service Accounts → Create Key (JSON). The service account needs BigQuery Data Viewer + BigQuery Job User roles.
+        </div>
       </>
     );
   }
@@ -684,6 +690,9 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         <FormInput label="access token" value={form.access_token} onChange={(v) => setForm({ ...form, access_token: v })} type="password" hint="personal access token (PAT)" required />
         <FormInput label="catalog" value={form.catalog} onChange={(v) => setForm({ ...form, catalog: v })} placeholder="main" hint="optional — Unity Catalog name" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="default" hint="optional — default schema" />
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="text-[var(--color-text-muted)]">setup:</span> Workspace Settings → User Settings → Developer → Access Tokens. Ensure SQL Warehouse is running and token has CAN USE permission.
+        </div>
       </>
     );
   }

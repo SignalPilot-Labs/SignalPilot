@@ -148,6 +148,26 @@ class SignalPilotClient:
         r.raise_for_status()
         return r.json()
 
+    async def cache_invalidate(self, connection_name: str | None = None) -> dict[str, Any]:
+        params = {}
+        if connection_name:
+            params["connection_name"] = connection_name
+        r = await self._client.post("/api/cache/invalidate", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    # ── annotations ──────────────────────────────────────────────────────────
+
+    async def get_annotations(self, connection_name: str) -> dict[str, Any]:
+        r = await self._client.get(f"/api/connections/{connection_name}/annotations")
+        r.raise_for_status()
+        return r.json()
+
+    async def detect_pii(self, connection_name: str) -> dict[str, Any]:
+        r = await self._client.post(f"/api/connections/{connection_name}/detect-pii")
+        r.raise_for_status()
+        return r.json()
+
     # ── settings ─────────────────────────────────────────────────────────────
 
     async def get_settings(self) -> dict[str, Any]:

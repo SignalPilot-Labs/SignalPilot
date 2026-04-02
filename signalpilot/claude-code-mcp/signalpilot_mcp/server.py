@@ -581,6 +581,112 @@ async def cache_stats() -> str:
     )
 
 
+@mcp.tool()
+async def invalidate_cache(connection_name: str = "") -> str:
+    """
+    Clear the query cache. Useful after schema changes or data updates.
+
+    Args:
+        connection_name: Clear cache only for this connection (empty = all)
+
+    Returns:
+        Confirmation message.
+    """
+    try:
+        result = await _get_client().cache_invalidate(connection_name or None)
+    except Exception as e:
+        return _err(e)
+    cleared = result.get("cleared", "?")
+    scope = f" for '{connection_name}'" if connection_name else ""
+    return f"Cache invalidated{scope}. {cleared} entries cleared."
+
+
+# ── Annotations & PII ────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def get_annotations(connection_name: str) -> str:
+    """
+    View schema annotations for a database connection.
+
+    Annotations include table descriptions, column metadata, PII flags,
+    sensitivity levels, and owners. These are defined in schema.yml files
+    and control governance behavior (PII redaction, blocked tables, etc.).
+
+    Args:
+        connection_name: Name of the connection
+
+    Returns:
+        Annotation details as formatted text.
+    """
+    try:
+        data = await _get_client().get_annotations(connection_name)
+    except Exception as e:
+        return _err(e)
+
+    if not data or (isinstance(data, dict) and not data.get("tables")):
+        return f"No annotations configured for '{connection_name}'."
+
+    lines = [f"Annotations for '{connection_name}':", ""]
+    tables = data.get("tables", data) if isinstance(data, dict) else data
+    if isinstance(tables, dict):
+        for tname, info in tables.items():
+            desc = info.get("description", "")
+            owner = info.get("owner", "")
+            lines.append(f"  {tname}")
+            if desc:
+                lines.append(f"    Description: {desc}")
+            if owner:
+                lines.append(f"    Owner: {owner}")
+            if info.get("sensitivity"):
+                lines.append(f"    Sensitivity: {info['sensitivity']}")
+            cols = info.get("columns", {})
+            for col_name, col_info in cols.items():
+                if col_info.get("pii"):
+                    lines.append(f"    [{col_name}] PII: {col_info['pii']}")
+            lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def detect_pii(connection_name: str) -> str:
+    """
+    Auto-detect PII (personally identifiable information) in a database.
+
+    Scans column names and sample data to find columns that may contain
+    emails, phone numbers, SSNs, credit card numbers, or IP addresses.
+    Results can be used to set up automatic PII redaction rules.
+
+    Args:
+        connection_name: Name of the connection to scan
+
+    Returns:
+        Detected PII columns and their types.
+    """
+    try:
+        data = await _get_client().detect_pii(connection_name)
+    except Exception as e:
+        return _err(e)
+
+    detections = data.get("detections", data) if isinstance(data, dict) else data
+    if not detections:
+        return f"No PII detected in '{connection_name}'."
+
+    lines = [f"PII Detection for '{connection_name}':", ""]
+    if isinstance(detections, list):
+        for d in detections:
+            table = d.get("table", "?")
+            column = d.get("column", "?")
+            pii_type = d.get("pii_type", "?")
+            confidence = d.get("confidence", "?")
+            lines.append(f"  {table}.{column} — {pii_type} (confidence: {confidence})")
+    elif isinstance(detections, dict):
+        for table, cols in detections.items():
+            for col, info in (cols.items() if isinstance(cols, dict) else []):
+                lines.append(f"  {table}.{col} — {info}")
+    return "\n".join(lines)
+
+
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 

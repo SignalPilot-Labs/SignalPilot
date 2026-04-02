@@ -98,8 +98,8 @@ async def pre_tool_use_hook(
                         "tool_name": tool_name,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[hooks] Failed to log subagent timeout: {e}")
             return {"decision": "block", "reason": f"Subagent timed out after {int(elapsed)}s (limit: {SUBAGENT_TIMEOUT_SEC}s). You must stop now and return your results."}
 
     # Record timestamp for duration calculation

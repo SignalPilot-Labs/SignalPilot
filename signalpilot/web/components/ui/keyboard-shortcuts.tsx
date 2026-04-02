@@ -60,11 +60,11 @@ export function KeyboardShortcuts() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/70 px-0 sm:px-4"
       onClick={() => setShowHelp(false)}
     >
       <div
-        className="bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl w-80 animate-scale-in"
+        className="bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl w-full sm:w-80 max-h-[85vh] overflow-y-auto animate-scale-in safe-area-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -161,7 +161,7 @@ export function GovernancePipeline() {
   return (
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M2 8h3l2-4 2 8 2-4h3" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -303,14 +303,14 @@ export function GovernancePipeline() {
         </div>
 
         {/* Footer note */}
-        <div className="flex items-center gap-2 mt-4 pt-3 border-t border-[var(--color-border)]">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-[var(--color-border)]">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
             <path d="M6 1v10M1 6h10" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" />
           </svg>
           <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
             every query passes through all 6 stages before results reach the agent
           </span>
-          <span className="ml-auto text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+          <span className="sm:ml-auto text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
             ~2ms overhead
           </span>
         </div>

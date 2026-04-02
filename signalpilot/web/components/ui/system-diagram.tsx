@@ -25,8 +25,8 @@ export function SystemDiagram({
         </svg>
         <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">system topology</span>
       </div>
-      <div className="p-6 flex items-center justify-center">
-        <svg width="480" height="140" viewBox="0 0 480 140" fill="none">
+      <div className="p-4 sm:p-6 overflow-x-auto">
+        <svg width="480" height="140" viewBox="0 0 480 140" fill="none" className="mx-auto max-w-none sm:max-w-full sm:h-auto" style={{ minWidth: "480px" }}>
           {/* Agent/Client */}
           <g>
             <rect x="0" y="45" width="80" height="50" stroke="var(--color-border-hover)" strokeWidth="1" fill="var(--color-bg)" />

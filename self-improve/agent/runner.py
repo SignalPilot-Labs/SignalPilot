@@ -29,6 +29,24 @@ from agent import db, hooks, git_ops, permissions, prompt, session_gate, signals
 # Helpers
 # =============================================================================
 
+async def _log_stream_delta(run_id: str, event_data: dict, agent_role: str) -> None:
+    """Log text/thinking deltas from a StreamEvent to the audit DB."""
+    if event_data.get("type") != "content_block_delta":
+        return
+    delta = event_data.get("delta", {})
+    dtype = delta.get("type", "")
+    if dtype == "text_delta" and delta.get("text"):
+        try:
+            await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": agent_role})
+        except Exception as e:
+            print(f"[agent] Audit log failed (text): {e}")
+    elif dtype == "thinking_delta" and delta.get("thinking"):
+        try:
+            await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": agent_role})
+        except Exception as e:
+            print(f"[agent] Audit log failed (thinking): {e}")
+
+
 def _is_workspace_same_repo(github_repo: str) -> bool:
     """Check if /workspace is the same repo as GITHUB_REPO."""
     try:
@@ -199,20 +217,7 @@ async def _run_loop(
 
             # --- StreamEvent ---
             if isinstance(message, StreamEvent):
-                event_data = message.event or {}
-                if event_data.get("type") == "content_block_delta":
-                    delta = event_data.get("delta", {})
-                    dtype = delta.get("type", "")
-                    if dtype == "text_delta" and delta.get("text"):
-                        try:
-                            await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": hooks._agent_role})
-                        except Exception:
-                            pass
-                    elif dtype == "thinking_delta" and delta.get("thinking"):
-                        try:
-                            await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": hooks._agent_role})
-                        except Exception:
-                            pass
+                await _log_stream_delta(run_id, message.event or {}, hooks._agent_role)
                 continue
 
             # --- AssistantMessage ---
@@ -428,20 +433,17 @@ async def _run_loop(
                     break
 
                 if isinstance(msg, StreamEvent):
-                    event_data = msg.event or {}
-                    if event_data.get("type") == "content_block_delta":
-                        delta = event_data.get("delta", {})
-                        dtype = delta.get("type", "")
-                        if dtype == "text_delta" and delta.get("text"):
-                            try:
-                                await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": "ceo"})
-                            except Exception:
-                                pass
-                        elif dtype == "thinking_delta" and delta.get("thinking"):
-                            try:
-                                await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": "ceo"})
-                            except Exception:
-                                pass
+                    await _log_stream_delta(run_id, msg.event or {}, "ceo")
+                    continue
+
+                if isinstance(msg, RateLimitEvent):
+                    info = msg.rate_limit_info
+                    await db.log_audit(run_id, "rate_limit", {
+                        "status": info.status, "resets_at": info.resets_at,
+                        "context": "ceo_round",
+                    })
+                    if info.status == "rejected":
+                        print(f"[agent] Rate limited during CEO round, waiting for reset...")
                     continue
 
                 if isinstance(msg, AssistantMessage):

@@ -185,7 +185,7 @@ export default function AuditPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
-        <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+        <div className="flex items-center gap-2 flex-1 min-w-0 sm:min-w-[200px]">
           <Filter className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
           <input
             type="text"

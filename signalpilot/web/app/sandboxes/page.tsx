@@ -184,13 +184,13 @@ export default function SandboxesPage() {
                   </div>
                   <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{status.label}</span>
                   <div className="flex items-center gap-1">
-                    <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
                     <button
                       onClick={(e) => {
                         e.preventDefault();
                         handleDelete(sb.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
+                      className="sm:opacity-0 sm:group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>

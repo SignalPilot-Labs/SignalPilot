@@ -1,0 +1,35 @@
+# SignalPilot Mobile Access Gateway
+# Usage: docker compose up --build
+#
+# Provides authenticated mobile access to:
+#   /app     → Web UI (port 3200)
+#   /monitor → Self-Improve Monitor (port 3400)
+#
+# First visit: http://localhost:8080/setup to create admin account
+
+services:
+  mobile-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sp-mobile-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_PORT: "8080"
+      WEB_UI_URL: "http://host.docker.internal:3200"
+      MONITOR_UI_URL: "http://host.docker.internal:3400"
+      GATEWAY_API_URL: "http://host.docker.internal:3300"
+      MONITOR_API_URL: "http://host.docker.internal:3401"
+      SESSION_MAX_AGE: "86400"
+      NODE_ENV: "production"
+      # JWT_SECRET: set a fixed secret for persistent sessions across restarts
+      # JWT_SECRET: "your-random-secret-here"
+    volumes:
+      - gateway-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  gateway-data:

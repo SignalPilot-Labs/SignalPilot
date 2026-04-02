@@ -1,0 +1,21 @@
+{
+  "name": "signalpilot-mobile-gateway",
+  "version": "1.0.0",
+  "description": "Secure authenticated mobile access gateway for SignalPilot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "hash-password": "node scripts/hash-password.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.21.0",
+    "helmet": "^7.1.0",
+    "http-proxy-middleware": "^3.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "otplib": "^12.0.1",
+    "qrcode": "^1.5.4",
+    "uuid": "^9.0.1"
+  }
+}

@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>SignalPilot — Mobile Portal</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a1a;
+      --surface: #111128;
+      --surface-2: #1a1a3e;
+      --surface-3: #1e1e4a;
+      --border: #2a2a5a;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-hover: #818cf8;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --radius: 14px;
+    }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      padding: 0;
+      background-image:
+        radial-gradient(ellipse at 20% 0%, rgba(99,102,241,0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 100%, rgba(139,92,246,0.04) 0%, transparent 50%);
+    }
+
+    /* Header */
+    .header {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      background: rgba(17,17,40,0.8);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .header-icon svg { width: 20px; height: 20px; }
+    .header-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .header-actions { display: flex; gap: 8px; }
+    .icon-btn {
+      width: 36px; height: 36px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .icon-btn:hover { border-color: var(--primary); color: var(--text); }
+
+    /* Content */
+    .content {
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Status bar */
+    .status-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 4px;
+    }
+    .status-bar::-webkit-scrollbar { display: none; }
+    .status-chip {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    .status-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+    .status-dot.red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    /* Cards */
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 12px;
+      padding-left: 4px;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 16px;
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.25s;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+    }
+    .card:hover {
+      border-color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .card:active { transform: translateY(0); }
+    .card-icon {
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-icon svg { width: 24px; height: 24px; }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .card-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .card-web::before { background: linear-gradient(90deg, #6366f1, #818cf8); }
+    .card-web .card-icon { background: rgba(99,102,241,0.15); color: #818cf8; }
+    .card-monitor::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+    .card-monitor .card-icon { background: rgba(139,92,246,0.15); color: #a78bfa; }
+
+    /* Full-width card */
+    .cards-full { display: grid; gap: 12px; margin-bottom: 28px; }
+    .card-full {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.25s;
+    }
+    .card-full:hover { border-color: var(--primary); transform: translateY(-1px); }
+    .card-full .card-icon { flex-shrink: 0; }
+    .card-full-content { flex: 1; }
+    .card-full-title { font-size: 14px; font-weight: 600; }
+    .card-full-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .card-arrow { color: var(--text-muted); flex-shrink: 0; }
+
+    /* Session info */
+    .session-info {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 28px;
+    }
+    .session-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 13px;
+    }
+    .session-label { color: var(--text-muted); }
+    .session-value { font-weight: 500; font-family: monospace; font-size: 12px; }
+
+    /* Logout */
+    .logout-btn {
+      width: 100%;
+      padding: 14px;
+      background: transparent;
+      border: 1px solid rgba(239,68,68,0.3);
+      color: var(--red);
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .logout-btn:hover { background: rgba(239,68,68,0.1); }
+
+    /* PWA install banner */
+    .install-banner {
+      display: none;
+      background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.1));
+      border: 1px solid rgba(99,102,241,0.3);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .install-banner:hover { border-color: var(--primary); }
+    .install-banner-text {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .install-banner-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 360px) {
+      .cards { grid-template-columns: 1fr; }
+      .content { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <div class="header-icon">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M8 16l5 5L24 10" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <span class="header-title">SignalPilot</span>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" id="refreshBtn" title="Refresh status">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m0 0a9 9 0 0 1 9-9m-9 9a9 9 0 0 0 9 9"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="sessionsBtn" title="Active sessions">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- PWA Install -->
+    <div class="install-banner" id="installBanner">
+      <div class="install-banner-text">Install SignalPilot</div>
+      <div class="install-banner-sub">Add to home screen for quick access</div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-bar" id="statusBar">
+      <div class="status-chip">
+        <div class="status-dot" id="webStatus"></div>
+        <span>Web UI</span>
+      </div>
+      <div class="status-chip">
+        <div class="status-dot" id="monitorStatus"></div>
+        <span>Monitor</span>
+      </div>
+      <div class="status-chip">
+        <div class="status-dot" id="gatewayStatus"></div>
+        <span>Gateway API</span>
+      </div>
+    </div>
+
+    <!-- Main Apps -->
+    <div class="section-title">Applications</div>
+    <div class="cards">
+      <a href="/app" class="card card-web">
+        <div class="card-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+          </svg>
+        </div>
+        <div class="card-title">Web UI</div>
+        <div class="card-desc">Query editor, schema browser, connections</div>
+      </a>
+      <a href="/monitor" class="card card-monitor">
+        <div class="card-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+        </div>
+        <div class="card-title">Agent Monitor</div>
+        <div class="card-desc">Self-improve runs, tool calls, controls</div>
+      </a>
+    </div>
+
+    <!-- Quick Links -->
+    <div class="section-title">Quick Access</div>
+    <div class="cards-full">
+      <a href="/app" class="card-full">
+        <div class="card-icon" style="background:rgba(34,197,94,0.12);color:#22c55e;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+          </svg>
+        </div>
+        <div class="card-full-content">
+          <div class="card-full-title">Query Editor</div>
+          <div class="card-full-desc">Write and execute governed SQL queries</div>
+        </div>
+        <div class="card-arrow">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </a>
+      <a href="/app" class="card-full">
+        <div class="card-icon" style="background:rgba(245,158,11,0.12);color:#f59e0b;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+        </div>
+        <div class="card-full-content">
+          <div class="card-full-title">Audit Log</div>
+          <div class="card-full-desc">Review all governed query activity</div>
+        </div>
+        <div class="card-arrow">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </a>
+      <a href="/monitor" class="card-full">
+        <div class="card-icon" style="background:rgba(99,102,241,0.12);color:#818cf8;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        <div class="card-full-content">
+          <div class="card-full-title">Agent Runs</div>
+          <div class="card-full-desc">Monitor active improvement cycles</div>
+        </div>
+        <div class="card-arrow">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </a>
+    </div>
+
+    <!-- Session Info -->
+    <div class="section-title">Session</div>
+    <div class="session-info" id="sessionInfo">
+      <div class="session-row">
+        <span class="session-label">Signed in as</span>
+        <span class="session-value" id="sessionUser">—</span>
+      </div>
+      <div class="session-row">
+        <span class="session-label">Active sessions</span>
+        <span class="session-value" id="sessionCount">—</span>
+      </div>
+    </div>
+
+    <button class="logout-btn" id="logoutBtn">Sign Out</button>
+  </div>
+
+  <!-- Sessions modal -->
+  <div id="sessionsModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:200;padding:20px;display:none;align-items:center;justify-content:center;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;width:100%;max-width:400px;max-height:80vh;overflow-y:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="font-size:16px;font-weight:700;">Active Sessions</h2>
+        <button class="icon-btn" id="closeModal" style="width:32px;height:32px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="sessionsList"></div>
+      <button id="revokeAllBtn" style="width:100%;padding:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;margin-top:12px;font-family:inherit;">Revoke Other Sessions</button>
+    </div>
+  </div>
+
+  <script>
+    // ---- Status checks ----
+    async function checkStatus() {
+      const checks = [
+        { el: 'webStatus', url: '/app' },
+        { el: 'monitorStatus', url: '/monitor' },
+        { el: 'gatewayStatus', url: '/gateway-api/health' },
+      ];
+      for (const c of checks) {
+        try {
+          const r = await fetch(c.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+          document.getElementById(c.el).className = 'status-dot ' + (r.ok ? 'green' : 'amber');
+        } catch {
+          document.getElementById(c.el).className = 'status-dot red';
+        }
+      }
+    }
+    checkStatus();
+    document.getElementById('refreshBtn').addEventListener('click', checkStatus);
+
+    // ---- Session info ----
+    async function loadSessionInfo() {
+      try {
+        const r = await fetch('/api/sessions');
+        const data = await r.json();
+        const current = data.sessions.find(s => s.current);
+        document.getElementById('sessionUser').textContent = current ? 'admin' : '—';
+        document.getElementById('sessionCount').textContent = data.sessions.length;
+      } catch {}
+    }
+    loadSessionInfo();
+
+    // ---- Logout ----
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location = '/login';
+    });
+
+    // ---- Sessions modal ----
+    const modal = document.getElementById('sessionsModal');
+    document.getElementById('sessionsBtn').addEventListener('click', async () => {
+      modal.style.display = 'flex';
+      try {
+        const r = await fetch('/api/sessions');
+        const data = await r.json();
+        const list = document.getElementById('sessionsList');
+        list.innerHTML = data.sessions.map(s => `
+          <div style="padding:10px 12px;background:var(--surface-2);border-radius:10px;margin-bottom:8px;font-size:13px;">
+            <div style="display:flex;justify-content:space-between;">
+              <span style="font-weight:600;">${s.current ? 'Current session' : 'Session ' + s.id}</span>
+              <span style="color:${s.current ? 'var(--green)' : 'var(--text-muted)'};">${s.current ? 'Active' : 'Other'}</span>
+            </div>
+            <div style="color:var(--text-muted);margin-top:4px;">IP: ${s.ip} · ${new Date(s.createdAt).toLocaleString()}</div>
+          </div>
+        `).join('');
+      } catch {}
+    });
+    document.getElementById('closeModal').addEventListener('click', () => { modal.style.display = 'none'; });
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+    document.getElementById('revokeAllBtn').addEventListener('click', async () => {
+      await fetch('/api/sessions/revoke-all', { method: 'POST' });
+      modal.style.display = 'none';
+      loadSessionInfo();
+    });
+
+    // ---- PWA Install ----
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      document.getElementById('installBanner').style.display = 'block';
+    });
+    document.getElementById('installBanner').addEventListener('click', async () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        document.getElementById('installBanner').style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

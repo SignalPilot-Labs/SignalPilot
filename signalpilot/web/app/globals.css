@@ -863,6 +863,28 @@ kbd {
   pre, code {
     font-size: max(12px, 0.75rem);
   }
+
+  /* ── Focus-visible: outline for keyboard/screen-reader nav on mobile ── */
+  :focus-visible {
+    outline: 2px solid var(--color-success);
+    outline-offset: 2px;
+  }
+
+  /* ── Selection color — matches theme ── */
+  ::selection {
+    background: rgba(0, 255, 136, 0.2);
+    color: var(--color-text);
+  }
+
+  /* ── Smooth scroll for in-page navigation ── */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* ── Prevent long-press context menu on interactive elements ── */
+  nav, .mobile-bottombar, .mobile-topbar, button {
+    -webkit-touch-callout: none;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════ */

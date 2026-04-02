@@ -120,15 +120,15 @@ export default function AuditPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={exportCSV} disabled={filtered.length === 0}
-            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider">
+            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider active:text-[var(--color-text)]">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> csv
           </button>
           <a href={getAuditExportUrl("json", typeFilter || undefined)} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
+            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider active:text-[var(--color-text)]">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
           </a>
           <button onClick={refresh}
-            className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
           </button>
         </div>

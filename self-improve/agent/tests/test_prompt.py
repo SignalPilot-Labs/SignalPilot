@@ -39,6 +39,20 @@ def test_build_system_prompt_duration_hours():
     assert "1h 30m" in text
 
 
+def test_build_system_prompt_exact_hour():
+    result = prompt.build_system_prompt(duration_minutes=120)
+    text = result["append"]
+    assert "2h" in text
+    assert "0m" not in text
+
+
+def test_build_system_prompt_no_duration():
+    result = prompt.build_system_prompt(duration_minutes=0)
+    text = result["append"]
+    # Should NOT include timed-session content
+    assert "TIME-LOCKED" not in text
+
+
 def test_build_initial_prompt_returns_string():
     result = prompt.build_initial_prompt()
     assert isinstance(result, str)

@@ -1446,6 +1446,61 @@ async def explore_column(
 
 
 @mcp.tool()
+async def estimate_query_cost(connection_name: str, sql: str) -> str:
+    """
+    Estimate the cost of a SQL query before executing it (dry run).
+
+    Returns estimated rows, bytes to scan, cost in USD, and warnings.
+    For BigQuery: uses native dry_run (zero cost, exact bytes estimate).
+    For other databases: uses EXPLAIN to estimate row counts and cost.
+
+    Use this BEFORE running expensive queries to avoid surprise costs.
+
+    Args:
+        connection_name: Database connection to estimate against.
+        sql: SQL query to estimate cost for.
+    """
+    err = _validate_connection_name(connection_name)
+    if err:
+        return err
+
+    if err := _validate_sql(sql):
+        return f"Error: {err}"
+
+    gw = _gateway_url()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{gw}/api/query/explain",
+                json={
+                    "connection_name": connection_name,
+                    "sql": sql,
+                    "row_limit": 1000,
+                },
+            )
+            if resp.status_code != 200:
+                return f"Error: {resp.text}"
+            data = resp.json()
+
+        lines = [f"Cost Estimate for: {connection_name}", ""]
+        lines.append(f"Estimated rows: {data.get('estimated_rows', 'unknown'):,}")
+        lines.append(f"Estimated USD:  ${data.get('estimated_usd', 0):.6f}")
+        lines.append(f"Is expensive:   {data.get('is_expensive', False)}")
+        lines.append(f"Tables touched: {', '.join(data.get('tables', []))}")
+
+        if data.get("warning"):
+            lines.append(f"\n⚠️  WARNING: {data['warning']}")
+
+        plan = data.get("plan")
+        if plan:
+            lines.append(f"\nQuery plan:\n{plan[:1500]}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error estimating cost: {e}"
+
+
+@mcp.tool()
 async def debug_cte_query(connection_name: str, sql: str) -> str:
     """
     ReFoRCE-style CTE debugger — break complex queries into CTEs and validate each step.

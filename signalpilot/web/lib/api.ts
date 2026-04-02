@@ -108,6 +108,17 @@ export const searchConnectionSchema = (name: string, query: string) =>
     }>;
   }>(`/api/connections/${name}/schema/search?q=${encodeURIComponent(query)}`);
 
+// Column Name Correction
+export const correctColumns = (name: string, table: string, columns: string[], threshold = 0.5) =>
+  request<{
+    table: string;
+    corrections: Record<string, { suggestion: string | null; distance: number; confidence: number }>;
+    total_columns: number;
+  }>(`/api/connections/${name}/schema/correct-columns`, {
+    method: "POST",
+    body: JSON.stringify({ table, columns, threshold }),
+  });
+
 // Schema Endorsements
 export const getSchemaEndorsements = (name: string) =>
   request<{ endorsed: string[]; hidden: string[]; mode: "all" | "endorsed_only" }>(

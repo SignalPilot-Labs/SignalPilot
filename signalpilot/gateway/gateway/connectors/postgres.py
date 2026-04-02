@@ -17,17 +17,34 @@ except ImportError:
 class PostgresConnector(BaseConnector):
     def __init__(self):
         self._pool = None
+        self._ssl_config: dict | None = None
+        self._temp_files: list[str] = []
+
+    def set_ssl_config(self, ssl_config: dict) -> None:
+        """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
+        self._ssl_config = ssl_config
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_ASYNCPG:
             raise RuntimeError("asyncpg not installed. Run: pip install asyncpg")
+
+        # Build SSL context if SSL config provided
+        ssl_ctx = None
+        if self._ssl_config and self._ssl_config.get("enabled"):
+            ssl_ctx = self._build_ssl_context()
+
         try:
+            connect_kwargs: dict[str, Any] = {
+                "min_size": 1,
+                "max_size": 5,
+                "timeout": 15,
+                "command_timeout": 30,
+            }
+            if ssl_ctx is not None:
+                connect_kwargs["ssl"] = ssl_ctx
             self._pool = await asyncpg.create_pool(
                 connection_string,
-                min_size=1,
-                max_size=5,
-                timeout=15,
-                command_timeout=30,
+                **connect_kwargs,
             )
         except asyncpg.InvalidCatalogNameError as e:
             raise RuntimeError(f"Database not found: {e}") from e
@@ -35,6 +52,51 @@ class PostgresConnector(BaseConnector):
             raise RuntimeError(f"Authentication failed: {e}") from e
         except (OSError, asyncio.TimeoutError) as e:
             raise RuntimeError(f"Connection failed (host unreachable or timeout): {e}") from e
+
+    def _build_ssl_context(self):
+        """Build an ssl.SSLContext from the stored SSL config."""
+        import ssl
+        import tempfile
+        import os
+
+        mode = self._ssl_config.get("mode", "require")
+
+        # Map SSL mode to ssl module constants
+        if mode in ("verify-ca", "verify-full"):
+            ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            ctx.check_hostname = mode == "verify-full"
+        else:
+            # "require" mode — encrypt but don't verify certs
+            ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        # Load CA certificate
+        if self._ssl_config.get("ca_cert"):
+            ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+            ca_file.write(self._ssl_config["ca_cert"].encode())
+            ca_file.close()
+            self._temp_files.append(ca_file.name)
+            ctx.load_verify_locations(ca_file.name)
+            if mode in ("verify-ca", "verify-full"):
+                ctx.verify_mode = ssl.CERT_REQUIRED
+
+        # Load client certificate + key (mutual TLS)
+        if self._ssl_config.get("client_cert") and self._ssl_config.get("client_key"):
+            cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+            cert_file.write(self._ssl_config["client_cert"].encode())
+            cert_file.close()
+            self._temp_files.append(cert_file.name)
+
+            key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+            key_file.write(self._ssl_config["client_key"].encode())
+            key_file.close()
+            os.chmod(key_file.name, 0o600)
+            self._temp_files.append(key_file.name)
+
+            ctx.load_cert_chain(cert_file.name, key_file.name)
+
+        return ctx
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._pool is None:
@@ -265,3 +327,11 @@ class PostgresConnector(BaseConnector):
         if self._pool:
             await self._pool.close()
             self._pool = None
+        # Cleanup temp SSL cert files
+        import os
+        for f in self._temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        self._temp_files.clear()

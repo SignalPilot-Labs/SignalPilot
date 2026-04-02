@@ -22,6 +22,12 @@ class ClickHouseConnector(BaseConnector):
     def __init__(self):
         self._client: CHClient | None = None
         self._database: str = "default"
+        self._ssl_config: dict | None = None
+        self._temp_files: list[str] = []
+
+    def set_ssl_config(self, ssl_config: dict) -> None:
+        """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
+        self._ssl_config = ssl_config
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_CLICKHOUSE:
@@ -42,10 +48,45 @@ class ClickHouseConnector(BaseConnector):
             "send_receive_timeout": 30,
         }
 
-        # SSL support
+        # SSL support — from connection string or explicit ssl_config
         if params.get("secure"):
             connect_args["secure"] = True
             connect_args["verify"] = True
+
+        if self._ssl_config and self._ssl_config.get("enabled"):
+            import tempfile
+            import os
+
+            connect_args["secure"] = True
+            mode = self._ssl_config.get("mode", "require")
+
+            if mode in ("verify-ca", "verify-full"):
+                connect_args["verify"] = True
+            else:
+                connect_args["verify"] = False
+
+            if self._ssl_config.get("ca_cert"):
+                ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                ca_file.write(self._ssl_config["ca_cert"].encode())
+                ca_file.close()
+                self._temp_files.append(ca_file.name)
+                connect_args["ca_certs"] = ca_file.name
+                connect_args["verify"] = True
+
+            if self._ssl_config.get("client_cert"):
+                cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                cert_file.write(self._ssl_config["client_cert"].encode())
+                cert_file.close()
+                self._temp_files.append(cert_file.name)
+                connect_args["certfile"] = cert_file.name
+
+            if self._ssl_config.get("client_key"):
+                key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+                key_file.write(self._ssl_config["client_key"].encode())
+                key_file.close()
+                os.chmod(key_file.name, 0o600)
+                self._temp_files.append(key_file.name)
+                connect_args["keyfile"] = key_file.name
 
         try:
             self._client = CHClient(**connect_args)
@@ -276,3 +317,10 @@ class ClickHouseConnector(BaseConnector):
         if self._client:
             self._client.disconnect()
             self._client = None
+        import os
+        for f in self._temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        self._temp_files.clear()

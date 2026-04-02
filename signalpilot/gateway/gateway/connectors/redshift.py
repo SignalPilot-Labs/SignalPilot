@@ -22,6 +22,12 @@ except ImportError:
 class RedshiftConnector(BaseConnector):
     def __init__(self):
         self._conn = None
+        self._ssl_config: dict | None = None
+        self._temp_files: list[str] = []
+
+    def set_ssl_config(self, ssl_config: dict) -> None:
+        """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
+        self._ssl_config = ssl_config
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PSYCOPG2:
@@ -33,8 +39,11 @@ class RedshiftConnector(BaseConnector):
         if dsn.startswith("redshift://"):
             dsn = "postgresql://" + dsn[len("redshift://"):]
 
+        # Build SSL kwargs from ssl_config if provided
+        ssl_kwargs = self._build_ssl_kwargs() if self._ssl_config and self._ssl_config.get("enabled") else {}
+
         try:
-            self._conn = psycopg2.connect(dsn, connect_timeout=15)
+            self._conn = psycopg2.connect(dsn, connect_timeout=15, **ssl_kwargs)
             self._conn.set_session(readonly=True, autocommit=True)
         except psycopg2.OperationalError as e:
             err_str = str(e).lower()
@@ -43,6 +52,39 @@ class RedshiftConnector(BaseConnector):
             elif "could not connect" in err_str or "connection refused" in err_str:
                 raise RuntimeError(f"Connection failed (host unreachable or timeout): {e}") from e
             raise RuntimeError(f"Redshift connection error: {e}") from e
+
+    def _build_ssl_kwargs(self) -> dict:
+        """Build psycopg2 SSL keyword arguments from ssl_config."""
+        import tempfile
+        import os
+
+        kwargs: dict = {}
+        mode = self._ssl_config.get("mode", "require")
+        kwargs["sslmode"] = mode
+
+        if self._ssl_config.get("ca_cert"):
+            ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+            ca_file.write(self._ssl_config["ca_cert"].encode())
+            ca_file.close()
+            self._temp_files.append(ca_file.name)
+            kwargs["sslrootcert"] = ca_file.name
+
+        if self._ssl_config.get("client_cert"):
+            cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+            cert_file.write(self._ssl_config["client_cert"].encode())
+            cert_file.close()
+            self._temp_files.append(cert_file.name)
+            kwargs["sslcert"] = cert_file.name
+
+        if self._ssl_config.get("client_key"):
+            key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+            key_file.write(self._ssl_config["client_key"].encode())
+            key_file.close()
+            os.chmod(key_file.name, 0o600)
+            self._temp_files.append(key_file.name)
+            kwargs["sslkey"] = key_file.name
+
+        return kwargs
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
@@ -228,3 +270,10 @@ class RedshiftConnector(BaseConnector):
         if self._conn:
             self._conn.close()
             self._conn = None
+        import os
+        for f in self._temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        self._temp_files.clear()

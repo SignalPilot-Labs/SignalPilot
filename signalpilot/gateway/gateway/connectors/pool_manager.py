@@ -191,6 +191,24 @@ class PoolManager:
                 if isinstance(connector, MySQLConnector):
                     connector.set_ssl_config(credential_extras["ssl_config"])
 
+            # PostgreSQL: pass SSL config for CA/client cert support
+            if db_type == "postgres" and credential_extras and credential_extras.get("ssl_config"):
+                from .postgres import PostgresConnector
+                if isinstance(connector, PostgresConnector):
+                    connector.set_ssl_config(credential_extras["ssl_config"])
+
+            # Redshift: pass SSL config for CA/client cert support
+            if db_type == "redshift" and credential_extras and credential_extras.get("ssl_config"):
+                from .redshift import RedshiftConnector
+                if isinstance(connector, RedshiftConnector):
+                    connector.set_ssl_config(credential_extras["ssl_config"])
+
+            # ClickHouse: pass SSL config for CA cert and verify modes
+            if db_type == "clickhouse" and credential_extras and credential_extras.get("ssl_config"):
+                from .clickhouse import ClickHouseConnector
+                if isinstance(connector, ClickHouseConnector):
+                    connector.set_ssl_config(credential_extras["ssl_config"])
+
             # SSH tunnel setup (for host:port-based databases)
             actual_conn_str = connection_string
             if (

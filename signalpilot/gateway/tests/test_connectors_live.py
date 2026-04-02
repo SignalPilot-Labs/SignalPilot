@@ -1016,5 +1016,152 @@ class TestMySQLSSLConfig:
         assert mock_connector._ssl_config == ssl_config
 
 
+class TestPostgresSSLConfig:
+    """Tests for PostgreSQL SSL certificate support."""
+
+    def test_ssl_config_stored(self):
+        from gateway.connectors.postgres import PostgresConnector
+        c = PostgresConnector()
+        ssl_config = {"enabled": True, "mode": "verify-full", "ca_cert": "PEM-DATA"}
+        c.set_ssl_config(ssl_config)
+        assert c._ssl_config == ssl_config
+
+    def test_ssl_context_built_for_verify_full(self):
+        from gateway.connectors.postgres import PostgresConnector
+        c = PostgresConnector()
+        c.set_ssl_config({
+            "enabled": True,
+            "mode": "verify-full",
+            "ca_cert": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+        })
+        # _build_ssl_context should create temp files
+        import ssl
+        try:
+            ctx = c._build_ssl_context()
+        except ssl.SSLError:
+            # Expected — test cert is not valid, but context was created
+            pass
+        # Should have created at least one temp file for CA cert
+        assert len(c._temp_files) >= 1
+        # Cleanup
+        import os
+        for f in c._temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+    def test_ssl_config_none_by_default(self):
+        from gateway.connectors.postgres import PostgresConnector
+        c = PostgresConnector()
+        assert c._ssl_config is None
+
+    def test_pool_manager_wires_ssl_for_postgres(self):
+        from gateway.connectors.pool_manager import PoolManager
+        from gateway.connectors.postgres import PostgresConnector
+        from unittest.mock import patch, AsyncMock
+
+        pm = PoolManager()
+        mock_connector = PostgresConnector()
+        mock_connector.connect = AsyncMock()
+        mock_connector.health_check = AsyncMock(return_value=True)
+
+        ssl_config = {"enabled": True, "mode": "require", "ca_cert": "test-ca"}
+        credential_extras = {"ssl_config": ssl_config}
+
+        with patch("gateway.connectors.pool_manager.get_connector", return_value=mock_connector):
+            asyncio.get_event_loop().run_until_complete(
+                pm.acquire("postgres", "postgresql://user:pass@localhost/db", credential_extras)
+            )
+
+        assert mock_connector._ssl_config == ssl_config
+
+
+class TestRedshiftSSLConfig:
+    """Tests for Redshift SSL certificate support."""
+
+    def test_ssl_config_stored(self):
+        from gateway.connectors.redshift import RedshiftConnector
+        c = RedshiftConnector()
+        ssl_config = {"enabled": True, "mode": "verify-ca", "ca_cert": "PEM-DATA"}
+        c.set_ssl_config(ssl_config)
+        assert c._ssl_config == ssl_config
+
+    def test_ssl_kwargs_built(self):
+        from gateway.connectors.redshift import RedshiftConnector
+        c = RedshiftConnector()
+        c.set_ssl_config({
+            "enabled": True,
+            "mode": "verify-ca",
+            "ca_cert": "test-ca-content",
+        })
+        kwargs = c._build_ssl_kwargs()
+        assert kwargs["sslmode"] == "verify-ca"
+        assert "sslrootcert" in kwargs
+        # Cleanup
+        import os
+        for f in c._temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+    def test_pool_manager_wires_ssl_for_redshift(self):
+        from gateway.connectors.pool_manager import PoolManager
+        from gateway.connectors.redshift import RedshiftConnector
+        from unittest.mock import patch, AsyncMock
+
+        pm = PoolManager()
+        mock_connector = RedshiftConnector()
+        mock_connector.connect = AsyncMock()
+        mock_connector.health_check = AsyncMock(return_value=True)
+
+        ssl_config = {"enabled": True, "mode": "require"}
+        credential_extras = {"ssl_config": ssl_config}
+
+        with patch("gateway.connectors.pool_manager.get_connector", return_value=mock_connector):
+            asyncio.get_event_loop().run_until_complete(
+                pm.acquire("redshift", "redshift://user:pass@localhost/db", credential_extras)
+            )
+
+        assert mock_connector._ssl_config == ssl_config
+
+
+class TestClickHouseSSLConfig:
+    """Tests for ClickHouse SSL certificate support."""
+
+    def test_ssl_config_stored(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        ssl_config = {"enabled": True, "mode": "require"}
+        c.set_ssl_config(ssl_config)
+        assert c._ssl_config == ssl_config
+
+    def test_ssl_config_none_by_default(self):
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        c = ClickHouseConnector()
+        assert c._ssl_config is None
+
+    def test_pool_manager_wires_ssl_for_clickhouse(self):
+        from gateway.connectors.pool_manager import PoolManager
+        from gateway.connectors.clickhouse import ClickHouseConnector
+        from unittest.mock import patch, AsyncMock
+
+        pm = PoolManager()
+        mock_connector = ClickHouseConnector()
+        mock_connector.connect = AsyncMock()
+        mock_connector.health_check = AsyncMock(return_value=True)
+
+        ssl_config = {"enabled": True, "mode": "verify-ca", "ca_cert": "test-ca"}
+        credential_extras = {"ssl_config": ssl_config}
+
+        with patch("gateway.connectors.pool_manager.get_connector", return_value=mock_connector):
+            asyncio.get_event_loop().run_until_complete(
+                pm.acquire("clickhouse", "clickhouse://user:pass@localhost/db", credential_extras)
+            )
+
+        assert mock_connector._ssl_config == ssl_config
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

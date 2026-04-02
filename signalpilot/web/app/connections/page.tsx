@@ -400,10 +400,10 @@ function DbTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
 
 /* ── Form field components ── */
 function FormInput({
-  label, value, onChange, type = "text", placeholder, hint, required, className = "",
+  label, value, onChange, type = "text", placeholder, hint, required, className = "", error,
 }: {
   label: string; value: string; onChange: (v: string) => void;
-  type?: string; placeholder?: string; hint?: string; required?: boolean; className?: string;
+  type?: string; placeholder?: string; hint?: string; required?: boolean; className?: string; error?: string;
 }) {
   return (
     <div className={className}>
@@ -415,9 +415,12 @@ function FormInput({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
+          error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
+        }`}
       />
-      {hint && <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
+      {error && <p className="text-[9px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      {hint && !error && <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
     </div>
   );
 }
@@ -660,6 +663,56 @@ function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
     }
   } catch { /* parse failed — ignore */ }
   return {};
+}
+
+function validateForm(form: FormState): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const config = DB_CONFIGS[form.db_type];
+
+  if (!form.name.trim()) errors.name = "connection name is required";
+  else if (!/^[a-zA-Z0-9_-]+$/.test(form.name)) errors.name = "only letters, numbers, hyphens, underscores";
+
+  if (form.connectionMode === "url") {
+    if (!form.connection_string.trim()) errors.connection_string = "connection URL is required";
+    return errors;
+  }
+
+  // DB-specific validation
+  if (config.fields.includes("host") && !form.host.trim()) errors.host = "host is required";
+  if (config.fields.includes("port")) {
+    const port = parseInt(form.port);
+    if (isNaN(port) || port < 1 || port > 65535) errors.port = "port must be 1-65535";
+  }
+
+  if (form.db_type === "snowflake") {
+    if (!form.account.trim()) errors.account = "account identifier is required";
+    else if (!form.account.includes(".") && !form.account.includes("-")) {
+      errors.account = "use full identifier: org-account or account.region";
+    }
+  }
+
+  if (form.db_type === "bigquery") {
+    if (!form.project.trim()) errors.project = "GCP project ID is required";
+    if (form.bq_auth_method === "service_account" && !form.credentials_json.trim()) {
+      errors.credentials_json = "service account JSON is required";
+    } else if (form.bq_auth_method === "service_account" && form.credentials_json.trim()) {
+      try { JSON.parse(form.credentials_json); } catch { errors.credentials_json = "invalid JSON format"; }
+    }
+  }
+
+  if (form.db_type === "databricks") {
+    if (!form.http_path.trim()) errors.http_path = "HTTP path is required (e.g., /sql/1.0/warehouses/abc123)";
+    if (form.databricks_auth_method === "pat" && !form.access_token.trim()) errors.access_token = "personal access token is required";
+  }
+
+  if (form.ssh_enabled) {
+    if (!form.ssh_host.trim()) errors.ssh_host = "SSH host is required";
+    if (!form.ssh_username.trim()) errors.ssh_username = "SSH username is required";
+    if (form.ssh_auth_method === "password" && !form.ssh_password.trim()) errors.ssh_password = "SSH password is required";
+    if (form.ssh_auth_method === "key" && !form.ssh_private_key.trim()) errors.ssh_private_key = "SSH private key is required";
+  }
+
+  return errors;
 }
 
 function buildCreatePayload(form: FormState): Record<string, unknown> {
@@ -1609,6 +1662,10 @@ export default function ConnectionsPage() {
   const [exploringTable, setExploringTable] = useState<string | null>(null);
   const [exploredData, setExploredData] = useState<Record<string, { columns: { name: string; type: string; sample_values?: string[]; value_stats?: { min: unknown; max: unknown; avg: number | null } }[] }>>({});
 
+  // Real-time form validation — computed on every form change
+  const formErrors = showForm ? validateForm(form) : {};
+  const hasFormErrors = Object.keys(formErrors).length > 0;
+
   const refresh = useCallback(() => {
     getConnections().then(setConnections).catch(() => {});
     getConnectionsHealth()
@@ -2066,7 +2123,7 @@ export default function ConnectionsPage() {
                   <div className="px-3 py-2 bg-[var(--color-bg-hover)] border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] tracking-wide">{editingConnection}</div>
                 </div>
               ) : (
-                <FormInput label="connection name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="prod-analytics" hint="alphanumeric, dashes, underscores" required />
+                <FormInput label="connection name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="prod-analytics" hint="alphanumeric, dashes, underscores" required error={form.name.length > 0 ? formErrors.name : undefined} />
               )}
               <FormInput label="description" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Production analytics DB" />
             </div>
@@ -2463,7 +2520,7 @@ export default function ConnectionsPage() {
                 {preTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TestTube className="w-3.5 h-3.5" strokeWidth={1.5} />}
                 test connection
               </button>
-              <button onClick={handleSaveAndTest} disabled={saving || preTesting || (!editingConnection && !form.name)} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
+              <button onClick={handleSaveAndTest} disabled={saving || preTesting || (!editingConnection && !form.name) || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingConnection ? "update & test" : "save & test"}
               </button>
               <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">

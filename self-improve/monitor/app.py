@@ -656,6 +656,35 @@ async def stream_events(run_id: str):
     )
 
 
+@app.get("/api/poll/{run_id}")
+async def poll_events(run_id: str, after_tool: int = 0, after_audit: int = 0):
+    """Polling fallback for environments where SSE doesn't work (e.g. Cloudflare tunnels)."""
+    conn = await _get_db()
+
+    tool_calls = []
+    cursor = await conn.execute(
+        "SELECT * FROM tool_calls WHERE run_id = ? AND id > ? ORDER BY id LIMIT 100",
+        (run_id, after_tool),
+    )
+    rows = await cursor.fetchall()
+    for r in rows:
+        tool_calls.append(_row_to_dict(r))
+
+    audit_events = []
+    cursor = await conn.execute(
+        "SELECT * FROM audit_log WHERE run_id = ? AND id > ? ORDER BY id LIMIT 100",
+        (run_id, after_audit),
+    )
+    rows = await cursor.fetchall()
+    for r in rows:
+        audit_events.append(_row_to_dict(r))
+
+    return {
+        "tool_calls": tool_calls,
+        "audit_events": audit_events,
+    }
+
+
 @app.get("/api/stream/latest")
 async def stream_latest():
     conn = await _get_db()

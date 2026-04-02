@@ -14,8 +14,8 @@ import {
   ArrowRight,
   Loader2,
 } from "lucide-react";
-import { subscribeMetrics, getAudit, getBudgets, getConnections, getCacheStats, getConnectionsHealth } from "@/lib/api";
-import type { MetricsSnapshot, AuditEntry, ConnectionInfo, ConnectionHealthStats } from "@/lib/types";
+import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
+import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { PullToRefreshWrapper } from "@/components/ui/pull-to-refresh";
 import { useConnection } from "@/lib/connection-context";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
@@ -126,7 +126,6 @@ export default function DashboardPage() {
         })
         .catch(() => {}),
       getBudgets().then(setBudgetData).catch(() => {}),
-      getConnections().then(setConnections).catch(() => {}),
       getCacheStats().then(setCacheStats).catch(() => {}),
       getConnectionsHealth()
         .then((res) => {

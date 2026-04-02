@@ -2,7 +2,7 @@ import type { SettingsStatus, Settings } from "./types";
 
 function getApiBase(): string {
   if (typeof window === "undefined") return "http://localhost:3401";
-  return `${window.location.protocol}//${window.location.hostname}:3401`;
+  return "";
 }
 
 export async function fetchSettingsStatus(): Promise<SettingsStatus> {

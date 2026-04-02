@@ -1,14 +1,8 @@
 import type { Run, ToolCall, AuditEvent, RepoInfo } from "./types";
 
-// FastAPI backend runs on port 3401.
-// On localhost: call port 3401 directly.
-// Via tunnel/remote: use relative URLs so Next.js rewrites proxy to the backend.
+// All /api/* requests are routed to FastAPI by nginx on the same port.
 function getApiBase(): string {
   if (typeof window === "undefined") return "http://localhost:3401";
-  const host = window.location.hostname;
-  if (host === "localhost" || host === "127.0.0.1") {
-    return `${window.location.protocol}//${host}:3401`;
-  }
   return "";
 }
 
@@ -89,6 +83,23 @@ export async function injectPrompt(
 
 export function createSSE(runId: string): EventSource {
   return new EventSource(`${getApiBase()}/api/stream/${runId}`);
+}
+
+export interface PollResult {
+  tool_calls: ToolCall[];
+  audit_events: AuditEvent[];
+}
+
+export async function pollEvents(
+  runId: string,
+  afterTool: number,
+  afterAudit: number
+): Promise<PollResult> {
+  const res = await fetch(
+    `${getApiBase()}/api/poll/${runId}?after_tool=${afterTool}&after_audit=${afterAudit}`
+  );
+  if (!res.ok) throw new Error("Failed to poll events");
+  return res.json();
 }
 
 export interface AgentHealth {

@@ -374,14 +374,14 @@ export default function ConnectionsPage() {
                   )}
 
                   {/* Action buttons */}
-                  <div className="flex flex-wrap items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1 w-full sm:w-auto border-t sm:border-t-0 border-[var(--color-border)]/30 pt-2 sm:pt-0">
                     <button onClick={(e) => { e.stopPropagation(); handleToggleSchema(conn.name); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" strokeWidth={1.5} />}
                       pii
                       {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
@@ -391,12 +391,12 @@ export default function ConnectionsPage() {
                       )}
                     </button>
                     <button onClick={() => handleTest(conn.name)} disabled={testing === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
                       {testing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" strokeWidth={1.5} />}
                       test
                     </button>
                     <button onClick={() => handleDelete(conn.name)}
-                      className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-all">
+                      className="p-2 sm:p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-all ml-auto sm:ml-0">
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>

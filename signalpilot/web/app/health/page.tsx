@@ -177,7 +177,7 @@ export default function HealthPage() {
       {/* Overview cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
         {/* Connections */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Wifi className={`w-3.5 h-3.5 ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connections</span>
@@ -197,7 +197,7 @@ export default function HealthPage() {
           </div>
         </div>
         {/* Avg Latency */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Clock className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">avg latency</span>
@@ -206,7 +206,7 @@ export default function HealthPage() {
           <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
         </div>
         {/* Query Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Zap className={`w-3.5 h-3.5 ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query cache</span>
@@ -226,7 +226,7 @@ export default function HealthPage() {
           </div>
         </div>
         {/* Schema Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+        <div className="bg-[var(--color-bg-card)] p-3 sm:p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
@@ -262,16 +262,16 @@ export default function HealthPage() {
 
               return (
                 <div key={health.connection_name} className="bg-[var(--color-bg-card)] overflow-hidden">
-                  <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
-                    <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-[var(--color-border)]">
+                    <div className="flex items-center gap-3 min-w-0">
                       <StatusDot
                         status={health.status === "healthy" ? "healthy" : health.status === "warning" || health.status === "degraded" ? "warning" : health.status === "unhealthy" ? "error" : "unknown"}
                         size={5}
                         pulse={health.status === "healthy"}
                       />
-                      <div>
-                        <h3 className="text-xs text-[var(--color-text)]">{health.connection_name}</h3>
-                        <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="min-w-0">
+                        <h3 className="text-xs text-[var(--color-text)] truncate">{health.connection_name}</h3>
+                        <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider truncate block">
                           {health.db_type}{conn ? ` — ${conn.host}:${conn.port}` : ""}
                         </span>
                       </div>
@@ -281,14 +281,14 @@ export default function HealthPage() {
                         <StatusIcon className="w-3 h-3" strokeWidth={1.5} /> {cfg.label}
                       </span>
                       <button onClick={() => handleTest(health.connection_name)} disabled={testing === health.connection_name}
-                        className="flex items-center gap-1 px-2 py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider">
+                        className="flex items-center gap-1 px-2.5 py-1.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider">
                         {testing === health.connection_name ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />}
                         test
                       </button>
                     </div>
                   </div>
 
-                  <div className="px-5 py-4 space-y-4">
+                  <div className="px-4 sm:px-5 py-4 space-y-4">
                     {/* Latency bars + distribution */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">

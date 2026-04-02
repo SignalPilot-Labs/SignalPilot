@@ -271,25 +271,59 @@ def _sanitize_db_error(error: str, db_type: str | None = None) -> str:
         hints.append("Check that the database server is running and the host/port are correct")
         if db_type in ("postgres", "mysql", "redshift"):
             hints.append("Verify firewall rules allow connections from this server's IP")
+        if db_type == "clickhouse":
+            hints.append("ClickHouse default port: 9000 (native) or 8123 (HTTP). Verify the correct protocol is selected")
+        if db_type == "mssql":
+            hints.append("SQL Server default port is 1433. If using a named instance, check the port in SQL Server Configuration Manager")
     elif "authentication" in err_lower or "password" in err_lower or "access denied" in err_lower:
         hints.append("Verify username and password are correct")
         if db_type == "snowflake":
             hints.append("For Snowflake, ensure the account identifier is correct (e.g., xy12345.us-east-1)")
+            if "mfa" in err_lower or "duo" in err_lower:
+                hints.append("MFA is blocking — use key-pair or OAuth auth method instead of password")
         elif db_type == "databricks":
             hints.append("For Databricks, check that the personal access token (PAT) is valid and not expired")
+        elif db_type == "bigquery":
+            hints.append("Verify the service account JSON is valid and has BigQuery access roles")
+        elif db_type == "mysql":
+            hints.append("MySQL may require 'mysql_native_password' plugin. Check with: SELECT plugin FROM mysql.user WHERE User='...'")
+        elif db_type == "trino":
+            hints.append("If using JWT/certificate auth, verify the token/cert has not expired")
     elif "timeout" in err_lower or "timed out" in err_lower:
         hints.append("Database is unreachable — check network connectivity")
         hints.append("If behind a VPN, ensure VPN is connected. If behind a firewall, add this server's IP to the allowlist")
-    elif "ssl" in err_lower or "certificate" in err_lower:
+        if db_type == "snowflake":
+            hints.append("Snowflake account may be in a different region — check the account URL")
+        if db_type == "databricks":
+            hints.append("Databricks workspace may be suspended — check the workspace status")
+    elif "ssl" in err_lower or "certificate" in err_lower or "tls" in err_lower:
         hints.append("SSL/TLS connection failed — check SSL configuration")
         hints.append("Try enabling SSL in advanced options with the appropriate CA certificate")
+        if db_type == "postgres":
+            hints.append("Set ssl_mode to 'require' or 'verify-ca'. For RDS, use the AWS RDS CA bundle")
+        elif db_type == "mysql":
+            hints.append("Set ssl_mode to 'REQUIRED'. For RDS, download the RDS CA bundle")
+        elif db_type == "clickhouse":
+            hints.append("For ClickHouse Cloud, use clickhouse+https:// scheme with SSL enabled")
     elif "does not exist" in err_lower or "not found" in err_lower:
         if "database" in err_lower:
             hints.append("Database name not found — verify the database exists and the user has access")
         elif "warehouse" in err_lower:
             hints.append("Warehouse not found — verify warehouse name and that it is running")
-        elif "schema" in err_lower:
-            hints.append("Schema not found — verify schema name and permissions")
+        elif "schema" in err_lower or "catalog" in err_lower:
+            hints.append("Schema/catalog not found — verify the name and permissions")
+        elif "table" in err_lower:
+            hints.append("Table not found — check schema filters and verify the table exists")
+    elif "permission denied" in err_lower or "insufficient privileges" in err_lower:
+        hints.append("User lacks required permissions. Grant at minimum SELECT access to the target schema")
+        if db_type == "bigquery":
+            hints.append("Assign 'BigQuery Data Viewer' and 'BigQuery Job User' roles to the service account")
+        elif db_type == "snowflake":
+            hints.append("Grant USAGE on warehouse and database, plus SELECT on schema tables")
+    elif "too many" in err_lower and ("connection" in err_lower or "client" in err_lower):
+        hints.append("Connection limit reached — reduce pool_max_size or close idle connections")
+        if db_type == "postgres":
+            hints.append("Check max_connections in postgresql.conf. Consider using PgBouncer for connection pooling")
 
     if hints:
         sanitized += " | Hint: " + "; ".join(hints)

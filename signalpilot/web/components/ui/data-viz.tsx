@@ -273,7 +273,7 @@ export function TrendIndicator({
           <rect x="2" y="5" width="8" height="2" fill={color} />
         )}
       </svg>
-      <span className="text-[9px] tabular-nums" style={{ color }}>
+      <span className="text-[11px] tabular-nums" style={{ color }}>
         {Math.abs(pctChange).toFixed(1)}%
       </span>
     </span>

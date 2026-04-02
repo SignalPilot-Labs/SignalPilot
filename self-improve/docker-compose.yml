@@ -1,24 +1,4 @@
 services:
-  postgres:
-    image: postgres:17
-    container_name: improve-pg
-    restart: unless-stopped
-    ports:
-      - "5610:5432"
-    environment:
-      POSTGRES_USER: improve_admin
-      POSTGRES_PASSWORD: Impr0ve!Aud1t
-      POSTGRES_DB: improve_audit
-    volumes:
-      - improve-pg-data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U improve_admin -d improve_audit"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    shm_size: 256mb
-
   monitor:
     build:
       context: .
@@ -29,11 +9,11 @@ services:
       - "3400:3400"
       - "3401:3401"
     environment:
-      AUDIT_DB_URL: postgresql://improve_admin:Impr0ve!Aud1t@postgres:5432/improve_audit
+      DB_PATH: /data/improve.db
+      MASTER_KEY_PATH: /data/master.key
       AGENT_API_URL: http://agent:8500
-    depends_on:
-      postgres:
-        condition: service_healthy
+    volumes:
+      - improve-db:/data
 
   agent:
     build:
@@ -42,11 +22,11 @@ services:
     container_name: improve-agent
     restart: unless-stopped
     env_file:
-      - ../.env
+      - path: ../.env
+        required: false
     environment:
       GIT_TERMINAL_PROMPT: "0"
-      # Agent config
-      AUDIT_DB_URL: postgresql://improve_admin:Impr0ve!Aud1t@postgres:5432/improve_audit
+      DB_PATH: /data/improve.db
       SP_BENCHMARK_DIR: /bench
       SP_GATEWAY_URL: http://host.docker.internal:3300
     healthcheck:
@@ -56,6 +36,7 @@ services:
       retries: 5
       start_period: 30s
     volumes:
+      - improve-db:/data
       - ../:/workspace:rw
       - ../research:/home/agentuser/research:ro
       - /var/run/docker.sock:/var/run/docker.sock
@@ -65,13 +46,10 @@ services:
       # Persist cloned repo so resume can pick up where it left off
       - agent-repo:/home/agentuser/repo
     working_dir: /workspace
-    depends_on:
-      postgres:
-        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
 volumes:
-  improve-pg-data:
+  improve-db:
   claude-agent-sessions:
   agent-repo:

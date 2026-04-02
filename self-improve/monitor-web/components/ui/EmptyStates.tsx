@@ -30,8 +30,8 @@ export function EmptyEvents() {
     <div className="flex flex-col items-center gap-4 py-12">
       <EmptyTerminal />
       <div className="text-center space-y-1.5">
-        <p className="text-[11px] text-[#777] font-medium">Waiting for events</p>
-        <p className="text-[10px] text-[#444]">Select a run or start a new one to see live activity</p>
+        <p className="text-[12px] text-[#aaa] font-medium">Waiting for events</p>
+        <p className="text-[11px] text-[#777]">Select a run or start a new one to see live activity</p>
       </div>
     </div>
   );
@@ -50,8 +50,8 @@ export function EmptyRuns() {
         <line x1="33" y1="36" x2="39" y2="36" stroke="rgba(0,255,136,0.3)" strokeWidth="1" />
       </svg>
       <div className="text-center space-y-1">
-        <p className="text-[10px] text-[#777]">No runs yet</p>
-        <p className="text-[9px] text-[#444]">Start an improvement run to begin</p>
+        <p className="text-[11px] text-[#aaa]">No runs yet</p>
+        <p className="text-[10px] text-[#777]">Start an improvement run to begin</p>
       </div>
     </div>
   );

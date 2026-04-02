@@ -120,15 +120,15 @@ export default function AuditPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={exportCSV} disabled={filtered.length === 0}
-            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider active:text-[var(--color-text)]">
+            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider active:text-[var(--color-text)]">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> csv
           </button>
           <a href={getAuditExportUrl("json", typeFilter || undefined)} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider active:text-[var(--color-text)]">
+            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider active:text-[var(--color-text)]">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
           </a>
           <button onClick={refresh}
-            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
+            className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
           </button>
         </div>
@@ -140,8 +140,8 @@ export default function AuditPage() {
         status={<StatusDot status={entries.length > 0 ? "healthy" : "unknown"} size={4} pulse={loading} />}
       >
         <div className="flex items-center gap-3 sm:gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">events: <code className="text-[10px] text-[var(--color-text)]">{entries.length}</code></span>
-          {statsData.blocked > 0 && <span className="text-[var(--color-error)]">blocked: <code className="text-[10px]">{statsData.blocked}</code></span>}
+          <span className="text-[var(--color-text-dim)]">events: <code className="text-[12px] text-[var(--color-text)]">{entries.length}</code></span>
+          {statsData.blocked > 0 && <span className="text-[var(--color-error)]">blocked: <code className="text-[12px]">{statsData.blocked}</code></span>}
         </div>
       </TerminalBar>
 
@@ -155,7 +155,7 @@ export default function AuditPage() {
             { label: "blocked", value: statsData.blocked, color: statsData.blocked > 0 ? "text-[var(--color-error)]" : "" },
           ].map(s => (
             <div key={s.label} className="flex items-center gap-2">
-              <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
               <span className={`text-xs tabular-nums ${s.color}`}>{s.value}</span>
             </div>
           ))}
@@ -170,15 +170,15 @@ export default function AuditPage() {
             const avg = latencyVals.reduce((a, b) => a + b, 0) / latencyVals.length;
             return (
               <div className="hidden sm:flex items-center gap-2 ml-auto">
-                <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</span>
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</span>
                 <Sparkline values={latencyVals} color="var(--color-success)" width={60} height={16} />
-                <span className="text-[9px] tabular-nums text-[var(--color-text-dim)]">avg {avg.toFixed(0)}ms</span>
+                <span className="text-[11px] tabular-nums text-[var(--color-text-dim)]">avg {avg.toFixed(0)}ms</span>
               </div>
             );
           })()}
           {activitySlots.length > 0 && (
             <div className={`hidden sm:flex items-center gap-2 ${filtered.filter(e => e.duration_ms != null).length < 3 ? "ml-auto" : ""}`}>
-              <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">activity</span>
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">activity</span>
               <ActivityDots values={activitySlots} rows={3} cols={12} dotSize={5} gap={2} />
             </div>
           )}
@@ -209,7 +209,7 @@ export default function AuditPage() {
           <option value="block">blocked</option>
         </select>
         {!loading && (
-          <span className="text-[10px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider">
+          <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider">
             {filtered.length} entries
           </span>
         )}
@@ -315,7 +315,7 @@ export default function AuditPage() {
             <thead>
               <tr className="border-b border-[var(--color-border)]">
                 {["time", "type", "connection", "detail", "duration"].map((h, i) => (
-                  <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]`}>
+                  <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]`}>
                     {h}
                   </th>
                 ))}
@@ -332,30 +332,30 @@ export default function AuditPage() {
                     onClick={() => setExpandedRow(isExpanded ? null : entry.id)}
                     className="table-row-hover cursor-pointer group"
                   >
-                    <td className="px-4 py-2.5 text-[10px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider align-top">
+                    <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider align-top">
                       <div className="flex items-center gap-1.5">
                         {isExpanded ? (
                           <ChevronDown className="w-2.5 h-2.5 text-[var(--color-text-dim)]" />
                         ) : (
                           <ChevronRight className="w-2.5 h-2.5 text-[var(--color-text-dim)] sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
                         )}
-                        <TimeAgo timestamp={entry.timestamp} live className="text-[10px]" />
+                        <TimeAgo timestamp={entry.timestamp} live className="text-[12px]" />
                       </div>
                       {isExpanded && entry.sql && (
                         <div className="mt-3 ml-4 animate-fade-in">
-                          <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
-                          <pre className="text-[11px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto">
-                            <SqlHighlight sql={entry.sql!} className="text-[11px]" />
+                          <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
+                          <pre className="text-[13px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto">
+                            <SqlHighlight sql={entry.sql!} className="text-[13px]" />
                           </pre>
                           {entry.rows_returned != null && (
-                            <p className="text-[9px] text-[var(--color-text-dim)] mt-2 tracking-wider">
+                            <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
                               rows: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.rows_returned.toLocaleString()}</span>
                             </p>
                           )}
                           {entry.metadata && Object.keys(entry.metadata).length > 0 && (
                             <div className="mt-2">
-                              <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
-                              <pre className="text-[9px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)]">
+                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
+                              <pre className="text-[11px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)]">
                                 {JSON.stringify(entry.metadata, null, 2)}
                               </pre>
                             </div>
@@ -364,42 +364,42 @@ export default function AuditPage() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 align-top">
-                      <span className={`flex items-center gap-1.5 text-[10px] tracking-wider ${color}`}>
+                      <span className={`flex items-center gap-1.5 text-[12px] tracking-wider ${color}`}>
                         <Icon className="w-3 h-3" strokeWidth={1.5} />
                         {entry.event_type}
                         {entry.blocked && (
-                          <span className="px-1 py-0.5 border badge-error text-[9px] uppercase tracking-wider">
+                          <span className="px-1 py-0.5 border badge-error text-[11px] uppercase tracking-wider">
                             blocked
                           </span>
                         )}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-[10px] text-[var(--color-text-dim)] align-top tracking-wider">
+                    <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] align-top tracking-wider">
                       {entry.connection_name || "—"}
                     </td>
                     <td className="px-4 py-2.5 max-w-md align-top">
                       {entry.sql ? (
-                        <div className="text-[10px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
-                          <SqlHighlight sql={entry.sql.slice(0, 120)} className="text-[10px]" />
+                        <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
+                          <SqlHighlight sql={entry.sql.slice(0, 120)} className="text-[12px]" />
                         </div>
                       ) : entry.block_reason ? (
-                        <span className="text-[10px] text-[var(--color-error)]">{entry.block_reason}</span>
+                        <span className="text-[12px] text-[var(--color-error)]">{entry.block_reason}</span>
                       ) : (
-                        <span className="text-[10px] text-[var(--color-text-dim)]">
+                        <span className="text-[12px] text-[var(--color-text-dim)]">
                           {entry.metadata?.code_preview ? String(entry.metadata.code_preview).slice(0, 60) : "—"}
                         </span>
                       )}
                       {entry.tables.length > 0 && (
                         <div className="flex gap-1 mt-1 flex-wrap">
                           {entry.tables.map((t) => (
-                            <span key={t} className="text-[9px] px-1 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                            <span key={t} className="text-[11px] px-1 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
                               {t}
                             </span>
                           ))}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-[10px] text-right tabular-nums whitespace-nowrap align-top tracking-wider">
+                    <td className="px-4 py-2.5 text-[12px] text-right tabular-nums whitespace-nowrap align-top tracking-wider">
                       {entry.duration_ms != null ? (
                         <span className={
                           entry.duration_ms < 50 ? "text-[var(--color-success)]" :
@@ -413,7 +413,7 @@ export default function AuditPage() {
                         <span className="text-[var(--color-text-dim)]">—</span>
                       )}
                       {entry.rows_returned != null && (
-                        <div className="text-[9px] text-[var(--color-text-dim)] mt-0.5">{entry.rows_returned.toLocaleString()}r</div>
+                        <div className="text-[11px] text-[var(--color-text-dim)] mt-0.5">{entry.rows_returned.toLocaleString()}r</div>
                       )}
                     </td>
                   </tr>

@@ -202,7 +202,7 @@ export function CommandPalette() {
             autoComplete="off"
             spellCheck={false}
           />
-          <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono text-[var(--color-text-dim)]">
+          <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)]">
             esc
           </kbd>
         </div>
@@ -216,7 +216,7 @@ export function CommandPalette() {
                 <path d="M15 15L21 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                 <path d="M7 10H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
               </svg>
-              <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
                 no results for &ldquo;{query}&rdquo;
               </p>
             </div>
@@ -224,7 +224,7 @@ export function CommandPalette() {
             Object.entries(groupedCommands).map(([category, items]) => (
               <div key={category}>
                 <div className="px-4 pt-2.5 pb-1">
-                  <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                  <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                     {category}
                   </span>
                 </div>
@@ -250,12 +250,12 @@ export function CommandPalette() {
                         <span className="text-xs tracking-wide">
                           {query ? <HighlightedText text={item.cmd.label} indices={item.labelIndices} /> : item.cmd.label}
                         </span>
-                        <span className="ml-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                        <span className="ml-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">
                           {query ? <HighlightedText text={item.cmd.description} indices={item.descIndices} /> : item.cmd.description}
                         </span>
                       </div>
                       {item.cmd.shortcut && (
-                        <kbd className="hidden sm:inline px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
+                        <kbd className="hidden sm:inline px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
                           {item.cmd.shortcut}
                         </kbd>
                       )}
@@ -268,14 +268,14 @@ export function CommandPalette() {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[9px] text-[var(--color-text-dim)] tracking-wider">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)] tracking-wider">
           <div className="hidden sm:flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono">↑↓</kbd>
+              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↑↓</kbd>
               navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono">↵</kbd>
+              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↵</kbd>
               select
             </span>
           </div>

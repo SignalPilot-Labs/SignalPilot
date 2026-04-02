@@ -345,14 +345,14 @@ export default function SandboxDetailPage() {
                 {sandbox.status}
               </span>
             </div>
-            <div className="hidden sm:flex items-center gap-3 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+            <div className="hidden sm:flex items-center gap-3 text-[12px] text-[var(--color-text-dim)] tracking-wider">
               <span className="flex items-center gap-1.5">
                 {sandbox.status}
               </span>
               {sandbox.vm_id && (
                 <span className="flex items-center gap-1">
                   <Cpu className="w-3 h-3" strokeWidth={1.5} />
-                  <code className="text-[9px]">{sandbox.vm_id}</code>
+                  <code className="text-[11px]">{sandbox.vm_id}</code>
                 </span>
               )}
               {sandbox.connection_name && (
@@ -370,7 +370,7 @@ export default function SandboxDetailPage() {
           <div className="flex items-center gap-2">
             <DollarSign className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
             <div className="w-16 sm:w-20">
-              <div className="flex justify-between text-[9px] text-[var(--color-text-dim)] mb-0.5 tabular-nums">
+              <div className="flex justify-between text-[9px] sm:text-[11px] text-[var(--color-text-dim)] mb-0.5 tabular-nums">
                 <span>${sandbox.budget_used.toFixed(4)}</span>
                 <span>${sandbox.budget_usd.toFixed(2)}</span>
               </div>
@@ -386,13 +386,13 @@ export default function SandboxDetailPage() {
 
           <div className="h-3 w-px bg-[var(--color-border)] hidden sm:block" />
 
-          <span className="hidden sm:flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="hidden sm:flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] tracking-wider">
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
             {sandbox.row_limit.toLocaleString()}
           </span>
 
           {sandbox.uptime_sec != null && sandbox.uptime_sec > 0 && (
-            <span className="hidden sm:flex items-center gap-1 text-[10px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+            <span className="hidden sm:flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
               <Clock className="w-3 h-3" strokeWidth={1.5} />
               {sandbox.uptime_sec < 60 ? `${sandbox.uptime_sec.toFixed(0)}s` : `${(sandbox.uptime_sec / 60).toFixed(0)}m`}
             </span>
@@ -422,7 +422,7 @@ export default function SandboxDetailPage() {
           </button>
           <button
             onClick={handleKill}
-            className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
+            className="flex items-center gap-1.5 px-2.5 py-2 sm:py-1.5 text-[12px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
           >
             <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" /> <span className="hidden sm:inline">kill</span>
           </button>
@@ -430,7 +430,7 @@ export default function SandboxDetailPage() {
       </div>
 
       {/* Terminal status bar */}
-      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] text-[9px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0 overflow-x-auto">
+      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0 overflow-x-auto">
         <span className="flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 ${sandbox.status === "running" ? "bg-[var(--color-success)]" : "bg-[var(--color-text-dim)]"}`} />
           {sandbox.status}
@@ -453,7 +453,7 @@ export default function SandboxDetailPage() {
             {entry.type === "input" && (
               <div className="w-full">
                 <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-0.5">
-                  <span className="text-[10px] text-[var(--color-success)] tracking-wider">
+                  <span className="text-[12px] text-[var(--color-success)] tracking-wider">
                     In [{history.filter((h, j) => j <= i && h.type === "input").length}]:
                   </span>
                 </div>
@@ -463,17 +463,17 @@ export default function SandboxDetailPage() {
             {entry.type === "output" && (
               <div className="w-full">
                 <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-[10px] text-blue-400 tracking-wider">
+                  <span className="text-[12px] text-blue-400 tracking-wider">
                     Out [{history.filter((h, j) => j <= i && h.type === "output").length}]:
                   </span>
                   {entry.execution_ms != null && (
-                    <span className="text-[10px] text-[var(--color-text-dim)] flex items-center gap-1 tabular-nums tracking-wider">
+                    <span className="text-[12px] text-[var(--color-text-dim)] flex items-center gap-1 tabular-nums tracking-wider">
                       <Clock className="w-2.5 h-2.5" strokeWidth={1.5} />
                       {entry.execution_ms.toFixed(0)}ms
                     </span>
                   )}
                 </div>
-                <pre className="whitespace-pre-wrap text-[var(--color-text-muted)] text-[11px] leading-relaxed">
+                <pre className="whitespace-pre-wrap text-[var(--color-text-muted)] text-[13px] leading-relaxed">
                   {entry.text}
                 </pre>
               </div>
@@ -482,7 +482,7 @@ export default function SandboxDetailPage() {
               <div className="w-full">
                 <div className="flex items-center gap-2 mb-1">
                   <ImageIcon className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                  <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">image output</span>
+                  <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">image output</span>
                 </div>
                 <div className="bg-white p-2 inline-block border border-[var(--color-border)]">
                   <img src={entry.imageData} alt="Sandbox output" className="max-w-full max-h-96" />
@@ -493,11 +493,11 @@ export default function SandboxDetailPage() {
               <div className="w-full">
                 <div className="flex items-center gap-2 mb-1">
                   <FileText className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                  <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">dataframe output</span>
+                  <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">dataframe output</span>
                 </div>
                 <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-x-auto max-h-96">
                   <div
-                    className="sandbox-html-output text-[11px] [&_table]:w-full [&_table]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-[9px] [&_th]:text-[var(--color-text-dim)] [&_th]:uppercase [&_th]:tracking-widest [&_th]:border-b [&_th]:border-[var(--color-border)] [&_td]:px-3 [&_td]:py-1.5 [&_td]:text-[var(--color-text-muted)] [&_td]:border-b [&_td]:border-[var(--color-border)]/20 [&_tr:hover]:bg-[var(--color-bg-hover)]"
+                    className="sandbox-html-output text-[13px] [&_table]:w-full [&_table]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-[11px] [&_th]:text-[var(--color-text-dim)] [&_th]:uppercase [&_th]:tracking-widest [&_th]:border-b [&_th]:border-[var(--color-border)] [&_td]:px-3 [&_td]:py-1.5 [&_td]:text-[var(--color-text-muted)] [&_td]:border-b [&_td]:border-[var(--color-border)]/20 [&_tr:hover]:bg-[var(--color-bg-hover)]"
                     dangerouslySetInnerHTML={{ __html: entry.htmlContent }}
                   />
                 </div>
@@ -505,20 +505,20 @@ export default function SandboxDetailPage() {
             )}
             {entry.type === "error" && (
               <div className="w-full">
-                <pre className="whitespace-pre-wrap text-[var(--color-error)] bg-[var(--color-error)]/5 p-3 border border-[var(--color-error)]/20 text-[11px] leading-relaxed">
+                <pre className="whitespace-pre-wrap text-[var(--color-error)] bg-[var(--color-error)]/5 p-3 border border-[var(--color-error)]/20 text-[13px] leading-relaxed">
                   {entry.text}
                 </pre>
               </div>
             )}
             {entry.type === "system" && (
-              <div className="w-full text-[10px] text-[var(--color-text-dim)] py-1 tracking-wider border-l-2 border-[var(--color-border)] pl-3">
+              <div className="w-full text-[12px] text-[var(--color-text-dim)] py-1 tracking-wider border-l-2 border-[var(--color-border)] pl-3">
                 {entry.text}
               </div>
             )}
           </div>
         ))}
         {running && (
-          <div className="flex items-center gap-2 text-[var(--color-text-dim)] text-[10px] py-2 tracking-wider">
+          <div className="flex items-center gap-2 text-[var(--color-text-dim)] text-[12px] py-2 tracking-wider">
             <Loader2 className="w-3 h-3 animate-spin" />
             <span>executing in isolated firecracker microvm...</span>
           </div>
@@ -531,7 +531,7 @@ export default function SandboxDetailPage() {
         <div className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-1">
           <button
             onClick={() => setShowSnippets(!showSnippets)}
-            className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider py-1.5 px-1"
+            className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider py-1.5 px-1"
           >
             {showSnippets ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             snippets
@@ -541,13 +541,13 @@ export default function SandboxDetailPage() {
               <button
                 key={idx}
                 onClick={() => setCode(snippet.code)}
-                className="px-2.5 py-1.5 sm:py-0.5 text-[9px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider active:bg-[var(--color-bg-hover)]"
+                className="px-2.5 py-1.5 sm:py-0.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider active:bg-[var(--color-bg-hover)]"
               >
                 {snippet.label}
               </button>
             ))}
           <div className="flex-1" />
-          <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
             [{inputCount}] cells executed
           </span>
         </div>
@@ -555,7 +555,7 @@ export default function SandboxDetailPage() {
         <div className="flex flex-col sm:flex-row gap-3 p-4 pt-2">
           <div className="flex-1 relative">
             {/* Input prompt indicator */}
-            <div className="absolute left-3 top-3 text-[10px] text-[var(--color-success)] tracking-wider pointer-events-none select-none">
+            <div className="absolute left-3 top-3 text-[12px] text-[var(--color-success)] tracking-wider pointer-events-none select-none">
               <span className="hidden sm:inline">In [{inputCount + 1}]:</span>
               <span className="sm:hidden">[{inputCount + 1}]</span>
             </div>
@@ -585,14 +585,14 @@ export default function SandboxDetailPage() {
           </div>
         </div>
         <div className="flex items-center justify-between px-4 pb-3">
-          <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider hidden sm:block">
+          <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider hidden sm:block">
             isolated firecracker microvm · ctrl+enter to execute · tab to indent
           </p>
           <p className="text-[9px] text-[var(--color-text-dim)] tracking-wider sm:hidden">
             firecracker microvm
           </p>
           {code.length > 0 && (
-            <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+            <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
               {code.length} chars / {code.split("\n").length} lines
             </span>
           )}

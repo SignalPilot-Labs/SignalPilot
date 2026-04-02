@@ -12,9 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ALLOWED_REPO = os.environ.get("GITHUB_REPO", "")
 _WORK_DIR = "/home/agentuser/repo"
 _initialized = False
+_last_repo = ""  # Track which repo we cloned so we re-clone on change
+
+
+def get_allowed_repo() -> str:
+    """Read GITHUB_REPO at call time (not import time) so runtime changes are picked up."""
+    return os.environ.get("GITHUB_REPO", "")
 
 
 def _run(args: list[str], cwd: str | None = None, timeout: int = 120) -> str:
@@ -45,20 +50,26 @@ def _ensure_repo() -> None:
     We clone from the remote into /home/agentuser/repo/ on first use.
     This avoids the submodule .git issue and ensures branches share
     history with the remote (required for PRs).
-    """
-    global _initialized
-    if _initialized:
-        return
 
+    If GITHUB_REPO changed since the last clone, we re-clone the new repo.
+    """
+    global _initialized, _last_repo
+
+    allowed_repo = get_allowed_repo()
     token = os.environ.get("GIT_TOKEN", "")
-    if not token or not ALLOWED_REPO:
+    if not token or not allowed_repo:
         raise RuntimeError("GIT_TOKEN and GITHUB_REPO must be set")
 
-    repo_dir = Path(_WORK_DIR)
-    remote_url = f"https://x-access-token:{token}@github.com/{ALLOWED_REPO}.git"
+    # If the repo changed, force a re-clone
+    if _initialized and _last_repo and _last_repo != allowed_repo:
+        print(f"[git] Repo changed from {_last_repo} to {allowed_repo} — re-cloning")
+        _initialized = False
 
-    if repo_dir.exists() and (repo_dir / ".git").is_dir():
-        # Already cloned — just update remote URL and fetch
+    repo_dir = Path(_WORK_DIR)
+    remote_url = f"https://x-access-token:{token}@github.com/{allowed_repo}.git"
+
+    if _initialized and repo_dir.exists() and (repo_dir / ".git").is_dir():
+        # Already cloned the same repo — just update remote URL and fetch
         print("[git] Using existing clone, updating remote")
         try:
             _run_git(["remote", "set-url", "origin", remote_url])
@@ -67,7 +78,7 @@ def _ensure_repo() -> None:
             print(f"[git] Warning: fetch failed: {e}")
     else:
         # Fresh clone — clear contents first (dir may be a volume mount)
-        print(f"[git] Cloning {ALLOWED_REPO} into {_WORK_DIR}...")
+        print(f"[git] Cloning {allowed_repo} into {_WORK_DIR}...")
         if repo_dir.exists():
             for item in repo_dir.iterdir():
                 if item.is_dir():
@@ -83,8 +94,7 @@ def _ensure_repo() -> None:
         )
         print("[git] Clone complete")
 
-    # Copy workspace files that aren't in the repo yet (like self-improve/)
-    # The agent works in the cloned repo but can reference /workspace for reading
+    _last_repo = allowed_repo
     _initialized = True
 
 
@@ -102,7 +112,7 @@ def get_branch_name() -> str:
     import uuid
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     short_id = uuid.uuid4().hex[:6]
-    return f"improvements-round-{date_str}-{short_id}"
+    return f"signalpilot/improvements-round-{date_str}-{short_id}"
 
 
 def create_branch(branch_name: str, base_branch: str = "main") -> str:
@@ -117,18 +127,88 @@ def create_branch(branch_name: str, base_branch: str = "main") -> str:
         except RuntimeError:
             print(f"[git] Warning: could not checkout {base_branch}, using current HEAD")
 
+    # Clean all untracked files and directories from previous runs
+    # so the new branch starts from a pristine state
+    try:
+        _run_git(["clean", "-fd"])
+        _run_git(["checkout", "--", "."])
+        print("[git] Cleaned working directory to match base branch")
+    except RuntimeError as e:
+        print(f"[git] Warning: clean failed: {e}")
+
     _run_git(["checkout", "-b", branch_name])
     print(f"[git] Created branch: {branch_name} (from {base_branch})")
     return branch_name
 
 
-def ensure_staging_branch() -> None:
-    """Verify staging branch exists on remote."""
+def ensure_base_branch(base_branch: str = "main") -> None:
+    """Verify the target base branch exists on remote.
+
+    If the repo is completely empty, initialize it with a placeholder
+    'main' branch (and 'staging' if needed) so the agent has something
+    to branch off of.
+    """
     _ensure_repo()
+
+    # Check if remote has ANY refs at all
     try:
-        _run_git(["ls-remote", "--exit-code", "--heads", "origin", "staging"])
+        all_refs = _run_git(["ls-remote", "--heads", "origin"])
     except RuntimeError:
-        print("[git] Warning: staging branch not found on remote")
+        all_refs = ""
+
+    if not all_refs.strip():
+        # Completely empty repo — bootstrap it
+        print(f"[git] Remote is empty — initializing with 'main' and 'staging' branches")
+        try:
+            _run_git(["checkout", "--orphan", "main"])
+            _run_git(["commit", "--allow-empty", "-m", "Initialize repository"])
+            _run_git(["push", "-u", "origin", "main"])
+            # Also create staging
+            _run_git(["checkout", "-b", "staging"])
+            _run_git(["push", "-u", "origin", "staging"])
+            # Go back to the requested base
+            if base_branch not in ("main", "staging"):
+                _run_git(["checkout", "-b", base_branch])
+                _run_git(["push", "-u", "origin", base_branch])
+            else:
+                _run_git(["checkout", base_branch])
+            print(f"[git] Initialized empty repo with main + staging branches")
+        except RuntimeError as e:
+            print(f"[git] Could not auto-init remote: {e}")
+        return
+
+    # Remote has refs — check if the specific base branch exists
+    try:
+        _run_git(["ls-remote", "--exit-code", "--heads", "origin", base_branch])
+    except RuntimeError:
+        print(f"[git] Branch '{base_branch}' not found on remote — creating it")
+        try:
+            # Create from the default branch (usually main)
+            default = _get_default_branch()
+            _run_git(["checkout", default])
+            _run_git(["checkout", "-b", base_branch])
+            _run_git(["push", "-u", "origin", base_branch])
+            print(f"[git] Created '{base_branch}' from '{default}'")
+        except RuntimeError as e:
+            print(f"[git] Could not create branch '{base_branch}': {e}")
+
+
+def _get_default_branch() -> str:
+    """Detect the remote's default branch (main, master, etc)."""
+    try:
+        ref = _run_git(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+        return ref.replace("origin/", "")
+    except RuntimeError:
+        # Fallback: check if main or master exists
+        try:
+            _run_git(["ls-remote", "--exit-code", "--heads", "origin", "main"])
+            return "main"
+        except RuntimeError:
+            try:
+                _run_git(["ls-remote", "--exit-code", "--heads", "origin", "master"])
+                return "master"
+            except RuntimeError:
+                return "main"
 
 
 def push_branch(branch_name: str) -> None:
@@ -136,22 +216,23 @@ def push_branch(branch_name: str) -> None:
     _run_git(["push", "-u", "origin", branch_name])
 
 
-def create_pr(branch_name: str, run_id: str) -> str:
-    """Create a PR from the branch to staging. Returns the PR URL."""
+def create_pr(branch_name: str, run_id: str, base_branch: str = "main") -> str:
+    """Create a PR from the branch to the base branch. Returns the PR URL."""
+    repo = get_allowed_repo()
     title = f"[Self-Improve] {branch_name}"
     body = (
         "## Self-Improvement Run\n\n"
         f"**Branch:** `{branch_name}`\n"
         f"**Run ID:** `{run_id}`\n\n"
-        "This PR was created by the SignalPilot self-improvement agent.\n"
-        "Review all changes carefully before merging to staging.\n\n"
+        f"This PR was created by the self-improvement agent.\n"
+        f"Review all changes carefully before merging to `{base_branch}`.\n\n"
         "---\n"
-        "*Generated by SignalPilot Self-Improve Framework*"
+        "*Generated by Self-Improve Framework*"
     )
 
     url = _run_gh([
         "pr", "create",
-        "--base", "staging",
+        "--base", base_branch,
         "--head", branch_name,
         "--title", title,
         "--body", body,

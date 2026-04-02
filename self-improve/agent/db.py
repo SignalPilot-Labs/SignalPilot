@@ -1,27 +1,127 @@
-"""Database utilities for audit logging."""
+"""Database utilities for audit logging — SQLite backend."""
 
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-import asyncpg
-
-
-_pool: asyncpg.Pool | None = None
+import aiosqlite
 
 
-async def init_pool(dsn: str) -> asyncpg.Pool:
-    """Create and cache the connection pool."""
-    global _pool
-    _pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
-    return _pool
+_db: aiosqlite.Connection | None = None
 
 
-def get_pool() -> asyncpg.Pool:
-    """Get the cached pool. Raises if not initialized."""
-    if _pool is None:
-        raise RuntimeError("Database pool not initialized. Call init_pool() first.")
-    return _pool
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at TEXT,
+    branch_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    pr_url TEXT,
+    total_tool_calls INTEGER DEFAULT 0,
+    total_cost_usd REAL DEFAULT 0,
+    total_input_tokens INTEGER DEFAULT 0,
+    total_output_tokens INTEGER DEFAULT 0,
+    rate_limit_info TEXT,
+    error_message TEXT,
+    sdk_session_id TEXT,
+    custom_prompt TEXT,
+    duration_minutes REAL DEFAULT 0,
+    base_branch TEXT DEFAULT 'main',
+    rate_limit_resets_at INTEGER,
+    diff_stats TEXT,
+    github_repo TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
+    phase TEXT NOT NULL CHECK (phase IN ('pre', 'post')),
+    tool_name TEXT NOT NULL,
+    input_data TEXT,
+    output_data TEXT,
+    duration_ms INTEGER,
+    permitted INTEGER NOT NULL DEFAULT 1,
+    deny_reason TEXT,
+    agent_role TEXT NOT NULL DEFAULT 'worker',
+    tool_use_id TEXT,
+    session_id TEXT,
+    agent_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
+    event_type TEXT NOT NULL,
+    details TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS control_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
+    signal TEXT NOT NULL CHECK (signal IN ('pause', 'resume', 'inject', 'stop', 'unlock')),
+    payload TEXT,
+    consumed INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    encrypted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_log_run_id ON audit_log(run_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_control_signals_run_id ON control_signals(run_id);
+CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id, consumed);
+"""
+
+
+async def init_db(db_path: str) -> aiosqlite.Connection:
+    """Open SQLite database, enable WAL mode, and create schema."""
+    global _db
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    _db = await aiosqlite.connect(db_path)
+    _db.row_factory = aiosqlite.Row
+    await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA busy_timeout=5000")
+    await _db.executescript(SCHEMA)
+    # Migrate: add github_repo column to runs if missing
+    cursor = await _db.execute("PRAGMA table_info(runs)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    if "github_repo" not in cols:
+        await _db.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
+    # Migrate: add session_id and agent_id to tool_calls if missing
+    cursor = await _db.execute("PRAGMA table_info(tool_calls)")
+    tc_cols = {row[1] for row in await cursor.fetchall()}
+    if "session_id" not in tc_cols:
+        await _db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
+    if "agent_id" not in tc_cols:
+        await _db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
+    await _db.commit()
+    return _db
+
+
+def get_db() -> aiosqlite.Connection:
+    """Get the cached connection. Raises if not initialized."""
+    if _db is None:
+        raise RuntimeError("Database not initialized. Call init_db() first.")
+    return _db
+
+
+async def close_db() -> None:
+    """Close the database connection."""
+    global _db
+    if _db:
+        await _db.close()
+        _db = None
 
 
 async def create_run(
@@ -29,50 +129,53 @@ async def create_run(
     custom_prompt: str | None = None,
     duration_minutes: float = 0,
     base_branch: str = "main",
+    github_repo: str | None = None,
 ) -> str:
     """Create a new run record. Returns the run UUID as string."""
-    pool = get_pool()
-    row = await pool.fetchrow(
-        """INSERT INTO runs (branch_name, custom_prompt, duration_minutes, base_branch)
-        VALUES ($1, $2, $3, $4) RETURNING id""",
-        branch_name,
-        custom_prompt,
-        duration_minutes,
-        base_branch,
+    import os
+    conn = get_db()
+    run_id = str(uuid.uuid4())
+    repo = github_repo or os.environ.get("GITHUB_REPO", "")
+    await conn.execute(
+        """INSERT INTO runs (id, branch_name, custom_prompt, duration_minutes, base_branch, github_repo)
+        VALUES (?, ?, ?, ?, ?, ?)""",
+        (run_id, branch_name, custom_prompt, duration_minutes, base_branch, repo or None),
     )
-    return str(row["id"])
+    await conn.commit()
+    return run_id
 
 
 async def save_rate_limit_reset(run_id: str, resets_at: int) -> None:
     """Save the rate limit reset timestamp."""
-    pool = get_pool()
-    await pool.execute(
-        "UPDATE runs SET rate_limit_resets_at = $2 WHERE id = $1",
-        uuid.UUID(run_id),
-        resets_at,
+    conn = get_db()
+    await conn.execute(
+        "UPDATE runs SET rate_limit_resets_at = ? WHERE id = ?",
+        (resets_at, run_id),
     )
+    await conn.commit()
 
 
 async def save_session_id(run_id: str, session_id: str) -> None:
     """Save the SDK session ID so we can resume later."""
-    pool = get_pool()
-    await pool.execute(
-        "UPDATE runs SET sdk_session_id = $2 WHERE id = $1",
-        uuid.UUID(run_id),
-        session_id,
+    conn = get_db()
+    await conn.execute(
+        "UPDATE runs SET sdk_session_id = ? WHERE id = ?",
+        (session_id, run_id),
     )
+    await conn.commit()
 
 
 async def get_run_for_resume(run_id: str) -> dict | None:
     """Get run info needed to resume a session."""
-    pool = get_pool()
-    row = await pool.fetchrow(
+    conn = get_db()
+    cursor = await conn.execute(
         """SELECT id, branch_name, status, sdk_session_id, custom_prompt,
                   duration_minutes, base_branch, total_cost_usd,
                   total_input_tokens, total_output_tokens
-        FROM runs WHERE id = $1""",
-        uuid.UUID(run_id),
+        FROM runs WHERE id = ?""",
+        (run_id,),
     )
+    row = await cursor.fetchone()
     if not row:
         return None
     return dict(row)
@@ -90,30 +193,42 @@ async def finish_run(
     diff_stats: list | None = None,
 ) -> None:
     """Mark a run as finished with final stats."""
-    pool = get_pool()
-    await pool.execute(
-        """UPDATE runs SET
-            ended_at = now(),
-            status = $2,
-            pr_url = $3,
-            total_cost_usd = $4,
-            total_input_tokens = $5,
-            total_output_tokens = $6,
-            error_message = $7,
-            rate_limit_info = $8,
-            diff_stats = $9,
-            total_tool_calls = (SELECT count(*) FROM tool_calls WHERE run_id = $1 AND phase = 'pre')
-        WHERE id = $1""",
-        uuid.UUID(run_id),
-        status,
-        pr_url,
-        total_cost_usd,
-        total_input_tokens,
-        total_output_tokens,
-        error_message,
-        json.dumps(rate_limit_info) if rate_limit_info else None,
-        json.dumps(diff_stats) if diff_stats else None,
+    conn = get_db()
+    # Count tool calls first
+    cursor = await conn.execute(
+        "SELECT count(*) FROM tool_calls WHERE run_id = ? AND phase = 'pre'",
+        (run_id,),
     )
+    count_row = await cursor.fetchone()
+    tool_count = count_row[0] if count_row else 0
+
+    await conn.execute(
+        """UPDATE runs SET
+            ended_at = datetime('now'),
+            status = ?,
+            pr_url = ?,
+            total_cost_usd = ?,
+            total_input_tokens = ?,
+            total_output_tokens = ?,
+            error_message = ?,
+            rate_limit_info = ?,
+            diff_stats = ?,
+            total_tool_calls = ?
+        WHERE id = ?""",
+        (
+            status,
+            pr_url,
+            total_cost_usd,
+            total_input_tokens,
+            total_output_tokens,
+            error_message,
+            json.dumps(rate_limit_info) if rate_limit_info else None,
+            json.dumps(diff_stats) if diff_stats else None,
+            tool_count,
+            run_id,
+        ),
+    )
+    await conn.commit()
 
 
 async def log_tool_call(
@@ -127,26 +242,32 @@ async def log_tool_call(
     deny_reason: str | None = None,
     agent_role: str = "worker",
     tool_use_id: str | None = None,
+    session_id: str | None = None,
+    agent_id: str | None = None,
 ) -> int:
     """Log a tool call. Returns the row id."""
-    pool = get_pool()
-    row = await pool.fetchrow(
+    conn = get_db()
+    cursor = await conn.execute(
         """INSERT INTO tool_calls
-            (run_id, phase, tool_name, input_data, output_data, duration_ms, permitted, deny_reason, agent_role, tool_use_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id""",
-        uuid.UUID(run_id),
-        phase,
-        tool_name,
-        json.dumps(input_data) if input_data else None,
-        json.dumps(output_data) if output_data else None,
-        duration_ms,
-        permitted,
-        deny_reason,
-        agent_role,
-        tool_use_id,
+            (run_id, phase, tool_name, input_data, output_data, duration_ms, permitted, deny_reason, agent_role, tool_use_id, session_id, agent_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            run_id,
+            phase,
+            tool_name,
+            json.dumps(input_data) if input_data else None,
+            json.dumps(output_data) if output_data else None,
+            duration_ms,
+            1 if permitted else 0,
+            deny_reason,
+            agent_role,
+            tool_use_id,
+            session_id,
+            agent_id,
+        ),
     )
-    return row["id"]
+    await conn.commit()
+    return cursor.lastrowid
 
 
 async def log_audit(
@@ -155,63 +276,51 @@ async def log_audit(
     details: dict | None = None,
 ) -> None:
     """Log an audit event."""
-    pool = get_pool()
-    await pool.execute(
-        "INSERT INTO audit_log (run_id, event_type, details) VALUES ($1, $2, $3)",
-        uuid.UUID(run_id),
-        event_type,
-        json.dumps(details or {}),
+    conn = get_db()
+    await conn.execute(
+        "INSERT INTO audit_log (run_id, event_type, details) VALUES (?, ?, ?)",
+        (run_id, event_type, json.dumps(details or {})),
     )
+    await conn.commit()
 
 
 async def poll_control_signal(run_id: str) -> dict | None:
-    """Fetch and consume the oldest pending control signal for this run.
-
-    Returns dict with 'signal' and 'payload' keys, or None if no pending signals.
-    """
-    pool = get_pool()
-    row = await pool.fetchrow(
-        """UPDATE control_signals
-        SET consumed = TRUE
-        WHERE id = (
-            SELECT id FROM control_signals
-            WHERE run_id = $1 AND NOT consumed
-            ORDER BY ts ASC
-            LIMIT 1
-        )
-        RETURNING signal, payload""",
-        uuid.UUID(run_id),
+    """Fetch and consume the oldest pending control signal for this run."""
+    conn = get_db()
+    cursor = await conn.execute(
+        """SELECT id, signal, payload FROM control_signals
+        WHERE run_id = ? AND consumed = 0
+        ORDER BY ts ASC LIMIT 1""",
+        (run_id,),
     )
+    row = await cursor.fetchone()
     if row:
+        await conn.execute(
+            "UPDATE control_signals SET consumed = 1 WHERE id = ?",
+            (row["id"],),
+        )
+        await conn.commit()
         return {"signal": row["signal"], "payload": row["payload"]}
     return None
 
 
 async def update_run_status(run_id: str, status: str) -> None:
     """Update the run status (e.g. to 'paused')."""
-    pool = get_pool()
-    await pool.execute(
-        "UPDATE runs SET status = $2 WHERE id = $1",
-        uuid.UUID(run_id),
-        status,
+    conn = get_db()
+    await conn.execute(
+        "UPDATE runs SET status = ? WHERE id = ?",
+        (status, run_id),
     )
+    await conn.commit()
 
 
 async def mark_crashed_runs() -> int:
-    """Mark any 'running' or 'paused' runs as 'crashed' on startup.
-
-    Called when the agent container starts — any run that was 'running' when
-    we last went down is stale and should be marked crashed.
-    Returns the number of runs marked.
-    """
-    pool = get_pool()
-    result = await pool.execute(
-        """UPDATE runs SET status = 'crashed', ended_at = now(),
+    """Mark any 'running' or 'paused' runs as 'crashed' on startup."""
+    conn = get_db()
+    cursor = await conn.execute(
+        """UPDATE runs SET status = 'crashed', ended_at = datetime('now'),
            error_message = 'Agent container restarted while run was in progress'
         WHERE status IN ('running', 'paused')"""
     )
-    # result is like "UPDATE N"
-    try:
-        return int(result.split()[-1])
-    except (ValueError, IndexError):
-        return 0
+    await conn.commit()
+    return cursor.rowcount

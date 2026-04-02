@@ -9,7 +9,7 @@ description = "SignalPilot self-improvement agent — CEO/Worker loop powered by
 requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk",
-    "asyncpg>=0.30.0",
+    "aiosqlite>=0.20.0",
     "httpx>=0.28.0",
     "python-dotenv",
     "fastapi>=0.115.0",

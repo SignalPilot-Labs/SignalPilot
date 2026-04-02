@@ -118,8 +118,8 @@ class TestSchemaCache:
         time.sleep(0.02)
         stats = cache.stats()
         assert stats["cached_connections"] == 0
-        # Total entries may still show 1 (not yet pruned)
-        assert stats["total_entries"] == 1
+        # stats() now lazy-purges expired entries, so total_entries == 0
+        assert stats["total_entries"] == 0
 
     def test_multiple_connections_isolated(self):
         cache = SchemaCache(ttl_seconds=60)

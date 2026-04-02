@@ -84,7 +84,7 @@ export default function Home() {
               <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-20" />
               <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
             </div>
-            <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1 text-center">
+            <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider flex-1 text-center">
               signalpilot — boot
             </code>
           </div>
@@ -130,10 +130,10 @@ export default function Home() {
                     <div className="h-3" />
                   ) : (
                     <>
-                      <span className="text-[10px] text-[var(--color-text-dim)] w-6 text-right tabular-nums select-none">
+                      <span className="text-[12px] text-[var(--color-text-dim)] w-6 text-right tabular-nums select-none">
                         {String(i + 1).padStart(2, "0")}
                       </span>
-                      <code className={`text-[11px] tracking-wider ${line.color} flex items-center gap-2`}>
+                      <code className={`text-[13px] tracking-wider ${line.color} flex items-center gap-2`}>
                         <span>{line.text}</span>
                         {line.check && (
                           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0">
@@ -150,10 +150,10 @@ export default function Home() {
             {/* Cursor */}
             {visibleLines < BOOT_LINES.length && (
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] text-[var(--color-text-dim)] w-6 text-right tabular-nums select-none">
+                <span className="text-[12px] text-[var(--color-text-dim)] w-6 text-right tabular-nums select-none">
                   {String(visibleLines + 1).padStart(2, "0")}
                 </span>
-                <span className={`text-[11px] text-[var(--color-success)] ${showCursor ? "opacity-100" : "opacity-0"}`}>
+                <span className={`text-[13px] text-[var(--color-success)] ${showCursor ? "opacity-100" : "opacity-0"}`}>
                   _
                 </span>
               </div>
@@ -163,12 +163,12 @@ export default function Home() {
           {/* Status bar */}
           <div className="px-4 py-2 border-t border-[var(--color-border)] flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5 text-[9px] text-[var(--color-text-dim)] tracking-wider">
+              <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                 <span className="w-1.5 h-1.5 bg-[var(--color-success)]" />
                 system ready
               </span>
             </div>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
               v0.1.0
             </span>
           </div>
@@ -178,7 +178,7 @@ export default function Home() {
         <div className="mt-4 text-center">
           <button
             onClick={() => router.push("/dashboard")}
-            className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-3 px-6 active:text-[var(--color-text)]"
+            className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider py-3 px-6 active:text-[var(--color-text)]"
           >
             skip &rarr; dashboard
           </button>

@@ -23,8 +23,9 @@ from claude_agent_sdk.types import (
 
 from agent import db
 
-# The only repo the agent is allowed to push to
-ALLOWED_REPO = os.environ.get("GITHUB_REPO", "")
+# Read at call time so runtime changes from /start are picked up
+def _get_allowed_repo() -> str:
+    return os.environ.get("GITHUB_REPO", "")
 
 # Protected branches - agent must never push directly to these
 PROTECTED_BRANCHES = {"main", "master", "staging", "prod", "production"}
@@ -100,8 +101,9 @@ def _check_git_push(cmd: str) -> str | None:
 
     # Block adding/changing remotes to non-allowed repos
     if "git remote" in cmd:
-        if ALLOWED_REPO and ALLOWED_REPO not in cmd:
-            return f"Cannot modify git remotes — only {ALLOWED_REPO} is allowed"
+        repo = _get_allowed_repo()
+        if repo and repo not in cmd:
+            return f"Cannot modify git remotes — only {repo} is allowed"
 
     if "git push" not in cmd:
         return None
@@ -130,9 +132,10 @@ def _check_repo_exploration(cmd: str) -> str | None:
     """Block commands that try to clone or explore other repos."""
     # Block cloning other repos
     if "git clone" in cmd:
-        if ALLOWED_REPO and ALLOWED_REPO not in cmd:
-            return "Cannot clone other repositories — stay within SignalPilot"
-        if not ALLOWED_REPO:
+        repo = _get_allowed_repo()
+        if repo and repo not in cmd:
+            return f"Cannot clone other repositories — stay within {repo}"
+        if not repo:
             return "Cannot clone repositories — GITHUB_REPO not configured"
 
     # Block cd to outside workspace

@@ -78,12 +78,12 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
               onKeyDown={handleKeyDown}
               placeholder="Type a prompt to inject into the running agent..."
               rows={3}
-              className="w-full bg-black/40 border border-[#1a1a1a] rounded px-3 py-2.5 text-[11px] text-[#ccc] placeholder-[#444] resize-y focus:outline-none focus:border-[#00ff88]/30 transition-all"
+              className="w-full bg-black/40 border border-[#1a1a1a] rounded px-3 py-2.5 text-[11px] text-[#ccc] placeholder-[#666] resize-y focus:outline-none focus:border-[#00ff88]/30 transition-all"
             />
 
             {/* Actions */}
             <div className="flex items-center justify-between mt-2.5">
-              <span className="text-[9px] text-[#444]">
+              <span className="text-[9px] text-[#888]">
                 {text.length > 0 ? `${text.length} chars` : "Ctrl+Enter to send"}
               </span>
               <div className="flex gap-2">

@@ -32,11 +32,41 @@ from claude_agent_sdk import (
     ToolUseBlock,
     ToolResultBlock,
 )
-from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher
+from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher, AgentDefinition
 
 from agent import db, hooks, git_ops, permissions, prompt, session_gate
 
-import asyncpg
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def _is_workspace_same_repo(github_repo: str) -> bool:
+    """Check if /workspace is the same repo as GITHUB_REPO.
+
+    This determines whether bundled skills should be copied into the
+    cloned repo. If someone sets a different GITHUB_REPO, the bundled
+    SignalPilot-specific skills should NOT be copied.
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd="/workspace",
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        origin = result.stdout.strip().lower()
+        # Normalize: extract owner/repo from the URL
+        # Handle https://github.com/owner/repo.git and git@github.com:owner/repo.git
+        for prefix in ["https://github.com/", "git@github.com:"]:
+            if prefix in origin:
+                slug = origin.split(prefix)[-1].rstrip(".git").strip("/")
+                return slug == github_repo.lower()
+        return github_repo.lower() in origin
+    except Exception:
+        return False
 
 
 # =============================================================================
@@ -45,44 +75,22 @@ import asyncpg
 _current_run_id: str | None = None
 _current_task: asyncio.Task | None = None
 _signal_queue: asyncio.Queue | None = None  # Instant control signal delivery
-_listener_task: asyncio.Task | None = None
-_listener_conn: asyncpg.Connection | None = None
 
 
 # =============================================================================
-# Instant signal delivery via pg LISTEN + in-process queue
+# Instant signal delivery via HTTP endpoints + in-process queue
 # =============================================================================
 
-async def _start_signal_listener(run_id: str) -> None:
-    """Start listening for pg_notify control signals for this run."""
-    global _signal_queue, _listener_task, _listener_conn
+def _init_signal_queue() -> None:
+    """Initialize the signal queue for a new run."""
+    global _signal_queue
     _signal_queue = asyncio.Queue()
-
-    dsn = os.environ["AUDIT_DB_URL"]
-    _listener_conn = await asyncpg.connect(dsn)
-
-    def _on_notify(conn, pid, channel, payload):
-        try:
-            data = _json.loads(payload)
-            if str(data.get("run_id")) == run_id:
-                _signal_queue.put_nowait(data)
-        except Exception:
-            pass
-
-    await _listener_conn.add_listener("control_signal", _on_notify)
-    print(f"[agent] Listening for control signals (run {run_id[:8]})")
+    print("[agent] Signal queue initialized")
 
 
-async def _stop_signal_listener() -> None:
-    """Stop the pg listener."""
-    global _listener_conn, _signal_queue
-    if _listener_conn:
-        try:
-            await _listener_conn.remove_listener("control_signal", lambda *a: None)
-            await _listener_conn.close()
-        except Exception:
-            pass
-        _listener_conn = None
+def _teardown_signal_queue() -> None:
+    """Tear down the signal queue."""
+    global _signal_queue
     _signal_queue = None
 
 
@@ -143,6 +151,46 @@ async def handle_pause(run_id: str) -> str | None:
                 return "resume"
 
 
+_pulse_task: asyncio.Task | None = None
+
+
+async def _subagent_pulse_checker(run_id: str) -> None:
+    """Background task that checks for stuck subagents every 30s.
+    When a subagent is idle > 10 min, pushes a stuck_recovery signal
+    which the main loop handles by interrupting + continuing."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            stuck = hooks.get_stuck_subagents()
+            if stuck:
+                descriptions = ", ".join(
+                    f"agent_id={s['agent_id']} (idle {s['idle_seconds']}s, total {s['total_seconds']}s)"
+                    for s in stuck
+                )
+                print(f"[pulse] STUCK SUBAGENTS DETECTED: {descriptions}")
+                await db.log_audit(run_id, "subagent_stuck", {
+                    "stuck_agents": stuck,
+                    "action": "interrupt_and_recover",
+                })
+                _push_signal("stuck_recovery", _json.dumps(stuck))
+                # Only fire once per detection — wait for recovery to clear things
+                return
+        except Exception as e:
+            print(f"[pulse] Error in pulse checker: {e}")
+
+
+def _start_pulse_checker(run_id: str) -> None:
+    global _pulse_task
+    _pulse_task = asyncio.create_task(_subagent_pulse_checker(run_id))
+
+
+def _stop_pulse_checker() -> None:
+    global _pulse_task
+    if _pulse_task and not _pulse_task.done():
+        _pulse_task.cancel()
+    _pulse_task = None
+
+
 # =============================================================================
 # Main agent run
 # =============================================================================
@@ -161,6 +209,7 @@ async def run_agent(
 
     # --- Git setup ---
     git_ops.setup_git_auth()
+    git_ops.ensure_base_branch(base_branch)
     branch_name = git_ops.get_branch_name()
     git_ops.create_branch(branch_name, base_branch=base_branch)
     print(f"[agent] Created branch: {branch_name} (from {base_branch})")
@@ -181,8 +230,9 @@ async def run_agent(
     session_gate.configure(run_id, duration_minutes)
     session_mcp = session_gate.create_session_mcp_server()
 
-    # --- Start instant signal listener ---
-    await _start_signal_listener(run_id)
+    # --- Start instant signal queue ---
+    _init_signal_queue()
+    _start_pulse_checker(run_id)
 
     duration_str = f"{duration_minutes}m" if duration_minutes > 0 else "unlimited"
     print(f"[agent] Duration: {duration_str}")
@@ -193,18 +243,63 @@ async def run_agent(
         "model": model,
         "max_budget_usd": max_budget,
         "duration_minutes": duration_minutes,
-        "custom_prompt": custom_prompt[:200] if custom_prompt else None,
+        "custom_prompt": custom_prompt if custom_prompt else None,
     })
 
-    # --- Copy skills into cloned repo ---
+    # --- Copy skills into cloned repo (only if they belong to this repo) ---
     work_dir = git_ops.get_work_dir()
     skills_src = Path("/workspace/self-improve/.claude")
     skills_dst = Path(work_dir) / ".claude"
-    if skills_src.exists():
+    # Only copy the bundled skills if /workspace is the same repo we're targeting
+    # (i.e., the self-improve framework is inside the target repo). Otherwise,
+    # the cloned repo should use its own .claude config if present.
+    workspace_repo = os.environ.get("GITHUB_REPO", "")
+    workspace_is_target = (
+        skills_src.exists()
+        and workspace_repo
+        and _is_workspace_same_repo(workspace_repo)
+    )
+    if workspace_is_target:
         if skills_dst.exists():
             shutil.rmtree(skills_dst)
         shutil.copytree(skills_src, skills_dst)
         print(f"[agent] Copied skills to {skills_dst}")
+    else:
+        print(f"[agent] Skipping skill copy — target repo differs from workspace")
+
+    # --- Subagents for parallel work (prompts loaded from prompts/agent-*.md) ---
+    subagents = {
+        "code-writer": AgentDefinition(
+            description="Use for writing new files, generating boilerplate, creating components, or implementing straightforward features. Delegates code generation so the main agent can continue planning.",
+            prompt=prompt.load_agent_prompt("code-writer"),
+            model="sonnet",
+            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+        ),
+        "test-writer": AgentDefinition(
+            description="Use for writing tests, running test suites, and verifying code works correctly. Delegates test creation and execution.",
+            prompt=prompt.load_agent_prompt("test-writer"),
+            model="sonnet",
+            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+        ),
+        "researcher": AgentDefinition(
+            description="Use for researching the codebase, finding patterns, understanding architecture, or looking up documentation. Returns findings without making changes.",
+            prompt=prompt.load_agent_prompt("researcher"),
+            model="opus",
+            tools=["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"],
+        ),
+        "frontend-builder": AgentDefinition(
+            description="Use for building React/Next.js components, pages, layouts, and styling. Handles TSX, CSS, Tailwind, and frontend-specific code generation.",
+            prompt=prompt.load_agent_prompt("frontend-builder"),
+            model="sonnet",
+            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+        ),
+        "reviewer": AgentDefinition(
+            description="MUST be called after completing each feature or significant change. Reviews recent commits for security vulnerabilities, performance issues, duplicated code, god files, and code quality problems. Runs on Opus for thorough analysis. Returns a structured review with critical issues, warnings, and files that need splitting.",
+            prompt=prompt.load_agent_prompt("reviewer"),
+            model="opus",
+            tools=["Read", "Glob", "Grep", "Bash"],
+        ),
+    }
 
     # --- SDK options ---
     options = ClaudeAgentOptions(
@@ -223,10 +318,13 @@ async def run_agent(
         max_budget_usd=max_budget if max_budget > 0 else None,
         include_partial_messages=True,
         mcp_servers={"session_gate": session_mcp},
+        agents=subagents,
         hooks={
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],
             "Stop": [HookMatcher(hooks=[hooks.stop_hook])],
+            "SubagentStart": [HookMatcher(hooks=[hooks.subagent_start_hook])],
+            "SubagentStop": [HookMatcher(hooks=[hooks.subagent_stop_hook])],
         },
     )
 
@@ -315,6 +413,26 @@ async def run_agent(
                             # Queue for delivery after current round completes
                             _pending_inject = signal.get("payload", "")
                             await db.log_audit(run_id, "prompt_injected", {"prompt": _pending_inject, "delivery": "queued"})
+                        elif sig == "stuck_recovery":
+                            # Subagent(s) stuck — interrupt and continue with recovery prompt
+                            stuck_info = signal.get("payload", "[]")
+                            print(f"[agent] STUCK RECOVERY: interrupting for stuck subagents")
+                            await client.interrupt()
+                            async for _ in client.receive_response():
+                                pass
+                            recovery_prompt = (
+                                "IMPORTANT: One or more subagents got stuck and had to be killed. "
+                                f"Stuck agent details: {stuck_info}\n\n"
+                                "Please manually achieve what those subagents were supposed to do, "
+                                "or break the task into smaller, simpler parts. "
+                                "Do NOT re-spawn the same agent with the same task — instead, "
+                                "do the work directly or split it into multiple smaller agent calls."
+                            )
+                            await db.log_audit(run_id, "stuck_recovery", {"stuck_info": stuck_info, "recovery_prompt": recovery_prompt})
+                            await client.query(recovery_prompt)
+                            # Restart pulse checker for the new round
+                            _start_pulse_checker(run_id)
+                            break
 
                     # --- StreamEvent ---
                     if isinstance(message, StreamEvent):
@@ -324,12 +442,12 @@ async def run_agent(
                             dtype = delta.get("type", "")
                             if dtype == "text_delta" and delta.get("text"):
                                 try:
-                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                             elif dtype == "thinking_delta" and delta.get("thinking"):
                                 try:
-                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                         continue
@@ -557,12 +675,12 @@ async def run_agent(
                                 dtype = delta.get("type", "")
                                 if dtype == "text_delta" and delta.get("text"):
                                     try:
-                                        await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": "ceo"})
+                                        await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": "ceo"})
                                     except Exception:
                                         pass
                                 elif dtype == "thinking_delta" and delta.get("thinking"):
                                     try:
-                                        await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": "ceo"})
+                                        await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": "ceo"})
                                     except Exception:
                                         pass
                             continue
@@ -615,7 +733,8 @@ async def run_agent(
         final_status = "error"
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
-        await _stop_signal_listener()
+        _stop_pulse_checker()
+        _teardown_signal_queue()
 
     # --- Post-run: push and create PR ---
     if final_status != "killed":
@@ -623,7 +742,7 @@ async def run_agent(
             current = git_ops.get_current_branch()
             if current == branch_name:
                 git_ops.push_branch(branch_name)
-                pr_url = git_ops.create_pr(branch_name, run_id)
+                pr_url = git_ops.create_pr(branch_name, run_id, base_branch=base_branch)
                 print(f"[agent] PR created: {pr_url}")
                 await db.log_audit(run_id, "pr_created", {"url": pr_url, "branch": branch_name})
         except Exception as e:
@@ -661,17 +780,22 @@ class StartRequest(BaseModel):
     max_budget_usd: float = 0
     duration_minutes: float = 0
     base_branch: str = "main"
+    # Credentials passed by monitor (decrypted from settings DB)
+    claude_token: str | None = None
+    git_token: str | None = None
+    github_repo: str | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    dsn = os.environ["AUDIT_DB_URL"]
-    await db.init_pool(dsn)
+    db_path = os.environ.get("DB_PATH", "/data/improve.db")
+    await db.init_db(db_path)
     crashed = await db.mark_crashed_runs()
     if crashed:
         print(f"[agent] Marked {crashed} stale run(s) as crashed from previous restart")
     print("[agent] Ready — waiting for start command on :8500")
     yield
+    await db.close_db()
 
 
 app = FastAPI(title="Self-Improve Agent", lifespan=lifespan)
@@ -706,6 +830,14 @@ async def start_run(body: StartRequest = StartRequest()):
     if _current_run_id is not None:
         raise HTTPException(status_code=409, detail=f"Run already in progress: {_current_run_id}")
 
+    # Inject credentials from monitor (takes priority over env vars)
+    if body.claude_token:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = body.claude_token
+    if body.git_token:
+        os.environ["GIT_TOKEN"] = body.git_token
+    if body.github_repo:
+        os.environ["GITHUB_REPO"] = body.github_repo
+
     budget = body.max_budget_usd if body.max_budget_usd is not None and body.max_budget_usd != 0 else float(os.environ.get("MAX_BUDGET_USD", "0"))
     _current_task = asyncio.create_task(
         run_agent(
@@ -720,7 +852,7 @@ async def start_run(body: StartRequest = StartRequest()):
     return {
         "ok": True,
         "run_id": _current_run_id,
-        "prompt": body.prompt[:200] if body.prompt else None,
+        "prompt": body.prompt if body.prompt else None,
         "max_budget_usd": budget,
         "duration_minutes": body.duration_minutes,
         "base_branch": body.base_branch,
@@ -730,6 +862,9 @@ async def start_run(body: StartRequest = StartRequest()):
 class ResumeRequest(BaseModel):
     run_id: str
     max_budget_usd: float = 0
+    claude_token: str | None = None
+    git_token: str | None = None
+    github_repo: str | None = None
 
 
 async def resume_agent(run_id: str, max_budget: float = 0):
@@ -772,17 +907,19 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     session_gate.configure(run_id, duration_minutes)
     session_mcp = session_gate.create_session_mcp_server()
 
-    await _start_signal_listener(run_id)
+    _init_signal_queue()
+    _start_pulse_checker(run_id)
     await db.update_run_status(run_id, "running")
     await db.log_audit(run_id, "session_resumed", {
         "sdk_session_id": session_id[:20] if session_id else None,
         "branch": branch_name,
     })
 
-    # --- Copy skills ---
+    # --- Copy skills (only if workspace matches target repo) ---
     skills_src = Path("/workspace/self-improve/.claude")
     skills_dst = Path(work_dir) / ".claude"
-    if skills_src.exists():
+    repo = os.environ.get("GITHUB_REPO", "")
+    if skills_src.exists() and repo and _is_workspace_same_repo(repo):
         if skills_dst.exists():
             shutil.rmtree(skills_dst)
         shutil.copytree(skills_src, skills_dst)
@@ -809,6 +946,8 @@ async def resume_agent(run_id: str, max_budget: float = 0):
             "PreToolUse": [HookMatcher(hooks=[hooks.pre_tool_use_hook])],
             "PostToolUse": [HookMatcher(hooks=[hooks.post_tool_use_hook])],
             "Stop": [HookMatcher(hooks=[hooks.stop_hook])],
+            "SubagentStart": [HookMatcher(hooks=[hooks.subagent_start_hook])],
+            "SubagentStop": [HookMatcher(hooks=[hooks.subagent_stop_hook])],
         },
     )
 
@@ -861,12 +1000,12 @@ async def resume_agent(run_id: str, max_budget: float = 0):
                             dtype = delta.get("type", "")
                             if dtype == "text_delta" and delta.get("text"):
                                 try:
-                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_text", {"text": delta["text"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                             elif dtype == "thinking_delta" and delta.get("thinking"):
                                 try:
-                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"][:2000], "agent_role": hooks._agent_role})
+                                    await db.log_audit(run_id, "llm_thinking", {"text": delta["thinking"], "agent_role": hooks._agent_role})
                                 except Exception:
                                     pass
                         continue
@@ -914,14 +1053,15 @@ async def resume_agent(run_id: str, max_budget: float = 0):
         final_status = "error"
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
-        await _stop_signal_listener()
+        _stop_pulse_checker()
+        _teardown_signal_queue()
 
     if final_status != "killed":
         try:
             current = git_ops.get_current_branch()
             if current == branch_name:
                 git_ops.push_branch(branch_name)
-                pr_url = git_ops.create_pr(branch_name, run_id)
+                pr_url = git_ops.create_pr(branch_name, run_id, base_branch=base_branch)
                 await db.log_audit(run_id, "pr_created", {"url": pr_url})
         except Exception as e:
             print(f"[agent] PR failed: {e}")
@@ -951,11 +1091,59 @@ async def resume_run(body: ResumeRequest):
     if _current_run_id is not None:
         raise HTTPException(status_code=409, detail=f"Run already in progress: {_current_run_id}")
 
+    # Inject credentials from monitor
+    if body.claude_token:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = body.claude_token
+    if body.git_token:
+        os.environ["GIT_TOKEN"] = body.git_token
+    if body.github_repo:
+        os.environ["GITHUB_REPO"] = body.github_repo
+
     budget = body.max_budget_usd or float(os.environ.get("MAX_BUDGET_USD", "0"))
     _current_task = asyncio.create_task(resume_agent(body.run_id, budget))
     _current_task.add_done_callback(_on_task_done)
     await asyncio.sleep(2)
     return {"ok": True, "run_id": body.run_id, "resumed": True}
+
+
+class InjectRequest(BaseModel):
+    payload: str | None = None
+
+
+@app.post("/pause")
+async def pause_agent():
+    """Push pause signal to the in-process queue."""
+    if _current_run_id is None:
+        raise HTTPException(status_code=409, detail="No run in progress")
+    _push_signal("pause")
+    return {"ok": True, "signal": "pause", "delivery": "instant"}
+
+
+@app.post("/resume_signal")
+async def resume_agent_signal():
+    """Push resume signal to the in-process queue."""
+    if _current_run_id is None:
+        raise HTTPException(status_code=409, detail="No run in progress")
+    _push_signal("resume")
+    return {"ok": True, "signal": "resume", "delivery": "instant"}
+
+
+@app.post("/inject")
+async def inject_agent(body: InjectRequest = InjectRequest()):
+    """Push inject signal with payload to the in-process queue."""
+    if _current_run_id is None:
+        raise HTTPException(status_code=409, detail="No run in progress")
+    _push_signal("inject", body.payload)
+    return {"ok": True, "signal": "inject", "delivery": "instant"}
+
+
+@app.post("/unlock")
+async def unlock_agent():
+    """Push unlock signal to the in-process queue."""
+    if _current_run_id is None:
+        raise HTTPException(status_code=409, detail="No run in progress")
+    _push_signal("unlock")
+    return {"ok": True, "signal": "unlock", "delivery": "instant"}
 
 
 @app.post("/stop")
@@ -995,7 +1183,7 @@ async def list_branches():
         branches = [b.replace("origin/", "") for b in output.strip().split("\n") if b.strip() and "HEAD" not in b]
         return sorted(set(branches))
     except Exception:
-        return ["main", "staging"]
+        return ["main"]
 
 
 @app.get("/diff/live")
@@ -1006,8 +1194,9 @@ async def get_live_diff():
         # Determine base branch from current run
         base = "main"
         if _current_run_id:
-            pool = db.get_pool()
-            row = await pool.fetchrow("SELECT base_branch FROM runs WHERE id = $1", _current_run_id)
+            conn = db.get_db()
+            cursor = await conn.execute("SELECT base_branch FROM runs WHERE id = ?", (_current_run_id,))
+            row = await cursor.fetchone()
             if row and row["base_branch"]:
                 base = row["base_branch"]
         stats = git_ops.get_branch_diff_live(base)

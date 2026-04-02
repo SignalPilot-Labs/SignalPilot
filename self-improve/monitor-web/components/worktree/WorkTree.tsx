@@ -190,7 +190,7 @@ function NodeItem({ node, depth }: { node: TreeNode; depth: number }) {
         onClick={() => isDir && setOpen(!open)}
       >
         {isDir ? (
-          <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="#444" strokeWidth="1.5" strokeLinecap="round"
+          <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="#888" strokeWidth="1.5" strokeLinecap="round"
             className={clsx("shrink-0 transition-transform duration-150", open && "rotate-90")}>
             <polyline points="2 1 6 4 2 7" />
           </svg>
@@ -198,24 +198,24 @@ function NodeItem({ node, depth }: { node: TreeNode; depth: number }) {
 
         {isDir ? <DirIcon open={open} /> : <FileIcon name={node.name} status={node.status} />}
 
-        <span className={clsx("flex-1 truncate", node.status === "deleted" ? "text-[#ff4444]/60 line-through" : node.status === "added" ? "text-[#00ff88]/80" : "text-[#888]")}>
+        <span className={clsx("flex-1 truncate", node.status === "deleted" ? "text-[#ff4444]/80 line-through" : node.status === "added" ? "text-[#00ff88]" : "text-[#bbb]")}>
           {node.name}
         </span>
 
         {(totalAdded > 0 || totalRemoved > 0) && (
           <span className="flex items-center gap-1 shrink-0">
-            {totalAdded > 0 && <span className="text-[8px] text-[#00ff88]/60 tabular-nums">+{totalAdded}</span>}
-            {totalRemoved > 0 && <span className="text-[8px] text-[#ff4444]/60 tabular-nums">-{totalRemoved}</span>}
+            {totalAdded > 0 && <span className="text-[9px] text-[#00ff88]/70 tabular-nums">+{totalAdded}</span>}
+            {totalRemoved > 0 && <span className="text-[9px] text-[#ff4444]/70 tabular-nums">-{totalRemoved}</span>}
           </span>
         )}
 
         {node.status && !node.isDir && (
           <span className={clsx(
-            "text-[7px] font-bold uppercase tracking-wider rounded px-1 py-0.5 shrink-0",
-            node.status === "added" && "text-[#00ff88]/60 bg-[#00ff88]/8",
-            node.status === "modified" && "text-[#ffcc44]/60 bg-[#ffcc44]/8",
-            node.status === "deleted" && "text-[#ff4444]/60 bg-[#ff4444]/8",
-            node.status === "renamed" && "text-[#88ccff]/60 bg-[#88ccff]/8",
+            "text-[8px] font-bold uppercase tracking-wider rounded px-1 py-0.5 shrink-0",
+            node.status === "added" && "text-[#00ff88]/80 bg-[#00ff88]/10",
+            node.status === "modified" && "text-[#ffcc44]/80 bg-[#ffcc44]/10",
+            node.status === "deleted" && "text-[#ff4444]/80 bg-[#ff4444]/10",
+            node.status === "renamed" && "text-[#88ccff]/80 bg-[#88ccff]/10",
           )}>
             {node.status === "added" ? "A" : node.status === "modified" ? "M" : node.status === "deleted" ? "D" : "R"}
           </span>
@@ -239,19 +239,19 @@ function FileList({ files }: { files: DiffFile[] }) {
   return (
     <div className="space-y-0.5">
       {sorted.map((f, i) => (
-        <div key={i} className="flex items-center gap-1.5 px-2 py-[3px] text-[9px] hover:bg-white/[0.02] rounded transition-colors">
+        <div key={i} className="flex items-center gap-1.5 px-2 py-[3px] text-[10px] hover:bg-white/[0.02] rounded transition-colors">
           <span className={clsx(
-            "shrink-0 w-[14px] text-center text-[7px] font-bold uppercase",
-            f.status === "added" && "text-[#00ff88]/60",
-            f.status === "modified" && "text-[#ffcc44]/60",
-            f.status === "deleted" && "text-[#ff4444]/60",
-            f.status === "renamed" && "text-[#88ccff]/60",
+            "shrink-0 w-[14px] text-center text-[8px] font-bold uppercase",
+            f.status === "added" && "text-[#00ff88]/80",
+            f.status === "modified" && "text-[#ffcc44]/80",
+            f.status === "deleted" && "text-[#ff4444]/80",
+            f.status === "renamed" && "text-[#88ccff]/80",
           )}>
             {f.status?.[0]?.toUpperCase() || "M"}
           </span>
-          <span className="text-[#888] truncate flex-1">{f.path}</span>
-          {f.added > 0 && <span className="text-[#00ff88]/50 tabular-nums shrink-0">+{f.added}</span>}
-          {f.removed > 0 && <span className="text-[#ff4444]/50 tabular-nums shrink-0">-{f.removed}</span>}
+          <span className="text-[#aaa] truncate flex-1">{f.path}</span>
+          {f.added > 0 && <span className="text-[#00ff88]/70 tabular-nums shrink-0">+{f.added}</span>}
+          {f.removed > 0 && <span className="text-[#ff4444]/70 tabular-nums shrink-0">-{f.removed}</span>}
         </div>
       ))}
     </div>
@@ -265,9 +265,10 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
   const [diffData, setDiffData] = useState<DiffStats | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
 
-  // Fetch git diff when run changes
+  // Fetch git diff when run changes — clear stale data immediately
   useEffect(() => {
-    if (!runId) { setDiffData(null); return; }
+    setDiffData(null);
+    if (!runId) return;
     setDiffLoading(true);
     fetchRunDiff(runId).then(d => { setDiffData(d); setDiffLoading(false); }).catch(() => setDiffLoading(false));
   }, [runId]);
@@ -296,31 +297,31 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
   const totalRemoved = diffData?.total_removed || 0;
 
   return (
-    <div className={clsx("flex flex-col border-l border-[#1a1a1a] bg-[#030303] transition-all duration-200", collapsed ? "w-[32px]" : "w-[280px]")}>
+    <div className={clsx("flex flex-col border-l border-[#1a1a1a] bg-[#030303] transition-all duration-200 mr-1", collapsed ? "w-[32px]" : "w-[280px]")}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[#1a1a1a]">
         {!collapsed && (
           <>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#555" strokeWidth="1.5" strokeLinecap="round">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#888" strokeWidth="1.5" strokeLinecap="round">
               <path d="M6 1v10M6 1L3 4M6 1l3 3" />
               <circle cx="6" cy="11" r="0" /><circle cx="3" cy="6" r="1" /><circle cx="9" cy="8" r="1" />
               <line x1="3" y1="6" x2="6" y2="6" /><line x1="9" y1="8" x2="6" y2="8" />
             </svg>
-            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#555]">Changes</span>
+            <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-[#999]">Changes</span>
             {diffData?.source && (
               <span className={clsx(
                 "text-[7px] rounded px-1 py-0.5 uppercase tracking-wider",
                 diffData.source === "live" ? "text-[#00ff88]/50 bg-[#00ff88]/8" :
                 diffData.source === "stored" ? "text-[#88ccff]/50 bg-[#88ccff]/8" :
-                "text-[#555] bg-white/[0.03]"
+                "text-[#999] bg-white/[0.03]"
               )}>
                 {diffData.source === "live" ? "live" : diffData.source === "stored" ? "git" : diffData.source}
               </span>
             )}
-            <span className="text-[8px] text-[#444] tabular-nums ml-auto">{totalFiles} files</span>
+            <span className="text-[10px] text-[#777] tabular-nums ml-auto">{totalFiles} files</span>
           </>
         )}
-        <button onClick={() => setCollapsed(!collapsed)} className="text-[#444] hover:text-[#888] transition-colors p-0.5">
+        <button onClick={() => setCollapsed(!collapsed)} className="text-[#777] hover:text-[#ccc] transition-colors p-0.5">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
             {collapsed ? <polyline points="3 2 7 5 3 8" /> : <polyline points="7 2 3 5 7 8" />}
           </svg>
@@ -331,10 +332,10 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
         <>
           {/* Stats */}
           {(totalAdded > 0 || totalRemoved > 0) && (
-            <div className="flex items-center gap-3 px-3 py-1.5 border-b border-[#1a1a1a]/60 text-[8px] text-[#555]">
+            <div className="flex items-center gap-3 px-3 py-1.5 border-b border-[#1a1a1a]/60 text-[10px] text-[#888]">
               <span>{totalFiles} files changed</span>
-              {totalAdded > 0 && <span className="text-[#00ff88]/50">+{totalAdded}</span>}
-              {totalRemoved > 0 && <span className="text-[#ff4444]/50">-{totalRemoved}</span>}
+              {totalAdded > 0 && <span className="text-[#00ff88]/70">+{totalAdded}</span>}
+              {totalRemoved > 0 && <span className="text-[#ff4444]/70">-{totalRemoved}</span>}
             </div>
           )}
 
@@ -342,27 +343,27 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
           <div className="flex border-b border-[#1a1a1a]/60">
             {hasGitDiff && (
               <button onClick={() => setActiveTab("tree")}
-                className={clsx("flex-1 py-1.5 text-[9px] font-medium text-center transition-colors",
-                  activeTab === "tree" ? "text-[#e8e8e8] border-b border-[#00ff88]" : "text-[#555] hover:text-[#888]")}>
+                className={clsx("flex-1 py-1.5 text-[10px] font-medium text-center transition-colors",
+                  activeTab === "tree" ? "text-[#e8e8e8] border-b border-[#00ff88]" : "text-[#888] hover:text-[#ccc]")}>
                 Tree
               </button>
             )}
             {hasGitDiff && (
               <button onClick={() => setActiveTab("files")}
-                className={clsx("flex-1 py-1.5 text-[9px] font-medium text-center transition-colors",
-                  activeTab === "files" ? "text-[#e8e8e8] border-b border-[#00ff88]" : "text-[#555] hover:text-[#888]")}>
+                className={clsx("flex-1 py-1.5 text-[10px] font-medium text-center transition-colors",
+                  activeTab === "files" ? "text-[#e8e8e8] border-b border-[#00ff88]" : "text-[#888] hover:text-[#ccc]")}>
                 Files
               </button>
             )}
             {hasLive && (
               <button onClick={() => setActiveTab("live")}
-                className={clsx("flex-1 py-1.5 text-[9px] font-medium text-center transition-colors",
-                  activeTab === "live" ? "text-[#e8e8e8] border-b border-[#00ff88]" : "text-[#555] hover:text-[#888]")}>
+                className={clsx("flex-1 py-1.5 text-[10px] font-medium text-center transition-colors",
+                  activeTab === "live" ? "text-[#e8e8e8] border-b border-[#00ff88]" : "text-[#888] hover:text-[#ccc]")}>
                 Session
               </button>
             )}
             {!hasGitDiff && !hasLive && (
-              <div className="flex-1 py-1.5 text-[9px] text-[#444] text-center">
+              <div className="flex-1 py-1.5 text-[10px] text-[#777] text-center">
                 {diffLoading ? "Loading..." : "No changes"}
               </div>
             )}
@@ -393,7 +394,7 @@ export function WorkTree({ events, runId }: { events: FeedEvent[]; runId: string
             )}
 
             {!diffLoading && !hasGitDiff && !hasLive && (
-              <div className="text-[9px] text-[#444] px-3 py-6 text-center">
+              <div className="text-[10px] text-[#777] px-3 py-6 text-center">
                 No file changes detected yet
               </div>
             )}

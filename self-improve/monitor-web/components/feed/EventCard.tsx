@@ -143,7 +143,7 @@ function DiffViewer({ patch }: { patch: Array<Record<string, unknown>> }) {
         const newStart = (hunk.newStart as number) || 0;
         return (
           <div key={hi} className="mb-2">
-            <div className="text-[9px] text-[#555] px-2 py-1 bg-[#0a0a0a] border-b border-[#1a1a1a]">
+            <div className="text-[9px] text-[#999] px-2 py-1 bg-[#0a0a0a] border-b border-[#1a1a1a]">
               @@ -{oldStart},{(hunk.oldLines as number) || 0} +{newStart},{(hunk.newLines as number) || 0} @@
             </div>
             {lines.map((line, li) => {
@@ -175,7 +175,7 @@ function BashOutput({ output }: { output: Record<string, unknown> }) {
   const stdout = (output.stdout as string) || "";
   const stderr = (output.stderr as string) || "";
   const text = stdout || stderr;
-  if (!text) return <span className="text-[10px] text-[#444] italic">(no output)</span>;
+  if (!text) return <span className="text-[10px] text-[#888] italic">(no output)</span>;
 
   return (
     <pre className="text-[10px] text-[#aaa] whitespace-pre-wrap break-all leading-relaxed">
@@ -204,7 +204,7 @@ function TodoDisplay({ todos }: { todos: Array<{ status: string; content: string
               </svg>
             </span>
           ) : (
-            <span className="text-[#444] mt-px shrink-0">
+            <span className="text-[#888] mt-px shrink-0">
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <rect x="2" y="2" width="6" height="6" rx="1" />
               </svg>
@@ -267,7 +267,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
     >
       {/* Header row */}
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-[9px] text-[#444] tabular-nums shrink-0 w-[52px]">
+        <span className="text-[9px] text-[#888] tabular-nums shrink-0 w-[52px]">
           {formatTs(tc.ts)}
         </span>
 
@@ -279,10 +279,10 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         {/* Agent role badge */}
         <span
           className={clsx(
-            "text-[8px] font-bold uppercase tracking-[0.12em] rounded px-1 py-0.5 shrink-0",
+            "text-[9px] font-bold uppercase tracking-[0.12em] rounded px-1 py-0.5 shrink-0",
             isCeo
               ? "text-[#ff8844] bg-[#ff8844]/12"
-              : "text-[#555] bg-white/[0.03]"
+              : "text-[#999] bg-white/[0.03]"
           )}
         >
           {isCeo ? "CEO" : "WRK"}
@@ -310,7 +310,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         )}
 
         {tc.duration_ms != null && (
-          <span className="text-[9px] text-[#555] shrink-0 tabular-nums">
+          <span className="text-[9px] text-[#999] shrink-0 tabular-nums">
             {formatDuration(tc.duration_ms)}
           </span>
         )}
@@ -322,7 +322,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         )}
 
         {/* Summary */}
-        <span className="text-[10px] text-[#555] truncate min-w-0 flex-1">
+        <span className="text-[10px] text-[#999] truncate min-w-0 flex-1">
           {denied ? tc.deny_reason : summary}
         </span>
 
@@ -332,7 +332,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
           height="10"
           viewBox="0 0 10 10"
           fill="none"
-          stroke="#444"
+          stroke="#888"
           strokeWidth="1.5"
           strokeLinecap="round"
           className={clsx("shrink-0 transition-transform duration-150", expanded && "rotate-90")}
@@ -353,14 +353,14 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
             {/* Tool-specific rendered content */}
             {hasTodos && (
                 <div>
-                  <div className="text-[8px] uppercase tracking-[0.15em] text-[#555] mb-1">Tasks</div>
+                  <div className="text-[9px] uppercase tracking-[0.15em] text-[#999] mb-1">Tasks</div>
                   <TodoDisplay todos={tc.input_data!.todos as Array<{ status: string; content: string; activeForm?: string }>} />
                 </div>
               )}
 
               {hasDiff && (
                 <div>
-                  <div className="text-[8px] uppercase tracking-[0.15em] text-[#555] mb-1">Diff</div>
+                  <div className="text-[9px] uppercase tracking-[0.15em] text-[#999] mb-1">Diff</div>
                   <div className="bg-black/30 rounded border border-[#1a1a1a] overflow-hidden max-h-[500px] overflow-y-auto">
                     <DiffViewer patch={tc.output_data!.structuredPatch as Array<Record<string, unknown>>} />
                   </div>
@@ -369,7 +369,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
 
               {hasBashOutput && (
                 <div>
-                  <div className="text-[8px] uppercase tracking-[0.15em] text-[#555] mb-1">Output</div>
+                  <div className="text-[9px] uppercase tracking-[0.15em] text-[#999] mb-1">Output</div>
                   <div className="bg-black/30 rounded border border-[#1a1a1a] p-2 max-h-[500px] overflow-y-auto">
                     <BashOutput output={tc.output_data!} />
                   </div>
@@ -379,7 +379,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
               {/* Raw Input - always available */}
               {tc.input_data && !hasTodos && (
                 <div>
-                  <div className="text-[8px] uppercase tracking-[0.15em] text-[#555] mb-1">Input</div>
+                  <div className="text-[9px] uppercase tracking-[0.15em] text-[#999] mb-1">Input</div>
                   <pre className="text-[10px] text-[#777] bg-black/30 rounded border border-[#1a1a1a] p-2 overflow-x-auto max-h-[400px] overflow-y-auto whitespace-pre-wrap break-all">
                     {JSON.stringify(tc.input_data, null, 2)}
                   </pre>
@@ -389,7 +389,7 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
               {/* Raw Output - show when no specialized renderer */}
               {tc.output_data && !hasDiff && !hasBashOutput && (
                 <div>
-                  <div className="text-[8px] uppercase tracking-[0.15em] text-[#00ff88]/50 mb-1">Result</div>
+                  <div className="text-[9px] uppercase tracking-[0.15em] text-[#00ff88]/50 mb-1">Result</div>
                   <pre className="text-[10px] text-[#777] bg-black/30 rounded border border-[#1a1a1a] p-2 overflow-x-auto max-h-[400px] overflow-y-auto whitespace-pre-wrap break-all">
                     {JSON.stringify(tc.output_data, null, 2)}
                   </pre>
@@ -459,7 +459,7 @@ function AuditCard({ event }: { event: AuditEvent }) {
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-[9px] text-[#444] tabular-nums shrink-0 w-[52px]">
+        <span className="text-[9px] text-[#888] tabular-nums shrink-0 w-[52px]">
           {formatTs(event.ts)}
         </span>
 
@@ -471,16 +471,28 @@ function AuditCard({ event }: { event: AuditEvent }) {
           {meta.label}
         </span>
 
-        <span className="text-[10px] text-[#555] truncate min-w-0 flex-1">
-          {preview}
-        </span>
+        {event.event_type === "pr_created" && event.details.url ? (
+          <a
+            href={String(event.details.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] text-[#88ccff] hover:text-[#aaddff] underline underline-offset-2 truncate min-w-0 flex-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            PR #{String(event.details.url).split("/").pop()}
+          </a>
+        ) : (
+          <span className="text-[10px] text-[#999] truncate min-w-0 flex-1">
+            {preview}
+          </span>
+        )}
 
         <svg
           width="10"
           height="10"
           viewBox="0 0 10 10"
           fill="none"
-          stroke="#444"
+          stroke="#888"
           strokeWidth="1.5"
           strokeLinecap="round"
           className={clsx("shrink-0 transition-transform duration-150", expanded && "rotate-90")}
@@ -555,7 +567,7 @@ function UsageCard({ usage }: { usage: UsageEvent }) {
       className="border-l-[3px] border-l-[#44ccdd]/30 bg-[#44ccdd]/[0.015] rounded-r px-3 py-1"
     >
       <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-[9px] text-[#444] tabular-nums shrink-0 w-[52px]">
+        <span className="text-[9px] text-[#888] tabular-nums shrink-0 w-[52px]">
           {formatTs(usage.ts)}
         </span>
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#44ccdd" strokeWidth="1" opacity="0.5">
@@ -567,11 +579,11 @@ function UsageCard({ usage }: { usage: UsageEvent }) {
         <span className="text-[9px] text-[#666] tabular-nums">
           in:{fmt(usage.input_tokens)} out:{fmt(usage.output_tokens)}
         </span>
-        <span className="text-[9px] text-[#555] tabular-nums">
+        <span className="text-[9px] text-[#999] tabular-nums">
           total: {fmt(usage.total_input_tokens)}↓ {fmt(usage.total_output_tokens)}↑
         </span>
         {usage.cache_read_input_tokens > 0 && (
-          <span className="text-[9px] text-[#555] tabular-nums">
+          <span className="text-[9px] text-[#999] tabular-nums">
             cache:{fmt(usage.cache_read_input_tokens)}
           </span>
         )}
@@ -589,7 +601,7 @@ function ControlCard({ text, ts }: { text: string; ts: string }) {
       className="border-l-[3px] border-l-[#ffaa00] bg-[#ffaa00]/[0.03] rounded-r px-3 py-1.5"
     >
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-[#444] tabular-nums w-[52px]">
+        <span className="text-[9px] text-[#888] tabular-nums w-[52px]">
           {formatTs(ts)}
         </span>
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#ffaa00" strokeWidth="1.5" strokeLinecap="round">

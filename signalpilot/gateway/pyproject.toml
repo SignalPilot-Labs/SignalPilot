@@ -21,10 +21,27 @@ dependencies = [
     "typer>=0.15.0",
     "mcp>=1.0.0",
     "pyyaml>=6.0.0",
+    # Database connectors
+    "pymysql>=1.1.0",
+    "pymssql>=2.3.0",
+    "psycopg2-binary>=2.9.0",
+    "sshtunnel>=0.4.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.28.0"]
+snowflake = ["snowflake-connector-python>=3.6.0"]
+bigquery = ["google-cloud-bigquery>=3.20.0"]
+clickhouse = ["clickhouse-driver>=0.2.7"]
+databricks = ["databricks-sql-connector>=3.0.0"]
+trino = ["trino>=0.330.0"]
+all-connectors = [
+    "snowflake-connector-python>=3.6.0",
+    "google-cloud-bigquery>=3.20.0",
+    "clickhouse-driver>=0.2.7",
+    "databricks-sql-connector>=3.0.0",
+    "trino>=0.330.0",
+]
 
 [project.scripts]
 sp = "gateway.cli:app"

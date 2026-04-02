@@ -33,6 +33,7 @@ COPY --from=builder /app/package.json /app/monitor-web/package.json
 COPY --from=builder /app/next.config.ts /app/monitor-web/next.config.ts
 COPY --from=builder /app/tsconfig.json /app/monitor-web/tsconfig.json
 COPY --from=builder /app/postcss.config.mjs /app/monitor-web/postcss.config.mjs
+COPY --from=builder /app/public /app/monitor-web/public
 
 # Startup script
 COPY monitor-entrypoint.sh /app/monitor-entrypoint.sh

@@ -34,13 +34,13 @@ export function LLMTextBlock({
             <rect x="1" y="9" width="10" height="1.5" rx="0.5" />
           </svg>
         ) : (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#555" strokeWidth="1.5" className="mt-0.5 shrink-0 opacity-60">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#999" strokeWidth="1.5" className="mt-0.5 shrink-0 opacity-60">
             <path d="M6 1l1 3h3l-2.5 2 1 3L6 7.5 3.5 9l1-3L2 4h3L6 1z" />
           </svg>
         )}
         <div className="min-w-0 flex-1">
           {isCeo && (
-            <span className="text-[8px] font-bold uppercase tracking-[0.12em] text-[#ff8844] bg-[#ff8844]/10 rounded px-1 py-0.5 mr-1">
+            <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#ff8844] bg-[#ff8844]/10 rounded px-1 py-0.5 mr-1">
               CEO
             </span>
           )}
@@ -49,7 +49,7 @@ export function LLMTextBlock({
           {isLong && (
             <button
               onClick={() => setCollapsed(!collapsed)}
-              className="text-[8px] text-[#555] hover:text-[#888] ml-1 transition-colors"
+              className="text-[9px] text-[#999] hover:text-[#888] ml-1 transition-colors"
             >
               [{collapsed ? "expand" : "collapse"}]
             </button>
@@ -77,7 +77,7 @@ export function LLMTextBlock({
                 exit={{ opacity: 0 }}
                 className="text-[11px] text-[#666] block"
               >
-                {text.slice(0, 200)}… <span className="text-[9px] text-[#555]">({text.length} chars)</span>
+                {text.slice(0, 200)}… <span className="text-[9px] text-[#999]">({text.length} chars)</span>
               </motion.span>
             )}
           </AnimatePresence>
@@ -125,7 +125,7 @@ export function LLMThinkingBlock({
         </svg>
         <div className="min-w-0 flex-1">
           {isCeo && (
-            <span className="text-[7px] font-bold uppercase tracking-[0.12em] text-[#774422] mr-1">
+            <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#774422] mr-1">
               CEO thinking
             </span>
           )}
@@ -133,7 +133,7 @@ export function LLMThinkingBlock({
           {isLong && (
             <button
               onClick={() => setCollapsed(!collapsed)}
-              className="text-[8px] text-[#444] hover:text-[#666] ml-1 transition-colors"
+              className="text-[9px] text-[#888] hover:text-[#666] ml-1 transition-colors"
             >
               [{collapsed ? "expand" : "collapse"}]
             </button>
@@ -159,9 +159,9 @@ export function LLMThinkingBlock({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="text-[10px] italic text-[#555] block"
+                className="text-[10px] italic text-[#999] block"
               >
-                {text.slice(0, 150)}… <span className="text-[8px] not-italic text-[#444]">({text.length} chars)</span>
+                {text.slice(0, 150)}… <span className="text-[9px] not-italic text-[#888]">({text.length} chars)</span>
               </motion.span>
             )}
           </AnimatePresence>

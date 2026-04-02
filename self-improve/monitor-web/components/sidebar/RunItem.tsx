@@ -57,15 +57,15 @@ export function RunItem({
 
       <div className="flex items-center gap-2 mb-1.5">
         <span className={clsx(
-          "text-[11px] font-medium truncate flex-1",
-          active ? "text-[#e8e8e8]" : "text-[#aaa]"
+          "text-[12px] font-medium truncate flex-1",
+          active ? "text-[#e8e8e8]" : "text-[#ccc]"
         )}>
           {branchShort}
         </span>
         <StatusBadge status={run.status} />
       </div>
 
-      <div className="flex items-center gap-3 text-[9px] text-[#555]">
+      <div className="flex items-center gap-3 text-[10px] text-[#888]">
         <span className="tabular-nums">{timeAgo(run.started_at)}</span>
         {run.total_tool_calls > 0 && (
           <span className="flex items-center gap-0.5">
@@ -76,12 +76,12 @@ export function RunItem({
           </span>
         )}
         {formatCost(run.total_cost_usd) && (
-          <span className="text-[#00ff88]/50 tabular-nums">
+          <span className="text-[#00ff88]/70 tabular-nums">
             {formatCost(run.total_cost_usd)}
           </span>
         )}
         {(run.total_input_tokens || 0) > 0 && (
-          <span className="text-[#444] tabular-nums">
+          <span className="text-[#666] tabular-nums">
             {formatTokens(run.total_input_tokens)}↓
           </span>
         )}
@@ -89,7 +89,7 @@ export function RunItem({
 
       {/* Error message preview */}
       {run.error_message && (
-        <div className="mt-1 text-[8px] text-[#ff4444]/60 truncate">
+        <div className="mt-1 text-[9px] text-[#ff4444]/80 truncate">
           {run.error_message.slice(0, 80)}
         </div>
       )}

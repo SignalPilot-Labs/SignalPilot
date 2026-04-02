@@ -93,3 +93,8 @@ def build_stop_prompt(reason: str = "") -> str:
     if reason:
         return f"Stop reason: {reason}\n\n{base}"
     return base
+
+
+def load_agent_prompt(agent_name: str) -> str:
+    """Load a subagent prompt from prompts/agent-{name}.md."""
+    return _load(f"agent-{agent_name}")

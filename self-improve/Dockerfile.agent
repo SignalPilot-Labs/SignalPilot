@@ -58,8 +58,8 @@ USER agentuser
 RUN npx playwright install chromium
 
 # Git config as agentuser
-RUN git config --global user.name "SignalPilot Improve Bot" \
-    && git config --global user.email "improve-bot@signalpilot.dev" \
+RUN git config --global user.name "Self-Improve Bot" \
+    && git config --global user.email "self-improve-bot@noreply.github.com" \
     && git config --global --add safe.directory /workspace \
     && git config --global --add safe.directory '*'
 

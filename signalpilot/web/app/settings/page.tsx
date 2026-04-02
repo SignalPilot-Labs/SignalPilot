@@ -30,7 +30,7 @@ function SectionHeader({ icon: Icon, title, iconColor }: { icon: React.ElementTy
     <div className="section-header mb-4">
       <div className="flex items-center gap-2">
         <Icon className={`w-3.5 h-3.5 ${iconColor || "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
-        <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{title}</span>
+        <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{title}</span>
       </div>
     </div>
   );
@@ -121,7 +121,7 @@ export default function SettingsPage() {
         status={<StatusDot status={settings ? "healthy" : "unknown"} size={4} />}
       >
         <div className="flex items-center gap-3 sm:gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">instance: <code className="text-[10px] text-[var(--color-text)]">{settings ? "loaded" : "—"}</code></span>
+          <span className="text-[var(--color-text-dim)]">instance: <code className="text-[12px] text-[var(--color-text)]">{settings ? "loaded" : "—"}</code></span>
         </div>
       </TerminalBar>
 
@@ -132,12 +132,12 @@ export default function SettingsPage() {
           <div className="p-4 sm:p-6 space-y-4">
             <div className="flex items-start gap-3 p-3 border border-[var(--color-border)] bg-[var(--color-bg)]">
               <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
-              <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
                 if the gateway has an api key configured, enter it here. stored in localStorage, sent as Bearer token.
               </p>
             </div>
             <div>
-              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">api key</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">api key</label>
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
                   <input
@@ -158,7 +158,7 @@ export default function SettingsPage() {
                 </button>
               </div>
               {browserKeySaved && (
-                <span className="flex items-center gap-1 mt-2 text-[10px] text-[var(--color-success)] tracking-wider animate-fade-in">
+                <span className="flex items-center gap-1 mt-2 text-[12px] text-[var(--color-success)] tracking-wider animate-fade-in">
                   <CheckCircle2 className="w-3 h-3" /> saved
                 </span>
               )}
@@ -172,11 +172,11 @@ export default function SettingsPage() {
         <SectionHeader icon={Server} title="firecracker sandbox (byof)" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="p-4 sm:p-6 space-y-4">
-            <p className="text-[10px] text-[var(--color-text-dim)] -mt-1 mb-2 tracking-wider">
+            <p className="text-[12px] text-[var(--color-text-dim)] -mt-1 mb-2 tracking-wider">
               bring your own firecracker — point to any sandbox manager endpoint.
             </p>
             <div>
-              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">provider</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">provider</label>
               <select value={settings.sandbox_provider}
                 onChange={(e) => setSettings({ ...settings, sandbox_provider: e.target.value as "local" | "remote" })}
                 className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)]">
@@ -185,7 +185,7 @@ export default function SettingsPage() {
               </select>
             </div>
             <div>
-              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">sandbox manager url</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">sandbox manager url</label>
               <input type="text" value={settings.sandbox_manager_url}
                 onChange={(e) => setSettings({ ...settings, sandbox_manager_url: e.target.value })}
                 placeholder="http://localhost:8080"
@@ -193,7 +193,7 @@ export default function SettingsPage() {
             </div>
             {settings.sandbox_provider === "remote" && (
               <div className="animate-fade-in">
-                <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">sandbox api key</label>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">sandbox api key</label>
                 <input type="password" value={settings.sandbox_api_key || ""}
                   onChange={(e) => setSettings({ ...settings, sandbox_api_key: e.target.value || null })}
                   placeholder="bearer token for remote sandbox manager"
@@ -201,14 +201,14 @@ export default function SettingsPage() {
               </div>
             )}
             <div>
-              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">max concurrent sandboxes</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">max concurrent sandboxes</label>
               <input type="number" value={settings.max_concurrent_sandboxes}
                 onChange={(e) => setSettings({ ...settings, max_concurrent_sandboxes: parseInt(e.target.value) || 10 })}
                 className="w-32 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
             </div>
             <div className="pt-2">
               <button onClick={handleTestConnection} disabled={testingHealth}
-                className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider active:bg-[var(--color-bg-hover)]">
+                className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider active:bg-[var(--color-bg-hover)]">
                 {testingHealth ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cpu className="w-3 h-3" strokeWidth={1.5} />}
                 test sandbox connection
               </button>
@@ -216,13 +216,13 @@ export default function SettingsPage() {
                 <div className="mt-3 animate-fade-in">
                   {"error" in healthResult ? (
                     <div className="p-3 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5">
-                      <span className="text-[10px] text-[var(--color-error)] flex items-center gap-1">
+                      <span className="text-[12px] text-[var(--color-error)] flex items-center gap-1">
                         <XCircle className="w-3 h-3" />{String(healthResult.error)}
                       </span>
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <div className="flex items-center gap-1 text-[10px] text-[var(--color-success)] tracking-wider">
+                      <div className="flex items-center gap-1 text-[12px] text-[var(--color-success)] tracking-wider">
                         <CheckCircle2 className="w-3 h-3" /> connected
                       </div>
                       <CodeBlock
@@ -251,7 +251,7 @@ export default function SettingsPage() {
                 { label: "default timeout (s)", key: "default_timeout_seconds", desc: "per-query hard timeout", type: "number" },
               ].map((field) => (
                 <div key={field.key}>
-                  <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">{field.label}</label>
+                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">{field.label}</label>
                   <input
                     type={field.type}
                     step={field.step}
@@ -259,7 +259,7 @@ export default function SettingsPage() {
                     onChange={(e) => setSettings({ ...settings, [field.key]: field.step ? parseFloat(e.target.value) : parseInt(e.target.value) || 0 })}
                     className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums"
                   />
-                  <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider">{field.desc}</p>
+                  <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">{field.desc}</p>
                 </div>
               ))}
             </div>
@@ -268,9 +268,9 @@ export default function SettingsPage() {
             <div className="mt-6 pt-6 border-t border-[var(--color-border)]">
               <div className="flex items-center gap-2 mb-3">
                 <Ban className="w-3 h-3 text-[var(--color-error)]" strokeWidth={1.5} />
-                <span className="text-[10px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">blocked tables</span>
+                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">blocked tables</span>
               </div>
-              <p className="text-[9px] text-[var(--color-text-dim)] mb-3 tracking-wider leading-relaxed">
+              <p className="text-[11px] text-[var(--color-text-dim)] mb-3 tracking-wider leading-relaxed">
                 tables here are rejected at policy check. queries referencing them get a governance error.
               </p>
 
@@ -297,7 +297,7 @@ export default function SettingsPage() {
                     setNewBlockedTable("");
                   }}
                   disabled={!newBlockedTable.trim()}
-                  className="flex items-center gap-1 px-3 py-2 text-[10px] text-[var(--color-error)] border border-[var(--color-error)]/20 hover:bg-[var(--color-error)]/5 transition-colors disabled:opacity-30 tracking-wider uppercase"
+                  className="flex items-center gap-1 px-3 py-2 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/20 hover:bg-[var(--color-error)]/5 transition-colors disabled:opacity-30 tracking-wider uppercase"
                 >
                   <Plus className="w-3 h-3" /> block
                 </button>
@@ -306,7 +306,7 @@ export default function SettingsPage() {
               {blockedTables.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {blockedTables.map((table) => (
-                    <span key={table} className="flex items-center gap-1.5 px-2 py-1 border border-[var(--color-error)]/20 text-[10px] tracking-wider group hover:border-[var(--color-error)]/40 transition-colors">
+                    <span key={table} className="flex items-center gap-1.5 px-2 py-1 border border-[var(--color-error)]/20 text-[12px] tracking-wider group hover:border-[var(--color-error)]/40 transition-colors">
                       <Ban className="w-2.5 h-2.5 text-[var(--color-error)]" />
                       <code className="text-[var(--color-text-muted)]">{table}</code>
                       <button onClick={() => setBlockedTables(blockedTables.filter((t) => t !== table))}
@@ -319,7 +319,7 @@ export default function SettingsPage() {
               )}
 
               {blockedTables.length === 0 && (
-                <p className="text-[9px] text-[var(--color-text-dim)] italic tracking-wider">
+                <p className="text-[11px] text-[var(--color-text-dim)] italic tracking-wider">
                   no tables blocked.
                 </p>
               )}
@@ -334,14 +334,14 @@ export default function SettingsPage() {
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="p-4 sm:p-6 space-y-4">
             <div>
-              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway url</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway url</label>
               <input type="text" value={settings.gateway_url}
                 onChange={(e) => setSettings({ ...settings, gateway_url: e.target.value })}
                 className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-base sm:text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
-              <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandbox vms use to call back to the gateway</p>
+              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandbox vms use to call back to the gateway</p>
             </div>
             <div>
-              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway api key</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway api key</label>
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
                   <input
@@ -363,12 +363,12 @@ export default function SettingsPage() {
                     setSettings({ ...settings, api_key: key });
                     setShowGatewayKey(true);
                   }}
-                  className="px-3 py-2 text-[10px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all whitespace-nowrap tracking-wider"
+                  className="px-3 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all whitespace-nowrap tracking-wider"
                 >
                   generate
                 </button>
               </div>
-              <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider">when set, all api requests require this key</p>
+              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">when set, all api requests require this key</p>
             </div>
           </div>
         </div>
@@ -379,7 +379,7 @@ export default function SettingsPage() {
         <SectionHeader icon={Cpu} title="mcp integration" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="p-4 sm:p-6 space-y-5">
-            <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
               connect claude code or any mcp client to signalpilot:
             </p>
 
@@ -391,9 +391,9 @@ export default function SettingsPage() {
                 { step: "03", label: "verify", code: "claude mcp list | grep signalpilot" },
               ].map((s) => (
                 <div key={s.step} className="flex items-start gap-3">
-                  <span className="text-[9px] text-[var(--color-text-dim)] tabular-nums tracking-wider mt-2.5 w-5">{s.step}</span>
+                  <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider mt-2.5 w-5">{s.step}</span>
                   <div className="flex-1">
-                    <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
+                    <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
                     <CodeBlock
                       code={s.code}
                       language="bash"
@@ -412,7 +412,7 @@ export default function SettingsPage() {
                   <rect x="1" y="1" width="10" height="10" stroke="var(--color-success)" strokeWidth="1" fill="none" opacity="0.4" />
                   <path d="M4 6L5.5 7.5L8 4.5" stroke="var(--color-success)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                <span className="text-[9px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">available tools</span>
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">available tools</span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {[
@@ -427,8 +427,8 @@ export default function SettingsPage() {
                       <rect x="2.5" y="2.5" width="5" height="5" fill="var(--color-success)" />
                     </svg>
                     <div className="min-w-0">
-                      <code className="text-[10px] text-[var(--color-text-muted)] tracking-wider block">{tool.name}</code>
-                      <span className="text-[8px] text-[var(--color-text-dim)] tracking-wider">{tool.desc}</span>
+                      <code className="text-[12px] text-[var(--color-text-muted)] tracking-wider block">{tool.name}</code>
+                      <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">{tool.desc}</span>
                     </div>
                   </div>
                 ))}
@@ -444,12 +444,12 @@ export default function SettingsPage() {
           className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           save gateway settings
-          <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30">
+          <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[10px] opacity-60 border border-[var(--color-bg)]/30">
             ctrl+S
           </kbd>
         </button>
         {saved && (
-          <span className="flex items-center gap-1 text-[10px] text-[var(--color-success)] tracking-wider animate-fade-in">
+          <span className="flex items-center gap-1 text-[12px] text-[var(--color-success)] tracking-wider animate-fade-in">
             <CheckCircle2 className="w-3 h-3" /> saved
           </span>
         )}

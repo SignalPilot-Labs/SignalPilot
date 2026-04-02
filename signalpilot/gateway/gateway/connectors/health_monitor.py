@@ -50,6 +50,48 @@ class ConnectionHealth:
                 self.consecutive_failures += 1
                 self.last_error = error
 
+    def history(self, window_seconds: int = 3600, bucket_seconds: int = 60) -> list[dict[str, Any]]:
+        """Return time-bucketed health history for charting.
+
+        Each bucket contains: timestamp, avg latency, success count, error count.
+        Designed for sparkline/chart rendering in the connections UI.
+        """
+        now = time.time()
+        cutoff = now - window_seconds
+        with self._lock:
+            recent = [e for e in self.events if e.timestamp > cutoff]
+
+        if not recent:
+            return []
+
+        # Create time buckets
+        num_buckets = max(1, window_seconds // bucket_seconds)
+        buckets: list[dict[str, Any]] = []
+        for i in range(num_buckets):
+            bucket_start = cutoff + i * bucket_seconds
+            bucket_end = bucket_start + bucket_seconds
+            bucket_events = [e for e in recent if bucket_start <= e.timestamp < bucket_end]
+            if bucket_events:
+                latencies = [e.latency_ms for e in bucket_events if e.success]
+                buckets.append({
+                    "timestamp": round(bucket_start, 1),
+                    "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+                    "max_latency_ms": round(max(latencies), 2) if latencies else None,
+                    "successes": sum(1 for e in bucket_events if e.success),
+                    "failures": sum(1 for e in bucket_events if not e.success),
+                    "total": len(bucket_events),
+                })
+            else:
+                buckets.append({
+                    "timestamp": round(bucket_start, 1),
+                    "avg_latency_ms": None,
+                    "max_latency_ms": None,
+                    "successes": 0,
+                    "failures": 0,
+                    "total": 0,
+                })
+        return buckets
+
     def stats(self, window_seconds: int = 300) -> dict[str, Any]:
         """Compute health statistics over the recent time window."""
         cutoff = time.time() - window_seconds
@@ -148,6 +190,16 @@ class HealthMonitor:
         if health is None:
             return None
         return health.stats(window_seconds)
+
+    def connection_history(
+        self, connection_name: str, window_seconds: int = 3600, bucket_seconds: int = 60,
+    ) -> list[dict[str, Any]] | None:
+        """Get time-bucketed health history for a connection (for charts)."""
+        with self._lock:
+            health = self._connections.get(connection_name)
+        if health is None:
+            return None
+        return health.history(window_seconds, bucket_seconds)
 
     def remove(self, connection_name: str) -> None:
         """Remove health tracking for a connection."""

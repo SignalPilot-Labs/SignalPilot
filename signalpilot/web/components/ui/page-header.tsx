@@ -19,12 +19,12 @@ export function PageHeader({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-lg font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-            <span className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)] flex-shrink-0">
+            <h1 className="text-lg sm:text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
+            <span className="text-[12px] text-[var(--color-text-muted)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)] flex-shrink-0">
               {subtitle}
             </span>
           </div>
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">{description}</p>
+          <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
         </div>
         {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}
       </div>
@@ -57,7 +57,7 @@ export function TerminalBar({
           <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
         </div>
         {/* Path */}
-        <code className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-1 whitespace-nowrap min-w-0 truncate">
+        <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider flex-1 whitespace-nowrap min-w-0 truncate">
           <span className="text-[var(--color-success)]">$</span>
           <span className="text-[var(--color-text-dim)] hidden sm:inline"> signalpilot </span>
           <span className="text-[var(--color-text-dim)] sm:hidden"> </span>

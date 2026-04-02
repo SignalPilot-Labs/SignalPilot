@@ -4,14 +4,31 @@ from __future__ import annotations
 
 from ..models import DBType
 from .base import BaseConnector
+from .bigquery import BigQueryConnector
+from .clickhouse import ClickHouseConnector
+from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
+from .mssql import MSSQLConnector
+from .mysql import MySQLConnector
+from .trino import TrinoConnector
 from .postgres import PostgresConnector
+from .redshift import RedshiftConnector
+from .snowflake import SnowflakeConnector
 from .sqlite import SQLiteConnector
 
 
 _REGISTRY: dict[str, type[BaseConnector]] = {
     DBType.postgres: PostgresConnector,
     DBType.duckdb: DuckDBConnector,
+    DBType.mysql: MySQLConnector,
+    DBType.snowflake: SnowflakeConnector,
+    DBType.bigquery: BigQueryConnector,
+    DBType.redshift: RedshiftConnector,
+    DBType.clickhouse: ClickHouseConnector,
+    DBType.databricks: DatabricksConnector,
+    DBType.mssql: MSSQLConnector,
+    DBType.trino: TrinoConnector,
+    DBType.sqlite: SQLiteConnector,
 }
 
 

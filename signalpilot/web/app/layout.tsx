@@ -10,6 +10,7 @@ import { PageTransition } from "@/components/ui/page-transition";
 import { NetworkStatus } from "@/components/ui/network-status";
 import { ScrollToTop } from "@/components/ui/scroll-to-top";
 import { ServiceWorkerRegister } from "@/components/ui/sw-register";
+import { ConnectionProvider } from "@/lib/connection-context";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -21,7 +22,12 @@ export const metadata: Metadata = {
     title: "SignalPilot",
   },
   icons: {
-    apple: "/icon-192.svg",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-96x96.png", sizes: "96x96", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
   },
   other: {
     "mobile-web-app-capable": "yes",
@@ -46,18 +52,20 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className="antialiased bg-noise">
         <ToastProvider>
-          <Sidebar />
-          <NetworkStatus />
-          <GridBackground />
-          <main className="main-content min-h-screen relative z-10">
-            <ErrorBoundary>
-              <PageTransition>{children}</PageTransition>
-            </ErrorBoundary>
-            <KeyboardShortcuts />
-            <CommandPalette />
-            <ScrollToTop />
-          </main>
-          <ServiceWorkerRegister />
+          <ConnectionProvider>
+            <Sidebar />
+            <NetworkStatus />
+            <GridBackground />
+            <main className="main-content min-h-screen relative z-10">
+              <ErrorBoundary>
+                <PageTransition>{children}</PageTransition>
+              </ErrorBoundary>
+              <KeyboardShortcuts />
+              <CommandPalette />
+              <ScrollToTop />
+            </main>
+            <ServiceWorkerRegister />
+          </ConnectionProvider>
         </ToastProvider>
       </body>
     </html>

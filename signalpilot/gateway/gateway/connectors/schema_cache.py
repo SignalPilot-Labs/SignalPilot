@@ -6,26 +6,100 @@ so list_tables / describe_table are instant.
 
 Cache is refreshable on demand via invalidate().
 Default TTL: 5 minutes (configurable).
+
+Enhanced with schema fingerprinting for fast change detection and
+diff history tracking for audit/notification.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
 
+def _normalize_schema(schema: dict[str, Any]) -> None:
+    """Normalize schema in-place to ensure consistent structure across all connectors.
+
+    Fills missing baseline fields so downstream consumers (DDL generation,
+    schema linking, Spider2.0 agent context) don't need per-DB special casing.
+    """
+    for table_key, table_data in schema.items():
+        # Table-level defaults
+        table_data.setdefault("schema", "")
+        table_data.setdefault("name", table_key.rsplit(".", 1)[-1])
+        table_data.setdefault("type", "table")
+        table_data.setdefault("columns", [])
+        table_data.setdefault("foreign_keys", [])
+        table_data.setdefault("row_count", 0)
+        table_data.setdefault("description", "")
+
+        # Normalize size: BigQuery uses size_bytes, others use size_mb
+        if "size_bytes" in table_data and "size_mb" not in table_data:
+            try:
+                table_data["size_mb"] = round(int(table_data["size_bytes"]) / (1024 * 1024), 2)
+            except (ValueError, TypeError):
+                pass
+
+        # Column-level defaults
+        for col in table_data["columns"]:
+            col.setdefault("name", "")
+            col.setdefault("type", "unknown")
+            col.setdefault("nullable", True)
+            col.setdefault("primary_key", False)
+            col.setdefault("comment", "")
+
+
+def _schema_fingerprint(schema: dict[str, Any]) -> str:
+    """Compute a fast structural fingerprint of a schema.
+
+    Captures table names, column names+types, and FK relationships.
+    Ignores volatile fields (row_count, stats, comments) so the fingerprint
+    only changes when the actual DDL structure changes.
+    """
+    parts: list[str] = []
+    for table_key in sorted(schema.keys()):
+        table = schema[table_key]
+        cols = table.get("columns", [])
+        col_sigs = []
+        for c in cols:
+            sig = f"{c.get('name', '')}:{c.get('type', '')}:{c.get('nullable', '')}:{c.get('primary_key', '')}"
+            col_sigs.append(sig)
+        fks = table.get("foreign_keys", [])
+        fk_sigs = []
+        for fk in fks:
+            fk_sigs.append(f"{fk.get('column', '')}->{fk.get('references_table', '')}.{fk.get('references_column', '')}")
+        parts.append(f"{table_key}|{'|'.join(sorted(col_sigs))}|FK:{'|'.join(sorted(fk_sigs))}")
+    combined = "\n".join(parts)
+    return hashlib.sha256(combined.encode()).hexdigest()[:16]
+
+
 @dataclass
 class _CachedSchema:
-    """A cached schema result with expiration tracking."""
+    """A cached schema result with expiration tracking and fingerprint."""
     data: dict[str, Any]
     cached_at: float
     ttl_seconds: float
+    fingerprint: str = ""
 
     @property
     def is_expired(self) -> bool:
         return time.monotonic() - self.cached_at > self.ttl_seconds
+
+
+@dataclass
+class SchemaDiffEvent:
+    """Records a schema change detected during refresh."""
+    connection_name: str
+    timestamp: float  # wall clock time.time()
+    diff: dict[str, Any]
+    old_fingerprint: str
+    new_fingerprint: str
+    table_count: int
 
 
 class SchemaCache:
@@ -42,11 +116,20 @@ class SchemaCache:
 
         # Force refresh
         cache.invalidate("my-conn")
+
+    Enhanced features:
+        - Schema fingerprinting: fast structural change detection without full diff
+        - Diff history: tracks last N schema changes per connection for audit/notification
     """
+
+    # Max diff events to keep per connection
+    _MAX_DIFF_HISTORY = 20
 
     def __init__(self, ttl_seconds: float = 300.0):
         self._ttl = ttl_seconds
         self._cache: dict[str, _CachedSchema] = {}
+        self._sample_cache: dict[str, _CachedSchema] = {}
+        self._diff_history: dict[str, deque[SchemaDiffEvent]] = {}
         self._lock = Lock()
 
     def get(self, connection_name: str) -> dict[str, Any] | None:
@@ -60,14 +143,64 @@ class SchemaCache:
                 return None
             return entry.data
 
-    def put(self, connection_name: str, schema: dict[str, Any]) -> None:
-        """Cache schema data for a connection."""
+    def put(self, connection_name: str, schema: dict[str, Any], track_diff: bool = False) -> dict[str, Any] | None:
+        """Cache schema data for a connection.
+
+        Automatically normalizes schema structure (fills missing defaults)
+        so downstream consumers get consistent fields regardless of DB type.
+
+        Args:
+            connection_name: Connection identifier.
+            schema: Schema data dict.
+            track_diff: If True and a previous schema exists, compute and store diff event.
+
+        Returns:
+            Diff dict if track_diff=True and changes were detected, else None.
+        """
+        # Normalize: ensure consistent baseline fields across all connector types
+        _normalize_schema(schema)
+        new_fp = _schema_fingerprint(schema)
+        diff_result = None
         with self._lock:
+            old_entry = self._cache.get(connection_name)
+            if track_diff and old_entry is not None:
+                old_fp = old_entry.fingerprint
+                if old_fp and old_fp != new_fp:
+                    # Structural change detected — compute detailed diff
+                    diff_result = _compute_schema_diff(old_entry.data, schema)
+                    if diff_result.get("has_changes"):
+                        event = SchemaDiffEvent(
+                            connection_name=connection_name,
+                            timestamp=time.time(),
+                            diff=diff_result,
+                            old_fingerprint=old_fp,
+                            new_fingerprint=new_fp,
+                            table_count=len(schema),
+                        )
+                        if connection_name not in self._diff_history:
+                            self._diff_history[connection_name] = deque(maxlen=self._MAX_DIFF_HISTORY)
+                        self._diff_history[connection_name].append(event)
             self._cache[connection_name] = _CachedSchema(
                 data=schema,
                 cached_at=time.monotonic(),
                 ttl_seconds=self._ttl,
+                fingerprint=new_fp,
             )
+        return diff_result
+
+    def diff(self, connection_name: str, new_schema: dict[str, Any]) -> dict[str, Any] | None:
+        """Compare cached schema with new schema and return differences.
+
+        Returns None if no cached schema exists.
+        Returns a dict with added/removed/modified tables and columns.
+        """
+        with self._lock:
+            entry = self._cache.get(connection_name)
+            if entry is None:
+                return None
+            old_schema = entry.data
+
+        return _compute_schema_diff(old_schema, new_schema)
 
     def invalidate(self, connection_name: str | None = None) -> int:
         """Invalidate cached schema. If connection_name is None, clear all.
@@ -84,15 +217,155 @@ class SchemaCache:
             self._cache.clear()
             return count
 
-    def stats(self) -> dict[str, Any]:
-        """Return cache statistics."""
+    # ─── Sample values cache ────────────────────────────────────────────
+    def get_sample_values(self, connection_name: str, table: str) -> dict[str, list] | None:
+        """Get cached sample values for a table. Returns None on miss."""
         with self._lock:
-            active = sum(1 for e in self._cache.values() if not e.is_expired)
-            return {
-                "cached_connections": active,
-                "total_entries": len(self._cache),
-                "ttl_seconds": self._ttl,
+            entry = self._sample_cache.get(f"{connection_name}:{table}")
+            if entry is None:
+                return None
+            if entry.is_expired:
+                del self._sample_cache[f"{connection_name}:{table}"]
+                return None
+            return entry.data
+
+    def put_sample_values(self, connection_name: str, table: str, values: dict[str, list]) -> None:
+        """Cache sample values for a table."""
+        with self._lock:
+            self._sample_cache[f"{connection_name}:{table}"] = _CachedSchema(
+                data=values,
+                cached_at=time.monotonic(),
+                ttl_seconds=self._ttl * 2,  # Sample values expire slower
+            )
+
+    def get_fingerprint(self, connection_name: str) -> str | None:
+        """Get the structural fingerprint of the cached schema. None if not cached."""
+        with self._lock:
+            entry = self._cache.get(connection_name)
+            if entry is None or entry.is_expired:
+                return None
+            return entry.fingerprint
+
+    def has_structural_change(self, connection_name: str, new_schema: dict[str, Any]) -> bool:
+        """Fast check: has the schema structure changed since last cache?
+
+        Uses fingerprint comparison — O(n) hash, no deep diff.
+        Returns True if changed or if no cached schema exists.
+        """
+        with self._lock:
+            entry = self._cache.get(connection_name)
+            if entry is None or not entry.fingerprint:
+                return True
+            new_fp = _schema_fingerprint(new_schema)
+            return entry.fingerprint != new_fp
+
+    def get_diff_history(self, connection_name: str | None = None) -> list[dict[str, Any]]:
+        """Get schema change history.
+
+        Args:
+            connection_name: If provided, get history for one connection.
+                           If None, get all recent changes across all connections.
+
+        Returns:
+            List of diff events (newest first).
+        """
+        with self._lock:
+            if connection_name:
+                events = list(self._diff_history.get(connection_name, []))
+            else:
+                events = []
+                for conn_events in self._diff_history.values():
+                    events.extend(conn_events)
+            # Sort newest first
+            events.sort(key=lambda e: e.timestamp, reverse=True)
+            return [
+                {
+                    "connection_name": e.connection_name,
+                    "timestamp": e.timestamp,
+                    "diff": e.diff,
+                    "old_fingerprint": e.old_fingerprint,
+                    "new_fingerprint": e.new_fingerprint,
+                    "table_count": e.table_count,
+                }
+                for e in events[:50]
+            ]
+
+    def stats(self) -> dict[str, Any]:
+        """Return cache statistics and purge expired entries."""
+        with self._lock:
+            # Lazy purge expired entries on stats() call
+            expired_keys = [k for k, e in self._cache.items() if e.is_expired]
+            for k in expired_keys:
+                del self._cache[k]
+            expired_samples = [k for k, e in self._sample_cache.items() if e.is_expired]
+            for k in expired_samples:
+                del self._sample_cache[k]
+            # Build fingerprint summary
+            fingerprints = {
+                name: entry.fingerprint
+                for name, entry in self._cache.items()
+                if entry.fingerprint
             }
+            total_diff_events = sum(len(q) for q in self._diff_history.values())
+            return {
+                "cached_connections": len(self._cache),
+                "total_entries": len(self._cache),
+                "cached_sample_tables": len(self._sample_cache),
+                "purged": len(expired_keys) + len(expired_samples),
+                "ttl_seconds": self._ttl,
+                "fingerprints": fingerprints,
+                "diff_events_total": total_diff_events,
+            }
+
+
+def _compute_schema_diff(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """Compute differences between two schema snapshots."""
+    old_tables = set(old.keys())
+    new_tables = set(new.keys())
+
+    added_tables = sorted(new_tables - old_tables)
+    removed_tables = sorted(old_tables - new_tables)
+
+    modified_tables: list[dict[str, Any]] = []
+    for table_key in sorted(old_tables & new_tables):
+        old_t = old[table_key]
+        new_t = new[table_key]
+
+        old_cols = {c["name"]: c for c in old_t.get("columns", [])}
+        new_cols = {c["name"]: c for c in new_t.get("columns", [])}
+
+        added_cols = sorted(set(new_cols.keys()) - set(old_cols.keys()))
+        removed_cols = sorted(set(old_cols.keys()) - set(new_cols.keys()))
+
+        # Check for type changes
+        type_changes = []
+        for col_name in sorted(set(old_cols.keys()) & set(new_cols.keys())):
+            old_type = old_cols[col_name].get("type", "")
+            new_type = new_cols[col_name].get("type", "")
+            if old_type != new_type:
+                type_changes.append({
+                    "column": col_name,
+                    "old_type": old_type,
+                    "new_type": new_type,
+                })
+
+        if added_cols or removed_cols or type_changes:
+            change: dict[str, Any] = {"table": table_key}
+            if added_cols:
+                change["added_columns"] = added_cols
+            if removed_cols:
+                change["removed_columns"] = removed_cols
+            if type_changes:
+                change["type_changes"] = type_changes
+            modified_tables.append(change)
+
+    has_changes = bool(added_tables or removed_tables or modified_tables)
+    return {
+        "has_changes": has_changes,
+        "added_tables": added_tables,
+        "removed_tables": removed_tables,
+        "modified_tables": modified_tables,
+    }
 
 
 # Global singleton

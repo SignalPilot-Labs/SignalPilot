@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
-import type { Run, FeedEvent, RunStatus, ToolCall } from "@/lib/types";
-import { fetchToolCalls, fetchAuditLog, startRun, fetchAgentHealth, fetchBranches } from "@/lib/api";
+import Image from "next/image";
+import Link from "next/link";
+import type { Run, FeedEvent, RunStatus, ToolCall, SettingsStatus, RepoInfo } from "@/lib/types";
+import { fetchToolCalls, fetchAuditLog, startRun, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo } from "@/lib/api";
 import type { AgentHealth } from "@/lib/api";
+import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
 import { useSSE } from "@/hooks/useSSE";
 import { useControl } from "@/hooks/useControl";
@@ -18,9 +21,15 @@ import { RateLimitBanner } from "@/components/controls/RateLimitBanner";
 import { WorkTree } from "@/components/worktree/WorkTree";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { RepoSelector } from "@/components/ui/RepoSelector";
+import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 
 export default function MonitorPage() {
-  const { runs, loading: runsLoading, refresh: refreshRuns } = useRuns();
+  const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(() => {
+    try { return localStorage.getItem("sp_improve_active_repo") || null; } catch { return null; }
+  });
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const { runs, loading: runsLoading, refresh: refreshRuns } = useRuns(activeRepoFilter);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [historyEvents, setHistoryEvents] = useState<FeedEvent[]>([]);
@@ -28,10 +37,43 @@ export default function MonitorPage() {
   const [startModalOpen, setStartModalOpen] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [agentHealth, setAgentHealth] = useState<AgentHealth | null>(null);
-  const [branches, setBranches] = useState<string[]>(["main", "staging"]);
+  const [branches, setBranches] = useState<string[]>(["main"]);
+  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
 
   const { events: liveEvents, connected, clearEvents } = useSSE(selectedRunId);
-  const allEvents = [...historyEvents, ...liveEvents];
+
+  // Merge live events into history — SSE post events need to find their pre in history
+  const allEvents = useMemo(() => {
+    if (liveEvents.length === 0) return historyEvents;
+    // Build a map of tool_use_id → index in history for quick lookups
+    const preIndex = new Map<string, number>();
+    const merged = [...historyEvents];
+    for (let i = 0; i < merged.length; i++) {
+      const ev = merged[i];
+      if (ev._kind === "tool" && ev.data.phase === "pre" && !ev.data.output_data && ev.data.tool_use_id) {
+        preIndex.set(ev.data.tool_use_id, i);
+      }
+    }
+    for (const ev of liveEvents) {
+      if (ev._kind === "tool" && ev.data.phase === "post" && ev.data.tool_use_id && preIndex.has(ev.data.tool_use_id)) {
+        // Merge post into the matching pre in history
+        const idx = preIndex.get(ev.data.tool_use_id)!;
+        const pre = merged[idx];
+        if (pre._kind === "tool") {
+          merged[idx] = {
+            _kind: "tool",
+            data: { ...pre.data, output_data: ev.data.output_data, duration_ms: ev.data.duration_ms, phase: "post" },
+          };
+        }
+        preIndex.delete(ev.data.tool_use_id);
+      } else {
+        merged.push(ev);
+      }
+    }
+    return merged;
+  }, [historyEvents, liveEvents]);
 
   const addEvent = useCallback((event: FeedEvent) => {
     setHistoryEvents((prev) => [...prev, event]);
@@ -53,13 +95,52 @@ export default function MonitorPage() {
     return () => clearInterval(id);
   }, []);
 
-  // Auto-select first running or latest run
+  // Check settings status on mount and load repos
   useEffect(() => {
-    if (!selectedRunId && runs.length > 0) {
-      const running = runs.find((r) => r.status === "running");
-      setSelectedRunId(running?.id || runs[0].id);
+    fetchSettingsStatus().then((s) => {
+      setSettingsStatus(s);
+      if (!s.configured) setOnboardingOpen(true);
+    });
+    fetchRepos().then((r) => {
+      setRepos(r);
+      if (r.length > 0) {
+        // Prefer stored repo if it still exists, otherwise pick first with runs
+        const stored = activeRepoFilter;
+        const valid = stored && r.some((repo) => repo.repo === stored);
+        if (!valid) {
+          const withRuns = r.find((repo) => repo.run_count > 0);
+          const picked = withRuns?.repo || r[0].repo;
+          setActiveRepoFilter(picked);
+          try { localStorage.setItem("sp_improve_active_repo", picked); } catch {}
+          fetchBranches(picked).then(setBranches);
+        } else {
+          fetchBranches(stored).then(setBranches);
+        }
+      }
+    });
+  }, []);
+
+  // Handle repo switch — refresh everything that depends on the active repo
+  // NOTE: do NOT call refreshRuns() here — it holds a stale closure with the old repo.
+  // useRuns already auto-fetches when activeRepoFilter changes via its useEffect.
+  const handleRepoSwitch = useCallback(async (repo: string) => {
+    setSuppressAutoSelect(true);
+    setActiveRepoFilter(repo || null);
+    try { if (repo) localStorage.setItem("sp_improve_active_repo", repo); else localStorage.removeItem("sp_improve_active_repo"); } catch {}
+    setSelectedRunId(null);
+    setSelectedRun(null);
+    setHistoryEvents([]);
+    clearEvents();
+    if (repo) {
+      await setActiveRepo(repo);
+      // Re-fetch branches for the new repo (direct GitHub API, no agent needed)
+      fetchBranches(repo).then(setBranches);
+    } else {
+      setBranches(["main"]);
     }
-  }, [runs, selectedRunId]);
+    // Refresh repos list to get updated counts
+    fetchRepos().then(setRepos);
+  }, [clearEvents]);
 
   // Keep selectedRun fresh
   useEffect(() => {
@@ -72,6 +153,7 @@ export default function MonitorPage() {
   // Load history when selecting a run
   const handleSelectRun = useCallback(
     async (id: string) => {
+      setSuppressAutoSelect(false);
       setSelectedRunId(id);
       setHistoryEvents([]);
       clearEvents();
@@ -165,10 +247,19 @@ export default function MonitorPage() {
         // SSE will pick up live events
       }
 
-      refreshRuns();
     },
-    [clearEvents, refreshRuns]
+    [clearEvents]
   );
+
+  // Auto-select first running or latest run on initial load only
+  // Suppressed after repo switch so user lands on "no run selected" view
+  useEffect(() => {
+    if (suppressAutoSelect) return;
+    if (!selectedRunId && runs.length > 0) {
+      const running = runs.find((r) => r.status === "running");
+      handleSelectRun(running?.id || runs[0].id);
+    }
+  }, [runs, selectedRunId, handleSelectRun, suppressAutoSelect]);
 
   // Start a new run
   const handleStartRun = useCallback(
@@ -182,13 +273,14 @@ export default function MonitorPage() {
           text: `New run started${prompt ? ` with custom prompt` : ""}`,
           ts: new Date().toISOString(),
         });
-        setTimeout(async () => {
-          await refreshRuns();
-          if (result.run_id) {
-            setSelectedRunId(result.run_id);
-            handleSelectRun(result.run_id);
-          }
-        }, 2000);
+        // Switch to the new run immediately
+        if (result.run_id) {
+          setSuppressAutoSelect(false);
+          setSelectedRunId(result.run_id);
+          setSelectedRun(null);
+          setHistoryEvents([]);
+          clearEvents();
+        }
       } catch (err) {
         addEvent({
           _kind: "control",
@@ -206,6 +298,7 @@ export default function MonitorPage() {
     (selectedRun?.status as RunStatus) || null;
   const agentIdle = agentHealth?.status === "idle";
   const agentReachable = agentHealth != null && agentHealth.status !== "unreachable";
+  const isConfigured = settingsStatus?.configured ?? false;
 
   return (
     <div className="h-screen flex flex-col bg-[var(--color-bg)]">
@@ -225,20 +318,26 @@ export default function MonitorPage() {
                 style={runStatus === "running" ? { animation: "spin 8s linear infinite" } : undefined}
               />
             </svg>
-            {/* Logo icon */}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={runStatus === "running" ? "#00ff88" : "#555"} strokeWidth="1.5" strokeLinecap="round">
-              <path d="M2 10L5 4L7 7L9 3L12 10" />
-            </svg>
+            {/* Logo */}
+            <Image src="/logo.svg" alt="SignalPilot" width={18} height={18} className="relative z-[1]" />
           </div>
           <div>
             <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">
               SignalPilot
             </h1>
-            <p className="text-[8px] text-[#444] tracking-[0.1em] uppercase -mt-0.5">
+            <p className="text-[9px] text-[#777] tracking-[0.1em] uppercase -mt-0.5">
               Self-Improve Monitor
             </p>
           </div>
         </div>
+
+        {/* Repo Selector */}
+        <div className="w-px h-4 bg-[#1a1a1a]" />
+        <RepoSelector
+          repos={repos}
+          activeRepo={activeRepoFilter}
+          onSelect={handleRepoSwitch}
+        />
 
         {selectedRun && (
           <motion.div
@@ -271,28 +370,43 @@ export default function MonitorPage() {
             }`}
             style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
           />
-          <span className="text-[8px] text-[#555]">
+          <span className="text-[10px] text-[#888]">
             {!agentReachable ? "Offline" : agentIdle ? "Idle" : "Active"}
           </span>
         </div>
+
+        {/* Settings link */}
+        <Link
+          href="/settings"
+          className="p-1.5 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors"
+          title="Settings"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </Link>
 
         {/* Start Run button */}
         <Button
           variant="success"
           size="md"
-          onClick={() => { fetchBranches().then(setBranches); setStartModalOpen(true); }}
-          disabled={!agentIdle || !agentReachable}
+          onClick={() => { fetchBranches(activeRepoFilter || undefined).then(setBranches); setStartModalOpen(true); }}
+          disabled={!agentIdle || !agentReachable || !isConfigured}
+          title={!isConfigured ? "Configure credentials in Settings first" : undefined}
           icon={
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
               <polygon points="3 2 8 5 3 8" />
             </svg>
           }
         >
-          {!agentReachable
-            ? "Offline"
-            : !agentIdle
-              ? "Running"
-              : "New Run"}
+          {!isConfigured
+            ? "Setup Required"
+            : !agentReachable
+              ? "Offline"
+              : !agentIdle
+                ? "Running"
+                : "New Run"}
         </Button>
 
         <div className="w-px h-4 bg-[#1a1a1a]" />
@@ -329,6 +443,25 @@ export default function MonitorPage() {
         branches={branches}
       />
 
+      {/* Onboarding Modal */}
+      {settingsStatus && (
+        <OnboardingModal
+          open={onboardingOpen}
+          onComplete={() => {
+            setOnboardingOpen(false);
+            fetchSettingsStatus().then(setSettingsStatus);
+            fetchRepos().then((r) => {
+              setRepos(r);
+              if (r.length > 0) {
+                setActiveRepoFilter(r[0].repo);
+                fetchBranches(r[0].repo).then(setBranches);
+              }
+            });
+          }}
+          initialStatus={settingsStatus}
+        />
+      )}
+
       {/* Rate Limit Banner */}
       {selectedRun?.status === "rate_limited" && selectedRun.rate_limit_resets_at && (
         <RateLimitBanner
@@ -351,7 +484,7 @@ export default function MonitorPage() {
         {/* Center - Event feed */}
         <main className="flex-1 flex flex-col min-h-0 min-w-0">
           <EventFeed events={allEvents} />
-          <StatsBar run={selectedRun} connected={connected} />
+          <StatsBar run={selectedRun} connected={connected} events={allEvents} />
         </main>
 
         {/* Right sidebar - WorkTree */}

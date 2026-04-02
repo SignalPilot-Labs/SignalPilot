@@ -11,4 +11,11 @@ if [ -d /home/agentuser/repo ]; then
     chown agentuser:agentuser /home/agentuser/repo
 fi
 
+# Ensure shared data volume is writable by agentuser
+if [ -d /data ]; then
+    chown -R agentuser:agentuser /data 2>/dev/null || chmod -R a+rw /data 2>/dev/null || true
+else
+    mkdir -p /data && chown agentuser:agentuser /data
+fi
+
 exec gosu agentuser "$@"

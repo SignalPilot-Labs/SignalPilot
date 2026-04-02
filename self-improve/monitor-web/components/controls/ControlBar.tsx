@@ -52,7 +52,7 @@ export function ControlBar({
   return (
     <div className="flex items-center gap-1.5">
       {sessionLocked && timeRemaining && (
-        <span className="text-[9px] text-[#ffaa00]/60 tabular-nums mr-1 flex items-center gap-1">
+        <span className="text-[10px] text-[#ffaa00]/80 tabular-nums mr-1 flex items-center gap-1">
           <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="#ffaa00" strokeWidth="1" opacity="0.5">
             <rect x="1.5" y="4" width="5" height="3" rx="0.5" />
             <path d="M2.5 4V3a1.5 1.5 0 013 0v1" />

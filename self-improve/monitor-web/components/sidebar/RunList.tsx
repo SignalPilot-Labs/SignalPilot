@@ -20,15 +20,15 @@ export function RunList({
     <aside className="w-[280px] flex-shrink-0 flex flex-col border-r border-[#1a1a1a] bg-[#030303]">
       <div className="px-4 py-3 border-b border-[#1a1a1a]">
         <div className="flex items-center gap-2">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#555" strokeWidth="1.5" strokeLinecap="round">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#888" strokeWidth="1.5" strokeLinecap="round">
             <rect x="1" y="1" width="10" height="10" rx="1.5" />
             <line x1="1" y1="4" x2="11" y2="4" />
             <line x1="1" y1="7" x2="11" y2="7" />
           </svg>
-          <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#555]">
+          <h2 className="text-[11px] font-bold uppercase tracking-[0.15em] text-[#999]">
             Runs
           </h2>
-          <span className="text-[9px] text-[#333] tabular-nums ml-auto">{runs.length}</span>
+          <span className="text-[10px] text-[#666] tabular-nums ml-auto">{runs.length}</span>
         </div>
       </div>
 

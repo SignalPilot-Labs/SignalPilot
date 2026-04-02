@@ -62,16 +62,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <div className="flex flex-col items-center justify-center py-24 px-8 animate-fade-in">
           <ErrorSVG />
           <h2 className="text-xs tracking-wider mb-2 text-[var(--color-text)]">something went wrong</h2>
-          <p className="text-[10px] text-[var(--color-text-dim)] mb-2 max-w-md text-center tracking-wider leading-relaxed">
+          <p className="text-[12px] text-[var(--color-text-dim)] mb-2 max-w-md text-center tracking-wider leading-relaxed">
             {this.state.error?.message || "an unexpected error occurred."}
           </p>
-          <p className="text-[9px] text-[var(--color-text-dim)] mb-6 tracking-wider">
+          <p className="text-[11px] text-[var(--color-text-dim)] mb-6 tracking-wider">
             try reloading the page to recover
           </p>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full max-w-xs sm:max-w-none sm:w-auto">
             <button
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[10px] tracking-wider uppercase transition-all hover:opacity-90 active:opacity-80"
+              className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 active:opacity-80"
             >
               <RefreshCw className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
               retry
@@ -81,7 +81,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 this.setState({ hasError: false, error: null });
                 window.location.reload();
               }}
-              className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2 border border-[var(--color-border)] text-[var(--color-text-dim)] text-[10px] tracking-wider uppercase transition-all hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] active:bg-[var(--color-bg-hover)]"
+              className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2 border border-[var(--color-border)] text-[var(--color-text-dim)] text-[12px] tracking-wider uppercase transition-all hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] active:bg-[var(--color-bg-hover)]"
             >
               reload page
             </button>

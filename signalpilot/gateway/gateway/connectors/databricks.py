@@ -129,14 +129,71 @@ class DatabricksConnector(BaseConnector):
         schema: dict[str, Any] = {}
         cursor = self._conn.cursor()
 
-        # List schemas (databases)
+        # Prefer information_schema (Unity Catalog, Databricks SQL) — single query for all columns
+        # Falls back to SHOW TABLES + DESCRIBE TABLE for legacy Hive metastore
+        try:
+            cursor.execute("""
+                SELECT
+                    table_schema,
+                    table_name,
+                    column_name,
+                    data_type,
+                    is_nullable,
+                    column_default,
+                    ordinal_position,
+                    comment
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('information_schema')
+                ORDER BY table_schema, table_name, ordinal_position
+            """)
+            for row in cursor.fetchall():
+                s_name = row[0]
+                t_name = row[1]
+                key = f"{s_name}.{t_name}"
+                if key not in schema:
+                    schema[key] = {
+                        "schema": s_name,
+                        "name": t_name,
+                        "columns": [],
+                    }
+                schema[key]["columns"].append({
+                    "name": row[2],
+                    "type": row[3] or "string",
+                    "nullable": row[4] == "YES" if row[4] else True,
+                    "primary_key": False,
+                    "comment": row[7] or "" if len(row) > 7 else "",
+                })
+            cursor.close()
+
+            # Try to get table-level metadata (row counts, etc.)
+            if schema:
+                try:
+                    cursor2 = self._conn.cursor()
+                    cursor2.execute("""
+                        SELECT table_schema, table_name, table_type
+                        FROM information_schema.tables
+                        WHERE table_schema NOT IN ('information_schema')
+                    """)
+                    for row in cursor2.fetchall():
+                        key = f"{row[0]}.{row[1]}"
+                        if key in schema:
+                            schema[key]["table_type"] = row[2] or "TABLE"
+                    cursor2.close()
+                except Exception:
+                    pass
+
+            return schema
+        except Exception:
+            pass
+
+        # Fallback: SHOW TABLES + DESCRIBE TABLE (legacy Hive metastore)
         try:
             cursor.execute("SHOW SCHEMAS")
-            schemas = [row[0] for row in cursor.fetchall()]
+            schemas_list = [row[0] for row in cursor.fetchall()]
         except Exception:
-            schemas = ["default"]
+            schemas_list = ["default"]
 
-        for schema_name in schemas:
+        for schema_name in schemas_list:
             if schema_name.lower() in ("information_schema",):
                 continue
             try:
@@ -156,7 +213,6 @@ class DatabricksConnector(BaseConnector):
                         col_name = cr[0]
                         col_type = cr[1] if len(cr) > 1 else "string"
                         comment = cr[2] if len(cr) > 2 else ""
-                        # Skip partition info lines
                         if col_name.startswith("#") or col_name == "":
                             continue
                         columns.append({

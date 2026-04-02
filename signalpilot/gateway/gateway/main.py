@@ -918,9 +918,12 @@ async def get_enriched_schema(
             cached = await connector.get_schema()
             schema_cache.put(name, cached)
 
+        # Apply endorsement filter (HEX Data Browser pattern)
+        filtered = apply_endorsement_filter(name, cached)
+
         # Build enriched compact schema
         enriched: dict[str, Any] = {}
-        for key, table in cached.items():
+        for key, table in filtered.items():
             # Compact DDL
             cols = []
             pk_cols = []

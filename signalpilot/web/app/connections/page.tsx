@@ -420,11 +420,19 @@ interface FormState {
   sf_private_key: string;
   sf_private_key_passphrase: string;
   sf_oauth_token: string;
-  // AWS IAM auth (PostgreSQL, MySQL on RDS)
+  // AWS IAM auth (PostgreSQL, MySQL on RDS, Redshift)
   iam_auth: boolean;
   aws_region: string;
   aws_access_key_id: string;
   aws_secret_access_key: string;
+  // Redshift IAM extras
+  redshift_cluster_id: string;
+  redshift_workgroup: string; // For Redshift Serverless
+  // Azure AD / Entra ID auth (MSSQL / Azure SQL)
+  azure_ad_auth: boolean;
+  azure_tenant_id: string;
+  azure_client_id: string;
+  azure_client_secret: string;
   // Trino HTTPS
   trino_https: boolean;
   // DuckDB / MotherDuck
@@ -463,6 +471,8 @@ const defaultForm: FormState = {
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
   snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", sf_oauth_token: "",
   iam_auth: false, aws_region: "us-east-1", aws_access_key_id: "", aws_secret_access_key: "",
+  redshift_cluster_id: "", redshift_workgroup: "",
+  azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
   trino_https: false, motherduck_token: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
@@ -638,12 +648,25 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     }
   }
 
-  // AWS IAM auth (PostgreSQL, MySQL on RDS)
-  if (form.iam_auth && (form.db_type === "postgres" || form.db_type === "mysql")) {
+  // AWS IAM auth (PostgreSQL, MySQL on RDS, Redshift)
+  if (form.iam_auth && (form.db_type === "postgres" || form.db_type === "mysql" || form.db_type === "redshift")) {
     payload.auth_method = "iam";
     payload.aws_region = form.aws_region;
     if (form.aws_access_key_id) payload.aws_access_key_id = form.aws_access_key_id;
     if (form.aws_secret_access_key) payload.aws_secret_access_key = form.aws_secret_access_key;
+    // Redshift-specific IAM fields
+    if (form.db_type === "redshift") {
+      if (form.redshift_cluster_id) payload.cluster_id = form.redshift_cluster_id;
+      if (form.redshift_workgroup) payload.workgroup = form.redshift_workgroup;
+    }
+  }
+
+  // Azure AD / Entra ID auth (MSSQL / Azure SQL)
+  if (form.azure_ad_auth && form.db_type === "mssql") {
+    payload.auth_method = "azure_ad";
+    if (form.azure_tenant_id) payload.azure_tenant_id = form.azure_tenant_id;
+    if (form.azure_client_id) payload.azure_client_id = form.azure_client_id;
+    if (form.azure_client_secret) payload.azure_client_secret = form.azure_client_secret;
   }
 
   // DuckDB MotherDuck token
@@ -976,33 +999,101 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     );
   }
 
-  // MSSQL — instance name, trust cert, encrypt option
+  // MSSQL — instance name, trust cert, encrypt option, Azure AD
   if (form.db_type === "mssql") {
     return (
       <>
         <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="sqlserver.example.com" hint="hostname or IP — for named instances: host\\INSTANCE" required />
         <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="1433" hint="default 1433 — Azure SQL uses 1433" />
         <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="master" required />
-        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="sa" hint="SQL Server login" required />
-        <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
-          <span className="text-[var(--color-text-muted)]">azure sql:</span> Use &lt;server&gt;.database.windows.net as host. Ensure firewall rule allows this server&apos;s IP. For named instances, include instance in host: host\SQLEXPRESS
+        {!form.azure_ad_auth && (
+          <>
+            <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="sa" hint="SQL Server login" required />
+            <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
+          </>
+        )}
+        {/* Azure AD / Entra ID toggle */}
+        <div className="col-span-2 mb-1">
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, azure_ad_auth: !form.azure_ad_auth })}
+            className={`flex items-center gap-2 px-2.5 py-1.5 text-[10px] tracking-wider border transition-all ${
+              form.azure_ad_auth
+                ? "border-blue-500/50 text-blue-400 bg-blue-500/10"
+                : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+            }`}
+          >
+            <Shield className="w-3 h-3" />
+            <span>Azure AD / Entra ID</span>
+            {form.azure_ad_auth && <span className="text-[var(--color-success)] text-[9px]">enabled</span>}
+          </button>
+        </div>
+        {form.azure_ad_auth && (
+          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-blue-500/20 bg-blue-500/5">
+            <FormInput label="tenant ID" value={form.azure_tenant_id} onChange={(v) => setForm({ ...form, azure_tenant_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="Azure AD directory (tenant) ID" required />
+            <FormInput label="client ID" value={form.azure_client_id} onChange={(v) => setForm({ ...form, azure_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="App registration (client) ID" required />
+            <FormInput label="client secret" value={form.azure_client_secret} onChange={(v) => setForm({ ...form, azure_client_secret: v })} type="password" hint="Service principal client secret" required className="col-span-2" />
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+              <div><span className="text-[var(--color-text-muted)]">setup:</span> Azure Portal → App Registrations → New → Add API Permission for Azure SQL Database. Create a contained DB user: CREATE USER [app-name] FROM EXTERNAL PROVIDER.</div>
+              <div><span className="text-[var(--color-text-muted)]">managed identity:</span> For Azure VMs/containers, leave client secret empty to use system-assigned managed identity (coming soon).</div>
+            </div>
+          </div>
+        )}
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div><span className="text-[var(--color-text-muted)]">azure sql:</span> Use &lt;server&gt;.database.windows.net as host. Ensure firewall rule allows this server&apos;s IP.</div>
+          <div><span className="text-[var(--color-text-muted)]">named instances:</span> Include instance in host: host\SQLEXPRESS. Or use port directly (SQL Browser resolves instances to ports).</div>
+          <div><span className="text-[var(--color-text-muted)]">on-prem:</span> For SQL Server behind a firewall, use the SSH tunnel option in Advanced settings.</div>
         </div>
       </>
     );
   }
 
-  // Redshift — cluster endpoint guidance
+  // Redshift — cluster endpoint guidance + IAM auth
   if (form.db_type === "redshift") {
     return (
       <>
         <FormInput label="cluster endpoint" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="my-cluster.abc123xyz.us-east-1.redshift.amazonaws.com" hint="Redshift console → Clusters → Properties → Endpoint" required />
         <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="5439" />
         <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="dev" hint="default database is 'dev'" required />
-        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="awsuser" required />
-        <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider">
-          <span className="text-[var(--color-text-muted)]">access:</span> Ensure this server&apos;s IP is allowed in the Redshift security group. For VPC clusters, use SSH tunnel or VPC peering. Redshift Serverless uses the same connection format.
+        {!form.iam_auth && (
+          <>
+            <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="awsuser" required />
+            <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
+          </>
+        )}
+        {/* IAM Auth toggle */}
+        <div className="col-span-2 mb-1">
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, iam_auth: !form.iam_auth })}
+            className={`flex items-center gap-2 px-2.5 py-1.5 text-[10px] tracking-wider border transition-all ${
+              form.iam_auth
+                ? "border-amber-500/50 text-amber-400 bg-amber-500/10"
+                : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+            }`}
+          >
+            <Shield className="w-3 h-3" />
+            <span>AWS IAM auth</span>
+            {form.iam_auth && <span className="text-[var(--color-success)] text-[9px]">enabled</span>}
+          </button>
+        </div>
+        {form.iam_auth && (
+          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5">
+            <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="awsuser" hint="Redshift DB user to get temporary credentials for" required />
+            <FormInput label="AWS region" value={form.aws_region} onChange={(v) => setForm({ ...form, aws_region: v })} placeholder="us-east-1" hint="Redshift cluster region" />
+            <FormInput label="cluster ID" value={form.redshift_cluster_id} onChange={(v) => setForm({ ...form, redshift_cluster_id: v })} placeholder="my-redshift-cluster" hint="provisioned cluster ID (auto-detected from endpoint if blank)" />
+            <FormInput label="workgroup" value={form.redshift_workgroup} onChange={(v) => setForm({ ...form, redshift_workgroup: v })} placeholder="default" hint="for Redshift Serverless only" />
+            <FormInput label="AWS access key ID" value={form.aws_access_key_id} onChange={(v) => setForm({ ...form, aws_access_key_id: v })} placeholder="AKIA..." hint="leave empty to use instance profile / env credentials" />
+            <FormInput label="AWS secret access key" value={form.aws_secret_access_key} onChange={(v) => setForm({ ...form, aws_secret_access_key: v })} type="password" hint="leave empty to use instance profile / env credentials" />
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+              <div><span className="text-[var(--color-text-muted)]">setup:</span> IAM user/role needs redshift:GetClusterCredentials (provisioned) or redshift-serverless:GetCredentials (serverless).</div>
+              <div><span className="text-[var(--color-text-muted)]">credentials:</span> Leave access key fields empty to use EC2 instance profile, ECS task role, or AWS_* env vars.</div>
+            </div>
+          </div>
+        )}
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[9px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div><span className="text-[var(--color-text-muted)]">access:</span> Ensure this server&apos;s IP is allowed in the Redshift security group. For VPC clusters, use SSH tunnel or VPC peering.</div>
+          <div><span className="text-[var(--color-text-muted)]">serverless:</span> Use workgroup endpoint: &lt;workgroup-name&gt;.&lt;account-id&gt;.&lt;region&gt;.redshift-serverless.amazonaws.com</div>
         </div>
       </>
     );
@@ -1606,12 +1697,23 @@ export default function ConnectionsPage() {
               <ConnectionFieldsForm form={form} setForm={setForm} />
             </div>
 
-            {/* Connection string preview */}
+            {/* Connection string preview with copy button */}
             {form.connectionMode !== "url" && (
               <div className="mb-4 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
                 <div className="flex items-center gap-2">
                   <Link2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
                   <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">connection preview</span>
+                  <div className="flex-1" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const fullUrl = buildConnectionPreview({ ...form, connectionMode: "fields" }).replace(":****@", `:${form.password || ""}@`);
+                      navigator.clipboard.writeText(fullUrl).then(() => toast("Connection URL copied", "info"));
+                    }}
+                    className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                  >
+                    copy url
+                  </button>
                 </div>
                 <code className="text-[10px] text-[var(--color-text-muted)] tracking-wide break-all">{buildConnectionPreview(form)}</code>
               </div>

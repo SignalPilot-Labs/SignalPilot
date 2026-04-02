@@ -29,19 +29,76 @@ class RedshiftConnector(BaseConnector):
         self._temp_files: list[str] = []
         self._connect_timeout: int = 15
         self._query_timeout: int = 30
+        # IAM auth for Redshift (GetClusterCredentials or Serverless GetCredentials)
+        self._iam_auth: bool = False
+        self._iam_region: str = "us-east-1"
+        self._iam_access_key: str = ""
+        self._iam_secret_key: str = ""
+        self._iam_cluster_id: str = ""  # For provisioned Redshift
+        self._iam_workgroup: str = ""   # For Redshift Serverless
 
     def set_ssl_config(self, ssl_config: dict) -> None:
         """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
         self._ssl_config = ssl_config
 
     def set_credential_extras(self, extras: dict) -> None:
-        """Extract SSL config and timeout settings from credential extras."""
+        """Extract SSL config, IAM auth, and timeout settings from credential extras."""
         if extras.get("ssl_config"):
             self.set_ssl_config(extras["ssl_config"])
         if extras.get("connection_timeout"):
             self._connect_timeout = extras["connection_timeout"]
         if extras.get("query_timeout"):
             self._query_timeout = extras["query_timeout"]
+        # IAM auth configuration
+        if extras.get("auth_method") == "iam" or extras.get("iam_auth"):
+            self._iam_auth = True
+            self._iam_region = extras.get("aws_region", "us-east-1")
+            self._iam_access_key = extras.get("aws_access_key_id", "")
+            self._iam_secret_key = extras.get("aws_secret_access_key", "")
+            self._iam_cluster_id = extras.get("cluster_id", "")
+            self._iam_workgroup = extras.get("workgroup", "")
+
+    def _generate_iam_credentials(self, db_user: str, db_name: str, host: str) -> tuple[str, str]:
+        """Generate temporary credentials via Redshift GetClusterCredentials or Serverless GetCredentials.
+
+        Returns (username, password) tuple with temporary IAM-based credentials.
+        """
+        try:
+            import boto3
+        except ImportError:
+            raise RuntimeError("boto3 required for IAM auth. Run: pip install boto3")
+
+        boto_kwargs: dict = {"region_name": self._iam_region}
+        if self._iam_access_key and self._iam_secret_key:
+            boto_kwargs["aws_access_key_id"] = self._iam_access_key
+            boto_kwargs["aws_secret_access_key"] = self._iam_secret_key
+
+        if self._iam_workgroup:
+            # Redshift Serverless — use redshift-serverless client
+            client = boto3.client("redshift-serverless", **boto_kwargs)
+            resp = client.get_credentials(
+                workgroupName=self._iam_workgroup,
+                dbName=db_name,
+            )
+            return resp["dbUser"], resp["dbPassword"]
+        else:
+            # Provisioned Redshift — use redshift client
+            cluster_id = self._iam_cluster_id
+            if not cluster_id:
+                # Try to extract cluster ID from host: cluster-id.xxx.region.redshift.amazonaws.com
+                parts = host.split(".")
+                if parts:
+                    cluster_id = parts[0]
+            if not cluster_id:
+                raise RuntimeError("IAM auth requires a cluster_id or a standard Redshift endpoint hostname")
+            client = boto3.client("redshift", **boto_kwargs)
+            resp = client.get_cluster_credentials(
+                ClusterIdentifier=cluster_id,
+                DbUser=db_user or "admin",
+                DbName=db_name or "dev",
+                AutoCreate=False,
+            )
+            return resp["DbUser"], resp["DbPassword"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PSYCOPG2:
@@ -52,6 +109,23 @@ class RedshiftConnector(BaseConnector):
         dsn = connection_string
         if dsn.startswith("redshift://"):
             dsn = "postgresql://" + dsn[len("redshift://"):]
+
+        # IAM auth: replace password with temporary credentials
+        if self._iam_auth:
+            from urllib.parse import urlparse, urlunparse, quote
+            parsed = urlparse(dsn)
+            host = parsed.hostname or "localhost"
+            db_user = parsed.username or "admin"
+            db_name = (parsed.path or "/dev").lstrip("/") or "dev"
+            iam_user, iam_pass = self._generate_iam_credentials(db_user, db_name, host)
+            dsn = urlunparse((
+                parsed.scheme,
+                f"{quote(iam_user)}:{quote(iam_pass)}@{parsed.hostname}:{parsed.port or 5439}",
+                parsed.path, parsed.params, parsed.query, parsed.fragment,
+            ))
+            # IAM auth requires SSL
+            if not self._ssl_config:
+                self._ssl_config = {"enabled": True, "mode": "require"}
 
         # Build SSL kwargs from ssl_config if provided
         ssl_kwargs = self._build_ssl_kwargs() if self._ssl_config and self._ssl_config.get("enabled") else {}

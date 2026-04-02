@@ -29,6 +29,11 @@ class MSSQLConnector(BaseConnector):
         self._ssl_config: dict | None = None
         self._login_timeout: int = 15
         self._query_timeout: int = 30
+        # Azure AD / Entra ID auth via access token
+        self._azure_ad_auth: bool = False
+        self._azure_tenant_id: str = ""
+        self._azure_client_id: str = ""
+        self._azure_client_secret: str = ""
 
     def set_ssl_config(self, ssl_config: dict) -> None:
         self._ssl_config = ssl_config
@@ -40,6 +45,41 @@ class MSSQLConnector(BaseConnector):
             self._login_timeout = extras["connection_timeout"]
         if extras.get("query_timeout"):
             self._query_timeout = extras["query_timeout"]
+        # Azure AD auth
+        if extras.get("auth_method") == "azure_ad" or extras.get("azure_ad_auth"):
+            self._azure_ad_auth = True
+            self._azure_tenant_id = extras.get("azure_tenant_id", "")
+            self._azure_client_id = extras.get("azure_client_id", "")
+            self._azure_client_secret = extras.get("azure_client_secret", "")
+
+    def _acquire_azure_ad_token(self) -> str:
+        """Acquire an Azure AD / Entra ID access token for Azure SQL using client credentials.
+
+        Uses MSAL (Microsoft Authentication Library) to get a token via OAuth2 client_credentials flow.
+        The token is then used as the password for pymssql connection.
+        """
+        try:
+            import msal
+        except ImportError:
+            raise RuntimeError("msal required for Azure AD auth. Run: pip install msal")
+
+        if not self._azure_tenant_id:
+            raise RuntimeError("Azure AD auth requires tenant_id")
+        if not self._azure_client_id or not self._azure_client_secret:
+            raise RuntimeError("Azure AD auth requires client_id and client_secret (service principal)")
+
+        authority = f"https://login.microsoftonline.com/{self._azure_tenant_id}"
+        app = msal.ConfidentialClientApplication(
+            self._azure_client_id,
+            authority=authority,
+            client_credential=self._azure_client_secret,
+        )
+        # Azure SQL database scope
+        result = app.acquire_token_for_client(scopes=["https://database.windows.net/.default"])
+        if "access_token" in result:
+            return result["access_token"]
+        error = result.get("error_description", result.get("error", "Unknown error"))
+        raise RuntimeError(f"Azure AD token acquisition failed: {error}")
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PYMSSQL:
@@ -60,20 +100,28 @@ class MSSQLConnector(BaseConnector):
             "charset": "UTF-8",
         }
 
+        # Azure AD auth — acquire token and use as password
+        if self._azure_ad_auth:
+            token = self._acquire_azure_ad_token()
+            connect_kwargs["password"] = token
+            # Azure SQL always requires encryption
+            connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=no"
+
         # Default to TDS 7.4 (SQL Server 2019+ / Azure SQL)
         connect_kwargs["tds_version"] = "7.4"
 
         # TLS encryption — from SSL config or URL encrypt=true
         enable_tls = params.get("encrypt", False)
-        if self._ssl_config and self._ssl_config.get("enabled"):
-            enable_tls = True
-            mode = self._ssl_config.get("mode", "require")
-            if mode in ("verify-ca", "verify-full"):
-                connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=no"
-            else:
+        if not self._azure_ad_auth:  # Azure AD already sets encryption above
+            if self._ssl_config and self._ssl_config.get("enabled"):
+                enable_tls = True
+                mode = self._ssl_config.get("mode", "require")
+                if mode in ("verify-ca", "verify-full"):
+                    connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=no"
+                else:
+                    connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=yes"
+            elif enable_tls:
                 connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=yes"
-        elif enable_tls:
-            connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=yes"
 
         try:
             self._conn = pymssql.connect(**connect_kwargs)

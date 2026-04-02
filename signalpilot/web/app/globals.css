@@ -734,6 +734,18 @@ kbd {
     min-height: 44px;
   }
 
+  /* ── Form inputs: taller for touch ── */
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="email"],
+  input[type="url"],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px !important; /* prevents iOS zoom on focus */
+  }
+
   /* ── Tables: horizontal scroll ── */
   table {
     display: block;

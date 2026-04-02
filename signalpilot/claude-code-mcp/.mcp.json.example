@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "signalpilot": {
+      "command": "signalpilot-mcp-remote",
+      "env": {
+        "SIGNALPILOT_URL": "http://YOUR_SERVER:3300",
+        "SIGNALPILOT_API_KEY": ""
+      }
+    }
+  }
+}

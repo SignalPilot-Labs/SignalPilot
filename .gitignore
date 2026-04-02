@@ -11,6 +11,13 @@ benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json
 
+# Web build artifacts
+signalpilot/web/.next/
+signalpilot/web/node_modules/
+signalpilot/web/package-lock.json
+signalpilot/web/next-env.d.ts
+signalpilot/web/tsconfig.tsbuildinfo
+
 # Self-improve build artifacts
 self-improve/monitor-web/.next/
 self-improve/monitor-web/node_modules/

@@ -206,11 +206,10 @@ async def lifespan(app: FastAPI):
                         if not conn_str:
                             continue
                         extras = get_credential_extras(conn_info.name)
-                        connector = await pool_manager.acquire(
+                        async with pool_manager.connection(
                             conn_info.db_type, conn_str, credential_extras=extras,
-                        )
-                        schema = await connector.get_schema()
-                        await pool_manager.release(conn_info.db_type, conn_str)
+                        ) as connector:
+                            schema = await connector.get_schema()
                         schema_cache.put(conn_info.name, schema)
                         # Update last_schema_refresh timestamp
                         update_connection(conn_info.name, ConnectionUpdate(
@@ -348,9 +347,8 @@ async def _auto_schema_refresh(name: str, db_type: str):
         if not conn_str:
             return
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(db_type, conn_str, credential_extras=extras)
-        schema = await connector.get_schema()
-        await pool_manager.release(db_type, conn_str)
+        async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
+            schema = await connector.get_schema()
         # Cache the schema
         schema_cache.put(name, schema)
         logger.info("Auto-refreshed schema for new connection '%s': %d tables", name, len(schema))
@@ -539,9 +537,8 @@ async def refresh_connection_schema(name: str):
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-        schema = await connector.get_schema()
-        await pool_manager.release(info.db_type, conn_str)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
@@ -1022,18 +1019,15 @@ async def get_grouped_schema(
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            cached = schema_cache.get(name)
+            if cached is None:
+                cached = await connector.get_schema()
+                schema_cache.put(name, cached)
 
-        cached = schema_cache.get(name)
-        if cached is None:
-            cached = await connector.get_schema()
-            schema_cache.put(name, cached)
-
-        # Compress and group
-        compressed = _compress_schema(cached)
-        groups = _group_tables(cached)
-
-        await pool_manager.release(info.db_type, conn_str)
+            # Compress and group
+            compressed = _compress_schema(cached)
+            groups = _group_tables(cached)
 
         return {
             "connection_name": name,
@@ -1077,9 +1071,9 @@ async def get_schema_samples(
     if cached is None:
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            schema_cache.put(name, cached)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
+                schema_cache.put(name, cached)
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
@@ -1090,29 +1084,27 @@ async def get_schema_samples(
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            samples: dict[str, dict[str, list]] = {}
+            for table_key in table_keys:
+                if table_key not in cached:
+                    continue
+                table_info = cached[table_key]
+                # Only sample string-like columns (most useful for schema linking)
+                string_types = {"character varying", "varchar", "text", "char", "character", "enum",
+                               "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
+                sample_cols = [
+                    col["name"] for col in table_info.get("columns", [])
+                    if col.get("type", "") in string_types or "char" in col.get("type", "").lower()
+                ]
+                if not sample_cols:
+                    continue
 
-        samples: dict[str, dict[str, list]] = {}
-        for table_key in table_keys:
-            if table_key not in cached:
-                continue
-            table_info = cached[table_key]
-            # Only sample string-like columns (most useful for schema linking)
-            string_types = {"character varying", "varchar", "text", "char", "character", "enum",
-                           "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
-            sample_cols = [
-                col["name"] for col in table_info.get("columns", [])
-                if col.get("type", "") in string_types or "char" in col.get("type", "").lower()
-            ]
-            if not sample_cols:
-                continue
+                table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
+                values = await connector.get_sample_values(table_name, sample_cols, limit=limit)
+                if values:
+                    samples[table_key] = values
 
-            table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
-            values = await connector.get_sample_values(table_name, sample_cols, limit=limit)
-            if values:
-                samples[table_key] = values
-
-        await pool_manager.release(info.db_type, conn_str)
         return {
             "connection_name": name,
             "tables_sampled": len(samples),
@@ -1143,80 +1135,77 @@ async def get_enriched_schema(
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            # Get or use cached schema
+            cached = schema_cache.get(name)
+            if cached is None:
+                cached = await connector.get_schema()
+                schema_cache.put(name, cached)
 
-        # Get or use cached schema
-        cached = schema_cache.get(name)
-        if cached is None:
-            cached = await connector.get_schema()
-            schema_cache.put(name, cached)
+            # Apply endorsement filter (HEX Data Browser pattern)
+            filtered = apply_endorsement_filter(name, cached)
 
-        # Apply endorsement filter (HEX Data Browser pattern)
-        filtered = apply_endorsement_filter(name, cached)
+            # Build enriched compact schema
+            enriched: dict[str, Any] = {}
+            for key, table in filtered.items():
+                # Compact DDL
+                cols = []
+                pk_cols = []
+                for col in table.get("columns", []):
+                    col_type = col.get("type", "")
+                    nullable = "" if col.get("nullable", True) else " NOT NULL"
+                    unique_hint = ""
+                    stats = col.get("stats", {})
+                    if stats.get("distinct_fraction") == -1.0:
+                        unique_hint = " UNIQUE"
+                    cols.append(f"{col['name']} {col_type}{nullable}{unique_hint}")
+                    if col.get("primary_key"):
+                        pk_cols.append(col["name"])
 
-        # Build enriched compact schema
-        enriched: dict[str, Any] = {}
-        for key, table in filtered.items():
-            # Compact DDL
-            cols = []
-            pk_cols = []
-            for col in table.get("columns", []):
-                col_type = col.get("type", "")
-                nullable = "" if col.get("nullable", True) else " NOT NULL"
-                unique_hint = ""
-                stats = col.get("stats", {})
-                if stats.get("distinct_fraction") == -1.0:
-                    unique_hint = " UNIQUE"
-                cols.append(f"{col['name']} {col_type}{nullable}{unique_hint}")
-                if col.get("primary_key"):
-                    pk_cols.append(col["name"])
+                ddl_parts = [f"CREATE TABLE {table.get('schema', '')}.{table['name']} ("]
+                ddl_parts.append("  " + ", ".join(cols))
+                if pk_cols:
+                    ddl_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
+                ddl_parts.append(")")
 
-            ddl_parts = [f"CREATE TABLE {table.get('schema', '')}.{table['name']} ("]
-            ddl_parts.append("  " + ", ".join(cols))
-            if pk_cols:
-                ddl_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
-            ddl_parts.append(")")
+                fk_refs = []
+                for fk in table.get("foreign_keys", []):
+                    ref_table = fk.get("references_table", "")
+                    if fk.get("references_schema"):
+                        ref_table = f"{fk['references_schema']}.{ref_table}"
+                    fk_refs.append(f"{fk['column']} -> {ref_table}.{fk.get('references_column', '')}")
 
-            fk_refs = []
-            for fk in table.get("foreign_keys", []):
-                ref_table = fk.get("references_table", "")
-                if fk.get("references_schema"):
-                    ref_table = f"{fk['references_schema']}.{ref_table}"
-                fk_refs.append(f"{fk['column']} -> {ref_table}.{fk.get('references_column', '')}")
+                entry: dict[str, Any] = {
+                    "ddl": "\n".join(ddl_parts),
+                    "row_count": table.get("row_count", 0),
+                }
+                if fk_refs:
+                    entry["foreign_keys"] = fk_refs
+                if table.get("indexes"):
+                    entry["indexes"] = [idx.get("name", "") for idx in table["indexes"]]
+                if table.get("description"):
+                    entry["description"] = table["description"]
 
-            entry: dict[str, Any] = {
-                "ddl": "\n".join(ddl_parts),
-                "row_count": table.get("row_count", 0),
-            }
-            if fk_refs:
-                entry["foreign_keys"] = fk_refs
-            if table.get("indexes"):
-                entry["indexes"] = [idx.get("name", "") for idx in table["indexes"]]
-            if table.get("description"):
-                entry["description"] = table["description"]
+                enriched[key] = entry
 
-            enriched[key] = entry
-
-        # Sample values (string columns only, limited tables)
-        string_types = {"character varying", "varchar", "text", "char", "character",
-                       "enum", "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
-        for key in list(enriched.keys())[:15]:  # Cap at 15 tables
-            table_info = cached.get(key, {})
-            sample_cols = [
-                col["name"] for col in table_info.get("columns", [])
-                if col.get("type", "") in string_types or "char" in col.get("type", "").lower()
-            ]
-            if not sample_cols:
-                continue
-            table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
-            try:
-                values = await connector.get_sample_values(table_name, sample_cols, limit=sample_limit)
-                if values:
-                    enriched[key]["sample_values"] = values
-            except Exception:
-                pass
-
-        await pool_manager.release(info.db_type, conn_str)
+            # Sample values (string columns only, limited tables)
+            string_types = {"character varying", "varchar", "text", "char", "character",
+                           "enum", "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
+            for key in list(enriched.keys())[:15]:  # Cap at 15 tables
+                table_info = cached.get(key, {})
+                sample_cols = [
+                    col["name"] for col in table_info.get("columns", [])
+                    if col.get("type", "") in string_types or "char" in col.get("type", "").lower()
+                ]
+                if not sample_cols:
+                    continue
+                table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
+                try:
+                    values = await connector.get_sample_values(table_name, sample_cols, limit=sample_limit)
+                    if values:
+                        enriched[key]["sample_values"] = values
+                except Exception:
+                    pass
 
         return {
             "connection_name": name,
@@ -1259,10 +1248,9 @@ async def get_compact_schema(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-        cached = await connector.get_schema()
-        schema_cache.put(name, cached)
-        await pool_manager.release(info.db_type, conn_str)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            cached = await connector.get_schema()
+            schema_cache.put(name, cached)
 
     filtered = apply_endorsement_filter(name, cached)
 
@@ -1946,9 +1934,8 @@ async def explore_table(
                 conn_str = get_connection_string(name)
                 if conn_str:
                     extras = get_credential_extras(name)
-                    connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-                    samples = await connector.get_sample_values(table, string_cols[:10], limit=sample_limit)
-                    await pool_manager.release(info.db_type, conn_str)
+                    async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                        samples = await connector.get_sample_values(table, string_cols[:10], limit=sample_limit)
                     if samples:
                         schema_cache.put_sample_values(name, table, samples)
                         result["sample_values"] = samples
@@ -1978,9 +1965,8 @@ async def get_schema_overview(
             raise HTTPException(status_code=400, detail="No credentials stored")
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
@@ -2060,9 +2046,8 @@ async def get_schema_diff(name: str):
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-        new_schema = await connector.get_schema()
-        await pool_manager.release(info.db_type, conn_str)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            new_schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
@@ -2135,9 +2120,8 @@ async def get_filtered_schema(
             raise HTTPException(status_code=400, detail="No credentials stored")
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
@@ -2201,9 +2185,8 @@ async def get_schema_relationships(
             raise HTTPException(status_code=400, detail="No credentials stored")
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
@@ -2298,9 +2281,8 @@ async def get_join_paths(
             raise HTTPException(status_code=400, detail="No credentials stored")
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
@@ -2436,35 +2418,32 @@ async def get_cached_sample_values(
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            # Determine columns to sample
+            col_list: list[str] = []
+            if columns:
+                col_list = [c.strip() for c in columns.split(",") if c.strip()]
+            else:
+                # Auto-select: string/enum columns from schema
+                schema = schema_cache.get(name)
+                if schema and table in schema:
+                    for col in schema[table].get("columns", []):
+                        col_type = col.get("type", "").lower()
+                        if any(t in col_type for t in ("varchar", "text", "char", "string", "enum", "category")):
+                            col_list.append(col["name"])
+                        if len(col_list) >= 10:
+                            break
 
-        # Determine columns to sample
-        col_list: list[str] = []
-        if columns:
-            col_list = [c.strip() for c in columns.split(",") if c.strip()]
-        else:
-            # Auto-select: string/enum columns from schema
-            schema = schema_cache.get(name)
-            if schema and table in schema:
-                for col in schema[table].get("columns", []):
-                    col_type = col.get("type", "").lower()
-                    if any(t in col_type for t in ("varchar", "text", "char", "string", "enum", "category")):
-                        col_list.append(col["name"])
-                    if len(col_list) >= 10:
-                        break
+            if not col_list:
+                return {
+                    "connection_name": name,
+                    "table": table,
+                    "cached": False,
+                    "sample_values": {},
+                    "message": "No columns selected — provide column names or ensure schema is cached",
+                }
 
-        if not col_list:
-            await pool_manager.release(info.db_type, conn_str)
-            return {
-                "connection_name": name,
-                "table": table,
-                "cached": False,
-                "sample_values": {},
-                "message": "No columns selected — provide column names or ensure schema is cached",
-            }
-
-        values = await connector.get_sample_values(table, col_list, limit=limit)
-        await pool_manager.release(info.db_type, conn_str)
+            values = await connector.get_sample_values(table, col_list, limit=limit)
 
         # Cache the results
         if values:
@@ -2507,9 +2486,8 @@ async def search_schema(
     if cached is None:
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
@@ -2584,18 +2562,17 @@ async def search_schema(
     if include_samples and results:
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            for key, table in results.items():
-                matched_cols = table.get("_matched_columns", [])
-                if matched_cols and hasattr(connector, "get_sample_values"):
-                    full_name = f"{table.get('schema', '')}.{table['name']}" if table.get("schema") else table["name"]
-                    try:
-                        samples = await connector.get_sample_values(full_name, matched_cols[:5], limit=3)
-                        if samples:
-                            table["_sample_values"] = samples
-                    except Exception:
-                        pass
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                for key, table in results.items():
+                    matched_cols = table.get("_matched_columns", [])
+                    if matched_cols and hasattr(connector, "get_sample_values"):
+                        full_name = f"{table.get('schema', '')}.{table['name']}" if table.get("schema") else table["name"]
+                        try:
+                            samples = await connector.get_sample_values(full_name, matched_cols[:5], limit=3)
+                            if samples:
+                                table["_sample_values"] = samples
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -2692,9 +2669,8 @@ async def correct_columns(name: str, body: dict):
             raise HTTPException(status_code=400, detail="No credentials stored")
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
@@ -3052,11 +3028,9 @@ async def explain_query(req: DirectQueryRequest):
 
     try:
         extras = get_credential_extras(req.connection_name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-
-        from .governance.cost_estimator import CostEstimator
-        cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
-        await pool_manager.release(info.db_type, conn_str)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            from .governance.cost_estimator import CostEstimator
+            cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
 
         return {
             "connection_name": req.connection_name,
@@ -3232,9 +3206,8 @@ async def generate_annotations(name: str):
 
     try:
         extras = get_credential_extras(name)
-        connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-        schema = await connector.get_schema()
-        await pool_manager.release(info.db_type, conn_str)
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
 
@@ -3285,9 +3258,8 @@ async def detect_pii(name: str):
     if cached_schema is None:
         try:
             extras = get_credential_extras(name)
-            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-            cached_schema = await connector.get_schema()
-            await pool_manager.release(info.db_type, conn_str)
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                cached_schema = await connector.get_schema()
             schema_cache.put(name, cached_schema)
         except Exception as e:
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))

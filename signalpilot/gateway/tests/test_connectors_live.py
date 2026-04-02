@@ -2412,6 +2412,12 @@ class TestMCPCapabilitiesTools:
         tools = mcp._tool_manager._tools
         assert "explain_query" in tools
 
+    def test_query_history_mcp_tool_exists(self):
+        """query_history MCP tool is registered."""
+        from gateway.mcp_server import mcp
+        tools = mcp._tool_manager._tools
+        assert "query_history" in tools
+
 
 # ── Query Error Hints ──────────────────────────────────────────────────────
 

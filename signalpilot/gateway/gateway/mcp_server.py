@@ -1094,6 +1094,68 @@ async def explain_query(connection_name: str, sql: str) -> str:
 
 
 @mcp.tool()
+async def query_history(connection_name: str, limit: int = 10) -> str:
+    """
+    Get recent successful queries for a database connection.
+
+    Useful for learning query patterns, understanding the data model
+    through real usage, and avoiding repeating previously failed queries.
+
+    Spider2.0 SOTA insight: agents that reference prior successful queries
+    have higher accuracy on follow-up questions in the same session.
+
+    Args:
+        connection_name: Name of the database connection
+        limit: Max queries to return (default 10, max 50)
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    limit = min(limit, 50)
+    gw = _gateway_url()
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(
+            f"{gw}/api/audit",
+            params={
+                "connection_name": connection_name,
+                "event_type": "query",
+                "limit": limit,
+            },
+        )
+    if r.status_code != 200:
+        return f"Error ({r.status_code}): {r.text[:200]}"
+
+    data = r.json()
+    entries = data.get("entries", [])
+    if not entries:
+        return f"No recent queries for {connection_name}"
+
+    lines = [f"-- Recent queries for {connection_name} ({len(entries)} shown)\n"]
+    for e in entries:
+        ts = e.get("timestamp", 0)
+        sql = e.get("sql", "")
+        rows = e.get("rows_returned", 0)
+        ms = e.get("duration_ms", 0)
+        blocked = e.get("blocked", False)
+
+        if blocked:
+            continue  # Skip blocked queries
+
+        # Format timestamp
+        import time as _time
+        try:
+            ts_str = _time.strftime("%H:%M:%S", _time.localtime(ts))
+        except Exception:
+            ts_str = "?"
+
+        lines.append(f"-- [{ts_str}] {rows} rows, {ms:.0f}ms")
+        lines.append(sql.strip())
+        lines.append("")
+
+    return "\n".join(lines) if len(lines) > 1 else f"No successful queries for {connection_name}"
+
+
+@mcp.tool()
 async def cache_status() -> str:
     """
     Check the query cache status and performance.

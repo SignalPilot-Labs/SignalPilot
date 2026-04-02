@@ -121,14 +121,20 @@ class SchemaCache:
             )
 
     def stats(self) -> dict[str, Any]:
-        """Return cache statistics."""
+        """Return cache statistics and purge expired entries."""
         with self._lock:
-            active = sum(1 for e in self._cache.values() if not e.is_expired)
-            sample_active = sum(1 for e in self._sample_cache.values() if not e.is_expired)
+            # Lazy purge expired entries on stats() call
+            expired_keys = [k for k, e in self._cache.items() if e.is_expired]
+            for k in expired_keys:
+                del self._cache[k]
+            expired_samples = [k for k, e in self._sample_cache.items() if e.is_expired]
+            for k in expired_samples:
+                del self._sample_cache[k]
             return {
-                "cached_connections": active,
+                "cached_connections": len(self._cache),
                 "total_entries": len(self._cache),
-                "cached_sample_tables": sample_active,
+                "cached_sample_tables": len(self._sample_cache),
+                "purged": len(expired_keys) + len(expired_samples),
                 "ttl_seconds": self._ttl,
             }
 

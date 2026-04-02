@@ -355,10 +355,10 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={entry.id}
-                    className="group/row hover:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
+                    className="group/row hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
                     onClick={() => setExpandedActivity(isExpanded ? null : entry.id)}
                   >
-                    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-y-1 sm:gap-x-3 px-4 py-2.5">
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-y-1 sm:gap-x-3 px-4 py-3 sm:py-2.5">
                       <div className="flex items-center gap-2 sm:contents min-w-0">
                         <span className={`text-[9px] font-medium uppercase tracking-[0.15em] w-8 flex-shrink-0 ${
                           entry.blocked ? "text-[var(--color-error)]" : cfg.color

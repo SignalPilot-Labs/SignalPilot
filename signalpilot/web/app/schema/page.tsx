@@ -332,7 +332,7 @@ export default function SchemaExplorerPage() {
                 <div key={key} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-hidden card-accent-top">
                   <button
                     onClick={() => toggleTable(key)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left group"
+                    className="w-full flex items-center gap-3 px-4 py-3.5 sm:py-2.5 hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-hover)] transition-colors text-left group"
                   >
                     {expanded ? (
                       <ChevronDown className="w-3 h-3 text-[var(--color-text-dim)]" />

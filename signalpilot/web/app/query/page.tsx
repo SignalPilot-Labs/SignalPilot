@@ -253,7 +253,7 @@ export default function QueryExplorerPage() {
             onChange={(e) =>
               setRowLimit(Math.max(1, Math.min(100000, Number(e.target.value) || 1000)))
             }
-            className="w-16 px-1 py-1 bg-transparent text-xs text-center focus:outline-none tabular-nums"
+            className="w-16 px-1 py-1 bg-transparent text-base sm:text-xs text-center focus:outline-none tabular-nums"
           />
         </div>
 
@@ -299,7 +299,7 @@ export default function QueryExplorerPage() {
           placeholder="SELECT * FROM users LIMIT 10;"
           rows={6}
           spellCheck={false}
-          className="flex-1 px-4 py-3 bg-transparent text-xs font-mono focus:outline-none resize-y placeholder:text-[var(--color-text-dim)] leading-[1.65rem] tracking-wide"
+          className="flex-1 px-4 py-3 bg-transparent text-base sm:text-xs font-mono focus:outline-none resize-y placeholder:text-[var(--color-text-dim)] leading-[1.65rem] tracking-wide"
         />
         {/* Bottom info bar */}
         <div className="absolute bottom-0 right-0 flex items-center gap-3 px-3 py-1.5 text-[9px] text-[var(--color-text-dim)] bg-[var(--color-bg-card)]">

@@ -17,8 +17,13 @@ SP_KEY="${3:-}"
 
 # Auto-derive monitor URL from gateway URL if only gateway provided
 if [ "$#" -eq 1 ]; then
-    # Replace port with 3401
-    SP_MONITOR="$(echo "$SP_URL" | sed 's/:[0-9]*$/:3401/')"
+    # Strip trailing slash, then replace port (or append :3401 if no port)
+    CLEAN_URL="$(echo "$SP_URL" | sed 's|/\+$||')"
+    if echo "$CLEAN_URL" | grep -qE ':[0-9]+$'; then
+        SP_MONITOR="$(echo "$CLEAN_URL" | sed 's|:[0-9]*$|:3401|')"
+    else
+        SP_MONITOR="${CLEAN_URL}:3401"
+    fi
 fi
 
 echo "=== SignalPilot MCP — Claude Code Setup ==="

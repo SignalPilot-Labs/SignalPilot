@@ -1323,6 +1323,23 @@ def main():
     import asyncio
     from . import __version__
 
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(f"signalpilot-mcp-remote {__version__}")
+        print()
+        print("MCP server for managing SignalPilot from Claude Code.")
+        print()
+        print("Usage:")
+        print("  signalpilot-mcp-remote           Start the MCP server (stdio transport)")
+        print("  signalpilot-mcp-remote --check    Test connectivity to gateway and monitor")
+        print("  signalpilot-mcp-remote --version  Print version")
+        print("  signalpilot-mcp-remote --help     Show this help")
+        print()
+        print("Environment variables:")
+        print(f"  SIGNALPILOT_URL          Gateway URL (current: {GATEWAY_URL})")
+        print(f"  SIGNALPILOT_MONITOR_URL  Self-improve monitor URL (current: {MONITOR_URL})")
+        print(f"  SIGNALPILOT_API_KEY      API key for auth (current: {'(set)' if API_KEY else '(none)'})")
+        return
+
     if "--version" in sys.argv:
         print(f"signalpilot-mcp {__version__}")
         return

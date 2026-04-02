@@ -138,10 +138,35 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict]:
     inferred: list[dict] = []
     seen = set()
 
+    def _add_inferred(from_schema, from_table, from_col, ref_table_data, ref_col, confidence="high"):
+        edge_key = (from_schema + "." + from_table, from_col, ref_table_data.get("schema", "") + "." + ref_table_data.get("name", ""), ref_col)
+        if edge_key not in seen:
+            seen.add(edge_key)
+            inferred.append({
+                "from_schema": from_schema,
+                "from_table": from_table,
+                "from_column": from_col,
+                "to_schema": ref_table_data.get("schema", ""),
+                "to_table": ref_table_data.get("name", ""),
+                "to_column": ref_col,
+                "inferred": True,
+                "confidence": confidence,
+            })
+            return True
+        return False
+
+    # Build column name → set of tables that have this column (for shared-name joins)
+    col_to_tables: dict[str, list[tuple[str, dict, str]]] = {}  # col_lower → [(full_key, table, actual_col_name)]
+    for key, table in schema.items():
+        for col in table.get("columns", []):
+            cn = col["name"].lower()
+            if cn not in col_to_tables:
+                col_to_tables[cn] = []
+            col_to_tables[cn].append((key, table, col["name"]))
+
     for key, table in schema.items():
         tbl_schema = table.get("schema", "")
         tbl_name = table.get("name", "").lower()
-        full_from = f"{tbl_schema}.{table.get('name', '')}" if tbl_schema else table.get("name", "")
 
         # Skip if table already has explicit FKs — don't duplicate
         existing_fk_cols = {fk["column"].lower() for fk in table.get("foreign_keys", [])}
@@ -157,10 +182,10 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict]:
                 prefix = cn[:-3]  # "customer"
                 # Try plural forms: customer → customers, category → categories
                 candidates = [prefix, prefix + "s", prefix + "es"]
-                if prefix.endswith("i"):
-                    candidates.append(prefix[:-1] + "ies")  # e.g., categori → categories
-                elif prefix.endswith("ie"):
-                    candidates.append(prefix[:-2] + "ies")
+                if prefix.endswith("y"):
+                    candidates.append(prefix[:-1] + "ies")  # category → categories
+                elif prefix.endswith("s") or prefix.endswith("x") or prefix.endswith("z"):
+                    candidates.append(prefix + "es")  # address → addresses
 
                 for candidate in candidates:
                     if candidate in table_lookup and candidate != tbl_name:
@@ -181,20 +206,44 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict]:
                                     ref_col = rc["name"]
                                     break
                         if ref_col:
-                            edge_key = (full_from, col["name"], ref_full, ref_col)
-                            if edge_key not in seen:
-                                seen.add(edge_key)
-                                inferred.append({
-                                    "from_schema": tbl_schema,
-                                    "from_table": table.get("name", ""),
-                                    "from_column": col["name"],
-                                    "to_schema": ref_table.get("schema", ""),
-                                    "to_table": ref_table.get("name", ""),
-                                    "to_column": ref_col,
-                                    "inferred": True,
-                                    "confidence": "high",
-                                })
+                            _add_inferred(tbl_schema, table.get("name", ""), col["name"], ref_table, ref_col)
                             break
+
+            # Pattern 2: column ends with Id (camelCase) → e.g., customerId → customers.id
+            elif cn.endswith("id") and cn != "id" and len(cn) > 2 and cn[-3].islower():
+                prefix = cn[:-2].lower()  # "customer"
+                candidates = [prefix, prefix + "s", prefix + "es"]
+                if prefix.endswith("y"):
+                    candidates.append(prefix[:-1] + "ies")
+                for candidate in candidates:
+                    if candidate in table_lookup and candidate != tbl_name:
+                        _, ref_table = table_lookup[candidate]
+                        for rc in ref_table.get("columns", []):
+                            rcn = rc["name"].lower()
+                            if rc.get("primary_key") or rcn == "id":
+                                _add_inferred(tbl_schema, table.get("name", ""), col["name"], ref_table, rc["name"])
+                                break
+                        break
+
+            # Pattern 3: shared column name with _id/_key suffix → join bridge
+            # e.g., both orders.product_id and order_items.product_id → joinable
+            elif cn.endswith(("_id", "_key", "_code")) and cn != "id":
+                entries = col_to_tables.get(cn, [])
+                if len(entries) > 1:
+                    # For each other table that has this same column, create an inferred join
+                    for other_key, other_table, other_col_name in entries:
+                        if other_key == key:
+                            continue
+                        other_name = other_table.get("name", "").lower()
+                        if other_name == tbl_name:
+                            continue
+                        # Only add if the other table has this as a PK or it looks like a dimension table
+                        is_pk_in_other = any(
+                            rc["name"].lower() == cn and rc.get("primary_key")
+                            for rc in other_table.get("columns", [])
+                        )
+                        if is_pk_in_other:
+                            _add_inferred(tbl_schema, table.get("name", ""), col["name"], other_table, other_col_name)
 
     return inferred
 

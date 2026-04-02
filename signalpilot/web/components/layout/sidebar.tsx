@@ -392,12 +392,25 @@ export default function Sidebar() {
             SignalPilot
           </span>
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {/* Governance status dot */}
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
             <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
           </span>
+          {/* Search button — opens command palette */}
+          <button
+            onClick={() => {
+              window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+            }}
+            className="flex items-center justify-center w-8 h-8"
+            aria-label="Search"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-[var(--color-text-dim)]">
+              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1" />
+              <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            </svg>
+          </button>
           {/* Hamburger / more menu */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}

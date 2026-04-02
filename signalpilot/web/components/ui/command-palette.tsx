@@ -255,7 +255,7 @@ export function CommandPalette() {
                         </span>
                       </div>
                       {item.cmd.shortcut && (
-                        <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
+                        <kbd className="hidden sm:inline px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
                           {item.cmd.shortcut}
                         </kbd>
                       )}
@@ -269,7 +269,7 @@ export function CommandPalette() {
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[9px] text-[var(--color-text-dim)] tracking-wider">
-          <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-3">
             <span className="flex items-center gap-1">
               <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[8px] font-mono">↑↓</kbd>
               navigate
@@ -279,7 +279,7 @@ export function CommandPalette() {
               select
             </span>
           </div>
-          <span>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
+          <span className="sm:ml-0 ml-auto">{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
         </div>
       </div>
     </div>

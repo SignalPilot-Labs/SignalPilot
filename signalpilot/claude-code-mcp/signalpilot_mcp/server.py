@@ -1221,12 +1221,95 @@ async def list_agent_branches() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Connectivity check
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def _run_check() -> bool:
+    """Validate connectivity to gateway and monitor. Returns True if all pass."""
+    import asyncio
+
+    tool_count = len(mcp._tool_manager._tools)
+    passed = 0
+    failed = 0
+
+    print("SignalPilot MCP — Connectivity Check")
+    print("=" * 40)
+    print(f"Gateway URL:  {GATEWAY_URL}")
+    print(f"Monitor URL:  {MONITOR_URL}")
+    print(f"API Key:      {'(set)' if API_KEY else '(none)'}")
+    print(f"Tools:        {tool_count}")
+    print()
+
+    # 1. Gateway health
+    try:
+        data = await _get_client().health()
+        status = data.get("status", "unknown")
+        print(f"  [PASS] Gateway health: {status}")
+        passed += 1
+    except Exception as e:
+        print(f"  [FAIL] Gateway health: {e}")
+        failed += 1
+
+    # 2. List connections (also verifies auth)
+    try:
+        conns = await _get_client().list_connections()
+        print(f"  [PASS] Gateway connections: {len(conns)} configured")
+        passed += 1
+    except Exception as e:
+        print(f"  [FAIL] Gateway connections: {e}")
+        failed += 1
+
+    # 3. Monitor / agent health
+    try:
+        data = await _get_agent_client().agent_health()
+        status = data.get("status", "unknown")
+        run_id = data.get("current_run_id")
+        extra = f" (run {run_id[:12]})" if run_id else ""
+        print(f"  [PASS] Agent health: {status}{extra}")
+        passed += 1
+    except Exception as e:
+        print(f"  [FAIL] Agent health: {e}")
+        failed += 1
+
+    # 4. List runs (verifies monitor DB)
+    try:
+        runs = await _get_agent_client().list_runs()
+        print(f"  [PASS] Monitor runs: {len(runs)} in history")
+        passed += 1
+    except Exception as e:
+        print(f"  [FAIL] Monitor runs: {e}")
+        failed += 1
+
+    print()
+    if failed == 0:
+        print(f"All {passed} checks passed — ready for Claude Code!")
+    else:
+        print(f"{passed} passed, {failed} failed — fix the failures above.")
+    return failed == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def main():
     """Run the SignalPilot remote MCP server over stdio."""
+    import asyncio
+    from . import __version__
+
+    if "--version" in sys.argv:
+        print(f"signalpilot-mcp {__version__}")
+        return
+
+    if "--check" in sys.argv:
+        import logging
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        ok = asyncio.run(_run_check())
+        sys.exit(0 if ok else 1)
+
     if not GATEWAY_URL or GATEWAY_URL == "http://localhost:3300":
         print(
             "Tip: Set SIGNALPILOT_URL to your gateway address. "

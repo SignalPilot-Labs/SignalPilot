@@ -337,8 +337,9 @@ class MySQLConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     with self._conn.cursor() as cursor:
+                        safe_col = self._quote_identifier(col)
                         cursor.execute(
-                            f"SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}"
+                            f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
                         )
                         rows = cursor.fetchall()
                         values = [str(r[col]) for r in rows if r[col] is not None]

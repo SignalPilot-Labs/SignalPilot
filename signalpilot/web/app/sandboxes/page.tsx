@@ -78,7 +78,7 @@ export default function SandboxesPage() {
         actions={
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="flex items-center gap-2 px-4 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 active:opacity-80"
           >
             <Plus className="w-3.5 h-3.5" /> new sandbox
           </button>
@@ -132,14 +132,14 @@ export default function SandboxesPage() {
               <button
                 onClick={handleCreate}
                 disabled={creating}
-                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                className="flex items-center gap-2 px-4 py-3 sm:py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30 active:opacity-80"
               >
                 {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                 create
               </button>
               <button
                 onClick={() => setShowCreate(false)}
-                className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+                className="px-4 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 cancel
               </button>
@@ -157,7 +157,7 @@ export default function SandboxesPage() {
           action={
             <button
               onClick={() => setShowCreate(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+              className="flex items-center gap-2 px-4 py-3 sm:py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
             >
               <Plus className="w-3.5 h-3.5" /> create first sandbox
             </button>
@@ -190,9 +190,9 @@ export default function SandboxesPage() {
                         e.preventDefault();
                         handleDelete(sb.id);
                       }}
-                      className="sm:opacity-0 sm:group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
+                      className="sm:opacity-0 sm:group-hover:opacity-100 p-2 sm:p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all active:text-[var(--color-error)]"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-4 h-4 sm:w-3 sm:h-3" />
                     </button>
                   </div>
                 </div>

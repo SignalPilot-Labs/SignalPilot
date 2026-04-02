@@ -148,8 +148,8 @@ export default function SettingsPage() {
                     className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                   />
                   <button onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
-                    {showApiKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 sm:p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
+                    {showApiKey ? <EyeOff className="w-4 h-4 sm:w-3 sm:h-3" /> : <Eye className="w-4 h-4 sm:w-3 sm:h-3" />}
                   </button>
                 </div>
                 <button onClick={handleSaveBrowserKey}
@@ -208,7 +208,7 @@ export default function SettingsPage() {
             </div>
             <div className="pt-2">
               <button onClick={handleTestConnection} disabled={testingHealth}
-                className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+                className="flex items-center gap-2 px-3 py-2.5 sm:py-1.5 text-[10px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider active:bg-[var(--color-bg-hover)]">
                 {testingHealth ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cpu className="w-3 h-3" strokeWidth={1.5} />}
                 test sandbox connection
               </button>
@@ -310,8 +310,8 @@ export default function SettingsPage() {
                       <Ban className="w-2.5 h-2.5 text-[var(--color-error)]" />
                       <code className="text-[var(--color-text-muted)]">{table}</code>
                       <button onClick={() => setBlockedTables(blockedTables.filter((t) => t !== table))}
-                        className="ml-0.5 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors">
-                        <X className="w-2.5 h-2.5" />
+                        className="ml-0.5 p-1.5 sm:p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors">
+                        <X className="w-3.5 h-3.5 sm:w-2.5 sm:h-2.5" />
                       </button>
                     </span>
                   ))}
@@ -352,8 +352,8 @@ export default function SettingsPage() {
                     className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                   />
                   <button onClick={() => setShowGatewayKey(!showGatewayKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
-                    {showGatewayKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 sm:p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
+                    {showGatewayKey ? <EyeOff className="w-4 h-4 sm:w-3 sm:h-3" /> : <Eye className="w-4 h-4 sm:w-3 sm:h-3" />}
                   </button>
                 </div>
                 <button

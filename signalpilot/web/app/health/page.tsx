@@ -151,7 +151,7 @@ export default function HealthPage() {
         description="connection health, latency, and cache performance"
         actions={
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-2 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
+            <label className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-3 py-2.5 sm:py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
               <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-none" />
               auto (10s)
             </label>
@@ -281,7 +281,7 @@ export default function HealthPage() {
                         <StatusIcon className="w-3 h-3" strokeWidth={1.5} /> {cfg.label}
                       </span>
                       <button onClick={() => handleTest(health.connection_name)} disabled={testing === health.connection_name}
-                        className="flex items-center gap-1 px-2.5 py-1.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider">
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider active:bg-[var(--color-bg-hover)]">
                         {testing === health.connection_name ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />}
                         test
                       </button>
@@ -301,7 +301,7 @@ export default function HealthPage() {
                     </div>
 
                     {/* Stats grid */}
-                    <div className="flex gap-3">
+                    <div className="flex flex-wrap gap-3">
                       {[
                         { label: "samples", value: health.sample_count, color: "" },
                         { label: "success", value: health.successes ?? "--", color: "text-[var(--color-success)]" },

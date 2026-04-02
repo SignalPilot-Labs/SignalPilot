@@ -241,15 +241,15 @@ export default function SchemaExplorerPage() {
               <button
                 onClick={scanPii}
                 disabled={scanningPii}
-                className="flex items-center gap-1 px-2 py-1.5 sm:py-1 text-[10px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider"
+                className="flex items-center gap-1 px-3 py-2.5 sm:py-1 text-[10px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors disabled:opacity-50 tracking-wider active:bg-[var(--color-warning)]/10"
               >
                 {scanningPii ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" strokeWidth={1.5} />}
                 {piiDetections ? `pii: ${Object.keys(piiDetections).length}` : "scan pii"}
               </button>
-              <button onClick={expandAll} className="px-2 py-1.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={expandAll} className="px-3 py-2.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
                 expand
               </button>
-              <button onClick={collapseAll} className="px-2 py-1.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={collapseAll} className="px-3 py-2.5 sm:py-1 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider active:text-[var(--color-text)]">
                 collapse
               </button>
             </div>

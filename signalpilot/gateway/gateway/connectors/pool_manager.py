@@ -6,11 +6,14 @@ Fixes MED-06: Connection pool recreated per query causing resource leaks.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
 from .base import BaseConnector
 from .registry import get_connector
+
+log = logging.getLogger("pool_manager")
 
 
 class PoolManager:
@@ -35,13 +38,13 @@ class PoolManager:
                 try:
                     if await connector.health_check():
                         return connector
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Health check failed for %s: %s", key.split(":")[0], e)
                 # Stale — close and recreate
                 try:
                     await connector.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("Error closing stale connector: %s", e)
                 del self._pools[key]
 
             connector = get_connector(db_type)

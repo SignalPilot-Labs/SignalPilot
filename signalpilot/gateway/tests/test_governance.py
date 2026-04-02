@@ -1,8 +1,9 @@
-"""Tests for the governance layer — budget, cost estimation, PII redaction."""
+"""Tests for the governance layer — budget, cost estimation, PII redaction, caching."""
 
 import pytest
 
 from gateway.governance.budget import BudgetLedger, SessionBudget
+from gateway.governance.cache import QueryCache
 from gateway.governance.pii import PIIRedactor, PIIRule, _hash_value, _mask_value
 
 
@@ -223,3 +224,66 @@ class TestPIIRedactor:
         redactor = PIIRedactor()
         redactor.add_rule("email", PIIRule.hash)
         assert redactor.redact_rows([]) == []
+
+
+class TestQueryCache:
+    """Test query result caching and invalidation."""
+
+    def _make_cache(self) -> QueryCache:
+        return QueryCache(max_entries=100, ttl_seconds=300)
+
+    def test_put_and_get(self):
+        cache = self._make_cache()
+        cache.put("conn1", "SELECT 1", 100, [{"a": 1}], ["t"], 5.0, "SELECT 1")
+        entry = cache.get("conn1", "SELECT 1", 100)
+        assert entry is not None
+        assert entry.rows == [{"a": 1}]
+
+    def test_miss_returns_none(self):
+        cache = self._make_cache()
+        assert cache.get("conn1", "SELECT 1", 100) is None
+
+    def test_invalidate_all(self):
+        cache = self._make_cache()
+        cache.put("conn1", "SELECT 1", 100, [], [], 1.0, "SELECT 1")
+        cache.put("conn2", "SELECT 2", 100, [], [], 1.0, "SELECT 2")
+        count = cache.invalidate()
+        assert count == 2
+        assert cache.get("conn1", "SELECT 1", 100) is None
+        assert cache.get("conn2", "SELECT 2", 100) is None
+
+    def test_invalidate_by_connection_name(self):
+        """Only entries for the specified connection should be removed."""
+        cache = self._make_cache()
+        cache.put("conn1", "SELECT 1", 100, [{"a": 1}], ["t1"], 1.0, "SELECT 1")
+        cache.put("conn1", "SELECT 2", 100, [{"b": 2}], ["t2"], 1.0, "SELECT 2")
+        cache.put("conn2", "SELECT 3", 100, [{"c": 3}], ["t3"], 1.0, "SELECT 3")
+
+        count = cache.invalidate("conn1")
+        assert count == 2
+
+        # conn1 entries gone
+        assert cache.get("conn1", "SELECT 1", 100) is None
+        assert cache.get("conn1", "SELECT 2", 100) is None
+
+        # conn2 entry still present
+        entry = cache.get("conn2", "SELECT 3", 100)
+        assert entry is not None
+        assert entry.rows == [{"c": 3}]
+
+    def test_hit_rate_tracking(self):
+        cache = self._make_cache()
+        cache.put("c", "SELECT 1", 100, [], [], 1.0, "SELECT 1")
+        cache.get("c", "SELECT 1", 100)  # hit
+        cache.get("c", "SELECT 999", 100)  # miss
+        stats = cache.stats()
+        assert stats["hits"] == 1
+        assert stats["misses"] == 1
+        assert stats["hit_rate"] == 0.5
+
+    def test_eviction_at_capacity(self):
+        cache = QueryCache(max_entries=2, ttl_seconds=300)
+        cache.put("c", "q1", 100, [], [], 1.0, "q1")
+        cache.put("c", "q2", 100, [], [], 1.0, "q2")
+        cache.put("c", "q3", 100, [], [], 1.0, "q3")  # should evict q1
+        assert cache.stats()["entries"] == 2

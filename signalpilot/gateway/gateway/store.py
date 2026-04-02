@@ -291,7 +291,7 @@ def update_connection(name: str, update: ConnectionUpdate) -> ConnectionInfo | N
     update_fields = update.model_dump(exclude_none=True)
 
     # Separate credential fields from metadata fields
-    credential_fields = {"password", "connection_string", "credentials_json", "access_token", "private_key", "private_key_passphrase"}
+    credential_fields = {"password", "connection_string", "credentials_json", "access_token", "private_key", "private_key_passphrase", "motherduck_token"}
     meta_updates = {k: v for k, v in update_fields.items() if k not in credential_fields}
 
     # Update metadata fields in connection info
@@ -457,6 +457,9 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
         extras["access_token"] = conn.access_token
         extras["catalog"] = conn.catalog
         extras["schema_name"] = conn.schema_name
+    # DuckDB MotherDuck token
+    if conn.db_type == DBType.duckdb and getattr(conn, "motherduck_token", None):
+        extras["motherduck_token"] = conn.motherduck_token
     # Timeout configuration (applies to all connectors)
     if conn.connection_timeout is not None:
         extras["connection_timeout"] = conn.connection_timeout

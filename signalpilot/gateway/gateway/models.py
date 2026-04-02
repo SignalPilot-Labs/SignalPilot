@@ -107,6 +107,8 @@ class ConnectionCreate(BaseModel):
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
+    # ─── DuckDB / MotherDuck ──────────────────────────────────────
+    motherduck_token: str | None = Field(default=None, max_length=2048)  # MotherDuck personal access token
     # ─── Metadata ───────────────────────────────────────────────────
     description: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list)  # organizational tags

@@ -3329,8 +3329,25 @@ async def search_schema(
             raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
         schema_cache.put(name, cached)
 
-    # Score each table by relevance to query terms
-    terms = [t.strip().lower() for t in q.split() if t.strip()]
+    # Parse HEX-style prefix filters: schema:public, table:users, column:email, database:analytics
+    prefix_filters: dict[str, list[str]] = {"schema": [], "table": [], "column": [], "database": []}
+    raw_terms: list[str] = []
+    for part in q.split():
+        part = part.strip()
+        if not part:
+            continue
+        matched_prefix = False
+        for prefix_key in prefix_filters:
+            if part.lower().startswith(f"{prefix_key}:"):
+                val = part[len(prefix_key) + 1:].lower()
+                if val:
+                    prefix_filters[prefix_key].append(val)
+                    matched_prefix = True
+                break
+        if not matched_prefix:
+            raw_terms.append(part.lower())
+
+    terms = raw_terms
     scored: list[tuple[float, str, dict]] = []
 
     for key, table in cached.items():
@@ -3338,6 +3355,28 @@ async def search_schema(
         table_name_lower = table.get("name", "").lower()
         schema_name_lower = table.get("schema", "").lower()
         matched_columns: list[str] = []
+
+        # Apply prefix filters first (any mismatch → skip table)
+        if prefix_filters["schema"] and not any(f in schema_name_lower for f in prefix_filters["schema"]):
+            continue
+        if prefix_filters["database"] and not any(f in schema_name_lower for f in prefix_filters["database"]):
+            continue
+        if prefix_filters["table"] and not any(f in table_name_lower for f in prefix_filters["table"]):
+            continue
+        if prefix_filters["column"]:
+            col_names_lower = [col.get("name", "").lower() for col in table.get("columns", [])]
+            if not any(any(f in cn for cn in col_names_lower) for f in prefix_filters["column"]):
+                continue
+            # Mark matched columns from prefix filter
+            for col in table.get("columns", []):
+                cn = col.get("name", "").lower()
+                if any(f in cn for f in prefix_filters["column"]):
+                    matched_columns.append(col["name"])
+            score += 5.0  # Boost for prefix filter match
+
+        # If only prefix filters (no free-text terms), auto-score based on matches
+        if not terms and any(prefix_filters[k] for k in prefix_filters):
+            score = max(score, 5.0)
 
         for term in terms:
             # Table name matching (highest weight)

@@ -11,6 +11,7 @@ import { PageTransition } from "@/components/ui/page-transition";
 export const metadata: Metadata = {
   title: "SignalPilot",
   description: "Governed sandbox console for AI database access",
+  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

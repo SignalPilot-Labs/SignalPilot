@@ -444,7 +444,7 @@ export default function SettingsPage() {
           className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           save gateway settings
-          <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30">
+          <kbd className="ml-2 px-1.5 py-0.5 bg-[var(--color-bg)]/20 text-[8px] opacity-60 border border-[var(--color-bg)]/30 hidden sm:inline">
             ctrl+S
           </kbd>
         </button>

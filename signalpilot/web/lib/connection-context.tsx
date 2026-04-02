@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  type ReactNode,
+} from "react";
 import { getConnections } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
 
@@ -39,14 +46,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const conns = await getConnections();
       setConnections(conns);
       // If current selection is gone or empty, pick first
-      const currentName = selectedConn || (() => { try { return localStorage.getItem(STORAGE_KEY) || ""; } catch { return ""; } })();
+      const currentName =
+        selectedConn ||
+        (() => {
+          try {
+            return localStorage.getItem(STORAGE_KEY) || "";
+          } catch {
+            return "";
+          }
+        })();
       const stillExists = conns.some((c) => c.name === currentName);
       if (!stillExists && conns.length > 0) {
         setSelectedConn(conns[0].name);
       } else if (stillExists && !selectedConn) {
         setSelectedConnState(currentName);
       }
-    } catch {} finally {
+    } catch {
+    } finally {
       setLoading(false);
     }
   }, [selectedConn, setSelectedConn]);
@@ -60,7 +76,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     getConnections()
       .then((conns) => {
         setConnections(conns);
-        const stored = (() => { try { return localStorage.getItem(STORAGE_KEY) || ""; } catch { return ""; } })();
+        const stored = (() => {
+          try {
+            return localStorage.getItem(STORAGE_KEY) || "";
+          } catch {
+            return "";
+          }
+        })();
         const exists = conns.some((c) => c.name === stored);
         if (exists) {
           setSelectedConnState(stored);
@@ -73,7 +95,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <ConnectionContext.Provider value={{ connections, selectedConn, setSelectedConn, refreshConnections, loading }}>
+    <ConnectionContext.Provider
+      value={{
+        connections,
+        selectedConn,
+        setSelectedConn,
+        refreshConnections,
+        loading,
+      }}
+    >
       {children}
     </ConnectionContext.Provider>
   );

@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
+
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
   const s = active ? "currentColor" : "currentColor";
@@ -19,8 +20,18 @@ function NavIconDashboard({ active }: { active: boolean }) {
 function NavIconQuery({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <path d="M10 8L12 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+      <path
+        d="M2 3H12M2 7H8M2 11H10"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      <path
+        d="M10 8L12 10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="square"
+      />
       {active && <circle cx="11" cy="9" r="1" fill="var(--color-success)" />}
     </svg>
   );
@@ -28,35 +39,99 @@ function NavIconQuery({ active }: { active: boolean }) {
 function NavIconSchema({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="1" y1="5" x2="13" y2="5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" strokeWidth="0.75" />
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <line
+        x1="1"
+        y1="5"
+        x2="13"
+        y2="5"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+      <line
+        x1="5"
+        y1="1"
+        x2="5"
+        y2="13"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
     </svg>
   );
 }
 function NavIconSandbox({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <path d="M4 5L6 7L4 9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <line x1="7" y1="9" x2="10" y2="9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <path
+        d="M4 5L6 7L4 9"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      <line
+        x1="7"
+        y1="9"
+        x2="10"
+        y2="9"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      {active && (
+        <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />
+      )}
     </svg>
   );
 }
 function NavIconDatabase({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <ellipse cx="7" cy="3" rx="5" ry="2" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 3V11C2 12.1 4.24 13 7 13C9.76 13 12 12.1 12 11V3" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 7C2 8.1 4.24 9 7 9C9.76 9 12 8.1 12 7" stroke="currentColor" strokeWidth="0.75" />
+      <ellipse
+        cx="7"
+        cy="3"
+        rx="5"
+        ry="2"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <path
+        d="M2 3V11C2 12.1 4.24 13 7 13C9.76 13 12 12.1 12 11V3"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <path
+        d="M2 7C2 8.1 4.24 9 7 9C9.76 9 12 8.1 12 7"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
     </svg>
   );
 }
 function NavIconHealth({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 7H3L5 3L7 11L9 5L11 7H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M1 7H3L5 3L7 11L9 5L11 7H13"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
       {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
     </svg>
   );
@@ -64,10 +139,61 @@ function NavIconHealth({ active }: { active: boolean }) {
 function NavIconAudit({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="9" x2="8" y2="9" stroke="currentColor" strokeWidth="0.75" />
+      <rect
+        x="2"
+        y="1"
+        width="10"
+        height="12"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <line
+        x1="4"
+        y1="4"
+        x2="10"
+        y2="4"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+      <line
+        x1="4"
+        y1="6.5"
+        x2="10"
+        y2="6.5"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+      <line
+        x1="4"
+        y1="9"
+        x2="8"
+        y2="9"
+        stroke="currentColor"
+        strokeWidth="0.75"
+      />
+    </svg>
+  );
+}
+function NavIconTunnel({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path
+        d="M1 7H4M10 7H13"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="square"
+      />
+      <rect
+        x="4"
+        y="3"
+        width="6"
+        height="8"
+        rx="3"
+        stroke="currentColor"
+        strokeWidth="1"
+        fill="none"
+      />
+      {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
     </svg>
   );
 }
@@ -75,38 +201,106 @@ function NavIconSettings({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <circle cx="7" cy="7" r="2.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M7 1V3M7 11V13M1 7H3M11 7H13M2.5 2.5L4 4M10 10L11.5 11.5M11.5 2.5L10 4M4 10L2.5 11.5" stroke="currentColor" strokeWidth="0.75" strokeLinecap="square" />
+      <path
+        d="M7 1V3M7 11V13M1 7H3M11 7H13M2.5 2.5L4 4M10 10L11.5 11.5M11.5 2.5L10 4M4 10L2.5 11.5"
+        stroke="currentColor"
+        strokeWidth="0.75"
+        strokeLinecap="square"
+      />
     </svg>
   );
 }
 
 type NavIconComponent = React.FC<{ active: boolean }>;
 
-const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
-  { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
+const nav: {
+  href: string;
+  label: string;
+  icon: NavIconComponent;
+  shortcut: string;
+}[] = [
+  {
+    href: "/dashboard",
+    label: "dashboard",
+    icon: NavIconDashboard,
+    shortcut: "1",
+  },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "2" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
-  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "4" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "5" },
+  {
+    href: "/sandboxes",
+    label: "sandboxes",
+    icon: NavIconSandbox,
+    shortcut: "4",
+  },
+  {
+    href: "/connections",
+    label: "connections",
+    icon: NavIconDatabase,
+    shortcut: "5",
+  },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "6" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "8" },
+  { href: "/tunnels", label: "tunnels", icon: NavIconTunnel, shortcut: "7" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  {
+    href: "/settings",
+    label: "settings",
+    icon: NavIconSettings,
+    shortcut: "9",
+  },
 ];
+
+/* Primary tabs shown in bottom nav on mobile (limit to 5 for thumb reach) */
+const mobileTabItems = [0, 1, 3, 4, 7]; // dashboard, query, sandboxes, connections, settings
 
 function SignalPilotLogo() {
   return (
     <div className="relative">
       {/* Status ring */}
-      <svg width="38" height="38" viewBox="0 0 38 38" fill="none" className="absolute -inset-[3px]">
-        <circle cx="19" cy="19" r="17" stroke="var(--color-border)" strokeWidth="0.5" fill="none" />
-        <circle cx="19" cy="19" r="17" stroke="var(--color-success)" strokeWidth="1" fill="none"
-          strokeDasharray="80 27" strokeLinecap="square" opacity="0.3"
+      <svg
+        width="38"
+        height="38"
+        viewBox="0 0 38 38"
+        fill="none"
+        className="absolute -inset-[3px]"
+      >
+        <circle
+          cx="19"
+          cy="19"
+          r="17"
+          stroke="var(--color-border)"
+          strokeWidth="0.5"
+          fill="none"
+        />
+        <circle
+          cx="19"
+          cy="19"
+          r="17"
+          stroke="var(--color-success)"
+          strokeWidth="1"
+          fill="none"
+          strokeDasharray="80 27"
+          strokeLinecap="square"
+          opacity="0.3"
           className="-rotate-90 origin-center"
         >
-          <animateTransform attributeName="transform" type="rotate" from="0 19 19" to="360 19 19" dur="20s" repeatCount="indefinite" />
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 19 19"
+            to="360 19 19"
+            dur="20s"
+            repeatCount="indefinite"
+          />
         </circle>
       </svg>
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg
+        width="32"
+        height="32"
+        viewBox="0 0 32 32"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
         {/* Outer frame */}
         <rect x="1" y="1" width="30" height="30" fill="white" />
         <rect x="2" y="2" width="28" height="28" fill="black" />
@@ -119,11 +313,29 @@ function SignalPilotLogo() {
           strokeLinejoin="miter"
         />
         {/* Cursor line */}
-        <line x1="16" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2.5" strokeLinecap="square" />
+        <line
+          x1="16"
+          y1="23"
+          x2="24"
+          y2="23"
+          stroke="white"
+          strokeWidth="2.5"
+          strokeLinecap="square"
+        />
         {/* Signal dot with pulse */}
         <circle cx="24" cy="9" r="3" fill="#00ff88" opacity="0.15">
-          <animate attributeName="r" values="3;5;3" dur="3s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.15;0;0.15" dur="3s" repeatCount="indefinite" />
+          <animate
+            attributeName="r"
+            values="3;5;3"
+            dur="3s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.15;0;0.15"
+            dur="3s"
+            repeatCount="indefinite"
+          />
         </circle>
         <circle cx="24" cy="9" r="2" fill="#00ff88" />
       </svg>
@@ -131,11 +343,46 @@ function SignalPilotLogo() {
   );
 }
 
+function SignalPilotLogoSmall() {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 32 32"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect x="1" y="1" width="30" height="30" fill="white" />
+      <rect x="2" y="2" width="28" height="28" fill="black" />
+      <path
+        d="M8 9L14 16L8 23"
+        stroke="white"
+        strokeWidth="2.5"
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+      />
+      <line
+        x1="16"
+        y1="23"
+        x2="24"
+        y2="23"
+        stroke="white"
+        strokeWidth="2.5"
+        strokeLinecap="square"
+      />
+      <circle cx="24" cy="9" r="2" fill="#00ff88" />
+    </svg>
+  );
+}
+
 function UptimeCounter() {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const start = Date.now();
-    const interval = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    const interval = setInterval(
+      () => setElapsed(Math.floor((Date.now() - start) / 1000)),
+      1000,
+    );
     return () => clearInterval(interval);
   }, []);
   const h = Math.floor(elapsed / 3600);
@@ -143,13 +390,20 @@ function UptimeCounter() {
   const s = elapsed % 60;
   return (
     <span className="tabular-nums">
-      {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:{String(s).padStart(2, "0")}
+      {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:
+      {String(s).padStart(2, "0")}
     </span>
   );
 }
 
 /* ── Badge for nav items ── */
-function NavBadge({ count, color = "var(--color-success)" }: { count: number; color?: string }) {
+function NavBadge({
+  count,
+  color = "var(--color-success)",
+}: {
+  count: number;
+  color?: string;
+}) {
   if (count <= 0) return null;
   return (
     <span
@@ -161,26 +415,117 @@ function NavBadge({ count, color = "var(--color-success)" }: { count: number; co
   );
 }
 
+/* ── Mobile bottom tab badge ── */
+function MobileNavBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 text-[8px] tabular-nums bg-[var(--color-success)] text-[var(--color-bg)]">
+      {count}
+    </span>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
-  const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
+  const [activeTunnels, setActiveTunnels] = useState(0);
+  const [connHealth, setConnHealth] = useState<{
+    total: number;
+    healthy: number;
+  }>({ total: 0, healthy: 0 });
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+
+  // Close mobile menu on navigation
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
+  // Swipe from right edge to open menu, swipe right to close
+  useEffect(() => {
+    function handleTouchStart(e: TouchEvent) {
+      touchStartX.current = e.touches[0].clientX;
+      touchStartY.current = e.touches[0].clientY;
+    }
+    function handleTouchEnd(e: TouchEvent) {
+      const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+      const deltaY = Math.abs(
+        e.changedTouches[0].clientY - touchStartY.current,
+      );
+      // Only trigger on horizontal swipes (not vertical scrolling)
+      if (deltaY > 50) return;
+      const screenW = window.innerWidth;
+      // Swipe left from right edge to open
+      if (
+        !mobileMenuOpen &&
+        touchStartX.current > screenW - 30 &&
+        deltaX < -60
+      ) {
+        setMobileMenuOpen(true);
+      }
+      // Swipe right to close
+      if (mobileMenuOpen && deltaX > 60) {
+        setMobileMenuOpen(false);
+      }
+    }
+    // Only on mobile (< 768px)
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      document.addEventListener("touchstart", handleTouchStart, {
+        passive: true,
+      });
+      document.addEventListener("touchend", handleTouchEnd, { passive: true });
+      return () => {
+        document.removeEventListener("touchstart", handleTouchStart);
+        document.removeEventListener("touchend", handleTouchEnd);
+      };
+    }
+  }, [mobileMenuOpen]);
+
+  // Prevent body scroll when mobile menu is open
+  useEffect(() => {
+    if (mobileMenuOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [mobileMenuOpen]);
 
   // Poll for active sandbox count and connection health
   const fetchCounts = useCallback(() => {
-    const url = typeof window !== "undefined" ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300" : "";
-    const key = typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
+    const isRemote =
+      typeof window !== "undefined" &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1";
+    const url = isRemote
+      ? ""
+      : typeof window !== "undefined"
+        ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300"
+        : "";
+    const key =
+      typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
     const headers: Record<string, string> = {};
     if (key) headers["Authorization"] = `Bearer ${key}`;
     fetch(`${url}/api/sandboxes`, { headers })
-      .then((r) => r.ok ? r.json() : [])
+      .then((r) => (r.ok ? r.json() : []))
       .then((sandboxes: { status: string }[]) => {
-        setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
+        setActiveSandboxes(
+          sandboxes.filter((s) => s.status === "running").length,
+        );
+      })
+      .catch(() => {});
+    fetch(`${url}/api/tunnels`, { headers })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((tunnels: { status: string }[]) => {
+        setActiveTunnels(tunnels.filter((t) => t.status === "running").length);
       })
       .catch(() => {});
     fetch(`${url}/api/health/connections`, { headers })
-      .then((r) => r.ok ? r.json() : { connections: [] })
+      .then((r) => (r.ok ? r.json() : { connections: [] }))
       .then((data: { connections: { status: string }[] }) => {
         const conns = data.connections || [];
         setConnHealth({
@@ -212,128 +557,414 @@ export default function Sidebar() {
   }, [router]);
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
-      {/* Logo */}
-      <div className="px-5 py-5 border-b border-[var(--color-border)]">
-        <Link href="/dashboard" className="flex items-center gap-3 group">
-          <div className="transition-transform group-hover:scale-105">
-            <SignalPilotLogo />
+    <>
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* Desktop sidebar — hidden on mobile */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <aside className="sidebar-desktop fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
+        {/* Logo */}
+        <div className="px-5 py-5 border-b border-[var(--color-border)]">
+          <Link href="/dashboard" className="flex items-center gap-3 group">
+            <div className="transition-transform group-hover:scale-105">
+              <SignalPilotLogo />
+            </div>
+            <div>
+              <h1 className="text-[11px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
+                SignalPilot
+              </h1>
+              <p className="text-[9px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mt-0.5">
+                governed infra
+              </p>
+            </div>
+          </Link>
+        </div>
+
+        {/* Command palette hint */}
+        <div className="px-3 pt-4 pb-2">
+          <button
+            className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
+            onClick={() => {
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
+              );
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              className="flex-shrink-0"
+            >
+              <circle
+                cx="5"
+                cy="5"
+                r="3.5"
+                stroke="currentColor"
+                strokeWidth="1"
+              />
+              <path
+                d="M8 8L10.5 10.5"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="flex-1 text-left">search</span>
+            <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[8px] font-mono">
+              ctrl+K
+            </kbd>
+          </button>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-2 space-y-0.5">
+          {nav.map(({ href, label, icon: Icon, shortcut }) => {
+            const active = pathname.startsWith(href);
+            const badge = href === "/sandboxes" ? activeSandboxes : 0;
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={`group flex items-center gap-3 px-3 py-2 text-xs transition-all ${
+                  active
+                    ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                <Icon active={active} />
+                <span className="flex-1 tracking-wide">{label}</span>
+                {badge > 0 ? (
+                  <NavBadge count={badge} />
+                ) : (
+                  <span
+                    className={`text-[9px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}
+                  >
+                    ^{shortcut}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Status footer */}
+        <div className="px-4 py-3 border-t border-[var(--color-border)] space-y-2.5">
+          <Tooltip content="all governance guards are active" position="right">
+            <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] cursor-default">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
+                <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
+              </span>
+              <span className="tracking-[0.15em] uppercase">
+                governance active
+              </span>
+            </div>
+          </Tooltip>
+          {connHealth.total > 0 && (
+            <Tooltip
+              content={`${connHealth.healthy}/${connHealth.total} connections healthy`}
+              position="right"
+            >
+              <Link
+                href="/connections"
+                className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors cursor-pointer"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <ellipse
+                    cx="5"
+                    cy="3"
+                    rx="3.5"
+                    ry="1.5"
+                    stroke="currentColor"
+                    strokeWidth="0.75"
+                    fill="none"
+                  />
+                  <path
+                    d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3"
+                    stroke="currentColor"
+                    strokeWidth="0.75"
+                  />
+                </svg>
+                <span className="tracking-[0.15em] uppercase">
+                  db {connHealth.healthy}/{connHealth.total}
+                </span>
+                {connHealth.healthy < connHealth.total && (
+                  <span className="w-1.5 h-1.5 bg-[var(--color-warning)]" />
+                )}
+              </Link>
+            </Tooltip>
+          )}
+          <Tooltip content="session uptime since page load" position="right">
+            <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)] cursor-default">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <circle
+                  cx="5"
+                  cy="5"
+                  r="4"
+                  stroke="var(--color-border-hover)"
+                  strokeWidth="1"
+                  fill="none"
+                />
+                <path
+                  d="M5 2.5V5L6.5 6.5"
+                  stroke="var(--color-text-dim)"
+                  strokeWidth="0.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="tracking-wider">
+                uptime <UptimeCounter />
+              </span>
+            </div>
+          </Tooltip>
+          {/* System info line */}
+          <div className="separator-subtle" />
+          <div className="flex items-center justify-between">
+            <Tooltip content="signalpilot gateway version" position="right">
+              <div className="flex items-center gap-1.5 cursor-default">
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                  <path
+                    d="M1 4H3L4 2L5 6L6 4H7"
+                    stroke="var(--color-text-dim)"
+                    strokeWidth="0.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">
+                  v0.1.0
+                </span>
+              </div>
+            </Tooltip>
+            <Tooltip content="bring your own firecracker" position="left">
+              <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
+                byof
+              </span>
+            </Tooltip>
           </div>
-          <div>
-            <h1 className="text-[13px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
-              SignalPilot
-            </h1>
-            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mt-0.5">
-              governed infra
-            </p>
+        </div>
+      </aside>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* Mobile top bar — visible only on mobile */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <header className="mobile-topbar fixed top-0 left-0 right-0 h-12 bg-[var(--color-sidebar)] border-b border-[var(--color-border)] flex items-center justify-between px-4 z-50">
+        <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0">
+          <SignalPilotLogoSmall />
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
+              SP
+            </span>
+            {(() => {
+              const currentNav = nav.find((n) => pathname.startsWith(n.href));
+              if (currentNav && currentNav.href !== "/dashboard") {
+                return (
+                  <>
+                    <span className="text-[10px] text-[var(--color-text-dim)]">
+                      /
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] tracking-wider truncate">
+                      {currentNav.label}
+                    </span>
+                  </>
+                );
+              }
+              return null;
+            })()}
           </div>
         </Link>
-      </div>
+        <div className="flex items-center gap-1.5">
+          {/* Connection health compact indicator */}
+          {connHealth.total > 0 && (
+            <span className="flex items-center gap-1 text-[9px] text-[var(--color-text-dim)] tracking-wider mr-1">
+              <span
+                className={`w-1.5 h-1.5 ${connHealth.healthy === connHealth.total ? "bg-[var(--color-success)]" : "bg-[var(--color-warning)]"}`}
+              />
+              {connHealth.healthy}/{connHealth.total}
+            </span>
+          )}
+          {/* Governance status dot */}
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
+            <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
+          </span>
+          {/* Search button — opens command palette */}
+          <button
+            onClick={() => {
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
+              );
+            }}
+            className="flex items-center justify-center w-10 h-10 -mr-1"
+            aria-label="Search"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 14 14"
+              fill="none"
+              className="text-[var(--color-text-dim)]"
+            >
+              <circle
+                cx="6"
+                cy="6"
+                r="4.5"
+                stroke="currentColor"
+                strokeWidth="1"
+              />
+              <path
+                d="M9.5 9.5L12.5 12.5"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+          {/* Hamburger / more menu */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="flex flex-col items-center justify-center w-10 h-10 gap-1"
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+          >
+            <span
+              className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "rotate-45 translate-y-[3px]" : ""}`}
+            />
+            <span
+              className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "opacity-0" : ""}`}
+            />
+            <span
+              className={`block w-4 h-px bg-[var(--color-text)] transition-all duration-200 ${mobileMenuOpen ? "-rotate-45 -translate-y-[3px]" : ""}`}
+            />
+          </button>
+        </div>
+      </header>
 
-      {/* Command palette hint */}
-      <div className="px-3 pt-4 pb-2">
-        <button
-          className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
-          onClick={() => {
-            window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
-          }}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* Mobile slide-out menu overlay */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {mobileMenuOpen && (
+        <div
+          className="mobile-menu-overlay fixed inset-0 z-[60]"
+          onClick={() => setMobileMenuOpen(false)}
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
-            <circle cx="5" cy="5" r="3.5" stroke="currentColor" strokeWidth="1" />
-            <path d="M8 8L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-          </svg>
-          <span className="flex-1 text-left">search</span>
-          <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono">
-            ctrl+K
-          </kbd>
-        </button>
-      </div>
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          {/* Menu panel */}
+          <div
+            className="absolute top-[calc(3rem+env(safe-area-inset-top,0px))] right-0 bottom-0 w-72 bg-[var(--color-sidebar)] border-l border-[var(--color-border)] flex flex-col animate-slide-in-right overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Full nav list */}
+            <nav className="flex-1 px-3 py-4 space-y-0.5">
+              {nav.map(({ href, label, icon: Icon }) => {
+                const active = pathname.startsWith(href);
+                const badge = href === "/sandboxes" ? activeSandboxes : 0;
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`group flex items-center gap-3 px-4 py-3 text-sm transition-all active:bg-[var(--color-bg-hover)] ${
+                      active
+                        ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+                        : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+                    }`}
+                  >
+                    <Icon active={active} />
+                    <span className="flex-1 tracking-wide">{label}</span>
+                    {badge > 0 && <NavBadge count={badge} />}
+                  </Link>
+                );
+              })}
+            </nav>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-2 space-y-0.5">
-        {nav.map(({ href, label, icon: Icon, shortcut }) => {
+            {/* Status footer in mobile menu */}
+            <div className="px-4 py-4 border-t border-[var(--color-border)] space-y-3">
+              <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
+                  <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
+                </span>
+                <span className="tracking-[0.15em] uppercase">
+                  governance active
+                </span>
+              </div>
+              {connHealth.total > 0 && (
+                <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <ellipse
+                      cx="5"
+                      cy="3"
+                      rx="3.5"
+                      ry="1.5"
+                      stroke="currentColor"
+                      strokeWidth="0.75"
+                      fill="none"
+                    />
+                    <path
+                      d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3"
+                      stroke="currentColor"
+                      strokeWidth="0.75"
+                    />
+                  </svg>
+                  <span className="tracking-[0.15em] uppercase">
+                    db {connHealth.healthy}/{connHealth.total}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-3 text-[9px] text-[var(--color-text-dim)]">
+                <span className="tracking-wider">
+                  uptime <UptimeCounter />
+                </span>
+                <span className="ml-auto tracking-wider">v0.1.0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* Mobile bottom tab bar */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <nav className="mobile-bottombar fixed bottom-0 left-0 right-0 h-14 bg-[var(--color-sidebar)] border-t border-[var(--color-border)] flex items-center justify-around z-50 safe-area-bottom">
+        {mobileTabItems.map((idx) => {
+          const { href, label, icon: Icon } = nav[idx];
           const active = pathname.startsWith(href);
-          const badge = href === "/sandboxes" ? activeSandboxes : 0;
+          const badge =
+            href === "/sandboxes"
+              ? activeSandboxes
+              : href === "/tunnels"
+                ? activeTunnels
+                : 0;
           return (
             <Link
               key={href}
               href={href}
-              className={`group flex items-center gap-3 px-3 py-2 text-sm transition-all ${
+              className={`flex flex-col items-center justify-center gap-1 py-1.5 flex-1 relative transition-colors active:bg-[var(--color-bg-hover)] ${
                 active
-                  ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+                  ? "text-[var(--color-text)]"
+                  : "text-[var(--color-text-dim)] active:text-[var(--color-text-muted)]"
               }`}
             >
-              <Icon active={active} />
-              <span className="flex-1 tracking-wide">{label}</span>
-              {badge > 0 ? (
-                <NavBadge count={badge} />
-              ) : (
-                <span className={`text-[11px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}>
-                  ^{shortcut}
-                </span>
+              {active && (
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-5 h-[3px] bg-[var(--color-success)] tab-active-indicator" />
               )}
+              <span
+                className={`relative transition-transform duration-150 ${active ? "scale-110" : ""}`}
+              >
+                <Icon active={active} />
+                {badge > 0 && <MobileNavBadge count={badge} />}
+              </span>
+              <span
+                className={`text-[9px] tracking-[0.1em] uppercase transition-colors duration-150 ${active ? "text-[var(--color-text)]" : ""}`}
+              >
+                {label}
+              </span>
             </Link>
           );
         })}
       </nav>
-
-      {/* Status footer */}
-      <div className="px-4 py-3 border-t border-[var(--color-border)] space-y-2.5">
-        <Tooltip content="all governance guards are active" position="right">
-          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-default">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
-              <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
-            </span>
-            <span className="tracking-[0.15em] uppercase">governance active</span>
-          </div>
-        </Tooltip>
-        {connHealth.total > 0 && (
-          <Tooltip content={`${connHealth.healthy}/${connHealth.total} connections healthy`} position="right">
-            <Link href="/connections" className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors cursor-pointer">
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <ellipse cx="5" cy="3" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
-                <path d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3" stroke="currentColor" strokeWidth="0.75" />
-              </svg>
-              <span className="tracking-[0.15em] uppercase">
-                db {connHealth.healthy}/{connHealth.total}
-              </span>
-              {connHealth.healthy < connHealth.total && (
-                <span className="w-1.5 h-1.5 bg-[var(--color-warning)]" />
-              )}
-            </Link>
-          </Tooltip>
-        )}
-        <Tooltip content="session uptime since page load" position="right">
-          <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)] cursor-default">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <circle cx="5" cy="5" r="4" stroke="var(--color-border-hover)" strokeWidth="1" fill="none" />
-              <path d="M5 2.5V5L6.5 6.5" stroke="var(--color-text-dim)" strokeWidth="0.8" strokeLinecap="round" />
-            </svg>
-            <span className="tracking-wider">uptime <UptimeCounter /></span>
-          </div>
-        </Tooltip>
-        {/* System info line */}
-        <div className="separator-subtle" />
-        <div className="flex items-center justify-between">
-          <Tooltip content="signalpilot gateway version" position="right">
-            <div className="flex items-center gap-1.5 cursor-default">
-              <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                <path d="M1 4H3L4 2L5 6L6 4H7" stroke="var(--color-text-dim)" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                v0.1.0
-              </span>
-            </div>
-          </Tooltip>
-          <Tooltip content="bring your own firecracker" position="left">
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
-              byof
-            </span>
-          </Tooltip>
-        </div>
-      </div>
-    </aside>
+    </>
   );
 }

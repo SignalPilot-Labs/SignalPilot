@@ -610,6 +610,174 @@ async def kill_agent():
 
 
 # ---------------------------------------------------------------------------
+# Parallel Run APIs (proxy to agent orchestrator)
+# ---------------------------------------------------------------------------
+
+class ParallelStartRequest(BaseModel):
+    prompt: str | None = None
+    max_budget_usd: float = 0
+    duration_minutes: float = 0
+    base_branch: str = "main"
+
+
+@app.get("/api/parallel/runs")
+async def list_parallel_runs():
+    """List all parallel run slots from the agent orchestrator."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/parallel/runs")
+            return res.json()
+    except Exception as e:
+        return {"runs": [], "error": str(e)}
+
+
+@app.post("/api/parallel/start")
+async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()):
+    """Start a new parallel agent run. Decrypts credentials and passes to orchestrator."""
+    conn = await _get_db()
+
+    # Read decrypted credentials from settings DB
+    creds = {}
+    for key in ("claude_token", "git_token", "github_repo"):
+        cursor = await conn.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        if row:
+            val = crypto.decrypt(row["value"], MASTER_KEY_PATH) if row["encrypted"] else row["value"]
+            creds[key] = val
+
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/parallel/start",
+                json={
+                    "prompt": body.prompt,
+                    "max_budget_usd": body.max_budget_usd,
+                    "duration_minutes": body.duration_minutes,
+                    "base_branch": body.base_branch,
+                    **creds,
+                },
+            )
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.get("/api/parallel/status")
+async def parallel_status():
+    """Get parallel run system status."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/parallel/status")
+            return res.json()
+    except Exception as e:
+        return {"status": "unreachable", "error": str(e)}
+
+
+@app.get("/api/parallel/runs/{run_id}")
+async def get_parallel_run(run_id: str):
+    """Get status of a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/parallel/runs/{run_id}")
+            if res.status_code == 404:
+                raise HTTPException(status_code=404, detail="Run not found")
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/stop")
+async def stop_parallel_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
+    """Stop a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/parallel/runs/{run_id}/stop",
+                json={"payload": body.payload or "Operator stop"},
+            )
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/kill")
+async def kill_parallel_run(run_id: str):
+    """Kill a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/kill")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/pause")
+async def pause_parallel_run(run_id: str):
+    """Pause a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/pause")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/resume")
+async def resume_parallel_run(run_id: str):
+    """Resume a paused parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/resume")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/inject")
+async def inject_parallel_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
+    """Inject a prompt into a parallel run."""
+    if not body.payload:
+        raise HTTPException(status_code=400, detail="Payload required")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/parallel/runs/{run_id}/inject",
+                json={"payload": body.payload},
+            )
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/unlock")
+async def unlock_parallel_run(run_id: str):
+    """Unlock session for a parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/unlock")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/cleanup")
+async def cleanup_parallel():
+    """Clean up finished parallel run containers."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/cleanup")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+# ---------------------------------------------------------------------------
 # SSE Streaming (polling SQLite instead of pg LISTEN/NOTIFY)
 # ---------------------------------------------------------------------------
 
@@ -676,6 +844,35 @@ async def stream_events(run_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/poll/{run_id}")
+async def poll_events(run_id: str, after_tool: int = 0, after_audit: int = 0):
+    """Polling fallback for environments where SSE doesn't work (e.g. Cloudflare tunnels)."""
+    conn = await _get_db()
+
+    tool_calls = []
+    cursor = await conn.execute(
+        "SELECT * FROM tool_calls WHERE run_id = ? AND id > ? ORDER BY id LIMIT 100",
+        (run_id, after_tool),
+    )
+    rows = await cursor.fetchall()
+    for r in rows:
+        tool_calls.append(_row_to_dict(r))
+
+    audit_events = []
+    cursor = await conn.execute(
+        "SELECT * FROM audit_log WHERE run_id = ? AND id > ? ORDER BY id LIMIT 100",
+        (run_id, after_audit),
+    )
+    rows = await cursor.fetchall()
+    for r in rows:
+        audit_events.append(_row_to_dict(r))
+
+    return {
+        "tool_calls": tool_calls,
+        "audit_events": audit_events,
+    }
 
 
 @app.get("/api/stream/latest")

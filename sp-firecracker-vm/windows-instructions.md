@@ -1,4 +1,5 @@
 # Running Firecracker microVMs on Windows 11 via Docker
+
 **Status:** Verified working
 **Date:** March 31, 2026
 **Test machine:** AMD Ryzen 9 9950X3D, Windows 11 Build 26200, Docker Desktop 27.5.1
@@ -21,12 +22,12 @@ Windows 11
 
 ## Prerequisites
 
-| Requirement | Notes |
-|-------------|-------|
-| Windows 11 (build 22000+) | Required for WSL2 nested virtualization |
+| Requirement                  | Notes                                                                                                |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Windows 11 (build 22000+)    | Required for WSL2 nested virtualization                                                              |
 | CPU with AMD-V or Intel VT-x | All modern CPUs have this. Enabled by default on most builds; consumer laptops may need BIOS toggle. |
-| Docker Desktop installed | Must use WSL2 backend (default since Docker Desktop 4.x) |
-| x86_64 architecture | ARM Windows (Snapdragon) is a separate target — not covered here |
+| Docker Desktop installed     | Must use WSL2 backend (default since Docker Desktop 4.x)                                             |
+| x86_64 architecture          | ARM Windows (Snapdragon) is a separate target — not covered here                                     |
 
 **If Docker Desktop is already running on your machine, prerequisites 1-3 are already met.** Docker Desktop requires WSL2 which requires virtualization support.
 
@@ -74,6 +75,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --device /dev/kvm alpine ls -la /dev/kvm
 ```
 
 Expected output:
+
 ```
 crw-rw----    1 root     109        10, 232 ...  /dev/kvm
 ```
@@ -93,6 +95,7 @@ Set-ExecutionPolicy Bypass -Scope Process
 ```
 
 It will:
+
 - Check Windows version
 - Enable Virtual Machine Platform feature if needed
 - Update WSL2 kernel
@@ -114,6 +117,7 @@ MSYS_NO_PATHCONV=1 docker build -f Dockerfile.test -t sp-firecracker-test .
 Build time: ~2 minutes (downloads Firecracker binary + kernel, builds rootfs).
 
 What the build does:
+
 1. Installs Firecracker v1.10.1 binary + jailer
 2. Downloads a prebuilt Firecracker-compatible Linux kernel from AWS S3
 3. Builds a minimal rootfs directory tree (busybox + Python 3.10)
@@ -127,6 +131,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --device /dev/kvm --privileged sp-firecracker
 ```
 
 Expected output (abbreviated):
+
 ```
 [OK] /dev/kvm found
 [OK] Firecracker: Firecracker v1.10.1
@@ -171,10 +176,10 @@ Kernel: 4.14.174
 
 ## Flags explained
 
-| Flag | Why it's needed |
-|------|----------------|
-| `--device /dev/kvm` | Passes the KVM device from WSL2 host into the container so Firecracker can create VMs |
-| `--privileged` | Needed at runtime so the container can `mount` the ext4 rootfs image to populate it. In production this step is done at build time — see notes below. |
+| Flag                | Why it's needed                                                                                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device /dev/kvm` | Passes the KVM device from WSL2 host into the container so Firecracker can create VMs                                                                 |
+| `--privileged`      | Needed at runtime so the container can `mount` the ext4 rootfs image to populate it. In production this step is done at build time — see notes below. |
 
 ### Reducing `--privileged` in production
 
@@ -220,6 +225,7 @@ The log file must be pre-created before starting Firecracker or it will exit wit
 **Cause:** Nested virtualization not enabled or WSL/Docker not restarted after enabling it.
 
 **Fix:**
+
 1. Verify `.wslconfig` exists and contains `nestedVirtualization=true`
 2. Run `wsl --shutdown` in PowerShell
 3. Fully restart Docker Desktop (right-click tray icon → Quit, then relaunch)
@@ -230,6 +236,7 @@ The log file must be pre-created before starting Firecracker or it will exit wit
 Git Bash on Windows converts Unix paths like `/dev/kvm` to Windows paths like `C:/dev/kvm`, which breaks Docker commands.
 
 **Fix:** Prefix commands with `MSYS_NO_PATHCONV=1`:
+
 ```bash
 MSYS_NO_PATHCONV=1 docker run --device /dev/kvm ...
 ```
@@ -241,12 +248,14 @@ PowerShell's `>` and `echo` operators write UTF-16. WSL silently fails to parse 
 **Symptoms:** `wsl --shutdown` + restart doesn't help, `/dev/kvm` still missing.
 
 **Fix:** Check the file:
+
 ```bash
 cat "C:/Users/<you>/.wslconfig"
 # If you see spaces between every character (e . g . l i k e   t h i s) it's UTF-16
 ```
 
 Recreate it correctly:
+
 ```powershell
 [System.IO.File]::WriteAllText("$env:USERPROFILE\.wslconfig", "[wsl2]`nnestedVirtualization=true`n")
 wsl --shutdown
@@ -258,6 +267,7 @@ wsl --shutdown
 **Cause:** Log file path doesn't exist.
 
 **Fix:** Pre-create the log file before starting Firecracker:
+
 ```python
 open("/tmp/firecracker.log", "w").close()
 subprocess.Popen(["firecracker", "--api-sock", "...", "--log-path", "/tmp/firecracker.log"])
@@ -277,15 +287,15 @@ Some enterprise IT policies block WSL2, Hyper-V, or nested virtualization via Gr
 
 ## Platform support summary
 
-| Platform | Firecracker supported? | Method | Notes |
-|----------|----------------------|--------|-------|
-| **Windows 11** (x86_64) | ✅ Yes | WSL2 nested virtualization | One-time `.wslconfig` setup |
-| **Windows 10** | ⚠️ Maybe | WSL2 nested virt (build 19041+) | Less tested, older WSL2 kernels may not support nested KVM |
-| **Windows ARM** (Snapdragon) | ❌ No | — | WSL2 ARM kernel doesn't expose KVM. Use container fallback. |
-| **Linux** (bare metal) | ✅ Yes | Native KVM | `--device /dev/kvm`, just works |
-| **Linux** (VM with nested virt) | ✅ Yes | Nested KVM | Enable nested virt on host hypervisor |
-| **macOS Apple Silicon** (M1+) | ⚠️ Experimental | Docker Desktop nested virt | macOS 13+, Docker Desktop 4.30+. Less proven. |
-| **macOS Intel** | ⚠️ Unlikely | — | Dying platform, not worth optimizing |
+| Platform                        | Firecracker supported? | Method                          | Notes                                                       |
+| ------------------------------- | ---------------------- | ------------------------------- | ----------------------------------------------------------- |
+| **Windows 11** (x86_64)         | ✅ Yes                 | WSL2 nested virtualization      | One-time `.wslconfig` setup                                 |
+| **Windows 10**                  | ⚠️ Maybe               | WSL2 nested virt (build 19041+) | Less tested, older WSL2 kernels may not support nested KVM  |
+| **Windows ARM** (Snapdragon)    | ❌ No                  | —                               | WSL2 ARM kernel doesn't expose KVM. Use container fallback. |
+| **Linux** (bare metal)          | ✅ Yes                 | Native KVM                      | `--device /dev/kvm`, just works                             |
+| **Linux** (VM with nested virt) | ✅ Yes                 | Nested KVM                      | Enable nested virt on host hypervisor                       |
+| **macOS Apple Silicon** (M1+)   | ⚠️ Experimental        | Docker Desktop nested virt      | macOS 13+, Docker Desktop 4.30+. Less proven.               |
+| **macOS Intel**                 | ⚠️ Unlikely            | —                               | Dying platform, not worth optimizing                        |
 
 ---
 

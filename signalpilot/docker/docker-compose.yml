@@ -17,9 +17,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - sp-data:/data
-    command: ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]
+    command:
+      ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]
     depends_on:
       sandbox:
         condition: service_started

@@ -16,14 +16,26 @@ export function Breadcrumb({
       {items.map((item, i) => (
         <span key={i} className="flex items-center gap-1.5">
           {i > 0 && (
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" className="text-[var(--color-text-dim)]">
-              <path d="M3 2L5 4L3 6" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+            <svg
+              width="8"
+              height="8"
+              viewBox="0 0 8 8"
+              fill="none"
+              className="text-[var(--color-text-dim)]"
+            >
+              <path
+                d="M3 2L5 4L3 6"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
           )}
           {item.href ? (
             <Link
               href={item.href}
-              className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors hover-underline"
+              className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] active:text-[var(--color-text)] transition-colors hover-underline py-1 -my-1"
             >
               {item.label}
             </Link>

@@ -37,7 +37,13 @@ export interface SSHTunnelConfig {
 
 export interface SSLConfig {
   enabled: boolean;
-  mode: "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
+  mode:
+    | "disable"
+    | "allow"
+    | "prefer"
+    | "require"
+    | "verify-ca"
+    | "verify-full";
   ca_cert: string | null;
   client_cert: string | null;
   client_key: string | null;
@@ -82,6 +88,18 @@ export interface ConnectionInfo {
   // Schema filtering
   schema_filter_include: string[] | null;
   schema_filter_exclude: string[] | null;
+}
+
+export interface TunnelInfo {
+  id: string;
+  label: string;
+  local_port: number;
+  public_url: string | null;
+  status: "starting" | "running" | "stopped" | "error";
+  error_message: string | null;
+  created_at: number;
+  started_at: number | null;
+  pid: number | null;
 }
 
 export interface SandboxInfo {

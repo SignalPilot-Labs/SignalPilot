@@ -5,10 +5,13 @@ description: "Use when building new database connectors, modifying the postgres 
 # Connector Development
 
 ## Current Connectors
+
 - **PostgreSQL** (`gateway/connectors/postgres.py`) — async via asyncpg, readonly transactions
 
 ## Connector Interface
+
 Each connector must implement:
+
 ```python
 async def execute_query(
     connection_string: str,
@@ -20,6 +23,7 @@ async def execute_query(
 ```
 
 ## QueryResult Shape
+
 ```python
 @dataclass
 class QueryResult:
@@ -31,6 +35,7 @@ class QueryResult:
 ```
 
 ## Adding a New Connector
+
 1. Create `gateway/connectors/{name}.py`
 2. Implement the `execute_query` interface
 3. Register in the connector registry
@@ -38,11 +43,13 @@ class QueryResult:
 5. Write integration tests using test databases
 
 ## Postgres Connector Issues to Fix
+
 - Creates new pool per query — should use persistent pool
 - No connection timeout configuration
 - No query timeout (relies on DB-level timeouts)
 - Connection string validation is minimal
 
 ## Test Databases Available
+
 - Enterprise OLTP: `postgresql://enterprise_admin:Ent3rpr1se!S3cur3@host.docker.internal:5601/enterprise_prod`
 - Analytics Warehouse: `postgresql://warehouse_admin:W4reh0use!An4lyt1cs@host.docker.internal:5602/analytics_warehouse`

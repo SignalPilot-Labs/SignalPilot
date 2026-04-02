@@ -31,9 +31,7 @@ export function PageTransition({ children }: { children: React.ReactNode }) {
   return (
     <div
       className={`transition-all duration-200 ease-out ${
-        transitioning
-          ? "opacity-0 translate-y-1"
-          : "opacity-100 translate-y-0"
+        transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"
       }`}
     >
       {displayChildren}

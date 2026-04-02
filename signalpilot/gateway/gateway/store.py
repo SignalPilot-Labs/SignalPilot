@@ -591,8 +591,8 @@ async def read_audit(
                 if event_type and entry.event_type != event_type:
                     continue
                 entries.append(entry)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Skipping malformed audit log entry at line %d: %s", lines_scanned, e)
 
     # Most recent first
     entries.sort(key=lambda e: e.timestamp, reverse=True)
@@ -668,5 +668,5 @@ def apply_endorsement_filter(name: str, schema: dict) -> dict:
 # Load endorsements on module import
 try:
     _load_endorsements()
-except Exception:
-    pass
+except Exception as e:
+    logger.warning("Failed to load endorsements on startup: %s", e)

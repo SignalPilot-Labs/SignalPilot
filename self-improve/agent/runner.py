@@ -245,8 +245,8 @@ async def _run_loop(
                             "cache_creation_input_tokens": message.usage.get("cache_creation_input_tokens", 0),
                             "cache_read_input_tokens": message.usage.get("cache_read_input_tokens", 0),
                         })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[agent] Failed to log token usage: {e}")
 
             # --- RateLimitEvent ---
             elif isinstance(message, RateLimitEvent):
@@ -288,8 +288,8 @@ async def _run_loop(
                 if message.session_id:
                     try:
                         await db.save_session_id(run_id, message.session_id)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[agent] Failed to save session ID: {e}")
                 if message.total_cost_usd:
                     total_cost = message.total_cost_usd
                 if message.usage:

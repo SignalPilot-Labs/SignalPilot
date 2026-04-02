@@ -6,9 +6,12 @@ Feature #9 from the feature table — P0 for demos and local dev.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .base import BaseConnector
+
+logger = logging.getLogger(__name__)
 
 try:
     import duckdb
@@ -138,8 +141,8 @@ class DuckDBConnector(BaseConnector):
             pk_result = self._conn.execute(pk_sql)
             for row in pk_result.fetchall():
                 pk_cols.add(f"{row[0]}.{row[1]}.{row[2]}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("DuckDB primary key introspection failed: %s", e)
 
         # Foreign keys
         fk_sql = """
@@ -171,8 +174,8 @@ class DuckDBConnector(BaseConnector):
                     "references_table": row[4],
                     "references_column": row[5],
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("DuckDB foreign key introspection failed: %s", e)
 
         # Row counts — duckdb_tables().estimated_size IS the estimated row count
         row_counts: dict[str, int] = {}
@@ -189,8 +192,8 @@ class DuckDBConnector(BaseConnector):
                 row_counts[key] = row[2] or 0
                 if row[3]:
                     table_comments[key] = row[3]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("DuckDB row count / table comment introspection failed: %s", e)
 
         # Column comments via duckdb_columns()
         col_comments: dict[str, str] = {}
@@ -204,8 +207,8 @@ class DuckDBConnector(BaseConnector):
             for row in cc_result.fetchall():
                 col_key = f"{row[0]}.{row[1]}.{row[2]}"
                 col_comments[col_key] = row[3]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("DuckDB column comment introspection failed: %s", e)
 
         schema: dict[str, Any] = {}
         for row in all_cols:

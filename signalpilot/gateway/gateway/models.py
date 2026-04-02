@@ -100,8 +100,12 @@ class ConnectionCreate(BaseModel):
     http_path: str | None = Field(default=None, max_length=512)  # SQL endpoint path
     access_token: str | None = Field(default=None, max_length=1024)  # PAT token
     catalog: str | None = Field(default=None, max_length=128)  # Unity Catalog
+    # ─── Snowflake key-pair auth ───────────────────────────────────
+    private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
+    private_key_passphrase: str | None = Field(default=None, max_length=1024)
     # ─── Metadata ───────────────────────────────────────────────────
     description: str = Field(default="", max_length=500)
+    tags: list[str] = Field(default_factory=list)  # organizational tags
 
 
 class ConnectionUpdate(BaseModel):
@@ -126,7 +130,10 @@ class ConnectionUpdate(BaseModel):
     http_path: str | None = Field(default=None, max_length=512)
     access_token: str | None = Field(default=None, max_length=1024)
     catalog: str | None = Field(default=None, max_length=128)
+    private_key: str | None = Field(default=None, max_length=16384)
+    private_key_passphrase: str | None = Field(default=None, max_length=1024)
     description: str | None = Field(default=None, max_length=500)
+    tags: list[str] | None = None
 
 
 class ConnectionInfo(BaseModel):
@@ -153,6 +160,7 @@ class ConnectionInfo(BaseModel):
     catalog: str | None = None
     # Metadata
     description: str = ""
+    tags: list[str] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     last_used: float | None = None
     status: str = "unknown"  # healthy | error | unknown

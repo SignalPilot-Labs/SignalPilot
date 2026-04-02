@@ -65,6 +65,7 @@ export interface ConnectionInfo {
   catalog: string | null;
   // Meta
   description: string;
+  tags: string[];
   created_at: number;
   last_used: number | null;
   status: string;

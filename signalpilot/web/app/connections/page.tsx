@@ -355,6 +355,13 @@ interface FormState {
   ssh_password: string;
   ssh_private_key: string;
   ssh_key_passphrase: string;
+  // Snowflake key-pair auth
+  snowflake_auth_method: "password" | "key_pair";
+  sf_private_key: string;
+  sf_private_key_passphrase: string;
+  // Tags
+  tags: string[];
+  tagInput: string;
 }
 
 const defaultForm: FormState = {
@@ -367,6 +374,8 @@ const defaultForm: FormState = {
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
+  snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "",
+  tags: [], tagInput: "",
 };
 
 function buildConnectionPreview(form: FormState): string {
@@ -394,6 +403,48 @@ function buildConnectionPreview(form: FormState): string {
     default:
       return "";
   }
+}
+
+/** Parse a connection URL into form fields (URL → fields sync). */
+function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
+  try {
+    if (dbType === "postgres" || dbType === "mysql" || dbType === "redshift" || dbType === "clickhouse") {
+      const parsed = new URL(url.replace(/^(postgresql|redshift|clickhouse|mysql\+pymysql):/, "http:"));
+      return {
+        host: parsed.hostname || "",
+        port: parsed.port || String(DB_CONFIGS[dbType].defaultPort),
+        database: parsed.pathname.replace(/^\//, "") || "",
+        username: decodeURIComponent(parsed.username || ""),
+        password: decodeURIComponent(parsed.password || ""),
+      };
+    }
+    if (dbType === "snowflake") {
+      // snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
+      const parsed = new URL(url.replace(/^snowflake:/, "http:"));
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      return {
+        account: parsed.hostname || "",
+        username: decodeURIComponent(parsed.username || ""),
+        password: decodeURIComponent(parsed.password || ""),
+        database: pathParts[0] || "",
+        schema_name: pathParts[1] || "",
+        warehouse: parsed.searchParams.get("warehouse") || "",
+        role: parsed.searchParams.get("role") || "",
+      };
+    }
+    if (dbType === "databricks") {
+      // databricks://token@host/http_path?catalog=CAT
+      const parsed = new URL(url.replace(/^databricks:/, "http:"));
+      return {
+        host: parsed.hostname || "",
+        access_token: decodeURIComponent(parsed.username || ""),
+        http_path: parsed.pathname.replace(/^\//, "") || "",
+        catalog: parsed.searchParams.get("catalog") || "",
+        schema_name: parsed.searchParams.get("schema") || "",
+      };
+    }
+  } catch { /* parse failed — ignore */ }
+  return {};
 }
 
 function buildCreatePayload(form: FormState): Record<string, unknown> {
@@ -431,6 +482,17 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
   if (config.fields.includes("http_path")) payload.http_path = form.http_path;
   if (config.fields.includes("access_token")) payload.access_token = form.access_token;
   if (config.fields.includes("catalog")) payload.catalog = form.catalog;
+
+  // Tags
+  if (form.tags.length > 0) {
+    payload.tags = form.tags;
+  }
+
+  // Snowflake key-pair auth
+  if (form.db_type === "snowflake" && form.snowflake_auth_method === "key_pair") {
+    payload.private_key = form.sf_private_key;
+    if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
+  }
 
   // SSL
   if (form.ssl_enabled && config.supportsSSL) {
@@ -493,7 +555,41 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
       <>
         <FormInput label="account identifier" value={form.account} onChange={(v) => setForm({ ...form, account: v })} placeholder="org-account" hint="e.g., xy12345.us-east-1" required />
         <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="ANALYTICS_USER" required />
-        <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required />
+        <div className="col-span-2 mb-1">
+          <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
+          <div className="flex gap-2">
+            {(["password", "key_pair"] as const).map((method) => (
+              <button
+                key={method}
+                type="button"
+                onClick={() => setForm({ ...form, snowflake_auth_method: method })}
+                className={`px-2.5 py-1 text-[10px] tracking-wider border transition-all ${
+                  form.snowflake_auth_method === method
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {method === "password" ? "password" : "key pair (RSA)"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {form.snowflake_auth_method === "password" ? (
+          <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required className="col-span-2" />
+        ) : (
+          <>
+            <FormTextArea
+              label="private key (PEM)"
+              value={form.sf_private_key}
+              onChange={(v) => setForm({ ...form, sf_private_key: v })}
+              placeholder="-----BEGIN ENCRYPTED PRIVATE KEY-----"
+              hint="RSA private key for Snowflake key-pair authentication"
+              rows={4}
+              className="col-span-2"
+            />
+            <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
+          </>
+        )}
         <FormInput label="warehouse" value={form.warehouse} onChange={(v) => setForm({ ...form, warehouse: v })} placeholder="COMPUTE_WH" hint="optional — default warehouse" />
         <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="PROD_DB" hint="optional — default database" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="PUBLIC" hint="optional — default schema" />
@@ -677,6 +773,7 @@ export default function ConnectionsPage() {
   const [endorsements, setEndorsements] = useState<Record<string, { endorsed: string[]; hidden: string[]; mode: "all" | "endorsed_only" }>>({});
   const [form, setForm] = useState<FormState>({ ...defaultForm });
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [filterTag, setFilterTag] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     getConnections().then(setConnections).catch(() => {});
@@ -794,6 +891,7 @@ export default function ConnectionsPage() {
       ssh_port: String(conn.ssh_tunnel?.port || 22),
       ssh_username: conn.ssh_tunnel?.username || "",
       ssh_auth_method: conn.ssh_tunnel?.auth_method || "password",
+      tags: conn.tags || [],
     });
     setEditingConnection(conn.name);
     setShowForm(true);
@@ -970,14 +1068,57 @@ export default function ConnectionsPage() {
               <FormInput label="description" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Production analytics DB" />
             </div>
 
-            {/* Connection mode toggle (fields vs URL) */}
+            {/* Tags */}
+            <div className="mb-4">
+              <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">tags</label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {form.tags.map((tag) => (
+                  <span key={tag} className="flex items-center gap-1 px-2 py-0.5 text-[9px] bg-[var(--color-bg-hover)] border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                    {tag}
+                    <button type="button" onClick={() => setForm({ ...form, tags: form.tags.filter(t => t !== tag) })} className="text-[var(--color-text-dim)] hover:text-[var(--color-error)] ml-0.5">&times;</button>
+                  </span>
+                ))}
+                <input
+                  type="text"
+                  value={form.tagInput}
+                  onChange={(e) => setForm({ ...form, tagInput: e.target.value })}
+                  onKeyDown={(e) => {
+                    if ((e.key === "Enter" || e.key === ",") && form.tagInput.trim()) {
+                      e.preventDefault();
+                      const tag = form.tagInput.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+                      if (tag && !form.tags.includes(tag)) {
+                        setForm({ ...form, tags: [...form.tags, tag], tagInput: "" });
+                      } else {
+                        setForm({ ...form, tagInput: "" });
+                      }
+                    }
+                  }}
+                  placeholder={form.tags.length === 0 ? "prod, analytics, team-data..." : "add tag..."}
+                  className="flex-1 min-w-[100px] px-2 py-1 text-[10px] bg-transparent border-none outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] tracking-wider"
+                />
+              </div>
+              <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">press enter or comma to add — organize connections by environment, team, or purpose</p>
+            </div>
+
+            {/* Connection mode toggle (fields vs URL) — bidirectional sync */}
             {config.connectionModes.length > 1 && (
               <div className="flex items-center gap-3 mb-4">
                 <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">connect via:</span>
                 {config.connectionModes.map((mode) => (
                   <button
                     key={mode}
-                    onClick={() => setForm({ ...form, connectionMode: mode })}
+                    onClick={() => {
+                      if (mode === form.connectionMode) return;
+                      if (mode === "url") {
+                        // Fields → URL: build connection string from current fields
+                        const preview = buildConnectionPreview({ ...form, connectionMode: "fields" });
+                        setForm({ ...form, connectionMode: "url", connection_string: preview.replace(":****@", `:${form.password || ""}@`) });
+                      } else {
+                        // URL → Fields: parse connection string into fields
+                        const parsed = parseConnectionUrl(form.connection_string, form.db_type);
+                        setForm({ ...form, connectionMode: "fields", ...parsed });
+                      }
+                    }}
                     className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] tracking-wider border transition-all ${
                       form.connectionMode === mode
                         ? "border-[var(--color-text)] text-[var(--color-text)]"
@@ -1072,7 +1213,33 @@ export default function ConnectionsPage() {
         />
       ) : (
         <div className="space-y-2">
-          {connections.map((conn) => {
+          {/* Tag filter bar */}
+          {(() => {
+            const allTags = [...new Set(connections.flatMap(c => c.tags || []))].sort();
+            if (allTags.length === 0) return null;
+            return (
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[9px] text-[var(--color-text-dim)] tracking-wider">filter:</span>
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => setFilterTag(filterTag === tag ? null : tag)}
+                    className={`px-2 py-0.5 text-[9px] tracking-wider border transition-all ${
+                      filterTag === tag
+                        ? "border-blue-500 text-blue-400 bg-blue-500/10"
+                        : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-blue-500/50 hover:text-blue-400"
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+                {filterTag && (
+                  <button onClick={() => setFilterTag(null)} className="text-[9px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider ml-1">clear</button>
+                )}
+              </div>
+            );
+          })()}
+          {connections.filter(c => !filterTag || (c.tags || []).includes(filterTag)).map((conn) => {
             const health = healthData[conn.name];
             const isExpanded = expandedConn === conn.name;
             const tables = schemaData[conn.name]?.tables;
@@ -1121,6 +1288,9 @@ export default function ConnectionsPage() {
                       {conn.ssh_tunnel?.enabled && (
                         <span className="text-[9px] px-1 py-0.5 border border-purple-500/30 text-purple-400 tracking-wider">ssh</span>
                       )}
+                      {conn.tags?.map((tag) => (
+                        <span key={tag} className="text-[9px] px-1 py-0.5 border border-blue-500/30 text-blue-400 tracking-wider">{tag}</span>
+                      ))}
                       {health && (
                         <span className={`text-[10px] tracking-wider ${
                           health.status === "healthy" ? "text-[var(--color-success)]" :

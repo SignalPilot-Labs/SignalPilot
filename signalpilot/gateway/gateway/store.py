@@ -247,6 +247,7 @@ def create_connection(conn: ConnectionCreate) -> ConnectionInfo:
         http_path=conn.http_path,
         catalog=conn.catalog,
         description=conn.description,
+        tags=conn.tags,
         created_at=time.time(),
     )
 
@@ -286,7 +287,7 @@ def update_connection(name: str, update: ConnectionUpdate) -> ConnectionInfo | N
     update_fields = update.model_dump(exclude_none=True)
 
     # Separate credential fields from metadata fields
-    credential_fields = {"password", "connection_string", "credentials_json", "access_token"}
+    credential_fields = {"password", "connection_string", "credentials_json", "access_token", "private_key", "private_key_passphrase"}
     meta_updates = {k: v for k, v in update_fields.items() if k not in credential_fields}
 
     # Update metadata fields in connection info
@@ -423,6 +424,10 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
         extras["role"] = conn.role
         extras["username"] = conn.username
         extras["password"] = conn.password
+        if conn.private_key:
+            extras["private_key"] = conn.private_key
+        if conn.private_key_passphrase:
+            extras["private_key_passphrase"] = conn.private_key_passphrase
     # Databricks structured params
     if conn.db_type == DBType.databricks:
         extras["http_path"] = conn.http_path

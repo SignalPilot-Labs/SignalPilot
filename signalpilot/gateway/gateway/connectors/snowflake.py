@@ -28,6 +28,23 @@ class SnowflakeConnector(BaseConnector):
         """Store structured credential data for connection."""
         self._credential_extras = extras
 
+    def _load_private_key(self, key_pem: str, passphrase: str | None = None) -> bytes:
+        """Load a PEM-encoded private key and return DER bytes for Snowflake key-pair auth."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.backends import default_backend
+
+        pwd = passphrase.encode() if passphrase else None
+        private_key = serialization.load_pem_private_key(
+            key_pem.encode(),
+            password=pwd,
+            backend=default_backend(),
+        )
+        return private_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+
     async def connect(self, connection_string: str) -> None:
         if not HAS_SNOWFLAKE:
             raise RuntimeError(
@@ -39,7 +56,8 @@ class SnowflakeConnector(BaseConnector):
 
         # Merge in credential_extras (takes precedence — they have the actual secrets)
         if self._credential_extras:
-            for key in ("account", "username", "password", "warehouse", "schema_name", "role"):
+            for key in ("account", "username", "password", "warehouse", "schema_name", "role",
+                        "private_key", "private_key_passphrase"):
                 val = self._credential_extras.get(key)
                 if val:
                     # Map schema_name -> schema for snowflake-connector
@@ -51,10 +69,23 @@ class SnowflakeConnector(BaseConnector):
         connect_args = {
             "account": params.get("account", ""),
             "user": params.get("user", ""),
-            "password": params.get("password", ""),
             "login_timeout": 15,
             "network_timeout": 30,
         }
+
+        # Key-pair auth takes precedence over password auth (HEX pattern)
+        if params.get("private_key"):
+            try:
+                pk_bytes = self._load_private_key(
+                    params["private_key"],
+                    params.get("private_key_passphrase"),
+                )
+                connect_args["private_key"] = pk_bytes
+            except Exception as e:
+                raise RuntimeError(f"Invalid private key: {e}") from e
+        elif params.get("password"):
+            connect_args["password"] = params["password"]
+
         if params.get("database"):
             connect_args["database"] = params["database"]
         if params.get("warehouse"):

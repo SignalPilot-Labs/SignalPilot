@@ -6,6 +6,7 @@ Uses PyMySQL for synchronous operations wrapped in async context.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from .base import BaseConnector
@@ -21,29 +22,30 @@ except ImportError:
 
 class MySQLConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._conn: pymysql.Connection | None = None
         self._connect_kwargs: dict = {}
         self._connect_params: dict = {}
-        self._ssl_config: dict | None = None
-        self._temp_files: list[str] = []
-        self._connection_timeout: int = 10
         self._read_timeout: int = 30
         self._write_timeout: int = 30
+        self._query_timeout: int = 30
         self._iam_auth: bool = False
         self._iam_region: str = "us-east-1"
         self._iam_access_key: str | None = None
         self._iam_secret_key: str | None = None
 
-    def set_ssl_config(self, ssl_config: dict) -> None:
-        """Set SSL configuration for the connection."""
-        self._ssl_config = ssl_config
+    # ─── Identifier quoting ───────────────────────────────────────────
+
+    @property
+    def _identifier_quote(self) -> str:
+        return '`'
+
+    # ─── Credential extras ────────────────────────────────────────────
 
     def set_credential_extras(self, extras: dict) -> None:
         """Extract SSL config, IAM auth, and timeout settings from credential extras."""
-        if extras.get("ssl_config"):
-            self.set_ssl_config(extras["ssl_config"])
-        if extras.get("connection_timeout"):
-            self._connection_timeout = extras["connection_timeout"]
+        super().set_credential_extras(extras)
+        # Map query_timeout to read_timeout for pymysql
         if extras.get("query_timeout"):
             self._read_timeout = extras["query_timeout"]
         if extras.get("auth_method") == "iam":
@@ -52,22 +54,11 @@ class MySQLConnector(BaseConnector):
             self._iam_access_key = extras.get("aws_access_key_id")
             self._iam_secret_key = extras.get("aws_secret_access_key")
 
-    def _generate_iam_token(self, host: str, port: int, username: str) -> str:
-        """Generate a short-lived RDS IAM auth token (valid 15 minutes)."""
-        try:
-            import boto3
-        except ImportError:
-            raise RuntimeError("boto3 not installed. Run: pip install boto3")
+    def set_ssl_config(self, ssl_config: dict) -> None:
+        """Set SSL configuration for the connection."""
+        self._ssl_config = ssl_config
 
-        kwargs: dict[str, Any] = {"region_name": self._iam_region}
-        if self._iam_access_key and self._iam_secret_key:
-            kwargs["aws_access_key_id"] = self._iam_access_key
-            kwargs["aws_secret_access_key"] = self._iam_secret_key
-
-        client = boto3.client("rds", **kwargs)
-        return client.generate_db_auth_token(
-            DBHostname=host, Port=port, DBUsername=username, Region=self._iam_region
-        )
+    # ─── Connect ──────────────────────────────────────────────────────
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PYMYSQL:
@@ -82,7 +73,14 @@ class MySQLConnector(BaseConnector):
             host = params.get("host", "localhost")
             port = int(params.get("port", 3306))
             user = params.get("user", "root")
-            password = self._generate_iam_token(host, port, user)
+            password = self._generate_rds_iam_token(
+                region=self._iam_region,
+                host=host,
+                port=port,
+                username=user,
+                access_key=self._iam_access_key,
+                secret_key=self._iam_secret_key,
+            )
             # IAM auth requires SSL
             if not self._ssl_config:
                 self._ssl_config = {"enabled": True, "mode": "require"}
@@ -104,34 +102,14 @@ class MySQLConnector(BaseConnector):
         # SSL support — pymysql uses ssl dict with ca/cert/key paths or content
         if self._ssl_config and self._ssl_config.get("enabled"):
             import ssl as ssl_module
-            import tempfile
-            import os
 
             ssl_ctx = ssl_module.create_default_context()
 
-            # Write PEM content to temp files if provided as strings
-            ssl_dict: dict = {}
-            if self._ssl_config.get("ca_cert"):
-                ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                ca_file.write(self._ssl_config["ca_cert"].encode())
-                ca_file.close()
-                ssl_dict["ca"] = ca_file.name
-                self._temp_files.append(ca_file.name)
-            if self._ssl_config.get("client_cert"):
-                cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                cert_file.write(self._ssl_config["client_cert"].encode())
-                cert_file.close()
-                ssl_dict["cert"] = cert_file.name
-                self._temp_files.append(cert_file.name)
-            if self._ssl_config.get("client_key"):
-                key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                key_file.write(self._ssl_config["client_key"].encode())
-                key_file.close()
-                ssl_dict["key"] = key_file.name
-                self._temp_files.append(key_file.name)
+            # Write PEM content to temp files using base class helper
+            ssl_paths = self._write_ssl_files()
 
-            if ssl_dict:
-                connect_kwargs["ssl"] = ssl_dict
+            if ssl_paths:
+                connect_kwargs["ssl"] = ssl_paths
             else:
                 # SSL enabled but no certs — enforce SSL with no cert verification
                 connect_kwargs["ssl"] = {"check_hostname": False}
@@ -174,6 +152,8 @@ class MySQLConnector(BaseConnector):
             "database": parsed.path.lstrip("/") if parsed.path else "",
         }
 
+    # ─── Execute ──────────────────────────────────────────────────────
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
@@ -189,16 +169,13 @@ class MySQLConnector(BaseConnector):
                 rows = cursor.fetchall()
                 return list(rows) if rows else []
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"MySQL query timed out after {effective_timeout}s")
+            result = await self._run_in_thread(_run, effective_timeout, label="MySQL")
         except pymysql.Error as e:
             raise RuntimeError(f"MySQL query error: {e}") from e
+        return result
+
+    # ─── Schema ───────────────────────────────────────────────────────
 
     async def get_schema(self) -> dict[str, Any]:
         if self._conn is None:
@@ -250,7 +227,6 @@ class MySQLConnector(BaseConnector):
         """
         # PyMySQL is not thread-safe for concurrent queries on the same connection,
         # but we can batch queries to reduce round trips
-        import asyncio
 
         def _fetch(query: str) -> list:
             try:
@@ -270,10 +246,7 @@ class MySQLConnector(BaseConnector):
             )
 
         # Run the synchronous queries in a thread pool to avoid blocking the event loop
-        loop = asyncio.get_event_loop()
-        rows, fk_rows, idx_rows = await loop.run_in_executor(
-            None, _fetch_all_sequential
-        )
+        rows, fk_rows, idx_rows = await asyncio.to_thread(_fetch_all_sequential)
 
         # Build cardinality map from the combined index query
         cardinality: dict[str, int] = {}
@@ -344,6 +317,8 @@ class MySQLConnector(BaseConnector):
             schema[key]["columns"].append(col_entry)
         return schema
 
+    # ─── Sample values ────────────────────────────────────────────────
+
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         if self._conn is None or not columns:
@@ -356,13 +331,14 @@ class MySQLConnector(BaseConnector):
                 rows = cursor.fetchall()
             return self._parse_sample_union_result(rows)
         except Exception:
-            # Fallback to per-column queries
+            # Fallback to per-column queries (uses _quote_table to prevent SQL injection)
+            safe_table = self._quote_table(table)
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
                     with self._conn.cursor() as cursor:
                         cursor.execute(
-                            f"SELECT DISTINCT `{col}` FROM {table} WHERE `{col}` IS NOT NULL LIMIT {limit}"
+                            f"SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}"
                         )
                         rows = cursor.fetchall()
                         values = [str(r[col]) for r in rows if r[col] is not None]
@@ -371,6 +347,8 @@ class MySQLConnector(BaseConnector):
                 except Exception:
                     continue
             return result
+
+    # ─── Health check ─────────────────────────────────────────────────
 
     async def health_check(self) -> bool:
         if self._conn is None:
@@ -382,6 +360,8 @@ class MySQLConnector(BaseConnector):
             return True
         except Exception:
             return False
+
+    # ─── Connection management ────────────────────────────────────────
 
     def _ensure_connected(self) -> None:
         """Ensure connection is alive, reconnect if needed."""
@@ -412,11 +392,4 @@ class MySQLConnector(BaseConnector):
         if self._conn:
             self._conn.close()
             self._conn = None
-        # Cleanup temp SSL cert files
-        import os
-        for f in self._temp_files:
-            try:
-                os.unlink(f)
-            except OSError:
-                pass
-        self._temp_files.clear()
+        self._cleanup_temp_files()

@@ -10,8 +10,13 @@ from .base import BaseConnector
 
 class SQLiteConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._conn: sqlite3.Connection | None = None
         self._db_path: str = ""
+
+    @property
+    def _identifier_quote(self) -> str:
+        return '['
 
     async def connect(self, connection_string: str) -> None:
         # connection_string is the file path (or :memory:)
@@ -146,10 +151,12 @@ class SQLiteConnector(BaseConnector):
         except Exception:
             # Fallback to per-column queries
             result: dict[str, list] = {}
+            safe_table = self._quote_table(table)
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     cursor = self._conn.execute(
-                        f'SELECT DISTINCT [{col}] FROM [{table}] WHERE [{col}] IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                     )
                     values = [str(row[0]) for row in cursor.fetchall()]
                     if values:

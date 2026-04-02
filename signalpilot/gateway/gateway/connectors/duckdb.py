@@ -20,16 +20,17 @@ except ImportError:
 
 class DuckDBConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_path: str = ""
         self._credential_extras: dict = {}
-        self._query_timeout: int | None = None
 
     def set_credential_extras(self, extras: dict) -> None:
         """Store credential extras — primarily for MotherDuck token auth."""
+        super().set_credential_extras(extras)
         self._credential_extras = extras
-        if extras.get("query_timeout"):
-            self._query_timeout = extras["query_timeout"]
+        if extras.get("motherduck_token"):
+            self._credential_extras["motherduck_token"] = extras["motherduck_token"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_DUCKDB:
@@ -244,10 +245,12 @@ class DuckDBConnector(BaseConnector):
         except Exception:
             # Fallback to per-column queries
             result: dict[str, list] = {}
+            safe_table = self._quote_table(table)
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     r = self._conn.execute(
-                        f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                     )
                     values = [str(row[0]) for row in r.fetchall()]
                     if values:

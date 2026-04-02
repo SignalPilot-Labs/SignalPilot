@@ -16,10 +16,8 @@ except ImportError:
 
 class PostgresConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._pool = None
-        self._ssl_config: dict | None = None
-        self._temp_files: list[str] = []
-        self._connection_timeout: int = 15
         self._command_timeout: int = 30
         self._pool_min_size: int = 1
         self._pool_max_size: int = 5
@@ -28,16 +26,8 @@ class PostgresConnector(BaseConnector):
         self._iam_access_key: str | None = None
         self._iam_secret_key: str | None = None
 
-    def set_ssl_config(self, ssl_config: dict) -> None:
-        """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
-        self._ssl_config = ssl_config
-
-    def set_credential_extras(self, extras: dict) -> None:
-        """Extract SSL config, IAM auth, and timeout settings from credential extras."""
-        if extras.get("ssl_config"):
-            self.set_ssl_config(extras["ssl_config"])
-        if extras.get("connection_timeout"):
-            self._connection_timeout = extras["connection_timeout"]
+    def _set_connector_specific_extras(self, extras: dict) -> None:
+        """Handle postgres-specific extras: pool sizes, IAM auth, command timeout."""
         if extras.get("query_timeout"):
             self._command_timeout = extras["query_timeout"]
         if extras.get("pool_min_size"):
@@ -50,23 +40,6 @@ class PostgresConnector(BaseConnector):
             self._iam_access_key = extras.get("aws_access_key_id")
             self._iam_secret_key = extras.get("aws_secret_access_key")
 
-    def _generate_iam_token(self, host: str, port: int, username: str) -> str:
-        """Generate a short-lived RDS IAM auth token (valid 15 minutes)."""
-        try:
-            import boto3
-        except ImportError:
-            raise RuntimeError("boto3 not installed. Run: pip install boto3")
-
-        kwargs: dict[str, Any] = {"region_name": self._iam_region}
-        if self._iam_access_key and self._iam_secret_key:
-            kwargs["aws_access_key_id"] = self._iam_access_key
-            kwargs["aws_secret_access_key"] = self._iam_secret_key
-
-        client = boto3.client("rds", **kwargs)
-        return client.generate_db_auth_token(
-            DBHostname=host, Port=port, DBUsername=username, Region=self._iam_region
-        )
-
     async def connect(self, connection_string: str) -> None:
         if not HAS_ASYNCPG:
             raise RuntimeError("asyncpg not installed. Run: pip install asyncpg")
@@ -78,7 +51,14 @@ class PostgresConnector(BaseConnector):
             host = parsed.hostname or "localhost"
             port = parsed.port or 5432
             username = parsed.username or "postgres"
-            token = self._generate_iam_token(host, port, username)
+            token = self._generate_rds_iam_token(
+                region=self._iam_region,
+                host=host,
+                port=port,
+                username=username,
+                access_key=self._iam_access_key,
+                secret_key=self._iam_secret_key,
+            )
             # Rebuild URL with IAM token as password (URL-encoded since tokens contain special chars)
             netloc = f"{quote(username, safe='')}:{quote(token, safe='')}@{host}:{port}"
             connection_string = urlunparse(parsed._replace(netloc=netloc))
@@ -112,10 +92,12 @@ class PostgresConnector(BaseConnector):
             raise RuntimeError(f"Connection failed (host unreachable or timeout): {e}") from e
 
     def _build_ssl_context(self):
-        """Build an ssl.SSLContext from the stored SSL config."""
+        """Build an ssl.SSLContext from the stored SSL config.
+
+        Uses base class _write_ssl_files() for temp file management,
+        but builds an ssl.SSLContext since asyncpg requires one.
+        """
         import ssl
-        import tempfile
-        import os
 
         mode = self._ssl_config.get("mode", "require")
 
@@ -129,30 +111,18 @@ class PostgresConnector(BaseConnector):
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
+        # Write PEM strings to temp files via base class
+        paths = self._write_ssl_files()
+
         # Load CA certificate
-        if self._ssl_config.get("ca_cert"):
-            ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-            ca_file.write(self._ssl_config["ca_cert"].encode())
-            ca_file.close()
-            self._temp_files.append(ca_file.name)
-            ctx.load_verify_locations(ca_file.name)
+        if "ca" in paths:
+            ctx.load_verify_locations(paths["ca"])
             if mode in ("verify-ca", "verify-full"):
                 ctx.verify_mode = ssl.CERT_REQUIRED
 
         # Load client certificate + key (mutual TLS)
-        if self._ssl_config.get("client_cert") and self._ssl_config.get("client_key"):
-            cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-            cert_file.write(self._ssl_config["client_cert"].encode())
-            cert_file.close()
-            self._temp_files.append(cert_file.name)
-
-            key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-            key_file.write(self._ssl_config["client_key"].encode())
-            key_file.close()
-            os.chmod(key_file.name, 0o600)
-            self._temp_files.append(key_file.name)
-
-            ctx.load_cert_chain(cert_file.name, key_file.name)
+        if "cert" in paths and "key" in paths:
+            ctx.load_cert_chain(paths["cert"], paths["key"])
 
         return ctx
 
@@ -380,12 +350,14 @@ class PostgresConnector(BaseConnector):
             return self._parse_sample_union_result([dict(r) for r in rows])
         except Exception:
             # Fallback to per-column queries if UNION ALL fails
+            safe_table = self._quote_table(table)
             result: dict[str, list] = {}
             async def _sample(col: str):
                 try:
+                    safe_col = self._quote_identifier(col)
                     async with self._pool.acquire() as conn:
                         rows = await conn.fetch(
-                            f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                            f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                         )
                         return col, [str(r[col]) for r in rows]
                 except Exception:
@@ -411,11 +383,4 @@ class PostgresConnector(BaseConnector):
         if self._pool:
             await self._pool.close()
             self._pool = None
-        # Cleanup temp SSL cert files
-        import os
-        for f in self._temp_files:
-            try:
-                os.unlink(f)
-            except OSError:
-                pass
-        self._temp_files.clear()
+        self._cleanup_temp_files()

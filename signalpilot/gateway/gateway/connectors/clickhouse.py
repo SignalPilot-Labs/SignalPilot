@@ -27,27 +27,19 @@ HAS_CLICKHOUSE = HAS_CLICKHOUSE_NATIVE or HAS_CLICKHOUSE_HTTP
 
 class ClickHouseConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._client = None  # Either CHClient or clickhouse_connect client
         self._http_client = None  # clickhouse_connect client (HTTP)
         self._use_http = False
         self._database: str = "default"
-        self._ssl_config: dict | None = None
-        self._temp_files: list[str] = []
-        self._connection_timeout: int = 10
-        self._query_timeout: int = 30
 
-    def set_ssl_config(self, ssl_config: dict) -> None:
-        """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
-        self._ssl_config = ssl_config
+    @property
+    def _identifier_quote(self) -> str:
+        return '`'
 
     def set_credential_extras(self, extras: dict) -> None:
         """Extract SSL config and timeout settings from credential extras."""
-        if extras.get("ssl_config"):
-            self.set_ssl_config(extras["ssl_config"])
-        if extras.get("connection_timeout"):
-            self._connection_timeout = extras["connection_timeout"]
-        if extras.get("query_timeout"):
-            self._query_timeout = extras["query_timeout"]
+        super().set_credential_extras(extras)
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_CLICKHOUSE:
@@ -74,9 +66,6 @@ class ClickHouseConnector(BaseConnector):
             connect_args["verify"] = True
 
         if self._ssl_config and self._ssl_config.get("enabled"):
-            import tempfile
-            import os
-
             connect_args["secure"] = True
             mode = self._ssl_config.get("mode", "require")
 
@@ -85,28 +74,15 @@ class ClickHouseConnector(BaseConnector):
             else:
                 connect_args["verify"] = False
 
-            if self._ssl_config.get("ca_cert"):
-                ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                ca_file.write(self._ssl_config["ca_cert"].encode())
-                ca_file.close()
-                self._temp_files.append(ca_file.name)
-                connect_args["ca_certs"] = ca_file.name
+            # Write PEM strings to temp files using base class helper
+            ssl_paths = self._write_ssl_files()
+            if "ca" in ssl_paths:
+                connect_args["ca_certs"] = ssl_paths["ca"]
                 connect_args["verify"] = True
-
-            if self._ssl_config.get("client_cert"):
-                cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                cert_file.write(self._ssl_config["client_cert"].encode())
-                cert_file.close()
-                self._temp_files.append(cert_file.name)
-                connect_args["certfile"] = cert_file.name
-
-            if self._ssl_config.get("client_key"):
-                key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                key_file.write(self._ssl_config["client_key"].encode())
-                key_file.close()
-                os.chmod(key_file.name, 0o600)
-                self._temp_files.append(key_file.name)
-                connect_args["keyfile"] = key_file.name
+            if "cert" in ssl_paths:
+                connect_args["certfile"] = ssl_paths["cert"]
+            if "key" in ssl_paths:
+                connect_args["keyfile"] = ssl_paths["key"]
 
         # If explicit HTTP mode requested (clickhouse+http:// or clickhouse+https://),
         # skip native TCP and go directly to HTTP
@@ -277,14 +253,10 @@ class ClickHouseConnector(BaseConnector):
                 return [dict(zip(col_names, row)) for row in rows_data]
             return []
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"ClickHouse query timed out after {effective_timeout}s")
+            return await self._run_in_thread(_run, effective_timeout, label="ClickHouse")
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(f"ClickHouse query error: {e}") from e
 
@@ -432,10 +404,11 @@ class ClickHouseConnector(BaseConnector):
         except Exception:
             # Fallback to per-column queries
             result: dict[str, list] = {}
+            safe_table = self._quote_table(table)
             for col in columns[:20]:
                 try:
                     data = self._raw_execute(
-                        f'SELECT DISTINCT `{col}` FROM {table} WHERE `{col}` IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}'
                     )
                     if isinstance(data, tuple) and len(data) == 2:
                         rows = data[0]
@@ -465,10 +438,4 @@ class ClickHouseConnector(BaseConnector):
             self._http_client.close()
             self._http_client = None
         self._use_http = False
-        import os
-        for f in self._temp_files:
-            try:
-                os.unlink(f)
-            except OSError:
-                pass
-        self._temp_files.clear()
+        self._cleanup_temp_files()

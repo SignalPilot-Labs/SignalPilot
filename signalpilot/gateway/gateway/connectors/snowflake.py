@@ -23,7 +23,7 @@ except ImportError:
 
 class SnowflakeConnector(BaseConnector):
     def __init__(self):
-        self._conn = None
+        super().__init__()
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
         self._login_timeout: int = 15
@@ -33,6 +33,7 @@ class SnowflakeConnector(BaseConnector):
 
     def set_credential_extras(self, extras: dict) -> None:
         """Store structured credential data and timeout settings for connection."""
+        super().set_credential_extras(extras)
         self._credential_extras = extras
         if extras.get("connection_timeout"):
             self._login_timeout = extras["connection_timeout"]
@@ -215,14 +216,8 @@ class SnowflakeConnector(BaseConnector):
             cursor.close()
             return list(rows) if rows else []
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"Snowflake query timed out after {effective_timeout}s")
+            return await self._run_in_thread(_run, effective_timeout, label="Snowflake")
         except snowflake.connector.Error as e:
             raise RuntimeError(f"Snowflake query error: {e}") from e
 
@@ -384,23 +379,26 @@ class SnowflakeConnector(BaseConnector):
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
-            import asyncio
+
             def _run():
                 cursor = self._conn.cursor(snowflake.connector.DictCursor)
                 cursor.execute(sql)
                 rows = cursor.fetchall()
                 cursor.close()
                 return rows
-            rows = await asyncio.to_thread(_run)
+
+            rows = await self._run_in_thread(_run, label="Snowflake sample")
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries if UNION ALL fails
+            safe_table = self._quote_table(table)
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor(snowflake.connector.DictCursor)
                     cursor.execute(
-                        f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                     )
                     rows = cursor.fetchall()
                     cursor.close()

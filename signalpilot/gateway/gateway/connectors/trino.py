@@ -9,7 +9,6 @@ with SHOW COLUMNS fallback for catalogs that don't expose it.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from .base import BaseConnector
@@ -24,6 +23,7 @@ except ImportError:
 
 class TrinoConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._conn = None
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
@@ -46,6 +46,7 @@ class TrinoConnector(BaseConnector):
         return f'"{safe}"'
 
     def set_credential_extras(self, extras: dict) -> None:
+        super().set_credential_extras(extras)
         self._credential_extras = extras
         if extras.get("query_timeout"):
             self._request_timeout = extras["query_timeout"]
@@ -240,14 +241,10 @@ class TrinoConnector(BaseConnector):
             rows = cursor.fetchall()
             return [dict(zip(columns, row)) for row in rows]
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"Trino query timed out after {effective_timeout}s")
+            return await self._run_in_thread(_run, timeout=effective_timeout, label="Trino")
+        except RuntimeError:
+            raise
         except Exception as e:
             err_str = str(e)
             if "QUERY_EXCEEDED" in err_str or "exceeded" in err_str.lower():
@@ -491,11 +488,13 @@ class TrinoConnector(BaseConnector):
         except Exception:
             # Fallback to per-column queries
             result: dict[str, list] = {}
+            safe_table = self._quote_table(table)
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor()
                     cursor.execute(
-                        f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                     )
                     rows = cursor.fetchall()
                     values = [str(row[0]) for row in rows if row[0] is not None]

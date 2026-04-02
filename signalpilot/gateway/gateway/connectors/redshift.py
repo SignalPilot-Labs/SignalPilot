@@ -24,11 +24,9 @@ except ImportError:
 
 class RedshiftConnector(BaseConnector):
     def __init__(self):
-        self._conn = None
-        self._ssl_config: dict | None = None
-        self._temp_files: list[str] = []
-        self._connect_timeout: int = 15
-        self._query_timeout: int = 30
+        super().__init__()
+        self._connect_timeout: int = self._connection_timeout
+        self._query_timeout: int = self._query_timeout
         # IAM auth for Redshift (GetClusterCredentials or Serverless GetCredentials)
         self._iam_auth: bool = False
         self._iam_region: str = "us-east-1"
@@ -37,18 +35,10 @@ class RedshiftConnector(BaseConnector):
         self._iam_cluster_id: str = ""  # For provisioned Redshift
         self._iam_workgroup: str = ""   # For Redshift Serverless
 
-    def set_ssl_config(self, ssl_config: dict) -> None:
-        """Set SSL configuration (CA cert, client cert, client key as PEM strings)."""
-        self._ssl_config = ssl_config
-
-    def set_credential_extras(self, extras: dict) -> None:
-        """Extract SSL config, IAM auth, and timeout settings from credential extras."""
-        if extras.get("ssl_config"):
-            self.set_ssl_config(extras["ssl_config"])
-        if extras.get("connection_timeout"):
-            self._connect_timeout = extras["connection_timeout"]
-        if extras.get("query_timeout"):
-            self._query_timeout = extras["query_timeout"]
+    def _set_connector_specific_extras(self, extras: dict) -> None:
+        """Handle Redshift-specific IAM config and timeout mapping."""
+        # Map base connection_timeout to Redshift's _connect_timeout
+        self._connect_timeout = self._connection_timeout
         # IAM auth configuration
         if extras.get("auth_method") == "iam" or extras.get("iam_auth"):
             self._iam_auth = True
@@ -147,34 +137,17 @@ class RedshiftConnector(BaseConnector):
 
     def _build_ssl_kwargs(self) -> dict:
         """Build psycopg2 SSL keyword arguments from ssl_config."""
-        import tempfile
-        import os
-
         kwargs: dict = {}
         mode = self._ssl_config.get("mode", "require")
         kwargs["sslmode"] = mode
 
-        if self._ssl_config.get("ca_cert"):
-            ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-            ca_file.write(self._ssl_config["ca_cert"].encode())
-            ca_file.close()
-            self._temp_files.append(ca_file.name)
-            kwargs["sslrootcert"] = ca_file.name
-
-        if self._ssl_config.get("client_cert"):
-            cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-            cert_file.write(self._ssl_config["client_cert"].encode())
-            cert_file.close()
-            self._temp_files.append(cert_file.name)
-            kwargs["sslcert"] = cert_file.name
-
-        if self._ssl_config.get("client_key"):
-            key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-            key_file.write(self._ssl_config["client_key"].encode())
-            key_file.close()
-            os.chmod(key_file.name, 0o600)
-            self._temp_files.append(key_file.name)
-            kwargs["sslkey"] = key_file.name
+        paths = self._write_ssl_files()
+        if "ca" in paths:
+            kwargs["sslrootcert"] = paths["ca"]
+        if "cert" in paths:
+            kwargs["sslcert"] = paths["cert"]
+        if "key" in paths:
+            kwargs["sslkey"] = paths["key"]
 
         return kwargs
 
@@ -208,14 +181,8 @@ class RedshiftConnector(BaseConnector):
                 rows = cursor.fetchall()
                 return [dict(r) for r in rows]
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"Redshift query timed out after {effective_timeout}s")
+            return await self._run_in_thread(_run, effective_timeout, label="Redshift")
         except psycopg2.Error as e:
             try:
                 self._conn.rollback()
@@ -459,21 +426,22 @@ class RedshiftConnector(BaseConnector):
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
-            import asyncio
             def _run():
                 with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                     cursor.execute(sql)
                     return cursor.fetchall()
-            rows = await asyncio.to_thread(_run)
+            rows = await self._run_in_thread(_run, label="Redshift")
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries if UNION ALL fails
+            safe_table = self._quote_table(table)
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                         cursor.execute(
-                            f'SELECT DISTINCT "{col}" FROM {table} WHERE "{col}" IS NOT NULL LIMIT {limit}'
+                            f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                         )
                         rows = cursor.fetchall()
                         values = [str(r[col]) for r in rows if r.get(col) is not None]
@@ -483,28 +451,6 @@ class RedshiftConnector(BaseConnector):
                     continue
             return result
 
-    async def health_check(self) -> bool:
-        if self._conn is None:
-            return False
-        try:
-            with self._conn.cursor() as cursor:
-                cursor.execute("SELECT 1")
-            return True
-        except Exception:
-            return False
-
-    def _cleanup_temp_files(self) -> None:
-        """Remove any temporary SSL certificate files."""
-        import os
-        for f in self._temp_files:
-            try:
-                os.unlink(f)
-            except OSError:
-                pass
-        self._temp_files.clear()
-
     async def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
-        self._cleanup_temp_files()
+        """Close connection and clean up temp files."""
+        await super().close()

@@ -6,6 +6,7 @@ Tier 1 connector matching HEX's BigQuery integration.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -22,6 +23,8 @@ except ImportError:
 
 class BigQueryConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
+        self._conn = None  # unused — BQ uses self._client
         self._client: bigquery.Client | None = None
         self._project: str = ""
         self._dataset: str = ""
@@ -32,6 +35,14 @@ class BigQueryConnector(BaseConnector):
         self._auth_method: str = "adc"
         self._oauth_token: str = ""
         self._impersonate_service_account: str = ""  # target SA email for impersonation
+
+    # ─── Identifier quoting ───────────────────────────────────────────
+
+    @property
+    def _identifier_quote(self) -> str:
+        return '`'
+
+    # ─── Connect ──────────────────────────────────────────────────────
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_BIGQUERY:
@@ -53,6 +64,8 @@ class BigQueryConnector(BaseConnector):
             elif "project" in err_str and ("not found" in err_str or "invalid" in err_str):
                 raise RuntimeError(f"GCP project not found: '{self._project}'") from e
             raise RuntimeError(f"BigQuery connection error: {e}") from e
+
+    # ─── Credentials ──────────────────────────────────────────────────
 
     def set_credentials(self, credentials_json: str, project: str = "", dataset: str = "",
                         location: str = "", maximum_bytes_billed: int | None = None):
@@ -118,7 +131,11 @@ class BigQueryConnector(BaseConnector):
             raise RuntimeError(f"BigQuery OAuth setup failed: {e}") from e
 
     def set_credential_extras(self, extras: dict) -> None:
-        """Extract BigQuery credentials from credential extras."""
+        """Extract BigQuery credentials from credential extras.
+
+        BQ does NOT use standard SSL/timeout fields from the base class,
+        so we intentionally skip super().set_credential_extras().
+        """
         # Parse maximum_bytes_billed from extras (safety limit)
         if extras.get("maximum_bytes_billed"):
             try:
@@ -147,34 +164,43 @@ class BigQueryConnector(BaseConnector):
                 maximum_bytes_billed=self._maximum_bytes_billed,
             )
 
+    # ─── Ensure connected ─────────────────────────────────────────────
+
     async def _ensure_connected(self) -> None:
         """Verify BigQuery client can reach the API; raise RuntimeError if not."""
         if self._client is None:
             raise RuntimeError("Not connected")
         try:
-            import asyncio
             await asyncio.to_thread(lambda: list(self._client.query("SELECT 1", timeout=10).result(timeout=10)))
         except Exception:
             self._client = None
             raise RuntimeError("BigQuery connection lost — please reconnect")
 
+    # ─── Execute (CRITICAL: non-blocking) ─────────────────────────────
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._client is None:
             raise RuntimeError("Not connected")
-        try:
-            job_config = bigquery.QueryJobConfig()
-            if self._dataset:
-                job_config.default_dataset = f"{self._project}.{self._dataset}"
-            # Safety limit: fail query before execution if it would scan too many bytes
-            if self._maximum_bytes_billed is not None:
-                job_config.maximum_bytes_billed = self._maximum_bytes_billed
 
-            query_job = self._client.query(sql, job_config=job_config, timeout=timeout)
+        client = self._client
+        dataset = self._dataset
+        project = self._project
+        max_bytes = self._maximum_bytes_billed
+
+        def _run():
+            job_config = bigquery.QueryJobConfig()
+            if dataset:
+                job_config.default_dataset = f"{project}.{dataset}"
+            # Safety limit: fail query before execution if it would scan too many bytes
+            if max_bytes is not None:
+                job_config.maximum_bytes_billed = max_bytes
+
+            query_job = client.query(sql, job_config=job_config, timeout=timeout)
             results = query_job.result(timeout=timeout)
             rows = [dict(row) for row in results]
 
             # Capture job stats for cost reporting
-            self._last_job_stats = {
+            stats = {
                 "total_bytes_processed": query_job.total_bytes_processed,
                 "total_bytes_billed": query_job.total_bytes_billed,
                 "cache_hit": query_job.cache_hit,
@@ -184,6 +210,11 @@ class BigQueryConnector(BaseConnector):
                 "slot_millis": getattr(query_job, "slot_millis", None),
                 "job_id": query_job.job_id,
             }
+            return rows, stats
+
+        try:
+            rows, stats = await asyncio.to_thread(_run)
+            self._last_job_stats = stats
             return rows
         except Exception as e:
             err_str = str(e).lower()
@@ -194,6 +225,8 @@ class BigQueryConnector(BaseConnector):
                     f"Reduce query scope or increase maximum_bytes_billed."
                 ) from e
             raise RuntimeError(f"BigQuery query error: {e}") from e
+
+    # ─── Dry run ──────────────────────────────────────────────────────
 
     async def dry_run(self, sql: str) -> dict[str, Any]:
         """Estimate query cost without executing (dry run).
@@ -207,7 +240,6 @@ class BigQueryConnector(BaseConnector):
             if self._dataset:
                 job_config.default_dataset = f"{self._project}.{self._dataset}"
 
-            import asyncio
             def _run():
                 return self._client.query(sql, job_config=job_config)
 
@@ -237,11 +269,12 @@ class BigQueryConnector(BaseConnector):
             n /= 1024
         return f"{n:.1f} PB"
 
+    # ─── Schema ───────────────────────────────────────────────────────
+
     async def get_schema(self) -> dict[str, Any]:
         if self._client is None:
             raise RuntimeError("Not connected")
 
-        import asyncio
         from concurrent.futures import ThreadPoolExecutor
 
         schema: dict[str, Any] = {}
@@ -327,6 +360,8 @@ class BigQueryConnector(BaseConnector):
 
         return schema
 
+    # ─── Sample values ────────────────────────────────────────────────
+
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip).
 
@@ -336,38 +371,52 @@ class BigQueryConnector(BaseConnector):
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='`')
-            import asyncio
+
             def _run():
                 job = self._client.query(sql, timeout=30)
                 return [dict(row) for row in job.result(timeout=30)]
+
             rows = await asyncio.to_thread(_run)
             return self._parse_sample_union_result(rows)
         except Exception:
-            # Fallback to per-column queries
+            # Fallback to per-column queries (also non-blocking)
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
-                    query = f"SELECT DISTINCT `{col}` FROM `{table}` WHERE `{col}` IS NOT NULL LIMIT {limit}"
-                    job = self._client.query(query, timeout=10)
-                    rows = list(job.result(timeout=10))
-                    values = [str(row[col]) for row in rows if row[col] is not None]
+                    safe_col = col.replace('`', '``')
+                    safe_table = self._quote_table(table)
+                    query = f"SELECT DISTINCT `{safe_col}` FROM {safe_table} WHERE `{safe_col}` IS NOT NULL LIMIT {limit}"
+
+                    def _run_col(q=query, c=col):
+                        job = self._client.query(q, timeout=10)
+                        rows = list(job.result(timeout=10))
+                        return [str(row[c]) for row in rows if row[c] is not None]
+
+                    values = await asyncio.to_thread(_run_col)
                     if values:
                         result[col] = values
                 except Exception:
                     continue
             return result
 
+    # ─── Health check (non-blocking) ──────────────────────────────────
+
     async def health_check(self) -> bool:
         if self._client is None:
             return False
         try:
-            query_job = self._client.query("SELECT 1", timeout=10)
-            list(query_job.result(timeout=10))
+            def _ping():
+                job = self._client.query("SELECT 1", timeout=10)
+                list(job.result(timeout=10))
+            await asyncio.to_thread(_ping)
             return True
         except Exception:
             return False
+
+    # ─── Close ────────────────────────────────────────────────────────
 
     async def close(self) -> None:
         if self._client:
             self._client.close()
             self._client = None
+        self._cleanup_temp_files()

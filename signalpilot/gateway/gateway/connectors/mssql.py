@@ -10,6 +10,7 @@ extended properties for comments, and index definitions.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from .base import BaseConnector
@@ -24,27 +25,25 @@ except ImportError:
 
 class MSSQLConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._conn: pymssql.Connection | None = None
         self._connect_params: dict = {}
-        self._ssl_config: dict | None = None
         self._login_timeout: int = 15
-        self._query_timeout: int = 30
         # Azure AD / Entra ID auth via access token
         self._azure_ad_auth: bool = False
         self._azure_tenant_id: str = ""
         self._azure_client_id: str = ""
         self._azure_client_secret: str = ""
 
-    def set_ssl_config(self, ssl_config: dict) -> None:
-        self._ssl_config = ssl_config
+    @property
+    def _identifier_quote(self) -> str:
+        return "["
 
     def set_credential_extras(self, extras: dict) -> None:
-        if extras.get("ssl_config"):
-            self.set_ssl_config(extras["ssl_config"])
+        super().set_credential_extras(extras)
+        # Map connection_timeout to MSSQL-specific login_timeout
         if extras.get("connection_timeout"):
             self._login_timeout = extras["connection_timeout"]
-        if extras.get("query_timeout"):
-            self._query_timeout = extras["query_timeout"]
         # Azure AD auth
         if extras.get("auth_method") == "azure_ad" or extras.get("azure_ad_auth"):
             self._azure_ad_auth = True
@@ -176,24 +175,30 @@ class MSSQLConnector(BaseConnector):
 
         return result
 
+    def _reconnect_once(self) -> None:
+        """Attempt a single reconnect using stored connection params. Raises on failure."""
+        if not self._connect_params:
+            raise RuntimeError("Not connected and no stored connection params")
+        try:
+            self._conn = pymssql.connect(
+                server=self._connect_params.get("host", "localhost"),
+                port=str(self._connect_params.get("port", "1433")),
+                user=self._connect_params.get("user", ""),
+                password=self._connect_params.get("password", ""),
+                database=self._connect_params.get("database", "master"),
+                login_timeout=self._login_timeout,
+                timeout=self._query_timeout,
+                as_dict=True,
+                charset="UTF-8",
+            )
+        except Exception as e:
+            self._conn = None
+            raise RuntimeError(f"Reconnect to SQL Server failed: {e}") from e
+
     def _ensure_connected(self) -> None:
-        """Ensure connection is alive, reconnect if needed."""
+        """Ensure connection is alive; attempt ONE reconnect if needed (no recursion)."""
         if self._conn is None:
-            if self._connect_params:
-                # Rebuild connect kwargs from stored params
-                self._conn = pymssql.connect(
-                    server=self._connect_params.get("host", "localhost"),
-                    port=str(self._connect_params.get("port", "1433")),
-                    user=self._connect_params.get("user", ""),
-                    password=self._connect_params.get("password", ""),
-                    database=self._connect_params.get("database", "master"),
-                    login_timeout=self._login_timeout,
-                    timeout=self._query_timeout,
-                    as_dict=True,
-                    charset="UTF-8",
-                )
-            else:
-                raise RuntimeError("Not connected")
+            self._reconnect_once()
             return
         try:
             cursor = self._conn.cursor()
@@ -201,15 +206,8 @@ class MSSQLConnector(BaseConnector):
             cursor.fetchall()
             cursor.close()
         except Exception:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
-            if self._connect_params:
-                self._ensure_connected()  # Recursive reconnect
-            else:
-                raise RuntimeError("Connection lost and cannot reconnect")
+            self._safe_close_sync()
+            self._reconnect_once()
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._conn is None:
@@ -230,14 +228,8 @@ class MSSQLConnector(BaseConnector):
             cursor.close()
             return list(rows) if rows else []
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"SQL Server query timed out after {effective_timeout}s")
+            return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
 
@@ -373,11 +365,9 @@ class MSSQLConnector(BaseConnector):
                 _fetch(stats_sql),
             )
 
-        # Run the synchronous queries in a thread pool to avoid blocking the event loop
-        import asyncio
-        loop = asyncio.get_event_loop()
-        rows, rowcount_rows, fk_rows, idx_rows, stat_rows = await loop.run_in_executor(
-            None, _fetch_all_sequential
+        # Run the synchronous queries in a thread to avoid blocking the event loop
+        rows, rowcount_rows, fk_rows, idx_rows, stat_rows = await asyncio.to_thread(
+            _fetch_all_sequential
         )
 
         # Build row count and table size maps
@@ -488,13 +478,15 @@ class MSSQLConnector(BaseConnector):
         if self._conn is None or not columns:
             return {}
         self._ensure_connected()
+        safe_table = self._quote_table(table)
         try:
             # MSSQL uses TOP N instead of LIMIT, and [] quoting
             parts = []
             for i, col in enumerate(columns[:20]):
+                safe_col = self._quote_identifier(col)
                 parts.append(
-                    f"SELECT '{col}' AS _col, CAST([{col}] AS NVARCHAR(MAX)) AS _val "
-                    f"FROM (SELECT DISTINCT TOP {limit} [{col}] FROM {table} WHERE [{col}] IS NOT NULL) t{i}"
+                    f"SELECT '{col}' AS _col, CAST({safe_col} AS NVARCHAR(MAX)) AS _val "
+                    f"FROM (SELECT DISTINCT TOP {limit} {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL) t{i}"
                 )
             sql = "\n UNION ALL \n".join(parts)
             cursor = self._conn.cursor(as_dict=True)
@@ -507,9 +499,10 @@ class MSSQLConnector(BaseConnector):
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
+                    safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor(as_dict=True)
                     cursor.execute(
-                        f"SELECT DISTINCT TOP {limit} [{col}] FROM {table} WHERE [{col}] IS NOT NULL"
+                        f"SELECT DISTINCT TOP {limit} {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL"
                     )
                     rows = cursor.fetchall()
                     cursor.close()
@@ -532,8 +525,3 @@ class MSSQLConnector(BaseConnector):
             return True
         except Exception:
             return False
-
-    async def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None

@@ -28,23 +28,23 @@ except ImportError:
 
 class DatabricksConnector(BaseConnector):
     def __init__(self):
+        super().__init__()
         self._conn = None
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
-        self._connection_timeout: int = 30
-        self._query_timeout: int | None = None
         # Auth method: "pat" (default), "oauth_m2m", "oauth_u2m"
         self._auth_method: str = "pat"
         self._oauth_client_id: str = ""
         self._oauth_client_secret: str = ""
 
+    @property
+    def _identifier_quote(self) -> str:
+        return '`'
+
     def set_credential_extras(self, extras: dict) -> None:
         """Store structured credential data for connection."""
+        super().set_credential_extras(extras)
         self._credential_extras = extras
-        if extras.get("connection_timeout"):
-            self._connection_timeout = extras["connection_timeout"]
-        if extras.get("query_timeout"):
-            self._query_timeout = extras["query_timeout"]
         if extras.get("auth_method"):
             self._auth_method = extras["auth_method"]
         if extras.get("oauth_client_id"):
@@ -78,7 +78,7 @@ class DatabricksConnector(BaseConnector):
         if params.get("schema"):
             connect_args["schema"] = params["schema"]
 
-        # Auth method routing (HEX pattern: PAT → OAuth M2M → OAuth U2M)
+        # Auth method routing (HEX pattern: PAT -> OAuth M2M -> OAuth U2M)
         auth_method = params.get("auth_method", self._auth_method)
 
         if auth_method == "oauth_m2m":
@@ -88,8 +88,8 @@ class DatabricksConnector(BaseConnector):
             if not client_id or not client_secret:
                 raise RuntimeError(
                     "OAuth M2M requires client_id and client_secret. "
-                    "Create a service principal in Databricks Account Console → "
-                    "User Management → Service Principals."
+                    "Create a service principal in Databricks Account Console -> "
+                    "User Management -> Service Principals."
                 )
             try:
                 from databricks.sdk.core import oauth_service_principal
@@ -132,7 +132,7 @@ class DatabricksConnector(BaseConnector):
             if not params.get("access_token"):
                 raise RuntimeError(
                     "PAT auth requires an access_token. "
-                    "Generate one at: Workspace Settings → User Settings → Developer → Access Tokens"
+                    "Generate one at: Workspace Settings -> User Settings -> Developer -> Access Tokens"
                 )
             connect_args["access_token"] = params["access_token"]
 
@@ -222,14 +222,10 @@ class DatabricksConnector(BaseConnector):
             cursor.close()
             return [dict(zip(columns, row)) for row in rows]
 
-        import asyncio
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_run),
-                timeout=effective_timeout + 5 if effective_timeout else None,
-            )
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"Databricks query timed out after {effective_timeout}s")
+            return await self._run_in_thread(_run, timeout=effective_timeout, label="Databricks")
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(f"Databricks query error: {e}") from e
 
@@ -453,12 +449,12 @@ class DatabricksConnector(BaseConnector):
         except Exception:
             # Fallback to per-column queries
             result: dict[str, list] = {}
+            safe_table = self._quote_table(table)
             for col in columns[:20]:
                 try:
                     cursor = self._conn.cursor()
-                    # Quote table name parts to prevent SQL injection
-                    safe_table = ".".join(f"`{p}`" for p in table.split("."))
-                    cursor.execute(f"SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}")
+                    safe_col = self._quote_identifier(col)
+                    cursor.execute(f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}")
                     rows = cursor.fetchall()
                     cursor.close()
                     values = [str(row[0]) for row in rows if row[0] is not None]

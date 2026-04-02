@@ -127,7 +127,7 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     supportsSSH: true,
     supportsSSL: true,
     connectionModes: ["fields", "url"],
-    fields: ["host", "port", "database", "username", "password"],
+    fields: ["host", "port", "database", "username", "password", "protocol"],
     description: "Column-oriented OLAP database",
   },
   databricks: {
@@ -336,6 +336,8 @@ interface FormState {
   project: string;
   dataset: string;
   credentials_json: string;
+  // ClickHouse
+  ch_protocol: "native" | "http";
   // Databricks
   http_path: string;
   access_token: string;
@@ -373,6 +375,7 @@ const defaultForm: FormState = {
   database: "", username: "", password: "", description: "",
   account: "", warehouse: "", schema_name: "", role: "",
   project: "", dataset: "", credentials_json: "",
+  ch_protocol: "native",
   http_path: "", access_token: "", catalog: "",
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
@@ -393,8 +396,13 @@ function buildConnectionPreview(form: FormState): string {
       return `mysql://${form.username || "user"}:****@${form.host || "host"}:${form.port || "3306"}/${form.database || "db"}`;
     case "redshift":
       return `redshift://${form.username || "user"}:****@${form.host || "host"}:${form.port || "5439"}/${form.database || "dev"}`;
-    case "clickhouse":
-      return `clickhouse://${form.username || "default"}:****@${form.host || "host"}:${form.port || "9000"}/${form.database || "default"}`;
+    case "clickhouse": {
+      const chScheme = form.ch_protocol === "http"
+        ? (form.ssl_enabled ? "clickhouse+https" : "clickhouse+http")
+        : (form.ssl_enabled ? "clickhouses" : "clickhouse");
+      const chPort = form.port || (form.ch_protocol === "http" ? (form.ssl_enabled ? "8443" : "8123") : (form.ssl_enabled ? "9440" : "9000"));
+      return `${chScheme}://${form.username || "default"}:****@${form.host || "host"}:${chPort}/${form.database || "default"}`;
+    }
     case "snowflake":
       return `snowflake://${form.username || "user"}:****@${form.account || "account"}/${form.database || "db"}/${form.schema_name || "schema"}${form.warehouse ? `?warehouse=${form.warehouse}` : ""}`;
     case "bigquery":
@@ -545,7 +553,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
       postgres: "postgresql://user:pass@host:5432/dbname",
       mysql: "mysql://user:pass@host:3306/dbname",
       redshift: "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/dev",
-      clickhouse: "clickhouse://user:pass@host:9000/default",
+      clickhouse: "clickhouse://user:pass@host:9000/default  (or clickhouse+http:// for HTTP)",
       snowflake: "snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE",
     };
     return (
@@ -656,13 +664,52 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     );
   }
 
-  // Standard host/port (Postgres, MySQL, Redshift, ClickHouse)
+  // ClickHouse — protocol selector + host/port
+  if (form.db_type === "clickhouse") {
+    const httpPort = form.ssl_enabled ? "8443" : "8123";
+    const nativePort = form.ssl_enabled ? "9440" : "9000";
+    return (
+      <>
+        <div className="col-span-2 mb-1">
+          <label className="block text-[10px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">protocol</label>
+          <div className="flex gap-2">
+            {(["native", "http"] as const).map((proto) => (
+              <button
+                key={proto}
+                type="button"
+                onClick={() => setForm({ ...form, ch_protocol: proto, port: proto === "http" ? httpPort : nativePort })}
+                className={`px-2.5 py-1 text-[10px] tracking-wider border transition-all ${
+                  form.ch_protocol === proto
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {proto === "native" ? "native TCP (:9000)" : "HTTP (:8123)"}
+              </button>
+            ))}
+          </div>
+          <p className="text-[9px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">
+            {form.ch_protocol === "http"
+              ? "HTTP protocol — better compatibility with ClickHouse Cloud and load balancers"
+              : "native protocol — fastest performance, direct binary protocol"}
+          </p>
+        </div>
+        <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="localhost" required />
+        <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder={form.ch_protocol === "http" ? httpPort : nativePort} />
+        <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="default" required />
+        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="default" required />
+        <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
+      </>
+    );
+  }
+
+  // Standard host/port (Postgres, MySQL, Redshift)
   return (
     <>
       <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="localhost" required />
       <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder={String(config.defaultPort)} />
-      <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder={form.db_type === "clickhouse" ? "default" : "mydb"} required />
-      <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder={form.db_type === "clickhouse" ? "default" : "postgres"} required />
+      <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="mydb" required />
+      <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="postgres" required />
       <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
     </>
   );
@@ -1426,16 +1473,31 @@ export default function ConnectionsPage() {
 
                   {/* Test result */}
                   {testResult[conn.name] && (
-                    <span className={`flex items-center gap-1 text-[10px] tracking-wider ${testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
-                      {testResult[conn.name].status === "healthy" ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                    <span className={`flex items-center gap-1 text-[10px] tracking-wider ${
+                      testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]"
+                      : testResult[conn.name].status === "warning" ? "text-[var(--color-warning)]"
+                      : "text-[var(--color-error)]"
+                    }`}>
+                      {testResult[conn.name].status === "healthy" ? <CheckCircle2 className="w-3 h-3" />
+                       : testResult[conn.name].status === "warning" ? <AlertTriangle className="w-3 h-3" />
+                       : <XCircle className="w-3 h-3" />}
                       {testResult[conn.name].phases ? (
                         <span className="flex items-center gap-1">
-                          {testResult[conn.name].phases!.map((p, i) => (
-                            <span key={i} className={`${p.status === "ok" ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
-                              {p.phase === "ssh_tunnel" ? "SSH" : "DB"}{p.status === "ok" ? "\u2713" : "\u2717"}
-                              {p.duration_ms ? ` ${p.duration_ms}ms` : ""}
-                            </span>
-                          ))}
+                          {testResult[conn.name].phases!.map((p, i) => {
+                            const phaseLabel = p.phase === "ssh_tunnel" ? "SSH"
+                              : p.phase === "schema_access" ? "Schema"
+                              : "DB";
+                            const statusIcon = p.status === "ok" ? "\u2713" : p.status === "warning" ? "!" : "\u2717";
+                            const statusColor = p.status === "ok" ? "text-[var(--color-success)]"
+                              : p.status === "warning" ? "text-[var(--color-warning)]"
+                              : "text-[var(--color-error)]";
+                            return (
+                              <span key={i} className={statusColor}>
+                                {phaseLabel}{statusIcon}
+                                {p.duration_ms ? ` ${p.duration_ms}ms` : ""}
+                              </span>
+                            );
+                          })}
                           {testResult[conn.name].total_duration_ms ? ` (${testResult[conn.name].total_duration_ms}ms)` : ""}
                         </span>
                       ) : testResult[conn.name].message.slice(0, 40)}

@@ -596,7 +596,6 @@ async def test_connection(name: str):
         except Exception:
             pass
 
-        await pool_manager.release(info.db_type, conn_str)
         phase2_duration = round((time.monotonic() - t1) * 1000, 1)
         if ok:
             msg = "Authentication and query test passed"
@@ -609,6 +608,7 @@ async def test_connection(name: str):
                 "duration_ms": phase2_duration,
             })
         else:
+            await pool_manager.release(info.db_type, conn_str)
             phases.append({
                 "phase": "database",
                 "status": "error",
@@ -616,6 +616,41 @@ async def test_connection(name: str):
                 "duration_ms": phase2_duration,
             })
             return {"status": "error", "phases": phases, "message": "Health check failed"}
+
+        # Phase 3: Schema access — verify we can read metadata (HEX pattern)
+        t2 = time.monotonic()
+        try:
+            schema = await connector.get_schema()
+            table_count = len(schema) if schema else 0
+            phase3_duration = round((time.monotonic() - t2) * 1000, 1)
+            if table_count > 0:
+                # Sample first few table names for confirmation
+                sample_tables = list(schema.keys())[:5]
+                phases.append({
+                    "phase": "schema_access",
+                    "status": "ok",
+                    "message": f"Schema readable: {table_count} tables found",
+                    "sample_tables": sample_tables,
+                    "duration_ms": phase3_duration,
+                })
+                # Cache the schema since we already fetched it
+                schema_cache.put(name, schema)
+            else:
+                phases.append({
+                    "phase": "schema_access",
+                    "status": "warning",
+                    "message": "Connected but no tables found — check permissions or database contents",
+                    "duration_ms": phase3_duration,
+                })
+        except Exception as e:
+            phases.append({
+                "phase": "schema_access",
+                "status": "warning",
+                "message": f"Schema access limited: {_sanitize_db_error(str(e))}",
+                "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+            })
+
+        await pool_manager.release(info.db_type, conn_str)
     except Exception as e:
         phases.append({
             "phase": "database",
@@ -626,10 +661,19 @@ async def test_connection(name: str):
         return {"status": "error", "phases": phases, "message": _sanitize_db_error(str(e))}
 
     total_ms = round((time.monotonic() - t0) * 1000, 1)
+    # Overall status: healthy if no errors, warning if schema access had issues
+    overall_status = "healthy"
+    for p in phases:
+        if p["status"] == "error":
+            overall_status = "error"
+            break
+        if p["status"] == "warning":
+            overall_status = "warning"
+
     return {
-        "status": "healthy",
+        "status": overall_status,
         "phases": phases,
-        "message": "All connection tests passed",
+        "message": "All connection tests passed" if overall_status == "healthy" else "Connection works but with warnings",
         "total_duration_ms": total_ms,
     }
 
@@ -1403,6 +1447,137 @@ async def get_schema_relationships(
             "relationship_count": len(relationships),
             "relationships": relationships,
         }
+
+
+@app.get("/api/connections/{name}/schema/join-paths")
+async def get_join_paths(
+    name: str,
+    from_table: str = Query(..., description="Source table (e.g., 'public.orders')"),
+    to_table: str = Query(..., description="Target table (e.g., 'public.products')"),
+    max_hops: int = Query(default=4, ge=1, le=6, description="Maximum FK hops to search"),
+):
+    """Find all FK join paths between two tables — critical for Spider2.0 multi-hop queries.
+
+    Uses BFS over the FK graph to discover all paths from source to target table,
+    returning the exact join columns at each hop. This enables AI agents to construct
+    correct multi-table JOINs without hallucinating join conditions.
+
+    Example: orders → order_items → products (2 hops via order_items.order_id and order_items.product_id)
+    """
+    info = get_connection(name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
+
+    cached = schema_cache.get(name)
+    if cached is None:
+        conn_str = get_connection_string(name)
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No credentials stored")
+        try:
+            extras = get_credential_extras(name)
+            connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+            cached = await connector.get_schema()
+            await pool_manager.release(info.db_type, conn_str)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_sanitize_db_error(str(e)))
+        schema_cache.put(name, cached)
+
+    filtered = apply_endorsement_filter(name, cached)
+
+    # Build bidirectional adjacency list with join info
+    # Each edge: (from_table, from_col, to_table, to_col)
+    edges: dict[str, list[tuple[str, str, str, str]]] = {}
+    for key, table in filtered.items():
+        tbl_schema = table.get("schema", "")
+        tbl_name = table.get("name", "")
+        full_name = f"{tbl_schema}.{tbl_name}" if tbl_schema else tbl_name
+
+        for fk in table.get("foreign_keys", []):
+            ref_schema = fk.get("references_schema", tbl_schema)
+            ref_full = f"{ref_schema}.{fk['references_table']}" if ref_schema else fk["references_table"]
+
+            # Forward edge
+            if full_name not in edges:
+                edges[full_name] = []
+            edges[full_name].append((full_name, fk["column"], ref_full, fk["references_column"]))
+
+            # Reverse edge (for bidirectional traversal)
+            if ref_full not in edges:
+                edges[ref_full] = []
+            edges[ref_full].append((ref_full, fk["references_column"], full_name, fk["column"]))
+
+    # Normalize table names for matching (try with and without schema prefix)
+    def resolve_table(name_input: str) -> str | None:
+        if name_input in edges or name_input in {k for t in filtered.values() for k in [f"{t.get('schema', '')}.{t.get('name', '')}"]}:
+            return name_input
+        # Try matching just the table name part
+        for key, table in filtered.items():
+            full = f"{table.get('schema', '')}.{table.get('name', '')}"
+            if table.get("name", "") == name_input or full == name_input or key == name_input:
+                return full
+        return None
+
+    src = resolve_table(from_table)
+    dst = resolve_table(to_table)
+    if not src:
+        raise HTTPException(status_code=404, detail=f"Table '{from_table}' not found in schema")
+    if not dst:
+        raise HTTPException(status_code=404, detail=f"Table '{to_table}' not found in schema")
+
+    if src == dst:
+        return {
+            "connection_name": name,
+            "from_table": from_table,
+            "to_table": to_table,
+            "paths": [{"hops": 0, "tables": [src], "joins": []}],
+        }
+
+    # BFS to find all paths up to max_hops
+    from collections import deque
+    paths: list[dict] = []
+    # queue items: (current_table, path_of_tables, path_of_joins)
+    queue: deque[tuple[str, list[str], list[dict]]] = deque()
+    queue.append((src, [src], []))
+
+    while queue:
+        current, path_tables, path_joins = queue.popleft()
+        if len(path_tables) - 1 >= max_hops:
+            continue
+
+        for from_t, from_col, to_t, to_col in edges.get(current, []):
+            if to_t in path_tables:
+                continue  # Avoid cycles
+
+            new_tables = path_tables + [to_t]
+            new_joins = path_joins + [{
+                "from": f"{from_t}.{from_col}",
+                "to": f"{to_t}.{to_col}",
+            }]
+
+            if to_t == dst:
+                paths.append({
+                    "hops": len(new_joins),
+                    "tables": new_tables,
+                    "joins": new_joins,
+                    "sql_hint": " JOIN ".join(
+                        f"{t}" for t in new_tables
+                    ) + " ON " + " AND ".join(
+                        f"{j['from']} = {j['to']}" for j in new_joins
+                    ),
+                })
+            else:
+                queue.append((to_t, new_tables, new_joins))
+
+    # Sort by number of hops (shortest first)
+    paths.sort(key=lambda p: p["hops"])
+
+    return {
+        "connection_name": name,
+        "from_table": from_table,
+        "to_table": to_table,
+        "path_count": len(paths),
+        "paths": paths[:10],  # Limit to 10 paths
+    }
 
 
 @app.get("/api/connections/{name}/schema/sample-values")

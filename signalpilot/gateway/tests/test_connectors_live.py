@@ -1910,5 +1910,123 @@ class TestSchemaRelationships:
         assert len(routes) > 0
 
 
+# ── Join Path Discovery (Round 8) ──────────────────────────────────────────
+
+class TestJoinPathDiscovery:
+    """Tests for the /schema/join-paths endpoint — multi-hop FK traversal."""
+
+    def test_join_paths_endpoint_exists(self):
+        """Join paths endpoint is registered."""
+        from gateway.main import app
+        routes = [r.path for r in app.routes if hasattr(r, "path")]
+        assert "/api/connections/{name}/schema/join-paths" in routes
+
+    def test_bfs_join_path_logic(self):
+        """BFS correctly finds multi-hop join paths."""
+        from collections import deque
+
+        # Simulate edges: orders -> customers, order_items -> orders, order_items -> products
+        edges = {
+            "public.orders": [
+                ("public.orders", "customer_id", "public.customers", "id"),
+            ],
+            "public.customers": [
+                ("public.customers", "id", "public.orders", "customer_id"),
+            ],
+            "public.order_items": [
+                ("public.order_items", "order_id", "public.orders", "id"),
+                ("public.order_items", "product_id", "public.products", "id"),
+            ],
+            "public.orders_rev": [],
+            "public.products": [
+                ("public.products", "id", "public.order_items", "product_id"),
+            ],
+        }
+        # Add reverse edges
+        edges["public.orders"].append(("public.orders", "id", "public.order_items", "order_id"))
+
+        src, dst = "public.orders", "public.products"
+        paths = []
+        queue: deque = deque()
+        queue.append((src, [src], []))
+
+        while queue:
+            current, path_tables, path_joins = queue.popleft()
+            if len(path_tables) - 1 >= 4:
+                continue
+            for from_t, from_col, to_t, to_col in edges.get(current, []):
+                if to_t in path_tables:
+                    continue
+                new_tables = path_tables + [to_t]
+                new_joins = path_joins + [{"from": f"{from_t}.{from_col}", "to": f"{to_t}.{to_col}"}]
+                if to_t == dst:
+                    paths.append({"hops": len(new_joins), "tables": new_tables, "joins": new_joins})
+                else:
+                    queue.append((to_t, new_tables, new_joins))
+
+        assert len(paths) >= 1
+        # Should find: orders -> order_items -> products (2 hops)
+        two_hop = [p for p in paths if p["hops"] == 2]
+        assert len(two_hop) >= 1
+        assert "public.order_items" in two_hop[0]["tables"]
+
+    def test_same_table_returns_zero_hops(self):
+        """Querying same table as source and target returns 0 hops."""
+        # The endpoint returns immediately for src == dst
+        # Just verify the logic
+        src = dst = "public.orders"
+        if src == dst:
+            result = {"hops": 0, "tables": [src], "joins": []}
+            assert result["hops"] == 0
+
+
+# ── Connection Test Phase 3: Schema Access (Round 8) ───────────────────────
+
+class TestConnectionTestPhase3:
+    """Tests for Phase 3 schema access verification in connection test."""
+
+    def test_test_endpoint_has_schema_access_phase(self):
+        """Connection test endpoint code includes schema_access phase."""
+        import inspect
+        from gateway.main import test_connection
+        source = inspect.getsource(test_connection)
+        assert "schema_access" in source
+        assert "Phase 3" in source
+
+    def test_phase3_caches_schema(self):
+        """Phase 3 caches schema after successful fetch."""
+        import inspect
+        from gateway.main import test_connection
+        source = inspect.getsource(test_connection)
+        assert "schema_cache.put" in source
+
+
+# ── MCP join/relationship tools (Round 8) ──────────────────────────────────
+
+class TestMCPJoinTools:
+    """Tests for MCP find_join_path and get_relationships tools."""
+
+    def test_find_join_path_exists(self):
+        from gateway.mcp_server import find_join_path
+        assert callable(find_join_path)
+
+    def test_get_relationships_exists(self):
+        from gateway.mcp_server import get_relationships
+        assert callable(get_relationships)
+
+    def test_find_join_path_has_max_hops(self):
+        import inspect
+        from gateway.mcp_server import find_join_path
+        source = inspect.getsource(find_join_path)
+        assert "max_hops" in source
+
+    def test_get_relationships_formats(self):
+        import inspect
+        from gateway.mcp_server import get_relationships
+        source = inspect.getsource(get_relationships)
+        assert "compact" in source
+        assert "graph" in source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

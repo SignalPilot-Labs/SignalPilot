@@ -596,6 +596,90 @@ def _format_health_stats(stats: dict) -> str:
 
 
 @mcp.tool()
+async def find_join_path(connection_name: str, from_table: str, to_table: str, max_hops: int = 4) -> str:
+    """
+    Find FK join paths between two tables for accurate multi-table SQL generation.
+
+    Returns the exact join columns at each hop, enabling correct JOIN construction
+    without hallucinating join conditions. Essential for Spider2.0-style queries.
+
+    Args:
+        connection_name: Name of the database connection
+        from_table: Source table (e.g., 'public.orders')
+        to_table: Target table (e.g., 'public.products')
+        max_hops: Maximum FK hops to search (1-6, default 4)
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+        resp = await client.get(
+            f"/api/connections/{connection_name}/schema/join-paths",
+            params={"from_table": from_table, "to_table": to_table, "max_hops": max_hops},
+        )
+        if resp.status_code != 200:
+            return f"Error: {resp.text}"
+        data = resp.json()
+
+    paths = data.get("paths", [])
+    if not paths:
+        return f"No join path found between {from_table} and {to_table} within {max_hops} hops"
+
+    lines = [f"Join paths: {from_table} → {to_table} ({len(paths)} found)\n"]
+    for i, p in enumerate(paths):
+        lines.append(f"Path {i+1} ({p['hops']} hop{'s' if p['hops'] != 1 else ''}):")
+        lines.append(f"  Tables: {' → '.join(p['tables'])}")
+        for j in p.get("joins", []):
+            lines.append(f"  JOIN ON {j['from']} = {j['to']}")
+        if p.get("sql_hint"):
+            lines.append(f"  SQL: {p['sql_hint']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_relationships(connection_name: str, format: str = "compact") -> str:
+    """
+    Get all foreign key relationships for a connection — ERD overview.
+
+    Useful for understanding the data model before writing queries.
+    Returns FK arrows showing which tables reference which.
+
+    Args:
+        connection_name: Name of the database connection
+        format: Output format — 'compact' (arrows), 'graph' (adjacency list)
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+        resp = await client.get(
+            f"/api/connections/{connection_name}/schema/relationships",
+            params={"format": format},
+        )
+        if resp.status_code != 200:
+            return f"Error: {resp.text}"
+        data = resp.json()
+
+    if format == "compact":
+        rels = data.get("relationships", [])
+        if not rels:
+            return "No foreign key relationships found"
+        header = f"Foreign Key Relationships ({len(rels)}):\n"
+        return header + "\n".join(f"  {r}" for r in rels)
+    elif format == "graph":
+        adj = data.get("adjacency", {})
+        if not adj:
+            return "No relationships found"
+        lines = [f"Table Graph ({len(adj)} tables):\n"]
+        for table, neighbors in adj.items():
+            lines.append(f"  {table} ↔ {', '.join(neighbors)}")
+        return "\n".join(lines)
+    else:
+        return json.dumps(data, indent=2)
+
+
+@mcp.tool()
 async def cache_status() -> str:
     """
     Check the query cache status and performance.

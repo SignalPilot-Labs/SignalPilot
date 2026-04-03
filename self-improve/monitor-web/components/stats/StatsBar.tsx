@@ -78,7 +78,7 @@ export function StatsBar({
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="h-8 flex items-center gap-5 px-4 border-t border-[#1a1a1a] bg-[#050505]"
+      className="min-h-[36px] sm:h-8 flex items-center gap-3 sm:gap-5 px-3 sm:px-4 border-t border-[#1a1a1a] bg-[#050505] overflow-x-auto"
     >
       <Stat
         icon={

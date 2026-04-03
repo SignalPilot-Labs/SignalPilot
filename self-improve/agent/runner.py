@@ -634,6 +634,11 @@ async def run_agent(
 
     try:
         async with ClaudeSDKClient(options=options) as client:
+            # Strip sensitive env vars before any agent interaction so bash commands can't access them.
+            # The SDK client is already initialized and has captured what it needs.
+            for secret_var in ("CLAUDE_CODE_OAUTH_TOKEN", "GIT_TOKEN", "GH_TOKEN", "FGAT_GIT_TOKEN"):
+                os.environ.pop(secret_var, None)
+
             initial = custom_prompt if custom_prompt else prompt.build_initial_prompt()
             await client.query(initial)
             print("[agent] Sent initial prompt")
@@ -744,6 +749,10 @@ async def resume_agent(run_id: str, max_budget: float = 0):
 
     try:
         async with ClaudeSDKClient(options=options) as client:
+            # Strip sensitive env vars before any agent interaction
+            for secret_var in ("CLAUDE_CODE_OAUTH_TOKEN", "GIT_TOKEN", "GH_TOKEN", "FGAT_GIT_TOKEN"):
+                os.environ.pop(secret_var, None)
+
             await client.query(
                 "You are resuming a previous session. Continue where you left off. "
                 "Check your recent commits with `git log --oneline -5` to remember what you were working on."

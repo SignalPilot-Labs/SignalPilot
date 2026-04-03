@@ -8,7 +8,9 @@ Provides:
 """
 
 import asyncio
+import hmac
 import json
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -16,10 +18,12 @@ from pathlib import Path
 
 import aiosqlite
 import httpx
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import Depends, FastAPI, Header, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 from monitor import crypto
 
@@ -184,9 +188,32 @@ _CORS_ORIGINS = os.environ.get(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _CORS_ORIGINS],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
+
+
+# ---------------------------------------------------------------------------
+# API key auth
+# ---------------------------------------------------------------------------
+
+_API_KEY = os.environ.get("SP_API_KEY", "")
+
+
+async def verify_api_key(x_api_key: str = Header(default="")) -> None:
+    """Verify API key if SP_API_KEY is configured. Skip auth if not set."""
+    if not _API_KEY:
+        return  # No API key configured — allow all (local dev)
+    if not x_api_key or not hmac.compare_digest(x_api_key, _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def _agent_headers() -> dict[str, str]:
+    """Build headers for monitor-to-agent proxy calls, including API key if configured."""
+    headers: dict[str, str] = {}
+    if _API_KEY:
+        headers["X-API-Key"] = _API_KEY
+    return headers
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +249,7 @@ async def health():
 # Run APIs
 # ---------------------------------------------------------------------------
 
-@app.get("/api/runs")
+@app.get("/api/runs", dependencies=[Depends(verify_api_key)])
 async def list_runs(repo: str | None = Query(default=None)):
     conn = await _get_db()
     if repo:
@@ -238,7 +265,7 @@ async def list_runs(repo: str | None = Query(default=None)):
     return [_row_to_dict(r) for r in rows]
 
 
-@app.get("/api/runs/{run_id}")
+@app.get("/api/runs/{run_id}", dependencies=[Depends(verify_api_key)])
 async def get_run(run_id: str):
     conn = await _get_db()
     cursor = await conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
@@ -248,7 +275,7 @@ async def get_run(run_id: str):
     return _row_to_dict(row)
 
 
-@app.get("/api/runs/{run_id}/tools")
+@app.get("/api/runs/{run_id}/tools", dependencies=[Depends(verify_api_key)])
 async def get_tool_calls(
     run_id: str,
     limit: int = Query(default=200, le=1000),
@@ -266,7 +293,7 @@ async def get_tool_calls(
     return [_row_to_dict(r) for r in rows]
 
 
-@app.get("/api/runs/{run_id}/audit")
+@app.get("/api/runs/{run_id}/audit", dependencies=[Depends(verify_api_key)])
 async def get_audit_log(
     run_id: str,
     limit: int = Query(default=200, le=1000),
@@ -289,7 +316,7 @@ async def get_audit_log(
 # ---------------------------------------------------------------------------
 
 class ControlSignalRequest(BaseModel):
-    payload: str | None = None
+    payload: str | None = Field(default=None, max_length=50000)
 
 
 async def _send_agent_signal(signal: str, payload: str | None = None) -> None:
@@ -300,12 +327,12 @@ async def _send_agent_signal(signal: str, payload: str | None = None) -> None:
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             body = {"payload": payload} if payload else {}
-            await client.post(f"{AGENT_API_URL}/{endpoint}", json=body)
+            await client.post(f"{AGENT_API_URL}/{endpoint}", json=body, headers=_agent_headers())
     except Exception:
         pass  # Agent may be unreachable — signal is still in DB
 
 
-@app.post("/api/runs/{run_id}/pause")
+@app.post("/api/runs/{run_id}/pause", dependencies=[Depends(verify_api_key)])
 async def pause_run(run_id: str):
     conn = await _get_db()
     cursor = await conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,))
@@ -324,7 +351,7 @@ async def pause_run(run_id: str):
     return {"ok": True, "signal": "pause"}
 
 
-@app.post("/api/runs/{run_id}/resume")
+@app.post("/api/runs/{run_id}/resume", dependencies=[Depends(verify_api_key)])
 async def resume_run(run_id: str):
     conn = await _get_db()
     cursor = await conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,))
@@ -343,7 +370,7 @@ async def resume_run(run_id: str):
     return {"ok": True, "signal": "resume"}
 
 
-@app.post("/api/runs/{run_id}/inject")
+@app.post("/api/runs/{run_id}/inject", dependencies=[Depends(verify_api_key)])
 async def inject_prompt(run_id: str, body: ControlSignalRequest):
     if not body.payload or not body.payload.strip():
         raise HTTPException(status_code=400, detail="Payload (prompt text) is required")
@@ -366,7 +393,7 @@ async def inject_prompt(run_id: str, body: ControlSignalRequest):
     return {"ok": True, "signal": "inject", "prompt_length": len(payload)}
 
 
-@app.post("/api/runs/{run_id}/stop")
+@app.post("/api/runs/{run_id}/stop", dependencies=[Depends(verify_api_key)])
 async def stop_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
     conn = await _get_db()
     cursor = await conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,))
@@ -386,7 +413,7 @@ async def stop_run(run_id: str, body: ControlSignalRequest = ControlSignalReques
     return {"ok": True, "signal": "stop", "reason": reason}
 
 
-@app.post("/api/runs/{run_id}/unlock")
+@app.post("/api/runs/{run_id}/unlock", dependencies=[Depends(verify_api_key)])
 async def unlock_run(run_id: str):
     conn = await _get_db()
     cursor = await conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,))
@@ -409,17 +436,18 @@ async def unlock_run(run_id: str):
 # Agent proxy (health / branches / diff)
 # ---------------------------------------------------------------------------
 
-@app.get("/api/agent/health")
+@app.get("/api/agent/health", dependencies=[Depends(verify_api_key)])
 async def agent_health():
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.get(f"{AGENT_API_URL}/health")
+            res = await client.get(f"{AGENT_API_URL}/health", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        return {"status": "unreachable", "error": str(e)}
+        logger.error(f"Agent health check failed: {e}")
+        return {"status": "unreachable", "error": "Agent unreachable"}
 
 
-@app.get("/api/agent/branches")
+@app.get("/api/agent/branches", dependencies=[Depends(verify_api_key)])
 async def list_branches(repo: str | None = Query(None)):
     """List branches. If repo is given, queries GitHub API directly (no agent needed).
     Falls back to agent proxy, then to ["main"]."""
@@ -460,7 +488,7 @@ async def list_branches(repo: str | None = Query(None)):
     # Fallback: proxy to agent
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{AGENT_API_URL}/branches")
+            res = await client.get(f"{AGENT_API_URL}/branches", headers=_agent_headers())
             if res.status_code == 200:
                 return res.json()
     except Exception:
@@ -468,7 +496,7 @@ async def list_branches(repo: str | None = Query(None)):
     return ["main"]
 
 
-@app.get("/api/runs/{run_id}/diff")
+@app.get("/api/runs/{run_id}/diff", dependencies=[Depends(verify_api_key)])
 async def get_run_diff(run_id: str):
     conn = await _get_db()
     cursor = await conn.execute(
@@ -492,7 +520,7 @@ async def get_run_diff(run_id: str):
     if row["status"] in ("running", "paused"):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                res = await client.get(f"{AGENT_API_URL}/diff/live")
+                res = await client.get(f"{AGENT_API_URL}/diff/live", headers=_agent_headers())
                 if res.status_code == 200:
                     data = res.json()
                     data["source"] = "live"
@@ -504,7 +532,7 @@ async def get_run_diff(run_id: str):
     base = row["base_branch"] or "main"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{AGENT_API_URL}/diff/{branch}", params={"base": base})
+            res = await client.get(f"{AGENT_API_URL}/diff/{branch}", params={"base": base}, headers=_agent_headers())
             if res.status_code == 200:
                 data = res.json()
                 data["source"] = "agent"
@@ -520,24 +548,25 @@ async def get_run_diff(run_id: str):
 # ---------------------------------------------------------------------------
 
 class ParallelStartRequest(BaseModel):
-    prompt: str | None = None
+    prompt: str | None = Field(default=None, max_length=50000)
     max_budget_usd: float = 0
     duration_minutes: float = 0
-    base_branch: str = "main"
+    base_branch: str = Field(default="main", max_length=200)
 
 
-@app.get("/api/parallel/runs")
+@app.get("/api/parallel/runs", dependencies=[Depends(verify_api_key)])
 async def list_parallel_runs():
     """List all parallel run slots from the agent orchestrator."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{AGENT_API_URL}/parallel/runs")
+            res = await client.get(f"{AGENT_API_URL}/parallel/runs", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        return {"runs": [], "error": str(e)}
+        logger.error(f"Failed to list parallel runs: {e}")
+        return {"runs": [], "error": "Failed to reach agent"}
 
 
-@app.post("/api/parallel/start")
+@app.post("/api/parallel/start", dependencies=[Depends(verify_api_key)])
 async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()):
     """Start a new parallel agent run. Decrypts credentials and passes to orchestrator."""
     conn = await _get_db()
@@ -562,6 +591,7 @@ async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()
                     "base_branch": body.base_branch,
                     **creds,
                 },
+                headers=_agent_headers(),
             )
             if res.status_code >= 400:
                 raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
@@ -569,36 +599,39 @@ async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Agent unreachable during parallel start: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.get("/api/parallel/status")
+@app.get("/api/parallel/status", dependencies=[Depends(verify_api_key)])
 async def parallel_status():
     """Get parallel run system status."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{AGENT_API_URL}/parallel/status")
+            res = await client.get(f"{AGENT_API_URL}/parallel/status", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        return {"status": "unreachable", "error": str(e)}
+        logger.error(f"Parallel status check failed: {e}")
+        return {"status": "unreachable", "error": "Agent unreachable"}
 
 
-@app.get("/api/parallel/runs/{run_id}")
+@app.get("/api/parallel/runs/{run_id}", dependencies=[Depends(verify_api_key)])
 async def get_parallel_run(run_id: str):
     """Get status of a specific parallel run."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{AGENT_API_URL}/parallel/runs/{run_id}")
+            res = await client.get(f"{AGENT_API_URL}/parallel/runs/{run_id}", headers=_agent_headers())
             if res.status_code == 404:
                 raise HTTPException(status_code=404, detail="Run not found")
             return res.json()
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Get parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/runs/{run_id}/stop")
+@app.post("/api/parallel/runs/{run_id}/stop", dependencies=[Depends(verify_api_key)])
 async def stop_parallel_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
     """Stop a specific parallel run."""
     try:
@@ -606,46 +639,51 @@ async def stop_parallel_run(run_id: str, body: ControlSignalRequest = ControlSig
             res = await client.post(
                 f"{AGENT_API_URL}/parallel/runs/{run_id}/stop",
                 json={"payload": body.payload or "Operator stop"},
+                headers=_agent_headers(),
             )
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Stop parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/runs/{run_id}/kill")
+@app.post("/api/parallel/runs/{run_id}/kill", dependencies=[Depends(verify_api_key)])
 async def kill_parallel_run(run_id: str):
     """Kill a specific parallel run."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/kill")
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/kill", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Kill parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/runs/{run_id}/pause")
+@app.post("/api/parallel/runs/{run_id}/pause", dependencies=[Depends(verify_api_key)])
 async def pause_parallel_run(run_id: str):
     """Pause a specific parallel run."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/pause")
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/pause", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Pause parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/runs/{run_id}/resume")
+@app.post("/api/parallel/runs/{run_id}/resume", dependencies=[Depends(verify_api_key)])
 async def resume_parallel_run(run_id: str):
     """Resume a paused parallel run."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/resume")
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/resume", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Resume parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/runs/{run_id}/inject")
+@app.post("/api/parallel/runs/{run_id}/inject", dependencies=[Depends(verify_api_key)])
 async def inject_parallel_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
     """Inject a prompt into a parallel run."""
     if not body.payload:
@@ -655,39 +693,43 @@ async def inject_parallel_run(run_id: str, body: ControlSignalRequest = ControlS
             res = await client.post(
                 f"{AGENT_API_URL}/parallel/runs/{run_id}/inject",
                 json={"payload": body.payload},
+                headers=_agent_headers(),
             )
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Inject parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/runs/{run_id}/unlock")
+@app.post("/api/parallel/runs/{run_id}/unlock", dependencies=[Depends(verify_api_key)])
 async def unlock_parallel_run(run_id: str):
     """Unlock session for a parallel run."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/unlock")
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/unlock", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Unlock parallel run failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
-@app.post("/api/parallel/cleanup")
+@app.post("/api/parallel/cleanup", dependencies=[Depends(verify_api_key)])
 async def cleanup_parallel():
     """Clean up finished parallel run containers."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            res = await client.post(f"{AGENT_API_URL}/parallel/cleanup")
+            res = await client.post(f"{AGENT_API_URL}/parallel/cleanup", headers=_agent_headers())
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        logger.error(f"Cleanup parallel runs failed: {e}")
+        raise HTTPException(status_code=502, detail="Agent unreachable")
 
 
 # ---------------------------------------------------------------------------
 # SSE Streaming (polling SQLite instead of pg LISTEN/NOTIFY)
 # ---------------------------------------------------------------------------
 
-@app.get("/api/stream/{run_id}")
+@app.get("/api/stream/{run_id}", dependencies=[Depends(verify_api_key)])
 async def stream_events(run_id: str):
     """SSE endpoint — polls SQLite for new tool calls and audit events."""
 
@@ -752,7 +794,7 @@ async def stream_events(run_id: str):
     )
 
 
-@app.get("/api/poll/{run_id}")
+@app.get("/api/poll/{run_id}", dependencies=[Depends(verify_api_key)])
 async def poll_events(run_id: str, after_tool: int = 0, after_audit: int = 0):
     """Polling fallback for environments where SSE doesn't work (e.g. Cloudflare tunnels)."""
     conn = await _get_db()
@@ -781,7 +823,7 @@ async def poll_events(run_id: str, after_tool: int = 0, after_audit: int = 0):
     }
 
 
-@app.get("/api/stream/latest")
+@app.get("/api/stream/latest", dependencies=[Depends(verify_api_key)])
 async def stream_latest():
     conn = await _get_db()
     cursor = await conn.execute(
@@ -800,7 +842,7 @@ async def stream_latest():
 SECRET_KEYS = {"claude_token", "git_token"}
 
 
-@app.get("/api/settings/status")
+@app.get("/api/settings/status", dependencies=[Depends(verify_api_key)])
 async def settings_status():
     """Check which credentials are configured."""
     conn = await _get_db()
@@ -823,7 +865,7 @@ async def settings_status():
     return result
 
 
-@app.get("/api/settings")
+@app.get("/api/settings", dependencies=[Depends(verify_api_key)])
 async def get_settings():
     """Get all settings with secrets masked."""
     conn = await _get_db()
@@ -844,13 +886,13 @@ async def get_settings():
 
 
 class UpdateSettingsRequest(BaseModel):
-    claude_token: str | None = None
-    git_token: str | None = None
-    github_repo: str | None = None
-    max_budget_usd: str | None = None
+    claude_token: str | None = Field(default=None, max_length=500)
+    git_token: str | None = Field(default=None, max_length=500)
+    github_repo: str | None = Field(default=None, max_length=200)
+    max_budget_usd: str | None = Field(default=None, max_length=20)
 
 
-@app.put("/api/settings")
+@app.put("/api/settings", dependencies=[Depends(verify_api_key)])
 async def update_settings(body: UpdateSettingsRequest):
     """Create or update settings. Secrets are encrypted before storage."""
     conn = await _get_db()
@@ -898,7 +940,7 @@ async def _add_repo_to_list(conn: aiosqlite.Connection, repo: str) -> None:
     )
 
 
-@app.get("/api/repos")
+@app.get("/api/repos", dependencies=[Depends(verify_api_key)])
 async def list_repos():
     """List all configured repos."""
     conn = await _get_db()
@@ -931,10 +973,14 @@ async def list_repos():
     return result
 
 
-@app.put("/api/repos/active")
-async def set_active_repo(body: dict):
+class SetActiveRepoRequest(BaseModel):
+    repo: str = Field(max_length=200)
+
+
+@app.put("/api/repos/active", dependencies=[Depends(verify_api_key)])
+async def set_active_repo(body: SetActiveRepoRequest):
     """Set the active repo."""
-    repo = body.get("repo", "").strip()
+    repo = body.repo.strip()
     if not repo:
         raise HTTPException(status_code=400, detail="repo is required")
     conn = await _get_db()
@@ -950,7 +996,7 @@ async def set_active_repo(body: dict):
     return {"ok": True, "active_repo": repo}
 
 
-@app.delete("/api/repos/{repo_slug:path}")
+@app.delete("/api/repos/{repo_slug:path}", dependencies=[Depends(verify_api_key)])
 async def remove_repo(repo_slug: str):
     """Remove a repo from the list (does not delete runs)."""
     conn = await _get_db()

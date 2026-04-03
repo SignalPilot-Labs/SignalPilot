@@ -12,6 +12,7 @@ services:
       DB_PATH: /data/improve.db
       MASTER_KEY_PATH: /data/master.key
       AGENT_API_URL: http://agent:8500
+      SP_API_KEY: ${SP_API_KEY:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3401/health || exit 1"]
       interval: 15s
@@ -30,6 +31,32 @@ services:
     depends_on:
       - monitor
 
+  # Restricted Docker socket proxy — only exposes the API calls needed by run_manager
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: improve-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1      # inspect, start, stop, rm
+      POST: 1            # allow POST (run, stop, rm)
+      VOLUMES: 1         # volume create/rm
+      NETWORKS: 0        # no network management
+      SERVICES: 0        # no swarm services
+      TASKS: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      EXEC: 0
+      IMAGES: 0
+      INFO: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SWARM: 0
+      SYSTEM: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   agent:
     build:
       context: .
@@ -43,6 +70,10 @@ services:
       DB_PATH: /data/improve.db
       SP_BENCHMARK_DIR: /bench
       SP_GATEWAY_URL: http://host.docker.internal:3300
+      SP_API_KEY: ${SP_API_KEY:-}
+      DOCKER_HOST: tcp://docker-proxy:2375
+    depends_on:
+      - docker-proxy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8500/health || exit 1"]
       interval: 10s
@@ -53,7 +84,6 @@ services:
       - improve-db:/data
       - ../:/workspace:rw
       - ../research:/home/agentuser/research:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - ${SP_BENCHMARK_DIR:-/tmp/signalpilot-bench}:/bench:rw
       # Persist Claude CLI auth + sessions across restarts
       - claude-agent-sessions:/home/agentuser/.claude

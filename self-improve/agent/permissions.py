@@ -50,11 +50,11 @@ _cred_re = re.compile("|".join(CREDENTIAL_PATTERNS), re.IGNORECASE)
 
 # Dangerous bash patterns
 DANGEROUS_PATTERNS = [
-    r"rm\s+(-\w*r\w*f|-\w*f\w*r|--force.*--recursive|--recursive.*--force)\s+/\s*$",
+    r"rm\s+(-\w*r\w*f|-\w*f\w*r|--force.*--recursive|--recursive.*--force)\s+/($|\s|\*)",
     r"mkfs\.",
     r"dd\s+.*of=/dev/",
     r">\s*/dev/sd[a-z]",
-    r"chmod\s+-R\s+777\s+/\s*$",
+    r"chmod\s+(-R\s+)?777\s+/($|\s|data|etc|home|var|workspace)",
 ]
 _dangerous_re = re.compile("|".join(DANGEROUS_PATTERNS))
 
@@ -157,7 +157,7 @@ def _check_token_exposure(cmd: str) -> str | None:
     """Block commands that would print or expose tokens/secrets.
 
     Covers direct shell builtins, subshell invocations, interpreter one-liners,
-    and /proc filesystem access to environment variables.
+    /proc filesystem access, generic env-dumping, and exfiltration patterns.
     """
     _secret_vars = "GIT_TOKEN|ANTHROPIC_API_KEY|GH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|FGAT_GIT_TOKEN"
     exposure_patterns = [
@@ -170,17 +170,45 @@ def _check_token_exposure(cmd: str) -> str | None:
         r"\benv\s*$",
         r"\bset\s*$",
         r"\bexport\s*$",
-        # Subshell and interpreter one-liners that could read env vars
+        # Subshell and interpreter one-liners that could read specific env vars
         rf"(python3?|node|perl|ruby)\s+(-[ce]|--eval)\s+.*({_secret_vars})",
         rf"bash\s+-c\s+.*({_secret_vars})",
         rf"sh\s+-c\s+.*({_secret_vars})",
+        # Generic env-dumping via interpreters (no specific var needed)
+        r'python3?\s+(-c|--command)\s+["\'].*os\.environ',
+        r'python3?\s+(-c|--command)\s+["\'].*\benviron\b',
+        r'node\s+(-e|--eval)\s+["\'].*process\.env',
+        r'ruby\s+(-e|--eval)\s+["\'].*\bENV\b',
+        r'perl\s+(-e|--eval)\s+["\'].*%ENV',
         # /proc filesystem access to environment
         r"cat\s+.*/proc/.*/environ",
         r"/proc/self/environ",
+        r"/proc/1/environ",
+        r"strings\s+.*/proc/.*/environ",
+        r"strings\s+/proc",
+        # Exfiltration of env vars via curl/wget
+        rf"curl\s+.*\$\{{?({_secret_vars})",
+        rf"wget\s+.*\$\{{?({_secret_vars})",
+        # Base64/hex encoding of .env files
+        r"base64\s+.*\.env",
+        r"xxd\s+.*\.env",
+        r"od\s+.*\.env",
     ]
     for pattern in exposure_patterns:
         if re.search(pattern, cmd):
             return "Blocked command that would expose credentials"
+    return None
+
+
+def _check_bash_path_confinement(cmd: str) -> str | None:
+    """Block bash commands that access files outside allowed directories."""
+    file_commands = r"(?:cat|head|tail|less|more|cp|mv|ln|chmod|chown|stat|file|strings|xxd|od|base64)\s+"
+    matches = re.findall(rf"(?:{file_commands})(/[^\s;|&]+)", cmd)
+    allowed_prefixes = ("/workspace", "/home/agentuser/repo", "/tmp", "/usr", "/var", "/etc", "/dev/null")
+    for path in matches:
+        norm = os.path.normpath(path)
+        if not any(norm == p or norm.startswith(p + "/") for p in allowed_prefixes):
+            return f"Bash file access to '{path}' is outside allowed directories"
     return None
 
 
@@ -215,6 +243,7 @@ async def check_tool_permission(
             or _check_dangerous_command(cmd)
             or _check_git_push(cmd)
             or _check_repo_exploration(cmd)
+            or _check_bash_path_confinement(cmd)
         )
 
     # --- Audit the decision ---

@@ -113,6 +113,8 @@ class Spinner:
         self._thread: threading.Thread | None = None
 
     def start(self) -> "Spinner":
+        if not IS_TTY:
+            return self  # No-op in non-TTY environments
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()

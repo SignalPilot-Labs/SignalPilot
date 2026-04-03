@@ -130,18 +130,27 @@ class TestUiSpinner:
 
     def test_thread_is_alive_after_start(self):
         spinner = ui.Spinner("loading")
-        spinner.start()
+        with patch.object(ui, "IS_TTY", True):
+            spinner.start()
         assert spinner._thread is not None
         assert spinner._thread.is_alive()
         spinner.stop(clear=False)
 
     def test_thread_is_stopped_after_stop(self):
         spinner = ui.Spinner("loading")
-        spinner.start()
+        with patch.object(ui, "IS_TTY", True):
+            spinner.start()
         spinner.stop(clear=False)
         # Give the thread a moment to finish (stop() joins with timeout=1)
         spinner._thread.join(timeout=2)
         assert not spinner._thread.is_alive()
+
+    def test_noop_in_non_tty(self):
+        spinner = ui.Spinner("loading")
+        with patch.object(ui, "IS_TTY", False):
+            spinner.start()
+        assert spinner._thread is None
+        spinner.stop(clear=False)  # must not raise
 
     def test_stop_without_start_does_not_raise(self):
         spinner = ui.Spinner("loading")

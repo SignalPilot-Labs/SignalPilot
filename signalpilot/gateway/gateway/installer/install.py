@@ -78,11 +78,19 @@ def _compose_file(repo_root: Path, dev: bool = False) -> Path:
 
 
 def _run_compose(
-    compose_file: Path, *args: str, capture: bool = False
+    compose_file: Path, *args: str, capture: bool = False, verbose: bool = False
 ) -> subprocess.CompletedProcess:
     cmd = ["docker", "compose", "-f", str(compose_file), *args]
+    if verbose:
+        ui.hint(f"$ {' '.join(cmd)}")
     if capture:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if verbose and result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"      {ui.DIM}{line}{ui.RESET}")
+        return result
+    if verbose:
+        return subprocess.run(cmd, stderr=subprocess.PIPE, text=True, timeout=300)
     return subprocess.run(
         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=300
     )
@@ -191,7 +199,7 @@ def _configure_env(repo_root: Path, non_interactive: bool = False, step: int = 0
     ui.hint(f"Non-secret settings: ~/.signalpilot/config.yml  (run: sp config)")
 
 
-def _build_services(compose_file: Path, services: list[str], step: int = 0, total: int = 0) -> bool:
+def _build_services(compose_file: Path, services: list[str], step: int = 0, total: int = 0, verbose: bool = False) -> bool:
     """Build Docker services with progress display."""
     ui.section("Building", step, total)
 
@@ -220,9 +228,9 @@ def _build_services(compose_file: Path, services: list[str], step: int = 0, tota
 
         try:
             if svc == "postgres":
-                result = _run_compose(compose_file, "pull", "postgres", capture=True)
+                result = _run_compose(compose_file, "pull", "postgres", capture=True, verbose=verbose)
             else:
-                result = _run_compose(compose_file, "build", svc, capture=True)
+                result = _run_compose(compose_file, "build", svc, capture=True, verbose=verbose)
         except subprocess.TimeoutExpired:
             spinner.stop()
             if ui.IS_TTY:
@@ -250,13 +258,16 @@ def _build_services(compose_file: Path, services: list[str], step: int = 0, tota
     return True
 
 
-def _start_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0) -> bool:
+def _start_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0, verbose: bool = False) -> bool:
     """Start services and wait for health."""
     ui.section("Starting services", step, total)
 
-    result = _run_compose(compose_file, "up", "-d")
+    result = _run_compose(compose_file, "up", "-d", verbose=verbose)
     if result.returncode != 0:
         ui.fail("docker compose", "failed to start")
+        if result.stderr:
+            for line in result.stderr.strip().split("\n")[-10:]:
+                print(f"      {ui.DIM}{line}{ui.RESET}")
         ui.hint(f"Run: docker compose -f {compose_file} up")
         return False
 
@@ -283,7 +294,7 @@ def _start_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0
         for _ in range(0, timeout, 2):
             try:
                 ps_result = _run_compose(
-                    compose_file, "ps", "--format", "json", svc, capture=True
+                    compose_file, "ps", "--format", "json", svc, capture=True, verbose=False
                 )
                 output = ps_result.stdout.lower()
                 if "healthy" in output or "running" in output:
@@ -342,6 +353,7 @@ def run_install(
     dev: bool = False,
     skip_build: bool = False,
     non_interactive: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Main install entry point."""
 
@@ -491,12 +503,12 @@ def run_install(
         services = ["gateway", "web", "postgres"]
         if not dev:
             services.append("sandbox")
-        if not _build_services(compose_file, services, next_step(), total_steps):
+        if not _build_services(compose_file, services, next_step(), total_steps, verbose=verbose):
             ui.hint("Fix the build errors above, then re-run: sp install")
             sys.exit(1)
 
     # Start
-    if not _start_services(compose_file, cfg, next_step(), total_steps):
+    if not _start_services(compose_file, cfg, next_step(), total_steps, verbose=verbose):
         ui.hint("Some services failed to start. Check logs above.")
 
     # Verify

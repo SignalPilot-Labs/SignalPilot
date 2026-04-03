@@ -711,6 +711,27 @@ async def cleanup_parallel():
 # Key Pool APIs (proxy to agent)
 # ---------------------------------------------------------------------------
 
+# --- Key Pool Proxy Models ---
+
+class AddKeyProxyRequest(BaseModel):
+    provider: str
+    key: str
+    label: str = ""
+    priority: int = 0
+
+class UpdateKeyProxyRequest(BaseModel):
+    label: str | None = None
+    priority: int | None = None
+    is_enabled: bool | None = None
+
+class RotationConfigProxyUpdate(BaseModel):
+    codex_fallback_enabled: bool | None = None
+    auto_wait_enabled: bool | None = None
+    max_wait_minutes: int | None = None
+    rotation_strategy: str | None = None
+    prefer_model_downgrade_over_codex: bool | None = None
+
+
 @app.get("/api/keys")
 async def list_keys():
     """List all API keys (masked)."""
@@ -723,11 +744,11 @@ async def list_keys():
 
 
 @app.post("/api/keys")
-async def add_key(body: dict):
+async def add_key(body: AddKeyProxyRequest):
     """Add a new API key to the pool."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(f"{AGENT_API_URL}/keys", json=body)
+            res = await client.post(f"{AGENT_API_URL}/keys", json=body.model_dump())
             if res.status_code >= 400:
                 raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
             return res.json()
@@ -760,11 +781,11 @@ async def get_key_config():
 
 
 @app.patch("/api/keys/config")
-async def update_key_config(body: dict):
+async def update_key_config(body: RotationConfigProxyUpdate):
     """Update rotation config."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.patch(f"{AGENT_API_URL}/keys/config", json=body)
+            res = await client.patch(f"{AGENT_API_URL}/keys/config", json=body.model_dump(exclude_none=True))
             if res.status_code >= 400:
                 raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
             return res.json()
@@ -775,11 +796,11 @@ async def update_key_config(body: dict):
 
 
 @app.patch("/api/keys/{key_id}")
-async def update_key(key_id: str, body: dict):
+async def update_key(key_id: str, body: UpdateKeyProxyRequest):
     """Update key metadata."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.patch(f"{AGENT_API_URL}/keys/{key_id}", json=body)
+            res = await client.patch(f"{AGENT_API_URL}/keys/{key_id}", json=body.model_dump(exclude_none=True))
             if res.status_code >= 400:
                 raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
             return res.json()

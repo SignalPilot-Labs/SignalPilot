@@ -453,22 +453,14 @@ class TestGetConfig:
 class TestUpdateConfig:
     @pytest.mark.asyncio
     async def test_update_config_endpoint(self, app_client):
-        """PATCH /keys/config updates the specified config fields.
-
-        NOTE: Due to router registration order (PATCH /keys/{key_id} is registered
-        before PATCH /keys/config), FastAPI resolves 'config' as a key_id and the
-        dedicated config handler is never reached. This test documents that the
-        endpoint returns 404 under the current routing order — this is a known
-        bug that should be fixed by moving PATCH /keys/config above
-        PATCH /keys/{key_id} in endpoints.py.
-        """
+        """PATCH /keys/config updates the specified config fields."""
         # Seed defaults first via GET
         await app_client.get("/keys/config")
 
         resp = await app_client.patch("/keys/config", json={"max_wait_minutes": 30})
-        # BUG: PATCH /keys/{key_id} captures 'config' before the config route is reached.
-        # When the bug is fixed this assertion should change to 200.
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["max_wait_minutes"] == "30"
 
     @pytest.mark.asyncio
     async def test_update_config_directly_via_pool(self, app_client):

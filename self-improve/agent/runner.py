@@ -11,6 +11,8 @@ import shutil
 import time
 from pathlib import Path
 
+from agent.key_pool import KeyPool
+
 from claude_agent_sdk import (
     ClaudeSDKClient,
     ClaudeAgentOptions,
@@ -138,10 +140,11 @@ async def _run_loop(
     initial_cost: float = 0,
     initial_input_tokens: int = 0,
     initial_output_tokens: int = 0,
-) -> tuple[str, float, int, int]:
+    key_pool: KeyPool | None = None,
+) -> tuple[str, float, int, int, bool]:
     """Shared loop for both run_agent and resume_agent.
 
-    Returns (final_status, total_cost, total_input_tokens, total_output_tokens).
+    Returns (final_status, total_cost, total_input_tokens, total_output_tokens, should_restart_client).
     """
     total_cost = initial_cost
     total_input_tokens = initial_input_tokens
@@ -255,32 +258,78 @@ async def _run_loop(
                     "status": info.status,
                     "resets_at": info.resets_at,
                     "utilization": info.utilization,
+                    "active_key_id": key_pool.active_key_id if key_pool else None,
                 })
                 if info.status == "rejected":
-                    resets_at = info.resets_at
-                    wait_sec = max(0, resets_at - time.time()) if resets_at else 0
-
-                    if fallback_model and fallback_model != model:
-                        print(f"[agent] Rate limited on {model}, SDK should fallback to {fallback_model}. Continuing...")
-                        await db.log_audit(run_id, "rate_limit_fallback", {
-                            "primary_model": model,
-                            "fallback_model": fallback_model,
-                            "resets_at": resets_at,
-                        })
+                    if key_pool:
+                        # Step 1: Mark current key as rate-limited
+                        await key_pool.mark_rate_limited(
+                            resets_at=info.resets_at,
+                            utilization=info.utilization,
+                        )
+                        # Step 2: Try to rotate to next available key
+                        next_key = await key_pool.handle_rate_limit()
+                        if next_key is not None:
+                            if next_key.provider == "codex":
+                                await db.log_audit(run_id, "codex_fallback", {
+                                    "key_id": next_key.id,
+                                    "reason": "all_claude_keys_rate_limited",
+                                })
+                                # Codex is degraded mode — for now, log and fall through to wait/pause
+                                print(f"[agent] Codex fallback activated (degraded mode)")
+                            else:
+                                await db.log_audit(run_id, "key_rotated", {
+                                    "from_key": key_pool.previous_key_id,
+                                    "to_key": next_key.id,
+                                    "resets_at": info.resets_at,
+                                })
+                                os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = next_key.decrypted_value
+                                print(f"[agent] Key rotated to {next_key.label or next_key.id[:8]}")
+                                return final_status, total_cost, total_input_tokens, total_output_tokens, True
+                        else:
+                            # All keys exhausted — try auto-wait
+                            next_key = await key_pool.wait_for_next_available_key(
+                                should_stop_fn=lambda: signals._signal_queue and not signals._signal_queue.empty(),
+                            )
+                            if next_key is not None:
+                                os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = next_key.decrypted_value
+                                print(f"[agent] Key available after wait: {next_key.label or next_key.id[:8]}")
+                                return final_status, total_cost, total_input_tokens, total_output_tokens, True
+                            # Auto-wait exhausted or disabled
+                            resets_at = info.resets_at
+                            wait_min = int(max(0, (resets_at or 0) - time.time()) / 60)
+                            print(f"[agent] All keys exhausted. Earliest reset in {wait_min}m. Pausing.")
+                            await db.update_run_status(run_id, "rate_limited")
+                            if resets_at:
+                                await db.save_rate_limit_reset(run_id, int(resets_at))
+                            final_status = "rate_limited"
+                            should_stop = True
+                            break
                     else:
-                        wait_min = int(wait_sec / 60)
-                        print(f"[agent] Rate limited. Resets in {wait_min}m. Pausing run for resume.")
-                        await db.update_run_status(run_id, "rate_limited")
-                        if resets_at:
-                            await db.save_rate_limit_reset(run_id, int(resets_at))
-                        await db.log_audit(run_id, "rate_limit_paused", {
-                            "resets_at": resets_at,
-                            "wait_seconds": int(wait_sec) if resets_at else None,
-                            "message": "Run paused. Use Resume to continue when rate limit clears.",
-                        })
-                        final_status = "rate_limited"
-                        should_stop = True
-                        break
+                        # No key pool — legacy single-key behavior
+                        resets_at = info.resets_at
+                        wait_sec = max(0, resets_at - time.time()) if resets_at else 0
+                        if fallback_model and fallback_model != model:
+                            print(f"[agent] Rate limited on {model}, SDK should fallback to {fallback_model}. Continuing...")
+                            await db.log_audit(run_id, "rate_limit_fallback", {
+                                "primary_model": model,
+                                "fallback_model": fallback_model,
+                                "resets_at": resets_at,
+                            })
+                        else:
+                            wait_min = int(wait_sec / 60)
+                            print(f"[agent] Rate limited. Resets in {wait_min}m. Pausing run for resume.")
+                            await db.update_run_status(run_id, "rate_limited")
+                            if resets_at:
+                                await db.save_rate_limit_reset(run_id, int(resets_at))
+                            await db.log_audit(run_id, "rate_limit_paused", {
+                                "resets_at": resets_at,
+                                "wait_seconds": int(wait_sec) if resets_at else None,
+                                "message": "Run paused. Use Resume to continue when rate limit clears.",
+                            })
+                            final_status = "rate_limited"
+                            should_stop = True
+                            break
 
             # --- ResultMessage ---
             elif isinstance(message, ResultMessage):
@@ -485,7 +534,7 @@ async def _run_loop(
             print(f"[agent] Worker assigned round {round_num + 2} task")
             await client.query(worker_prompt)
 
-    return final_status, total_cost, total_input_tokens, total_output_tokens
+    return final_status, total_cost, total_input_tokens, total_output_tokens, False
 
 
 # =============================================================================
@@ -592,6 +641,21 @@ async def run_agent(
     work_dir = git_ops.get_work_dir()
     _copy_skills(work_dir)
 
+    # --- Initialize key pool ---
+    key_pool = KeyPool(run_id=run_id)
+    try:
+        await key_pool.migrate_single_token_to_pool()
+    except Exception as e:
+        print(f"[agent] Key pool migration (non-fatal): {e}")
+    active_key = await key_pool.get_next_key(provider="claude_code")
+    if active_key:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = active_key.decrypted_value
+        await db.log_audit(run_id, "key_pool_initialized", {
+            "count": len(await key_pool.list_keys()),
+            "active_key_id": active_key.id,
+        })
+    # If no keys in pool, fall through — existing env var token will be used
+
     # --- Build SDK options ---
     agent_defs = subagents.build_subagent_definitions()
     options = _build_sdk_options(
@@ -633,21 +697,34 @@ async def run_agent(
     total_output = 0
 
     try:
-        async with ClaudeSDKClient(options=options) as client:
-            initial = custom_prompt if custom_prompt else prompt.build_initial_prompt()
-            await client.query(initial)
-            print("[agent] Sent initial prompt")
+        should_restart_client = True
+        is_first_start = True
+        while should_restart_client:
+            should_restart_client = False
+            async with ClaudeSDKClient(options=options) as client:
+                if is_first_start:
+                    initial = custom_prompt if custom_prompt else prompt.build_initial_prompt()
+                    await client.query(initial)
+                    print("[agent] Sent initial prompt")
+                    is_first_start = False
+                else:
+                    await client.query(
+                        "Continuing after key rotation. Pick up where you left off. "
+                        "Check `git log --oneline -5` to see recent work."
+                    )
+                    print("[agent] Sent continuation prompt after key rotation")
 
-            final_status, total_cost, total_input, total_output = await _run_loop(
-                client=client,
-                run_id=run_id,
-                branch_name=branch_name,
-                custom_prompt=custom_prompt,
-                duration_minutes=duration_minutes,
-                model=model,
-                fallback_model=fallback_model,
-                base_branch=base_branch,
-            )
+                final_status, total_cost, total_input, total_output, should_restart_client = await _run_loop(
+                    client=client,
+                    run_id=run_id,
+                    branch_name=branch_name,
+                    custom_prompt=custom_prompt,
+                    duration_minutes=duration_minutes,
+                    model=model,
+                    fallback_model=fallback_model,
+                    base_branch=base_branch,
+                    key_pool=key_pool,
+                )
 
     except asyncio.CancelledError:
         print("[agent] Run KILLED by operator")
@@ -718,6 +795,12 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     # --- Copy skills ---
     _copy_skills(work_dir)
 
+    # --- Initialize key pool ---
+    key_pool = KeyPool(run_id=run_id)
+    active_key = await key_pool.get_next_key(provider="claude_code")
+    if active_key:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = active_key.decrypted_value
+
     # --- SDK options with resume ---
     agent_defs = subagents.build_subagent_definitions()
     options = _build_sdk_options(
@@ -741,36 +824,49 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     prior_input = run_info.get("total_input_tokens", 0) or 0
     prior_output = run_info.get("total_output_tokens", 0) or 0
     final_status = "completed"
+    total_cost = prior_cost
+    total_input = prior_input
+    total_output = prior_output
 
     try:
-        async with ClaudeSDKClient(options=options) as client:
-            await client.query(
-                "You are resuming a previous session. Continue where you left off. "
-                "Check your recent commits with `git log --oneline -5` to remember what you were working on."
-            )
-            print("[agent] Resume prompt sent")
+        should_restart_client = True
+        is_first_start = True
+        while should_restart_client:
+            should_restart_client = False
+            async with ClaudeSDKClient(options=options) as client:
+                if is_first_start:
+                    await client.query(
+                        "You are resuming a previous session. Continue where you left off. "
+                        "Check your recent commits with `git log --oneline -5` to remember what you were working on."
+                    )
+                    print("[agent] Resume prompt sent")
+                    is_first_start = False
+                else:
+                    await client.query(
+                        "Continuing after key rotation. Pick up where you left off."
+                    )
 
-            final_status, total_cost, total_input, total_output = await _run_loop(
-                client=client,
-                run_id=run_id,
-                branch_name=branch_name,
-                custom_prompt=custom_prompt,
-                duration_minutes=duration_minutes,
-                model=model,
-                fallback_model=fallback_model,
-                base_branch=base_branch,
-                initial_cost=prior_cost,
-                initial_input_tokens=prior_input,
-                initial_output_tokens=prior_output,
-            )
+                result = await _run_loop(
+                    client=client,
+                    run_id=run_id,
+                    branch_name=branch_name,
+                    custom_prompt=custom_prompt,
+                    duration_minutes=duration_minutes,
+                    model=model,
+                    fallback_model=fallback_model,
+                    base_branch=base_branch,
+                    initial_cost=total_cost,
+                    initial_input_tokens=total_input,
+                    initial_output_tokens=total_output,
+                    key_pool=key_pool,
+                )
+                final_status, total_cost, total_input, total_output, should_restart_client = result
 
     except asyncio.CancelledError:
         final_status = "killed"
-        total_cost, total_input, total_output = prior_cost, prior_input, prior_output
     except Exception as e:
         print(f"[agent] Resume error: {e}")
         final_status = "error"
-        total_cost, total_input, total_output = prior_cost, prior_input, prior_output
         await db.log_audit(run_id, "fatal_error", {"error": str(e)})
     finally:
         signals.stop_pulse_checker()

@@ -98,6 +98,30 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_run_id ON audit_log(run_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_control_signals_run_id ON control_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id, consumed);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('claude_code', 'codex')),
+    label TEXT NOT NULL DEFAULT '',
+    encrypted_key TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    rate_limit_resets_at INTEGER,
+    rate_limit_utilization REAL,
+    last_used_at TEXT,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_provider ON api_keys(provider);
+CREATE INDEX IF NOT EXISTS idx_api_keys_priority ON api_keys(provider, priority, is_enabled);
+
+CREATE TABLE IF NOT EXISTS key_rotation_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 db: aiosqlite.Connection | None = None
@@ -678,6 +702,104 @@ async def cleanup_parallel():
         async with httpx.AsyncClient(timeout=30) as client:
             res = await client.post(f"{AGENT_API_URL}/parallel/cleanup")
             return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+
+# ---------------------------------------------------------------------------
+# Key Pool APIs (proxy to agent)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/keys")
+async def list_keys():
+    """List all API keys (masked)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/keys")
+            return res.json()
+    except Exception as e:
+        return []
+
+
+@app.post("/api/keys")
+async def add_key(body: dict):
+    """Add a new API key to the pool."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/keys", json=body)
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.patch("/api/keys/{key_id}")
+async def update_key(key_id: str, body: dict):
+    """Update key metadata."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.patch(f"{AGENT_API_URL}/keys/{key_id}", json=body)
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.delete("/api/keys/{key_id}")
+async def delete_key(key_id: str):
+    """Remove a key from the pool."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.delete(f"{AGENT_API_URL}/keys/{key_id}")
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.get("/api/keys/status")
+async def key_pool_status():
+    """Get key pool status."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/keys/status")
+            return res.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/keys/config")
+async def get_key_config():
+    """Get rotation config."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/keys/config")
+            return res.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.patch("/api/keys/config")
+async def update_key_config(body: dict):
+    """Update rotation config."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.patch(f"{AGENT_API_URL}/keys/config", json=body)
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 

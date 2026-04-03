@@ -45,6 +45,8 @@ CREDENTIAL_PATTERNS = [
     r"\.npmrc$",
     r"\.pypirc$",
     r"\.docker/config\.json",
+    r"api_keys",
+    r"key_rotation",
 ]
 _cred_re = re.compile("|".join(CREDENTIAL_PATTERNS), re.IGNORECASE)
 

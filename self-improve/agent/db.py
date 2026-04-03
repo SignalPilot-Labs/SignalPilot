@@ -97,6 +97,30 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_control_signals_run_id ON control_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id, consumed);
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('claude_code', 'codex')),
+    label TEXT NOT NULL DEFAULT '',
+    encrypted_key TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    rate_limit_resets_at INTEGER,
+    rate_limit_utilization REAL,
+    last_used_at TEXT,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_provider ON api_keys(provider);
+CREATE INDEX IF NOT EXISTS idx_api_keys_priority ON api_keys(provider, priority, is_enabled);
+
+CREATE TABLE IF NOT EXISTS key_rotation_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

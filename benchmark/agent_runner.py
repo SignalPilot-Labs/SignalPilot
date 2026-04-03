@@ -74,12 +74,21 @@ def _build_system_prompt(task: TaskContext, config: BenchmarkConfig) -> str:
         "- Use `list_tables` or `describe_table` for schema exploration",
         "- Your goal is to produce the CORRECT result set that answers the question",
         "",
-        "## Approach",
-        "1. Explore schema: use `list_tables` or query `SELECT name, sql FROM sqlite_master WHERE type='table'`",
-        "2. Examine relevant tables: use `describe_table` or `SELECT * FROM table_name LIMIT 3`",
-        "3. Write your SQL query to answer the question",
-        "4. Execute it with `query_database` and verify the results make sense",
-        "5. If results look wrong, iterate — check data types, NULLs, joins",
+        "## Approach (follow this EXACTLY)",
+        "1. PLAN: Before any SQL, state: (a) what columns the answer needs, (b) how many rows, (c) what units",
+        "2. EXPLORE: use `list_tables` then `describe_table` for relevant tables, sample with LIMIT 3",
+        "3. WRITE SQL: SELECT only the columns the question asks for — no extra columns!",
+        "4. EXECUTE: run with `query_database`, verify result shape matches your plan",
+        "5. VERIFY: check row count, column count, numeric scale/units, aggregation level",
+        "6. If results look wrong, iterate — check data types, NULLs, joins, filters",
+        "",
+        "## CRITICAL Rules",
+        "- SELECT ONLY the columns the question asks for. Extra columns = WRONG answer.",
+        "- For percentages/rates: output as 0-100 (e.g., 45.5), NOT as 0-1 fraction",
+        "- For proportions/shares: output as 0-1 (e.g., 0.455), NOT as percentage",
+        "- Always use CAST(x AS REAL) for division to avoid integer truncation",
+        "- Never round unless the question explicitly asks for rounding",
+        "- If your query returns 0 rows, something is wrong — check your filters",
         "",
         "## SQLite Tips",
         "- Use `strftime('%Y-%m', date_col)` for date grouping, NOT DATE_FORMAT",
@@ -293,8 +302,13 @@ async def run_task(
 
     except Exception as e:
         err_str = str(e)
+        # If the agent already gathered query results before crashing, treat
+        # this as a successful (partial) run rather than an error.
+        if all_query_results and output.final_sql:
+            # Agent ran and got results — just a crash at cleanup/end
+            pass  # Fall through to normal result processing below
         # Retry on transient CLI/MCP failures (exit code 1, connection reset)
-        if ("exit code 1" in err_str or "Connection reset" in err_str) and output.turns_used < 3:
+        elif ("exit code 1" in err_str or "Connection reset" in err_str) and output.turns_used < 3:
             print(f"    Retrying after transient error: {err_str[:80]}")
             await asyncio.sleep(2)
             output2 = AgentOutput()

@@ -96,7 +96,9 @@ def doctor(
     """Diagnose SignalPilot stack health."""
     from .installer import run_doctor
 
-    run_doctor(dev=dev)
+    failures = run_doctor(dev=dev)
+    if failures:
+        raise typer.Exit(1)
 
 
 @app.command(name="config")

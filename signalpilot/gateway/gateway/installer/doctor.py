@@ -271,8 +271,8 @@ def _check_resources(diag: _DiagResult, step: int, total: int) -> None:
         diag.fail("Docker disk", "could not query")
 
 
-def run_doctor(dev: bool = False) -> None:
-    """Run all diagnostic checks and print a summary."""
+def run_doctor(dev: bool = False) -> int:
+    """Run all diagnostic checks and print a summary. Returns number of failures."""
     print()
 
     diag = _DiagResult()
@@ -303,3 +303,5 @@ def run_doctor(dev: bool = False) -> None:
         for i, issue in enumerate(diag.issues, 1):
             print(f"    {i}. {issue}")
         print()
+
+    return diag.failed

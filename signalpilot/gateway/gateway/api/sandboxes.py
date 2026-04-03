@@ -32,13 +32,20 @@ async def create_sandbox(req: SandboxCreate):
     settings = load_settings()
 
     client = get_sandbox_client()
-    sandbox = await client.create_sandbox(
-        session_token=session_token,
-        connection_name=req.connection_name,
-        label=req.label,
-        budget_usd=req.budget_usd,
-        row_limit=req.row_limit,
-    )
+    try:
+        sandbox = await client.create_sandbox(
+            session_token=session_token,
+            connection_name=req.connection_name,
+            label=req.label,
+            budget_usd=req.budget_usd,
+            row_limit=req.row_limit,
+        )
+    except Exception as e:
+        error_msg = str(e)[:200]
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to create sandbox: {error_msg}",
+        )
     upsert_sandbox(sandbox)
 
     await append_audit(AuditEntry(
@@ -69,7 +76,12 @@ async def kill_sandbox(sandbox_id: str):
 
     if sandbox.vm_id:
         client = get_sandbox_client()
-        await client.kill(sandbox.vm_id)
+        try:
+            await client.kill(sandbox.vm_id)
+        except Exception as e:
+            # Log but don't block deletion — the sandbox record should still be cleaned up
+            import logging
+            logging.getLogger(__name__).warning("Failed to kill sandbox VM %s: %s", sandbox.vm_id, str(e)[:200])
 
     delete_sandbox(sandbox_id)
 
@@ -87,12 +99,20 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
     session_token = str(uuid.uuid4())  # In production, this is tied to the session
 
     client = get_sandbox_client()
-    result = await client.execute(
-        sandbox=sandbox,
-        code=req.code,
-        session_token=session_token,
-        timeout=req.timeout,
-    )
+    try:
+        result = await client.execute(
+            sandbox=sandbox,
+            code=req.code,
+            session_token=session_token,
+            timeout=req.timeout,
+        )
+    except Exception as e:
+        # Sanitize error to avoid leaking sandbox infrastructure details
+        error_msg = str(e)[:200]
+        raise HTTPException(
+            status_code=502,
+            detail=f"Sandbox execution failed: {error_msg}",
+        )
 
     # Update sandbox state
     upsert_sandbox(sandbox)

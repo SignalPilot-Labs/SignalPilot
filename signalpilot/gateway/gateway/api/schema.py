@@ -38,6 +38,7 @@ from .deps import (
     sanitize_db_error,
     get_schema_filters,
     apply_schema_filter,
+    ConnectionName,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ def _load_semantic_model(name: str) -> dict:
 
 @router.get("/connections/{name}/schema")
 async def get_connection_schema(
-    name: str,
+    name: ConnectionName,
     compact: bool = Query(default=False, description="Return compressed schema optimized for LLM context windows"),
     filter: str = Query(default="", description="Filter tables by name pattern (case-insensitive substring match, comma-separated)"),
 ):
@@ -151,7 +152,7 @@ async def get_connection_schema(
 
 @router.get("/connections/{name}/schema/grouped")
 async def get_grouped_schema(
-    name: str,
+    name: ConnectionName,
     sample_limit: int = Query(default=3, ge=1, le=10),
 ):
     """Return schema organized by table groups — optimized for large schemas.
@@ -204,7 +205,7 @@ async def get_grouped_schema(
 
 @router.get("/connections/{name}/schema/samples")
 async def get_schema_samples(
-    name: str,
+    name: ConnectionName,
     tables: str = Query(default="", description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
@@ -273,7 +274,7 @@ async def get_schema_samples(
 
 @router.post("/connections/{name}/schema/explore")
 async def explore_column_values(
-    name: str,
+    name: ConnectionName,
     table: str = Query(..., description="Full table name (e.g., 'public.users')"),
     column: str = Query(..., description="Column to explore"),
     limit: int = Query(default=20, ge=1, le=100, description="Max distinct values"),
@@ -401,7 +402,7 @@ FROM {q_table}
 
 @router.get("/connections/{name}/schema/enriched")
 async def get_enriched_schema(
-    name: str,
+    name: ConnectionName,
     sample_limit: int = Query(default=3, ge=1, le=10, description="Max sample values per column"),
 ):
     """Return enriched compact schema optimized for Spider2.0 text-to-SQL.
@@ -515,7 +516,7 @@ async def get_enriched_schema(
 
 @router.get("/connections/{name}/schema/compact")
 async def get_compact_schema(
-    name: str,
+    name: ConnectionName,
     max_tables: int = Query(default=50, ge=1, le=500, description="Maximum tables to include"),
     include_fk: bool = Query(default=True, description="Include foreign key relationships"),
     include_types: bool = Query(default=True, description="Include column type info"),
@@ -698,7 +699,7 @@ async def get_compact_schema(
 
 @router.get("/connections/{name}/schema/ddl")
 async def get_schema_ddl(
-    name: str,
+    name: ConnectionName,
     max_tables: int = Query(default=50, ge=1, le=500, description="Maximum tables to include"),
     include_fk: bool = Query(default=True, description="Include foreign key constraints"),
     compress: bool = Query(default=False, description="Enable ReFoRCE-style table grouping for large schemas"),
@@ -937,7 +938,7 @@ async def get_schema_ddl(
 
 @router.get("/connections/{name}/schema/agent-context")
 async def get_agent_context(
-    name: str,
+    name: ConnectionName,
     question: str = Query(default="", description="Optional question for schema linking — omit for full schema"),
     max_tables: int = Query(default=30, ge=1, le=100, description="Max tables to include"),
     include_samples: bool = Query(default=True, description="Include cached sample values for string columns"),
@@ -1357,7 +1358,7 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
 
 @router.get("/connections/{name}/schema/link")
 async def schema_link(
-    name: str,
+    name: ConnectionName,
     question: str = Query(..., description="Natural language question to link schema for"),
     format: str = Query(default="ddl", pattern="^(ddl|compact|json|condensed)$", description="Output format: ddl (full), condensed (pruned columns), compact (one-line), json"),
     max_tables: int = Query(default=20, ge=1, le=100, description="Max tables in linked schema"),
@@ -2113,7 +2114,7 @@ def _save_semantic_model(name: str, model: dict) -> None:
 
 @router.post("/connections/{name}/schema/refine")
 async def refine_schema(
-    name: str,
+    name: ConnectionName,
     request: Request,
 ):
     """Two-pass schema refinement -- Spider2.0 SOTA technique.
@@ -2286,7 +2287,7 @@ async def refine_schema(
 
 @router.get("/connections/{name}/schema/explore-table")
 async def explore_table(
-    name: str,
+    name: ConnectionName,
     table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
     include_samples: bool = Query(default=True, description="Include sample distinct values for string/enum columns"),
     include_stats: bool = Query(default=True, description="Include column-level statistics"),
@@ -2378,7 +2379,7 @@ async def explore_table(
 
 
 @router.get("/connections/{name}/schema/overview")
-async def get_schema_overview(name: str):
+async def get_schema_overview(name: ConnectionName):
     """Quick database overview -- table count, total columns, total rows, FK graph density."""
     info = require_connection(name)
     filtered = await get_filtered_schema(name, info)
@@ -2459,7 +2460,7 @@ async def get_schema_overview(name: str):
 
 
 @router.get("/connections/{name}/schema/diff")
-async def get_schema_diff(name: str):
+async def get_schema_diff(name: ConnectionName):
     """Compare current database schema against cached version."""
     info = require_connection(name)
 
@@ -2497,7 +2498,7 @@ async def get_schema_diff(name: str):
 
 
 @router.get("/connections/{name}/schema/refresh-status")
-async def get_schema_refresh_status(name: str):
+async def get_schema_refresh_status(name: ConnectionName):
     """Get schema refresh schedule status for a connection."""
     info = require_connection(name)
 
@@ -2518,7 +2519,7 @@ async def get_schema_refresh_status(name: str):
 
 
 @router.get("/connections/{name}/schema/diff-history")
-async def get_schema_diff_history(name: str):
+async def get_schema_diff_history(name: ConnectionName):
     """Get schema change history for a connection."""
     info = require_connection(name)
 
@@ -2542,7 +2543,7 @@ async def get_all_schema_changes():
 
 @router.get("/connections/{name}/schema/filter")
 async def get_filtered_schema_endpoint(
-    name: str,
+    name: ConnectionName,
     schema_prefix: str = Query(default="", description="Filter by schema/database prefix (e.g., 'public', 'analytics')"),
     table_prefix: str = Query(default="", description="Filter by table name prefix"),
     include_columns: bool = Query(default=True, description="Include column details"),
@@ -2586,7 +2587,7 @@ async def get_filtered_schema_endpoint(
 
 @router.get("/connections/{name}/schema/relationships")
 async def get_schema_relationships(
-    name: str,
+    name: ConnectionName,
     format: str = Query(
         default="compact",
         pattern=r"^(compact|full|graph)$",
@@ -2684,7 +2685,7 @@ async def get_schema_relationships(
 
 @router.get("/connections/{name}/schema/join-paths")
 async def get_join_paths(
-    name: str,
+    name: ConnectionName,
     from_table: str = Query(..., description="Source table (e.g., 'public.orders')"),
     to_table: str = Query(..., description="Target table (e.g., 'public.products')"),
     max_hops: int = Query(default=4, ge=1, le=6, description="Maximum FK hops to search"),
@@ -2799,7 +2800,7 @@ async def get_join_paths(
 
 @router.get("/connections/{name}/schema/sample-values")
 async def get_cached_sample_values(
-    name: str,
+    name: ConnectionName,
     table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
     columns: str = Query(default="", description="Comma-separated column names. Empty = auto-select string/enum columns"),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
@@ -2863,7 +2864,7 @@ async def get_cached_sample_values(
 
 @router.get("/connections/{name}/schema/search")
 async def search_schema(
-    name: str,
+    name: ConnectionName,
     q: str = Query(..., min_length=1, description="Search query -- matches table names, column names, column comments"),
     include_samples: bool = Query(default=False, description="Include sample values for matched columns"),
     limit: int = Query(default=20, ge=1, le=100, description="Max tables to return"),
@@ -3015,14 +3016,14 @@ async def search_schema(
 
 
 @router.get("/connections/{name}/schema/endorsements")
-async def get_endorsements(name: str):
+async def get_endorsements(name: ConnectionName):
     """Get schema endorsement config for a connection."""
     require_connection(name)
     return get_schema_endorsements(name)
 
 
 @router.put("/connections/{name}/schema/endorsements")
-async def update_endorsements(name: str, body: dict):
+async def update_endorsements(name: ConnectionName, body: dict):
     """Set schema endorsement config for a connection.
 
     Body: {"endorsed": ["schema.table", ...], "hidden": ["schema.table", ...], "mode": "all|endorsed_only"}
@@ -3040,14 +3041,14 @@ async def update_endorsements(name: str, body: dict):
 
 
 @router.get("/connections/{name}/semantic-model")
-async def get_semantic_model(name: str):
+async def get_semantic_model(name: ConnectionName):
     """Get the semantic model for a connection."""
     require_connection(name)
     return _load_semantic_model(name)
 
 
 @router.put("/connections/{name}/semantic-model")
-async def update_semantic_model(name: str, body: dict):
+async def update_semantic_model(name: ConnectionName, body: dict):
     """Update the semantic model for a connection.
 
     Body: {
@@ -3082,7 +3083,7 @@ async def update_semantic_model(name: str, body: dict):
 
 
 @router.post("/connections/{name}/semantic-model/generate")
-async def generate_semantic_model(name: str):
+async def generate_semantic_model(name: ConnectionName):
     """Auto-generate a semantic model skeleton from the database schema."""
     info = require_connection(name)
     cached = await get_or_fetch_schema(name, info)
@@ -3160,7 +3161,7 @@ async def generate_semantic_model(name: str):
 
 
 @router.post("/connections/{name}/schema/correct-columns")
-async def correct_columns(name: str, body: dict):
+async def correct_columns(name: ConnectionName, body: dict):
     """Suggest corrections for hallucinated column names.
 
     Body: {"table": "public.customers", "columns": ["customer_name", "email_addr"]}
@@ -3227,7 +3228,7 @@ async def correct_columns(name: str, body: dict):
 
 
 @router.post("/connections/{name}/schema/explore-columns")
-async def explore_columns_deep(name: str, body: dict):
+async def explore_columns_deep(name: ConnectionName, body: dict):
     """Deep column exploration for complex Spider2.0 queries.
 
     Body: {

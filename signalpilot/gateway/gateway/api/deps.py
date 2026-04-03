@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import re
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Path
 
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
@@ -138,6 +138,29 @@ def sanitize_db_error(error: str, db_type: str | None = None) -> str:
     if hints:
         sanitized += " | Hint: " + "; ".join(hints)
     return sanitized
+
+
+# ─── Connection name validation ──────────────────────────────────────────────
+
+_CONN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def validate_connection_name(name: str) -> str:
+    """Validate a connection name from URL path parameters.
+
+    Prevents path traversal and injection by enforcing the same pattern
+    as ConnectionCreate.name (alphanumeric, hyphens, underscores only).
+    """
+    if not name or len(name) > 64 or not _CONN_NAME_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid connection name. Use 1-64 characters: letters, digits, hyphens, underscores.",
+        )
+    return name
+
+
+# FastAPI dependency for validated connection name path parameters
+ConnectionName = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")]
 
 
 # ─── Connection lookup ────────────────────────────────────────────────────────

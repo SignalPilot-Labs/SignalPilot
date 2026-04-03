@@ -5,13 +5,28 @@ included by main.py into the FastAPI app.
 """
 
 import asyncio
+import hmac
+import logging
 import os
 import traceback
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
 
 from agent import db, git_ops, session_gate, signals, runner
+
+
+logger = logging.getLogger(__name__)
+
+_API_KEY = os.environ.get("SP_API_KEY", "")
+
+
+async def verify_api_key(x_api_key: str = Header(default="")) -> None:
+    """Verify API key if SP_API_KEY is configured."""
+    if not _API_KEY:
+        return
+    if not x_api_key or not hmac.compare_digest(x_api_key, _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 router = APIRouter()
@@ -22,26 +37,26 @@ router = APIRouter()
 # =============================================================================
 
 class StartRequest(BaseModel):
-    prompt: str | None = None
+    prompt: str | None = Field(default=None, max_length=50000)
     max_budget_usd: float = 0
     duration_minutes: float = 0
-    base_branch: str = "main"
+    base_branch: str = Field(default="main", max_length=200)
     # Credentials passed by monitor (decrypted from settings DB)
-    claude_token: str | None = None
-    git_token: str | None = None
-    github_repo: str | None = None
+    claude_token: str | None = Field(default=None, max_length=500)
+    git_token: str | None = Field(default=None, max_length=500)
+    github_repo: str | None = Field(default=None, max_length=200)
 
 
 class ResumeRequest(BaseModel):
-    run_id: str
+    run_id: str = Field(max_length=100)
     max_budget_usd: float = 0
-    claude_token: str | None = None
-    git_token: str | None = None
-    github_repo: str | None = None
+    claude_token: str | None = Field(default=None, max_length=500)
+    git_token: str | None = Field(default=None, max_length=500)
+    github_repo: str | None = Field(default=None, max_length=200)
 
 
 class InjectRequest(BaseModel):
-    payload: str | None = None
+    payload: str | None = Field(default=None, max_length=50000)
 
 
 # =============================================================================
@@ -75,7 +90,7 @@ async def health():
     }
 
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(verify_api_key)])
 async def start_run(body: StartRequest = StartRequest()):
     if signals.current_run_id is not None:
         raise HTTPException(status_code=409, detail=f"Run already in progress: {signals.current_run_id}")
@@ -109,7 +124,7 @@ async def start_run(body: StartRequest = StartRequest()):
     }
 
 
-@router.post("/resume")
+@router.post("/resume", dependencies=[Depends(verify_api_key)])
 async def resume_run(body: ResumeRequest):
     if signals.current_run_id is not None:
         raise HTTPException(status_code=409, detail=f"Run already in progress: {signals.current_run_id}")
@@ -129,7 +144,7 @@ async def resume_run(body: ResumeRequest):
     return {"ok": True, "run_id": body.run_id, "resumed": True}
 
 
-@router.post("/pause")
+@router.post("/pause", dependencies=[Depends(verify_api_key)])
 async def pause_agent():
     """Push pause signal to the in-process queue."""
     if signals.current_run_id is None:
@@ -138,7 +153,7 @@ async def pause_agent():
     return {"ok": True, "signal": "pause", "delivery": "instant"}
 
 
-@router.post("/resume_signal")
+@router.post("/resume_signal", dependencies=[Depends(verify_api_key)])
 async def resume_agent_signal():
     """Push resume signal to the in-process queue."""
     if signals.current_run_id is None:
@@ -147,7 +162,7 @@ async def resume_agent_signal():
     return {"ok": True, "signal": "resume", "delivery": "instant"}
 
 
-@router.post("/inject")
+@router.post("/inject", dependencies=[Depends(verify_api_key)])
 async def inject_agent(body: InjectRequest = InjectRequest()):
     """Push inject signal with payload to the in-process queue."""
     if signals.current_run_id is None:
@@ -156,7 +171,7 @@ async def inject_agent(body: InjectRequest = InjectRequest()):
     return {"ok": True, "signal": "inject", "delivery": "instant"}
 
 
-@router.post("/unlock")
+@router.post("/unlock", dependencies=[Depends(verify_api_key)])
 async def unlock_agent():
     """Push unlock signal to the in-process queue."""
     if signals.current_run_id is None:
@@ -165,7 +180,7 @@ async def unlock_agent():
     return {"ok": True, "signal": "unlock", "delivery": "instant"}
 
 
-@router.post("/stop")
+@router.post("/stop", dependencies=[Depends(verify_api_key)])
 async def stop_run_instant():
     """Push stop signal directly to the in-process queue. Instant delivery."""
     if signals.current_run_id is None:
@@ -174,7 +189,7 @@ async def stop_run_instant():
     return {"ok": True, "signal": "stop", "delivery": "instant"}
 
 
-@router.post("/kill")
+@router.post("/kill", dependencies=[Depends(verify_api_key)])
 async def kill_run():
     """Immediately cancel the running task. No cleanup, no PR."""
     if signals.current_task is None or signals.current_run_id is None:
@@ -193,7 +208,7 @@ async def kill_run():
     return {"ok": True, "signal": "kill", "run_id": run_id}
 
 
-@router.get("/branches")
+@router.get("/branches", dependencies=[Depends(verify_api_key)])
 async def list_branches():
     try:
         git_ops.setup_git_auth()
@@ -205,7 +220,7 @@ async def list_branches():
         return ["main"]
 
 
-@router.get("/diff/live")
+@router.get("/diff/live", dependencies=[Depends(verify_api_key)])
 async def get_live_diff():
     """Get diff stats for the currently running branch (including uncommitted)."""
     try:
@@ -226,7 +241,7 @@ async def get_live_diff():
         return {"files": [], "error": "Failed to compute diff"}
 
 
-@router.get("/diff/{branch}")
+@router.get("/diff/{branch}", dependencies=[Depends(verify_api_key)])
 async def get_branch_diff(branch: str, base: str = "main"):
     """Get diff stats between a branch and its base."""
     try:

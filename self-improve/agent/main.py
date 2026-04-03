@@ -25,26 +25,27 @@ Module layout:
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel, Field
 import uvicorn
 
 from agent import db, endpoints
+from agent.endpoints import verify_api_key
 from agent.run_manager import RunManager
 
 
 class ParallelStartRequest(BaseModel):
-    prompt: str | None = None
+    prompt: str | None = Field(default=None, max_length=50000)
     max_budget_usd: float = 0
     duration_minutes: float = 0
-    base_branch: str = "main"
-    claude_token: str | None = None
-    git_token: str | None = None
-    github_repo: str | None = None
+    base_branch: str = Field(default="main", max_length=200)
+    claude_token: str | None = Field(default=None, max_length=500)
+    git_token: str | None = Field(default=None, max_length=500)
+    github_repo: str | None = Field(default=None, max_length=200)
 
 
 class ParallelSignalRequest(BaseModel):
-    payload: str | None = None
+    payload: str | None = Field(default=None, max_length=50000)
 
 
 _run_manager = RunManager()
@@ -84,13 +85,13 @@ app.include_router(endpoints.router)
 # Parallel run endpoints — multiple concurrent agents in Docker containers
 # =============================================================================
 
-@app.get("/parallel/runs")
+@app.get("/parallel/runs", dependencies=[Depends(verify_api_key)])
 async def list_parallel_runs():
     """List all parallel run slots (active and finished)."""
     return [RunManager.to_dict(s) for s in _run_manager.get_all_slots()]
 
 
-@app.post("/parallel/start")
+@app.post("/parallel/start", dependencies=[Depends(verify_api_key)])
 async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()):
     """Start a new parallel agent run in its own Docker container."""
     credentials = {}
@@ -121,7 +122,7 @@ async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/parallel/runs/{run_id}")
+@app.get("/parallel/runs/{run_id}", dependencies=[Depends(verify_api_key)])
 async def get_parallel_run(run_id: str):
     """Get status of a specific parallel run by run_id."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -130,7 +131,7 @@ async def get_parallel_run(run_id: str):
     return RunManager.to_dict(slot)
 
 
-@app.get("/parallel/runs/{run_id}/health")
+@app.get("/parallel/runs/{run_id}/health", dependencies=[Depends(verify_api_key)])
 async def parallel_run_health(run_id: str):
     """Get health of a specific parallel worker container."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -142,7 +143,7 @@ async def parallel_run_health(run_id: str):
         return {"status": "unreachable", "error": str(e)}
 
 
-@app.post("/parallel/runs/{run_id}/stop")
+@app.post("/parallel/runs/{run_id}/stop", dependencies=[Depends(verify_api_key)])
 async def stop_parallel_run(run_id: str, body: ParallelSignalRequest = ParallelSignalRequest()):
     """Stop a specific parallel run."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -154,7 +155,7 @@ async def stop_parallel_run(run_id: str, body: ParallelSignalRequest = ParallelS
     return await _run_manager.stop_run(slot.container_name, reason)
 
 
-@app.post("/parallel/runs/{run_id}/kill")
+@app.post("/parallel/runs/{run_id}/kill", dependencies=[Depends(verify_api_key)])
 async def kill_parallel_run(run_id: str):
     """Kill a specific parallel run immediately."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -163,7 +164,7 @@ async def kill_parallel_run(run_id: str):
     return await _run_manager.kill_run(slot.container_name)
 
 
-@app.post("/parallel/runs/{run_id}/pause")
+@app.post("/parallel/runs/{run_id}/pause", dependencies=[Depends(verify_api_key)])
 async def pause_parallel_run(run_id: str):
     """Pause a specific parallel run."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -174,7 +175,7 @@ async def pause_parallel_run(run_id: str):
     return await _run_manager.pause_run(slot.container_name)
 
 
-@app.post("/parallel/runs/{run_id}/resume")
+@app.post("/parallel/runs/{run_id}/resume", dependencies=[Depends(verify_api_key)])
 async def resume_parallel_run(run_id: str):
     """Resume a paused parallel run."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -183,7 +184,7 @@ async def resume_parallel_run(run_id: str):
     return await _run_manager.resume_run(slot.container_name)
 
 
-@app.post("/parallel/runs/{run_id}/inject")
+@app.post("/parallel/runs/{run_id}/inject", dependencies=[Depends(verify_api_key)])
 async def inject_parallel_run(run_id: str, body: ParallelSignalRequest = ParallelSignalRequest()):
     """Inject a prompt into a parallel run."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -194,7 +195,7 @@ async def inject_parallel_run(run_id: str, body: ParallelSignalRequest = Paralle
     return await _run_manager.inject_prompt(slot.container_name, {"payload": body.payload})
 
 
-@app.post("/parallel/runs/{run_id}/unlock")
+@app.post("/parallel/runs/{run_id}/unlock", dependencies=[Depends(verify_api_key)])
 async def unlock_parallel_run(run_id: str):
     """Unlock the session gate for a parallel run."""
     slot = _run_manager.get_slot_by_run_id(run_id)
@@ -203,7 +204,7 @@ async def unlock_parallel_run(run_id: str):
     return await _run_manager.unlock_run(slot.container_name)
 
 
-@app.post("/parallel/cleanup")
+@app.post("/parallel/cleanup", dependencies=[Depends(verify_api_key)])
 async def cleanup_parallel_runs():
     """Clean up finished parallel run containers."""
     before = len([s for s in _run_manager.get_all_slots() if s.status not in ("starting", "running")])
@@ -211,7 +212,7 @@ async def cleanup_parallel_runs():
     return {"ok": True, "cleaned": before}
 
 
-@app.get("/parallel/status")
+@app.get("/parallel/status", dependencies=[Depends(verify_api_key)])
 async def parallel_status():
     """Summary of parallel run system."""
     slots = _run_manager.get_all_slots()

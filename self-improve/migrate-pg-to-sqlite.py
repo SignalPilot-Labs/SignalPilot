@@ -13,6 +13,7 @@ Requires: psycopg2-binary (pip install psycopg2-binary)
 import argparse
 import json
 import sqlite3
+import os
 import sys
 
 try:
@@ -23,7 +24,10 @@ except ImportError:
     sys.exit(1)
 
 
-PG_DSN = "postgresql://improve_admin:Impr0ve!Aud1t@localhost:5610/improve_audit"
+PG_DSN = os.environ.get("PG_DSN")
+if not PG_DSN:
+    print("Set PG_DSN environment variable (e.g. postgresql://user:pass@localhost:5610/improve_audit)")
+    sys.exit(1)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (

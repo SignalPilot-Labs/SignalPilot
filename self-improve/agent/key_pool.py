@@ -69,6 +69,7 @@ class KeyPool:
         self._run_id = run_id
         self._active_key: ApiKey | None = None
         self._previous_key_id: str | None = None
+        self._config_seeded = False
 
     @property
     def active_key_id(self) -> str | None:
@@ -117,7 +118,8 @@ class KeyPool:
                 from monitor.crypto import decrypt, mask
                 plain = decrypt(d["encrypted_key"], MASTER_KEY_PATH)
                 d["masked_key"] = mask(plain, prefix_len=4)
-            except Exception:
+            except Exception as e:
+                print(f"[key_pool] Failed to decrypt key {d.get('id', '?')}: {e}")
                 d["masked_key"] = "****"
             del d["encrypted_key"]
             d["is_enabled"] = bool(d["is_enabled"])
@@ -327,24 +329,33 @@ class KeyPool:
                 return None
 
         await self.clear_rate_limit(earliest.id)
-        await self._touch_key(earliest.id)
-        self._active_key = earliest
+        # Re-fetch from DB to get fresh state (key may have been modified during sleep)
+        try:
+            refreshed = await self._get_key_by_id(earliest.id)
+            if not refreshed.is_enabled:
+                return None  # Key was disabled during wait
+        except ValueError:
+            return None  # Key was deleted during wait
+        await self._touch_key(refreshed.id)
+        self._active_key = refreshed
 
         if self._run_id:
             await db.log_audit(self._run_id, "key_pool_resumed", {
-                "key_id": earliest.id,
+                "key_id": refreshed.id,
                 "waited_seconds": int(wait_seconds + 5),
             })
             await db.update_run_status(self._run_id, "running")
 
-        return earliest
+        return refreshed
 
     # ── Config ────────────────────────────────────────────────────────
 
     async def get_config(self) -> dict[str, str]:
         """Load rotation config, seeding defaults if needed."""
         conn = db.get_db()
-        await self._seed_defaults(conn)
+        if not self._config_seeded:
+            await self._seed_defaults(conn)
+            self._config_seeded = True
         cursor = await conn.execute("SELECT key, value FROM key_rotation_config")
         rows = await cursor.fetchall()
         return {row["key"]: row["value"] for row in rows}

@@ -278,7 +278,7 @@ async def _run_loop(
                         else:
                             # All keys exhausted — try auto-wait
                             next_key = await key_pool.wait_for_next_available_key(
-                                should_stop_fn=lambda: signals._signal_queue and not signals._signal_queue.empty(),
+                                should_stop_fn=signals.has_pending_signals,
                             )
                             if next_key is not None:
                                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = next_key.decrypted_value

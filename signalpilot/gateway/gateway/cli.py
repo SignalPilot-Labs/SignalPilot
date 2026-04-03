@@ -64,5 +64,16 @@ def status():
         typer.echo(f"Sandbox Health:      error — {e}")
 
 
+@app.command()
+def install(
+    dev: bool = typer.Option(False, "--dev", help="Use dev compose file"),
+    skip_build: bool = typer.Option(False, "--skip-build", help="Skip docker build step"),
+):
+    """Install and start SignalPilot using Docker Compose."""
+    from .installer import run_install
+
+    run_install(dev=dev, skip_build=skip_build)
+
+
 if __name__ == "__main__":
     app()

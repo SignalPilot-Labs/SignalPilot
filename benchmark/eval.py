@@ -200,43 +200,59 @@ def compare_results(
     """
     Compare predicted and gold result sets using Spider2's methodology.
 
-    - Column-vector comparison
+    Spider2 compares by COLUMN POSITION (not name), since predicted and gold
+    may have different column names for the same data.
+
+    - Column-vector comparison by position
     - Numeric tolerance of 1e-2
     - NaN normalized to 0
     - Optional order-independent comparison
-    - Optional column subset matching
+    - Optional column subset matching (by position index)
     """
     if not predicted and not gold:
         return True
     if not predicted or not gold:
         return False
 
-    # If condition_cols specified, only compare those columns
-    if condition_cols:
-        pred_cols = condition_cols
-        gold_cols = condition_cols
-    else:
-        pred_cols = list(predicted[0].keys())
-        gold_cols = list(gold[0].keys())
-
-        # Column count must match
-        if len(pred_cols) != len(gold_cols):
-            return False
-
     # Row count must match
     if len(predicted) != len(gold):
         return False
 
-    # Extract column vectors
-    def extract_col_vectors(rows: list[dict], cols: list[str]) -> list[list[Any]]:
+    # Convert rows from dicts to positional lists for position-based comparison
+    pred_all_cols = list(predicted[0].keys())
+    gold_all_cols = list(gold[0].keys())
+
+    # Determine which column indices to compare
+    if condition_cols:
+        # condition_cols contains gold column NAMES — convert to indices
+        gold_indices = []
+        for col_name in condition_cols:
+            if col_name in gold_all_cols:
+                gold_indices.append(gold_all_cols.index(col_name))
+        if not gold_indices:
+            gold_indices = list(range(len(gold_all_cols)))
+    else:
+        # Compare all columns — must have same count
+        if len(pred_all_cols) != len(gold_all_cols):
+            return False
+        gold_indices = list(range(len(gold_all_cols)))
+
+    # Use same position indices for predicted (clamped to available columns)
+    pred_indices = [i for i in gold_indices if i < len(pred_all_cols)]
+    if len(pred_indices) != len(gold_indices):
+        return False
+
+    # Extract column vectors by position
+    def extract_positional_vectors(rows: list[dict], all_cols: list[str], indices: list[int]) -> list[list[Any]]:
         vectors = []
-        for col in cols:
+        for idx in indices:
+            col = all_cols[idx]
             vec = [_normalize_value(row.get(col)) for row in rows]
             vectors.append(vec)
         return vectors
 
-    pred_vectors = extract_col_vectors(predicted, pred_cols)
-    gold_vectors = extract_col_vectors(gold, gold_cols)
+    pred_vectors = extract_positional_vectors(predicted, pred_all_cols, pred_indices)
+    gold_vectors = extract_positional_vectors(gold, gold_all_cols, gold_indices)
 
     if ignore_order:
         # Sort each vector independently and compare

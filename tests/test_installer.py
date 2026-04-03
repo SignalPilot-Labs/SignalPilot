@@ -531,3 +531,116 @@ class TestFindRepoRoot:
             # the function should raise FileNotFoundError with a clear message.
             with pytest.raises(FileNotFoundError, match="repo root"):
                 frr()
+
+
+# ---------------------------------------------------------------------------
+# ui.Timer
+# ---------------------------------------------------------------------------
+
+
+class TestUiTimer:
+    def test_start_returns_self(self):
+        t = ui.Timer()
+        assert t.start() is t
+
+    def test_elapsed_ms_is_non_negative(self):
+        t = ui.Timer().start()
+        assert t.elapsed_ms() >= 0
+
+    def test_elapsed_ms_increases_over_time(self):
+        import time
+        t = ui.Timer().start()
+        time.sleep(0.05)
+        assert t.elapsed_ms() >= 30  # allow some slack
+
+    def test_elapsed_display_ms_format(self):
+        t = ui.Timer().start()
+        # Immediate — should be under 1000ms
+        display = t.elapsed_display()
+        assert display.endswith("ms")
+
+    def test_elapsed_display_seconds_format(self):
+        t = ui.Timer()
+        t._start = 0  # fake a very old start time
+        import time
+        # Patch perf_counter to return a large value
+        with patch("time.perf_counter", return_value=2.5):
+            display = t.elapsed_display()
+        assert display == "2.5s"
+
+
+# ---------------------------------------------------------------------------
+# ui.section() with step counters
+# ---------------------------------------------------------------------------
+
+
+class TestUiSectionSteps:
+    def test_step_counter_appears(self, capsys):
+        ui.section("Building", step=3, total=6)
+        out = capsys.readouterr().out
+        assert "[3/6]" in out
+        assert "Building" in out
+
+    def test_no_step_counter_when_none(self, capsys):
+        ui.section("System")
+        out = capsys.readouterr().out
+        assert "System" in out
+        assert "[" not in out
+
+    def test_step_counter_zero_values(self, capsys):
+        ui.section("Config", step=0, total=0)
+        out = capsys.readouterr().out
+        assert "[0/0]" in out
+
+
+# ---------------------------------------------------------------------------
+# checks.verify_endpoint()
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyEndpoint:
+    def test_returns_tuple(self):
+        result = checks.verify_endpoint("http://127.0.0.1:19999")
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_unreachable_returns_none_status(self):
+        status, ms = checks.verify_endpoint("http://127.0.0.1:19999", timeout=1)
+        assert status is None
+        assert isinstance(ms, int)
+
+    def test_elapsed_is_non_negative(self):
+        _, ms = checks.verify_endpoint("http://127.0.0.1:19999", timeout=1)
+        assert ms >= 0
+
+
+# ---------------------------------------------------------------------------
+# checks.verify_postgres()
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyPostgres:
+    def test_returns_tuple(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            ok, ms = checks.verify_postgres("/fake/compose.yml")
+        assert isinstance(ok, bool)
+        assert isinstance(ms, int)
+
+    def test_success_when_returncode_zero(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            ok, _ = checks.verify_postgres("/fake/compose.yml")
+        assert ok is True
+
+    def test_failure_when_returncode_nonzero(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1)
+            ok, _ = checks.verify_postgres("/fake/compose.yml")
+        assert ok is False
+
+    def test_failure_on_timeout(self):
+        import subprocess
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="", timeout=5)):
+            ok, _ = checks.verify_postgres("/fake/compose.yml")
+        assert ok is False

@@ -55,7 +55,12 @@ print_header() {
 }
 
 print_section() {
-  printf "\n  ${BOLD}%s${RESET}\n\n" "$1"
+  # $1 = title, $2 = step number (e.g. "1"), $3 = total steps (e.g. "7")
+  if [ -n "$2" ] && [ -n "$3" ]; then
+    printf "\n  ${BOLD}%s${RESET}  ${DIM}[%s/%s]${RESET}\n\n" "$1" "$2" "$3"
+  else
+    printf "\n  ${BOLD}%s${RESET}\n\n" "$1"
+  fi
 }
 
 # print_kv <key> <value>  — left-padded, key fixed at 20 chars
@@ -290,12 +295,12 @@ configure_env() {
   _example_file="${REPO_DIR}/.env.example"
 
   if [ -f "$_env_file" ]; then
-    print_section "Configuration"
+    print_section "Configuration" "$STEP" "$TOTAL_STEPS"
     print_check ".env" "already exists, skipping"
     return
   fi
 
-  print_section "Configuration"
+  print_section "Configuration" "$STEP" "$TOTAL_STEPS"
 
   if [ -f "$_example_file" ]; then
     cp "$_example_file" "$_env_file"
@@ -405,6 +410,17 @@ else
   COMPOSE_FILE="${COMPOSE_DIR}/docker-compose.yml"
 fi
 
+STEP=0
+if [ "$RUNNING_FROM_REPO" = "0" ]; then
+  TOTAL_STEPS=7
+else
+  TOTAL_STEPS=6
+fi
+
+next_step() {
+  STEP=$((STEP + 1))
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,14 +431,16 @@ print_header
 
 detect_platform
 
-print_section "System"
+next_step
+print_section "System" "$STEP" "$TOTAL_STEPS"
 print_kv "OS"    "$OS_PRETTY"
 print_kv "Shell" "$SHELL_PRETTY"
 print_kv "User"  "$CURRENT_USER"
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
-print_section "Dependencies"
+next_step
+print_section "Dependencies" "$STEP" "$TOTAL_STEPS"
 
 # Docker (with retry loop)
 while true; do
@@ -502,7 +520,8 @@ fi
 # ── Clone (if not running from repo) ─────────────────────────────────────────
 
 if [ "$RUNNING_FROM_REPO" = "0" ]; then
-  print_section "Cloning"
+  next_step
+  print_section "Cloning" "$STEP" "$TOTAL_STEPS"
 
   CLONE_URL="https://github.com/SignalPilot-Labs/SignalPilot.git"
 
@@ -523,17 +542,19 @@ if [ "$RUNNING_FROM_REPO" = "0" ]; then
   fi
 fi
 
-# ── .env setup ────────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 
+next_step
 configure_env
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
+next_step
 if [ "$SKIP_BUILD" = "1" ]; then
-  print_section "Building"
+  print_section "Building" "$STEP" "$TOTAL_STEPS"
   printf "    ${DIM}Skipped (--skip-build)${RESET}\n"
 else
-  print_section "Building"
+  print_section "Building" "$STEP" "$TOTAL_STEPS"
 
   if [ ! -f "$COMPOSE_FILE" ]; then
     printf "  ${DIM}Compose file not found: %s${RESET}\n\n" "$COMPOSE_FILE"
@@ -543,7 +564,7 @@ else
   SERVICES="gateway web postgres sandbox"
 
   for svc in $SERVICES; do
-    print_dot "$svc" "waiting"
+    print_dot "$svc" "${DIM}queued${RESET}"
   done
 
   # Move cursor up to overwrite the dots
@@ -553,7 +574,13 @@ else
   for svc in $SERVICES; do
     # Overwrite current line with spinner state
     printf "\033[2K"
-    print_wait "$svc" "building..."
+    _build_start=$(date +%s)
+
+    if [ "$svc" = "postgres" ]; then
+      print_wait "$svc" "pulling..."
+    else
+      print_wait "$svc" "building..."
+    fi
 
     _build_log=$(mktemp)
 
@@ -566,14 +593,17 @@ else
       _rc=$?
     fi
 
+    _build_end=$(date +%s)
+    _build_elapsed=$((_build_end - _build_start))
+
     # Move up one line to overwrite
     printf "\033[1A\033[2K"
 
     if [ "$_rc" = "0" ]; then
       if [ "$svc" = "postgres" ]; then
-        print_check "$svc" "pulled"
+        print_check "$svc" "pulled     ${DIM}${_build_elapsed}s${RESET}"
       else
-        print_check "$svc" "built"
+        print_check "$svc" "built      ${DIM}${_build_elapsed}s${RESET}"
       fi
     else
       print_fail "$svc" "build failed"
@@ -590,7 +620,8 @@ fi
 
 # ── Start services ────────────────────────────────────────────────────────────
 
-print_section "Starting services"
+next_step
+print_section "Starting services" "$STEP" "$TOTAL_STEPS"
 
 if ! docker compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1; then
   printf "  ${DIM}Failed to start services. Run:${RESET}\n"
@@ -635,6 +666,64 @@ for svc in postgres gateway web; do
     printf "\n  ${DIM}Check logs: docker compose -f %s logs %s${RESET}\n\n" "$COMPOSE_FILE" "$svc"
   fi
 done
+
+# ── Verify ───────────────────────────────────────────────────────────────────
+
+next_step
+print_section "Verifying" "$STEP" "$TOTAL_STEPS"
+
+# verify_endpoint <label> <url> <expected_status>
+verify_endpoint() {
+  _ve_label="$1"
+  _ve_url="$2"
+  _ve_expect="${3:-200}"
+
+  _ve_start=$(date +%s%N 2>/dev/null || date +%s)
+
+  if command -v curl >/dev/null 2>&1; then
+    _ve_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$_ve_url" 2>/dev/null)
+  elif command -v wget >/dev/null 2>&1; then
+    _ve_code=$(wget -q --spider --server-response --timeout=10 "$_ve_url" 2>&1 | awk '/HTTP/{print $2}' | tail -1)
+  else
+    print_fail "$_ve_label" "no curl or wget available"
+    return
+  fi
+
+  _ve_end=$(date +%s%N 2>/dev/null || date +%s)
+
+  # Calculate ms (fallback to seconds if %N not supported)
+  if echo "$_ve_start" | grep -q "N$"; then
+    # %N not supported, use seconds
+    _ve_ms="—"
+  else
+    _ve_ms=$(( (_ve_end - _ve_start) / 1000000 ))
+    _ve_ms="${_ve_ms}ms"
+  fi
+
+  if [ "$_ve_code" = "$_ve_expect" ]; then
+    print_check "$_ve_label" "${_ve_code} OK     ${DIM}(${_ve_ms})${RESET}"
+  else
+    print_fail "$_ve_label" "HTTP ${_ve_code:-timeout}"
+  fi
+}
+
+verify_endpoint "Gateway API" "http://localhost:3300/health"
+verify_endpoint "Web UI"      "http://localhost:3200"
+
+# Postgres check via docker compose exec
+_pg_start=$(date +%s%N 2>/dev/null || date +%s)
+if docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
+  _pg_end=$(date +%s%N 2>/dev/null || date +%s)
+  if echo "$_pg_start" | grep -q "N$"; then
+    _pg_ms="—"
+  else
+    _pg_ms=$(( (_pg_end - _pg_start) / 1000000 ))
+    _pg_ms="${_pg_ms}ms"
+  fi
+  print_check "PostgreSQL" "connected  ${DIM}(${_pg_ms})${RESET}"
+else
+  print_fail "PostgreSQL" "not responding"
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 

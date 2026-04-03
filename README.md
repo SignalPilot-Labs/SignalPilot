@@ -4,9 +4,36 @@ Governed AI database access platform with autonomous self-improvement. SQL queri
 
 ## Quick Start
 
+The fastest way to get SignalPilot running:
+
+```bash
+./install.sh
+```
+
+The installer checks dependencies, configures your environment, builds containers, starts services, and verifies everything is healthy. It will guide you through installing Docker Desktop if needed.
+
+Alternatively, use the Python CLI:
+
+```bash
+pip install -e signalpilot/gateway
+sp install
+```
+
+**Flags:**
+
+| Flag             | Description                          |
+| ---------------- | ------------------------------------ |
+| `--dev`          | Use the dev compose file (no sandbox) |
+| `--skip-build`   | Skip Docker image builds             |
+| `--no-color`     | Disable ANSI color codes (shell only) |
+
+### Manual Setup
+
+If you prefer to set things up manually:
+
 ```bash
 # 1. Copy .env and fill in tokens
-cp self-improve/.env.example .env
+cp .env.example .env
 # Required: GIT_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, GITHUB_REPO
 
 # 2. Start the main platform (gateway + web UI + postgres)

@@ -2,6 +2,7 @@
 
 import sys
 import threading
+import time
 
 # ANSI codes - only when stdout is a TTY
 IS_TTY = sys.stdout.isatty()
@@ -32,9 +33,12 @@ def header() -> None:
     print()
 
 
-def section(title: str) -> None:
-    """Print a section header with spacing."""
-    print(f"\n  {BOLD}{title}{RESET}\n")
+def section(title: str, step: int | None = None, total: int | None = None) -> None:
+    """Print a section header with optional step counter."""
+    if step is not None and total is not None:
+        print(f"\n  {BOLD}{title}{RESET}  {DIM}[{step}/{total}]{RESET}\n")
+    else:
+        print(f"\n  {BOLD}{title}{RESET}\n")
 
 
 def kv(key: str, value: str) -> None:
@@ -117,3 +121,23 @@ class Spinner:
         if clear:
             sys.stdout.write(f"\r{CLEAR_LINE}")
             sys.stdout.flush()
+
+
+class Timer:
+    """Simple elapsed time tracker."""
+
+    def __init__(self) -> None:
+        self._start: float = 0
+
+    def start(self) -> "Timer":
+        self._start = time.perf_counter()
+        return self
+
+    def elapsed_ms(self) -> int:
+        return int((time.perf_counter() - self._start) * 1000)
+
+    def elapsed_display(self) -> str:
+        ms = self.elapsed_ms()
+        if ms < 1000:
+            return f"{ms}ms"
+        return f"{ms / 1000:.1f}s"

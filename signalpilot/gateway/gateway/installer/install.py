@@ -60,12 +60,12 @@ def _wait_for_docker(max_seconds: int = 60) -> bool:
     return False
 
 
-def _configure_env(repo_root: Path) -> None:
+def _configure_env(repo_root: Path, step: int = 0, total: int = 0) -> None:
     """Interactive .env configuration."""
     env_file = repo_root / ".env"
     example_file = repo_root / ".env.example"
 
-    ui.section("Configuration")
+    ui.section("Configuration", step, total)
 
     if env_file.exists():
         ui.check(".env", "already exists, skipping")
@@ -138,12 +138,12 @@ def _configure_env(repo_root: Path) -> None:
     ui.hint(f"Written to {env_file}")
 
 
-def _build_services(compose_file: Path, services: list[str]) -> bool:
+def _build_services(compose_file: Path, services: list[str], step: int = 0, total: int = 0) -> bool:
     """Build Docker services with progress display."""
-    ui.section("Building")
+    ui.section("Building", step, total)
 
     for svc in services:
-        ui.dot(svc, "waiting")
+        ui.dot(svc, "queued")
 
     # Move cursor up to overwrite the dot lines
     if ui.IS_TTY:
@@ -153,7 +153,10 @@ def _build_services(compose_file: Path, services: list[str]) -> bool:
     for svc in services:
         if ui.IS_TTY:
             sys.stdout.write(f"{ui.CLEAR_LINE}")
-        ui.wait_item(svc, "building...")
+        action_label = "pulling..." if svc == "postgres" else "building..."
+        ui.wait_item(svc, action_label)
+
+        timer = ui.Timer().start()
 
         spinner = ui.Spinner(f"Building {svc}")
         spinner.start()
@@ -177,7 +180,8 @@ def _build_services(compose_file: Path, services: list[str]) -> bool:
 
         if result.returncode == 0:
             action = "pulled" if svc == "postgres" else "built"
-            ui.check(svc, action)
+            elapsed = timer.elapsed_display()
+            ui.check(svc, f"{action:<10} {ui.dim_text(elapsed)}")
         else:
             ui.fail(svc, "build failed")
             ui.error_block("Build output:", "")
@@ -189,9 +193,9 @@ def _build_services(compose_file: Path, services: list[str]) -> bool:
     return True
 
 
-def _start_services(compose_file: Path) -> bool:
+def _start_services(compose_file: Path, step: int = 0, total: int = 0) -> bool:
     """Start services and wait for health."""
-    ui.section("Starting services")
+    ui.section("Starting services", step, total)
 
     result = _run_compose(compose_file, "up", "-d")
     if result.returncode != 0:
@@ -234,6 +238,36 @@ def _start_services(compose_file: Path) -> bool:
     return True
 
 
+def _verify_services(compose_file: Path, step: int = 0, total: int = 0) -> None:
+    """Verify services are responding correctly."""
+    ui.section("Verifying", step, total)
+
+    # Gateway API health check
+    status, ms = checks.verify_endpoint("http://localhost:3300/health")
+    if status and 200 <= status < 300:
+        ui.check("Gateway API", f"{status} OK     {ui.dim_text(f'({ms}ms)')}")
+    elif status:
+        ui.fail("Gateway API", f"HTTP {status}")
+    else:
+        ui.fail("Gateway API", "unreachable")
+
+    # Web UI check
+    status, ms = checks.verify_endpoint("http://localhost:3200")
+    if status and 200 <= status < 400:
+        ui.check("Web UI", f"{status} OK     {ui.dim_text(f'({ms}ms)')}")
+    elif status:
+        ui.fail("Web UI", f"HTTP {status}")
+    else:
+        ui.fail("Web UI", "unreachable")
+
+    # PostgreSQL check
+    ok, ms = checks.verify_postgres(str(compose_file))
+    if ok:
+        ui.check("PostgreSQL", f"connected  {ui.dim_text(f'({ms}ms)')}")
+    else:
+        ui.fail("PostgreSQL", "not responding")
+
+
 def run_install(
     dev: bool = False,
     skip_build: bool = False,
@@ -242,15 +276,24 @@ def run_install(
 
     ui.header()
 
+    # Step tracking for progress display
+    step = 0
+    total_steps = 6  # System, Dependencies, Configuration, Building, Starting, Verifying
+
+    def next_step() -> int:
+        nonlocal step
+        step += 1
+        return step
+
     # Platform detection
     plat = checks.detect_platform()
-    ui.section("System")
+    ui.section("System", next_step(), total_steps)
     ui.kv("OS", plat["os_pretty"])
     ui.kv("Shell", plat["shell"])
     ui.kv("User", plat["user"])
 
     # Dependencies
-    ui.section("Dependencies")
+    ui.section("Dependencies", next_step(), total_steps)
 
     docker = checks.check_docker()
 
@@ -348,22 +391,26 @@ def run_install(
         sys.exit(1)
 
     # Configuration
-    _configure_env(repo_root)
+    _configure_env(repo_root, next_step(), total_steps)
 
     # Build
     if skip_build:
-        ui.section("Building")
+        s = next_step()
+        ui.section("Building", s, total_steps)
         ui.hint("Skipped (--skip-build)")
     else:
         services = ["gateway", "web", "postgres"]
         if not dev:
             services.append("sandbox")
-        if not _build_services(compose_file, services):
+        if not _build_services(compose_file, services, next_step(), total_steps):
             sys.exit(1)
 
     # Start
-    if not _start_services(compose_file):
+    if not _start_services(compose_file, next_step(), total_steps):
         ui.hint("Some services failed to start. Check logs above.")
+
+    # Verify
+    _verify_services(compose_file, next_step(), total_steps)
 
     # Done
     print(f"\n\n  {ui.GREEN}{ui.BOLD}✓  SignalPilot is running{ui.RESET}\n\n")

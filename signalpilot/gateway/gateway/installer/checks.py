@@ -6,6 +6,7 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 
 
 def detect_platform() -> dict:
@@ -152,3 +153,38 @@ def port_owner(port: int) -> str | None:
 
 
 REQUIRED_PORTS = [3200, 3300, 3400, 3401, 5600]
+
+
+def verify_endpoint(url: str, timeout: int = 10) -> tuple[int | None, int]:
+    """Hit a URL and return (status_code, elapsed_ms). Returns (None, 0) on failure."""
+    import urllib.request
+    import urllib.error
+
+    start = time.perf_counter()
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            elapsed = int((time.perf_counter() - start) * 1000)
+            return resp.status, elapsed
+    except urllib.error.HTTPError as e:
+        elapsed = int((time.perf_counter() - start) * 1000)
+        return e.code, elapsed
+    except (urllib.error.URLError, OSError, TimeoutError):
+        elapsed = int((time.perf_counter() - start) * 1000)
+        return None, elapsed
+
+
+def verify_postgres(compose_file: str, timeout: int = 5) -> tuple[bool, int]:
+    """Check PostgreSQL connectivity via docker compose exec. Returns (ok, elapsed_ms)."""
+    start = time.perf_counter()
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", compose_file, "exec", "-T", "postgres",
+             "pg_isready", "-U", "postgres"],
+            capture_output=True, timeout=timeout,
+        )
+        elapsed = int((time.perf_counter() - start) * 1000)
+        return result.returncode == 0, elapsed
+    except (subprocess.TimeoutExpired, OSError):
+        elapsed = int((time.perf_counter() - start) * 1000)
+        return False, elapsed

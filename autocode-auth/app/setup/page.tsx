@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import AuthLayout from "@/components/AuthLayout";
 
 type Status = "waiting" | "connected" | "error";
@@ -26,7 +27,7 @@ const TERMINAL_LINES = [
   "✓ first improvement shipped in 4m 23s",
 ];
 
-const PLACEHOLDER_EMAIL = "user@example.com";
+const FALLBACK_EMAIL = "user@example.com";
 const PLACEHOLDER_REPO = "github.com/user/repo";
 
 function statusLabel(s: Status): string {
@@ -42,6 +43,8 @@ function statusColor(s: Status): string {
 }
 
 export default function SetupPage() {
+  const { data: session } = useSession();
+  const userEmail = session?.user?.email ?? FALLBACK_EMAIL;
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<SystemStatus>({
     cli: "waiting",
@@ -182,7 +185,7 @@ export default function SetupPage() {
             <span className="w-10 text-[var(--color-dim)]">[auth]</span>
             <span className={statusColor(status.auth)}>
               {status.auth === "connected"
-                ? `AUTHENTICATED as ${PLACEHOLDER_EMAIL} ✓`
+                ? `AUTHENTICATED as ${userEmail} ✓`
                 : "PENDING..."}
             </span>
           </div>
@@ -261,7 +264,7 @@ export default function SetupPage() {
                   <br />
                   [docker]  running ✓
                   <br />
-                  {`[auth]    authenticated as ${PLACEHOLDER_EMAIL} ✓`}
+                  {`[auth]    authenticated as ${userEmail} ✓`}
                   <br />
                   {`[repo]    ${PLACEHOLDER_REPO} ✓`}
                   <br />

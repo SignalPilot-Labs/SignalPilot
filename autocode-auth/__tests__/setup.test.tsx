@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import SetupPage from "@/app/setup/page";
 
+vi.mock("next-auth/react", () => ({
+  useSession: () => ({
+    data: { user: { name: "Test User", email: "test@example.com" } },
+    status: "authenticated",
+  }),
+}));
+
 beforeEach(() => {
   vi.useFakeTimers();
   Object.assign(navigator, {

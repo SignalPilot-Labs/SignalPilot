@@ -57,7 +57,13 @@ def _clone_repo() -> Path:
 
     if result.returncode != 0:
         ui.fail("Repository", "clone failed")
-        ui.hint("Check your network connection and repo access.")
+        stderr = (result.stderr or "").strip()
+        if "could not resolve" in stderr.lower() or "unable to access" in stderr.lower():
+            ui.hint("Check your network connection.")
+        elif "repository not found" in stderr.lower() or "403" in stderr:
+            ui.hint("Check your repo access permissions.")
+        else:
+            ui.hint("Check your network connection and repo access.")
         sys.exit(1)
 
     ui.check("Repository", f"cloned to {dest}")
@@ -431,7 +437,7 @@ def run_install(
         ui.check("Docker Compose", f"v{docker['compose_version']}")
     else:
         ui.fail("Docker Compose", "plugin not found")
-        ui.hint("Run: docker compose version — to verify your Docker Desktop install.")
+        ui.hint("Docker Compose ships with Docker Desktop — reinstall or update Docker Desktop.")
         sys.exit(1)
 
     # Git
@@ -470,6 +476,7 @@ def run_install(
 
     if not compose_file.exists():
         ui.fail("Compose file", f"not found: {compose_file}")
+        ui.hint("Re-clone the repository or run from the repo root.")
         sys.exit(1)
 
     # Configuration
@@ -485,6 +492,7 @@ def run_install(
         if not dev:
             services.append("sandbox")
         if not _build_services(compose_file, services, next_step(), total_steps):
+            ui.hint("Fix the build errors above, then re-run: sp install")
             sys.exit(1)
 
     # Start
@@ -531,6 +539,7 @@ def run_uninstall(dev: bool = False) -> None:
 
     if not compose_file.exists():
         ui.fail("Compose file", f"not found: {compose_file}")
+        ui.hint("Re-clone the repository or run from the repo root.")
         sys.exit(1)
 
     spinner = ui.Spinner("Stopping containers")
@@ -541,7 +550,8 @@ def run_uninstall(dev: bool = False) -> None:
         result = _run_compose(compose_file, "down", "-v", capture=True)
     except subprocess.TimeoutExpired:
         spinner.stop()
-        ui.fail("docker compose", "timed out")
+        ui.fail("docker compose", "timed out after 5 minutes")
+        ui.hint("Try manually: docker compose -f " + str(compose_file) + " down -v")
         sys.exit(1)
 
     spinner.stop()

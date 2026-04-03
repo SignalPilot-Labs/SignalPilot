@@ -549,7 +549,9 @@ def run_install(
     print(f"\n  {ui.bold_text('Next steps')}\n")
     print(f"    1. Open {ui.bold_text(f'http://localhost:{web_port}')}")
     print(f"    2. Connect a database:  {ui.dim_text('sp connect mydb postgresql://...')}")
-    print(f"    3. Read the docs:       {ui.dim_text('github.com/SignalPilot-Labs/SignalPilot')}")
+    print(f"    3. Check health:        {ui.dim_text('sp doctor')}")
+    print()
+    print(f"  {ui.dim_text('Useful commands: sp ps · sp logs -f · sp restart · sp config')}")
     print()
 
 

@@ -297,11 +297,19 @@ def load_eval_config(eval_config_path: Path) -> dict[str, dict]:
 def evaluate_task(
     instance_id: str,
     predicted_rows: list[dict[str, Any]],
-    gold_csv_path: Path,
+    gold_csv_path: Path | list[Path],
     eval_config: dict | None = None,
 ) -> bool:
-    """Evaluate a single task against its gold result."""
-    gold_rows = load_gold_csv(gold_csv_path)
+    """Evaluate a single task against its gold result.
+
+    gold_csv_path may be a single Path or a list of Paths (variant files like
+    local002_a.csv, local002_b.csv).  The task is CORRECT if it matches ANY
+    variant.
+    """
+    if isinstance(gold_csv_path, list):
+        gold_paths = gold_csv_path
+    else:
+        gold_paths = [gold_csv_path]
 
     ignore_order = True
     condition_cols = None
@@ -310,12 +318,17 @@ def evaluate_task(
         ignore_order = eval_config.get("ignore_order", True)
         condition_cols = eval_config.get("condition_cols")
 
-    return compare_results(
-        predicted_rows,
-        gold_rows,
-        ignore_order=ignore_order,
-        condition_cols=condition_cols,
-    )
+    for path in gold_paths:
+        gold_rows = load_gold_csv(path)
+        if compare_results(
+            predicted_rows,
+            gold_rows,
+            ignore_order=ignore_order,
+            condition_cols=condition_cols,
+        ):
+            return True
+
+    return False
 
 
 def parse_query_result_to_rows(result_text: str) -> list[dict[str, Any]]:

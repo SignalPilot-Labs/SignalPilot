@@ -27,6 +27,7 @@ from claude_agent_sdk import (
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     query,
 )
 
@@ -227,11 +228,33 @@ async def run_task(
                             if sql:
                                 output.final_sql = sql
                         output.turns_used += 1
-                    elif isinstance(block, ToolResultBlock):
-                        # Capture query results from tool responses
-                        text = getattr(block, "text", "") or ""
-                        if not text and hasattr(block, "content"):
-                            text = str(block.content)
+
+            elif isinstance(message, UserMessage):
+                # Tool results arrive in UserMessage blocks (not AssistantMessage)
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock):
+                        # content is str | list[dict] | None
+                        content = block.content
+                        if isinstance(content, list):
+                            # List of content items — concatenate text parts
+                            text = " ".join(
+                                item.get("text", "") for item in content
+                                if isinstance(item, dict)
+                            )
+                        elif isinstance(content, str):
+                            text = content
+                        else:
+                            text = ""
+
+                        # MCP tool results may be JSON-wrapped: {"result":"..."}
+                        if text.startswith("{"):
+                            try:
+                                parsed = json.loads(text)
+                                if isinstance(parsed, dict) and "result" in parsed:
+                                    text = parsed["result"]
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
                         if text:
                             if "Query blocked" in text:
                                 output.governance_blocked = True
@@ -262,26 +285,36 @@ async def run_task(
 async def run_task_with_eval(
     task: TaskContext,
     config: BenchmarkConfig,
-    gold_csv_path: Path | None = None,
+    gold_csv_path: Path | list[Path] | None = None,
     eval_config: dict | None = None,
 ) -> EvalResult:
-    """Run a task and evaluate against gold standard."""
-    from .eval import evaluate_task
+    """Run a task and evaluate against gold standard.
+
+    gold_csv_path may be a single Path, a list of variant Paths, or None.
+    """
+    from .eval import evaluate_task, load_gold_csv
 
     output = await run_task(task, config)
 
+    # Normalise to list for uniform handling below
+    if isinstance(gold_csv_path, list):
+        gold_paths: list[Path] = [p for p in gold_csv_path if p.exists()]
+    elif gold_csv_path is not None and gold_csv_path.exists():
+        gold_paths = [gold_csv_path]
+    else:
+        gold_paths = []
+
     correct = False
-    if gold_csv_path and gold_csv_path.exists() and output.result_rows:
+    if gold_paths and output.result_rows:
         correct = evaluate_task(
             task.instance_id,
             output.result_rows,
-            gold_csv_path,
+            gold_paths,
             eval_config,
         )
 
-    # Load gold rows for the report
-    from .eval import load_gold_csv
-    gold_rows = load_gold_csv(gold_csv_path) if gold_csv_path and gold_csv_path.exists() else []
+    # Load gold rows from the first available variant for the report
+    gold_rows = load_gold_csv(gold_paths[0]) if gold_paths else []
 
     return EvalResult(
         instance_id=task.instance_id,

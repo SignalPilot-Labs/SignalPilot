@@ -100,11 +100,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         settings = load_settings()
         expected_key = settings.api_key
 
-        # If no API key configured, allow all (dev mode) but flag it
+        # If no API key configured, allow all (dev mode) — log warning server-side
+        # (don't advertise auth state in response headers)
         if not expected_key:
-            response = await call_next(request)
-            response.headers["X-SignalPilot-Auth"] = "none"
-            return response
+            logger.warning("No API key configured — running in dev mode (unauthenticated)")
+            return await call_next(request)
 
         # Extract key from Authorization: Bearer <key> or X-API-Key: <key>
         provided_key = None

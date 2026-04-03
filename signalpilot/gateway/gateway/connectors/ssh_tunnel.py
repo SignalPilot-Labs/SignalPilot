@@ -77,6 +77,7 @@ class SSHTunnel:
             raise ValueError("SSH tunnel requires host and username")
 
         _validate_hostname(ssh_host, "ssh_host")
+        _validate_hostname(remote_host, "remote_host")
 
         tunnel_kwargs: dict[str, Any] = {
             "ssh_address_or_host": (ssh_host, ssh_port),

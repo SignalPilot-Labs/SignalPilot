@@ -491,7 +491,8 @@ class TestAuthMiddlewareIntegration:
         client = _make_test_app(APIKeyAuthMiddleware)
         resp = client.get("/test")
         assert resp.status_code == 200
-        assert resp.headers.get("X-SignalPilot-Auth") == "none"
+        # Auth state should NOT be leaked in response headers
+        assert "X-SignalPilot-Auth" not in resp.headers
 
     def test_valid_bearer_token_allowed(self):
         """Request with correct Bearer token is allowed."""

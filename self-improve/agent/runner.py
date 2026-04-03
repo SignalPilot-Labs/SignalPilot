@@ -296,17 +296,18 @@ async def _run_loop(
                                         break
 
                                     # Sleep in 10s chunks for responsive signal handling
-                                    chunk_remaining = min(60, max_wait - waited)
-                                    while chunk_remaining > 0:
-                                        sleep_chunk = min(10, chunk_remaining)
+                                    sleep_target = min(60, max_wait - waited)
+                                    slept = 0
+                                    while slept < sleep_target:
+                                        sleep_chunk = min(10, sleep_target - slept)
                                         await asyncio.sleep(sleep_chunk)
-                                        chunk_remaining -= sleep_chunk
+                                        slept += sleep_chunk
                                         if signals.has_pending_signals():
                                             signal_break = True
                                             break
                                     if signal_break:
                                         break
-                                    waited += 60
+                                    waited += slept
 
                                 if signal_break:
                                     await db.log_audit(run_id, "codex_fallback_ended", {

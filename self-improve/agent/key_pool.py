@@ -320,17 +320,14 @@ class KeyPool:
             if wait_seconds > max_wait:
                 return None
 
-            # Log and wait
-            if self._run_id:
-                await db.log_audit(self._run_id, "key_pool_waiting", {
-                    "key_id": earliest.id,
-                    "wait_seconds": int(wait_seconds),
-                    "resets_at": earliest.rate_limit_resets_at,
-                })
-
-            # Update run status
-            if self._run_id:
-                await db.update_run_status(self._run_id, "waiting_for_key")
+        # Log and update status outside the lock (DB writes can be slow)
+        if self._run_id:
+            await db.log_audit(self._run_id, "key_pool_waiting", {
+                "key_id": earliest.id,
+                "wait_seconds": int(wait_seconds),
+                "resets_at": earliest.rate_limit_resets_at,
+            })
+            await db.update_run_status(self._run_id, "waiting_for_key")
 
         # Sleep loop runs WITHOUT the lock so other tasks can proceed
         remaining = wait_seconds + 5  # 5s safety buffer

@@ -113,8 +113,9 @@ def show_config():
             print(f"  {ui.BOLD}{section}{ui.RESET}")
 
         # Mask sensitive values
+        _SENSITIVE = {"password", "token", "secret", "api_key"}
         display_val = value
-        if key in ("password",) and isinstance(value, str) and len(value) > 0:
+        if key in _SENSITIVE and isinstance(value, str) and len(value) > 0:
             display_val = "****"
 
         source_tag = f"{ui.DIM}← {source}{ui.RESET}"

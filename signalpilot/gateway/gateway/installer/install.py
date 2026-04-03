@@ -231,7 +231,7 @@ def _build_services(compose_file: Path, services: list[str], step: int = 0, tota
     return True
 
 
-def _start_services(compose_file: Path, step: int = 0, total: int = 0) -> bool:
+def _start_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0) -> bool:
     """Start services and wait for health."""
     ui.section("Starting services", step, total)
 
@@ -241,10 +241,14 @@ def _start_services(compose_file: Path, step: int = 0, total: int = 0) -> bool:
         ui.hint(f"Run: docker compose -f {compose_file} up")
         return False
 
+    db_port = cfg.get("database", {}).get("port", 5600)
+    gw_port = cfg.get("gateway", {}).get("port", 3300)
+    web_port = cfg.get("web", {}).get("port", 3200)
+
     health_services = [
-        ("postgres", 5600, 60),
-        ("gateway", 3300, 90),
-        ("web", 3200, 90),
+        ("postgres", db_port, 60),
+        ("gateway", gw_port, 90),
+        ("web", web_port, 90),
     ]
 
     for svc, port, timeout in health_services:
@@ -276,12 +280,15 @@ def _start_services(compose_file: Path, step: int = 0, total: int = 0) -> bool:
     return True
 
 
-def _verify_services(compose_file: Path, step: int = 0, total: int = 0) -> None:
+def _verify_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0) -> None:
     """Verify services are responding correctly."""
     ui.section("Verifying", step, total)
 
+    gw_port = cfg.get("gateway", {}).get("port", 3300)
+    web_port = cfg.get("web", {}).get("port", 3200)
+
     # Gateway API health check
-    status, ms = checks.verify_endpoint("http://localhost:3300/health")
+    status, ms = checks.verify_endpoint(f"http://localhost:{gw_port}/health")
     if status and 200 <= status < 300:
         ui.check("Gateway API", f"{status} OK     {ui.dim_text(f'({ms}ms)')}")
     elif status:
@@ -290,7 +297,7 @@ def _verify_services(compose_file: Path, step: int = 0, total: int = 0) -> None:
         ui.fail("Gateway API", "unreachable")
 
     # Web UI check
-    status, ms = checks.verify_endpoint("http://localhost:3200")
+    status, ms = checks.verify_endpoint(f"http://localhost:{web_port}")
     if status and 200 <= status < 400:
         ui.check("Web UI", f"{status} OK     {ui.dim_text(f'({ms}ms)')}")
     elif status:
@@ -450,19 +457,23 @@ def run_install(
             sys.exit(1)
 
     # Start
-    if not _start_services(compose_file, next_step(), total_steps):
+    if not _start_services(compose_file, cfg, next_step(), total_steps):
         ui.hint("Some services failed to start. Check logs above.")
 
     # Verify
-    _verify_services(compose_file, next_step(), total_steps)
+    _verify_services(compose_file, cfg, next_step(), total_steps)
 
     # Done
+    web_port = cfg.get("web", {}).get("port", 3200)
+    gw_port = cfg.get("gateway", {}).get("port", 3300)
+    db_port = cfg.get("database", {}).get("port", 5600)
+
     print(f"\n\n  {ui.GREEN}{ui.BOLD}✓  SignalPilot is running{ui.RESET}\n\n")
-    print(f"  {'Web UI':<18}http://localhost:3200")
-    print(f"  {'Gateway API':<18}http://localhost:3300")
-    print(f"  {'PostgreSQL':<18}localhost:5600")
+    print(f"  {'Web UI':<18}http://localhost:{web_port}")
+    print(f"  {'Gateway API':<18}http://localhost:{gw_port}")
+    print(f"  {'PostgreSQL':<18}localhost:{db_port}")
     print(f"\n\n  {ui.bold_text('Next steps')}\n")
-    print(f"    1. Open {ui.bold_text('http://localhost:3200')} in your browser")
+    print(f"    1. Open {ui.bold_text(f'http://localhost:{web_port}')} in your browser")
     print(f"    2. Connect a database:  {ui.dim_text('sp connect mydb postgresql://...')}")
     print(f"    3. Read the docs:       {ui.dim_text('https://github.com/SignalPilot-Labs/SignalPilot')}")
     print()

@@ -31,12 +31,21 @@ def _load_yaml(path: Path) -> dict:
         with open(path) as f:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        import sys
+        print(f"  warning: failed to parse {path}: {exc}", file=sys.stderr)
         return {}
 
 
-def _apply_env(config: dict) -> dict:
-    result = copy.deepcopy(config)
+def _parse_env_overrides(reference: dict) -> list[tuple[str, str, object]]:
+    """Parse SP_* env vars into (section, key, coerced_value) triples.
+
+    Uses *reference* to determine valid sections/keys and whether to
+    coerce to int.  Shared by load_config and resolve_with_sources.
+    """
+    overrides: list[tuple[str, str, object]] = []
     for env_key, env_val in os.environ.items():
         if not env_key.startswith("SP_"):
             continue
@@ -44,46 +53,37 @@ def _apply_env(config: dict) -> dict:
         if len(parts) != 2:
             continue
         section, key = parts
-        if section not in result or not isinstance(result[section], dict):
+        if section not in reference or not isinstance(reference[section], dict):
             continue
-        if key not in result[section]:
+        if key not in reference[section]:
             continue
-        default_val = result[section][key]
+        default_val = reference[section][key]
         if isinstance(default_val, int):
             try:
-                result[section][key] = int(env_val)
+                overrides.append((section, key, int(env_val)))
             except ValueError:
                 pass
         else:
-            result[section][key] = env_val
+            overrides.append((section, key, env_val))
+    return overrides
+
+
+def _apply_env(config: dict) -> dict:
+    result = copy.deepcopy(config)
+    for section, key, value in _parse_env_overrides(_DEFAULTS):
+        if section in result and isinstance(result[section], dict) and key in result[section]:
+            result[section][key] = value
     return result
 
 
-def load_config(repo_root: Path | None = None) -> dict:
-    config = copy.deepcopy(_DEFAULTS)
+def _load_layers(repo_root: Path | None) -> list[tuple[str, dict]]:
+    """Load config file layers in cascade order."""
+    layers: list[tuple[str, dict]] = []
 
     if repo_root is not None:
-        repo_cfg = _load_yaml(repo_root / "config" / "config.yml")
-        config = _deep_merge(config, repo_cfg)
-
-    user_cfg = _load_yaml(Path.home() / ".signalpilot" / "config.yml")
-    config = _deep_merge(config, user_cfg)
-
-    project_cfg = _load_yaml(Path.cwd() / ".signalpilot" / "config.yml")
-    config = _deep_merge(config, project_cfg)
-
-    config = _apply_env(config)
-
-    return config
-
-
-def resolve_with_sources(repo_root: Path | None = None) -> dict[str, tuple]:
-    layers: list[tuple[str, dict]] = [("default", copy.deepcopy(_DEFAULTS))]
-
-    if repo_root is not None:
-        repo_cfg = _load_yaml(repo_root / "config" / "config.yml")
-        if repo_cfg:
-            layers.append(("repo config", repo_cfg))
+        cfg = _load_yaml(repo_root / "config" / "config.yml")
+        if cfg:
+            layers.append(("repo config", cfg))
 
     user_cfg = _load_yaml(Path.home() / ".signalpilot" / "config.yml")
     if user_cfg:
@@ -93,17 +93,29 @@ def resolve_with_sources(repo_root: Path | None = None) -> dict[str, tuple]:
     if project_cfg:
         layers.append(("project config", project_cfg))
 
-    # Build a merged config tracking which layer last set each key
-    result: dict[str, tuple] = {}
+    return layers
 
+
+def load_config(repo_root: Path | None = None) -> dict:
+    config = copy.deepcopy(_DEFAULTS)
+
+    for _label, layer in _load_layers(repo_root):
+        config = _deep_merge(config, layer)
+
+    config = _apply_env(config)
+    return config
+
+
+def resolve_with_sources(repo_root: Path | None = None) -> dict[str, tuple]:
     # Seed with defaults
+    result: dict[str, tuple] = {}
     for section, values in _DEFAULTS.items():
         if isinstance(values, dict):
             for key, val in values.items():
                 result[f"{section}.{key}"] = (val, "default")
 
     # Apply file layers in order
-    for label, layer in layers[1:]:
+    for label, layer in _load_layers(repo_root):
         for section, values in layer.items():
             if isinstance(values, dict):
                 for key, val in values.items():
@@ -111,25 +123,10 @@ def resolve_with_sources(repo_root: Path | None = None) -> dict[str, tuple]:
                     if flat_key in result:
                         result[flat_key] = (val, label)
 
-    # Apply env overrides
-    defaults_flat = {f"{s}.{k}": v for s, vals in _DEFAULTS.items() if isinstance(vals, dict) for k, v in vals.items()}
-    for env_key, env_val in os.environ.items():
-        if not env_key.startswith("SP_"):
-            continue
-        parts = env_key[3:].lower().split("_", 1)
-        if len(parts) != 2:
-            continue
-        section, key = parts
+    # Apply env overrides (uses same parser as load_config)
+    for section, key, value in _parse_env_overrides(_DEFAULTS):
         flat_key = f"{section}.{key}"
-        if flat_key not in result:
-            continue
-        default_val = defaults_flat.get(flat_key)
-        if isinstance(default_val, int):
-            try:
-                result[flat_key] = (int(env_val), "env")
-            except ValueError:
-                pass
-        else:
-            result[flat_key] = (env_val, "env")
+        if flat_key in result:
+            result[flat_key] = (value, "env")
 
     return result

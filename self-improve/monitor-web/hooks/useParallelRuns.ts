@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ParallelRunSlot, ParallelStatus } from "@/lib/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3401";
+const API = "";
 
 const SAFE_ID = /^[\w-]+$/;
 

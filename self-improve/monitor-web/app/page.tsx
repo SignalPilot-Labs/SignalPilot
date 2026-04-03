@@ -42,6 +42,7 @@ import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 import { ParallelRunsView } from "@/components/parallel/ParallelRunsView";
 import { MobileTab } from "@/components/mobile/MobileTab";
 import { MobileControlSheet } from "@/components/mobile/MobileControlSheet";
+import { TunnelPopover } from "@/components/ui/TunnelPopover";
 import { useMobile } from "@/hooks/useMobile";
 
 export default function MonitorPage() {
@@ -418,6 +419,9 @@ export default function MonitorPage() {
           style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
         />
 
+        {/* Tunnel manager */}
+        <TunnelPopover />
+
         {/* Run status */}
         {selectedRun && <StatusBadge status={selectedRun.status as RunStatus} size="md" />}
 
@@ -534,6 +538,11 @@ export default function MonitorPage() {
             Event Feed
           </button>
         </div>
+
+        <div className="w-px h-4 bg-[#1a1a1a]" />
+
+        {/* Tunnel manager */}
+        <TunnelPopover />
 
         <div className="w-px h-4 bg-[#1a1a1a]" />
 

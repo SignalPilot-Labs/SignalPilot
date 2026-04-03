@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from signalpilot.gateway.gateway.installer import checks
-from signalpilot.gateway.gateway.installer.doctor import _DiagResult, _check_system, _check_configuration, _check_endpoints, run_doctor
+from signalpilot.gateway.gateway.installer.doctor import _DiagResult, _check_system, _check_configuration, _check_ports, _check_endpoints, run_doctor
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +121,38 @@ class TestCheckConfiguration:
         d = _DiagResult()
         _check_configuration(d, tmp_path, 2, 5)
         assert any("world-readable" in i or "644" in i for i in d.issues)
+
+
+# ---------------------------------------------------------------------------
+# doctor._check_ports
+# ---------------------------------------------------------------------------
+
+class TestCheckPorts:
+    _DEFAULT_CFG = {"web": {"port": 3200}, "gateway": {"port": 3300},
+                    "monitor": {"port": 3400, "api_port": 3401}, "database": {"port": 5600}}
+
+    def test_all_ports_available(self, capsys):
+        d = _DiagResult()
+        with patch.object(checks, "check_port", return_value=True):
+            _check_ports(d, self._DEFAULT_CFG, 3, 6)
+        assert d.passed == 5
+        assert d.failed == 0
+
+    def test_port_in_use_by_other_process(self, capsys):
+        d = _DiagResult()
+        with patch.object(checks, "check_port", return_value=False), \
+             patch.object(checks, "port_owner", return_value="node"):
+            _check_ports(d, self._DEFAULT_CFG, 3, 6)
+        assert d.failed == 5
+        assert all("node" in i for i in d.issues)
+
+    def test_port_in_use_by_docker_passes(self, capsys):
+        d = _DiagResult()
+        with patch.object(checks, "check_port", return_value=False), \
+             patch.object(checks, "port_owner", return_value="docker"):
+            _check_ports(d, self._DEFAULT_CFG, 3, 6)
+        assert d.passed == 5
+        assert d.failed == 0
 
 
 # ---------------------------------------------------------------------------

@@ -177,6 +177,24 @@ def _check_containers(diag: _DiagResult, compose_file: Path, step: int, total: i
             diag.fail(svc, "not running", f"run: docker compose -f {compose_file} up -d")
 
 
+def _check_ports(diag: _DiagResult, cfg: dict, step: int, total: int) -> None:
+    """Check that required ports are available or owned by SignalPilot containers."""
+    ui.section("Ports", step, total)
+
+    for port in checks.required_ports(cfg):
+        if checks.check_port(port):
+            diag.ok(f"Port {port}", "available")
+        else:
+            owner = checks.port_owner(port)
+            # If owned by docker, it's likely our container — that's fine
+            if owner and owner.lower() in ("docker", "com.docke"):
+                diag.ok(f"Port {port}", f"in use by {owner} (expected)")
+            elif owner:
+                diag.fail(f"Port {port}", f"in use by {owner}", f"stop {owner} or change port in config")
+            else:
+                diag.fail(f"Port {port}", "in use", "stop the process or change port in config")
+
+
 def _check_endpoints(diag: _DiagResult, cfg: dict, step: int, total: int) -> None:
     """Verify health endpoints respond correctly."""
     ui.section("Endpoints", step, total)
@@ -258,7 +276,7 @@ def run_doctor(dev: bool = False) -> None:
     print()
 
     diag = _DiagResult()
-    total_steps = 5
+    total_steps = 6
 
     try:
         repo_root = _find_repo_root()
@@ -271,9 +289,10 @@ def run_doctor(dev: bool = False) -> None:
 
     _check_system(diag, 1, total_steps)
     _check_configuration(diag, repo_root, 2, total_steps)
-    _check_containers(diag, compose_file, 3, total_steps)
-    _check_endpoints(diag, cfg, 4, total_steps)
-    _check_resources(diag, 5, total_steps)
+    _check_ports(diag, cfg, 3, total_steps)
+    _check_containers(diag, compose_file, 4, total_steps)
+    _check_endpoints(diag, cfg, 5, total_steps)
+    _check_resources(diag, 6, total_steps)
 
     # Summary
     print()

@@ -108,7 +108,7 @@ class TestPIIMasking:
     def test_hash_value(self):
         result = _hash_value("test@example.com")
         assert result.startswith("sha256:")
-        assert len(result) == 19  # "sha256:" + 12 hex chars
+        assert len(result) == 71  # "sha256:" + 64 hex chars (full SHA-256)
 
     def test_hash_none(self):
         assert _hash_value(None) == "NULL"

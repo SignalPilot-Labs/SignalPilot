@@ -9,7 +9,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .deps import get_sandbox_client, load_settings, schema_cache
+from .deps import ConnectionName, get_sandbox_client, load_settings, schema_cache
 from ..governance.cache import query_cache
 from ..store import get_connection, list_connections, list_sandboxes
 
@@ -43,7 +43,7 @@ async def metrics_stream():
 
             payload = {
                 "timestamp": time.time(),
-                "sandbox_manager": settings.sandbox_manager_url,
+                "sandbox_manager_configured": bool(settings.sandbox_manager_url),
                 "sandbox_health": sandbox_health,
                 "kvm_available": kvm_available,
                 "active_sandboxes": len(sandboxes),
@@ -262,7 +262,7 @@ async def get_connector_capabilities(db_type: str | None = None):
 
 
 @router.get("/connections/{name}/capabilities")
-async def get_connection_capabilities(name: str):
+async def get_connection_capabilities(name: ConnectionName):
     """Return capabilities for a specific connection based on its db_type.
 
     Combines tier info with live connection status for a complete picture.

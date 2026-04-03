@@ -9,7 +9,7 @@ from ..connectors.pool_manager import pool_manager
 from ..governance.annotations import generate_skeleton, load_annotations
 from ..governance.budget import budget_ledger
 from ..store import get_connection, get_connection_string, get_credential_extras
-from .deps import sanitize_db_error
+from .deps import sanitize_db_error, ConnectionName
 
 router = APIRouter(prefix="/api")
 
@@ -56,7 +56,7 @@ async def close_budget(session_id: str):
 
 
 @router.get("/connections/{name}/annotations")
-async def get_annotations(name: str):
+async def get_annotations(name: ConnectionName):
     """Get schema annotations for a connection (Feature #16)."""
     info = get_connection(name)
     if not info:
@@ -66,7 +66,7 @@ async def get_annotations(name: str):
 
 
 @router.post("/connections/{name}/annotations/generate")
-async def generate_annotations(name: str):
+async def generate_annotations(name: ConnectionName):
     """Generate a starter schema.yml from database introspection (Feature #29)."""
     info = get_connection(name)
     if not info:

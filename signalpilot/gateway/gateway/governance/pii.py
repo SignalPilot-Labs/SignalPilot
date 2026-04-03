@@ -185,11 +185,11 @@ def detect_pii_columns(column_names: list[str]) -> dict[str, PIIRule]:
 
 
 def _hash_value(val: Any) -> str:
-    """SHA-256 hash a value, returning first 12 chars of hex digest."""
+    """SHA-256 hash a value, returning full SHA-256 hash."""
     if val is None:
         return "NULL"
     raw = str(val).encode("utf-8")
-    return f"sha256:{hashlib.sha256(raw).hexdigest()[:12]}"
+    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
 def _mask_value(val: Any) -> str:

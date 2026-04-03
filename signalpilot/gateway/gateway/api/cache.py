@@ -8,7 +8,7 @@ from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
 from ..store import get_connection, get_connection_string, get_credential_extras
-from .deps import sanitize_db_error
+from .deps import sanitize_db_error, ConnectionName
 
 router = APIRouter(prefix="/api")
 
@@ -27,7 +27,7 @@ async def invalidate_cache(connection_name: str | None = None):
 
 
 @router.post("/connections/{name}/detect-pii")
-async def detect_pii(name: str):
+async def detect_pii(name: ConnectionName):
     """Auto-detect PII columns in a database schema based on naming patterns.
 
     Returns suggested PII rules for columns with names matching known

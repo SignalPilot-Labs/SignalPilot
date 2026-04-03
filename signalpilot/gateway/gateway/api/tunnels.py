@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 
 from ..models import AuditEntry, TunnelCreate, TunnelInfo, TunnelStatus
+from .deps import ResourceID
 from ..store import (
     append_audit,
     delete_tunnel,
@@ -31,8 +32,20 @@ async def get_tunnels():
     return list_tunnels()
 
 
+# Ports explicitly allowed for tunneling. Only these ports can be exposed
+# via Cloudflare tunnels to prevent accidental exposure of databases,
+# admin interfaces, or other internal services.
+_ALLOWED_TUNNEL_PORTS = frozenset({3000, 3200, 3400, 3401, 8180})
+
+
 @router.post("/api/tunnels", status_code=201)
 async def create_tunnel_endpoint(req: TunnelCreate):
+    # Enforce port allowlist
+    if req.local_port not in _ALLOWED_TUNNEL_PORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Port {req.local_port} is not in the allowed tunnel ports: {sorted(_ALLOWED_TUNNEL_PORTS)}",
+        )
     for t in list_tunnels():
         if t.local_port == req.local_port and t.status in (TunnelStatus.running, TunnelStatus.starting):
             raise HTTPException(status_code=409, detail=f"Port {req.local_port} is already tunneled")
@@ -69,7 +82,7 @@ async def create_tunnel_endpoint(req: TunnelCreate):
 
 
 @router.get("/api/tunnels/{tunnel_id}")
-async def get_tunnel_detail(tunnel_id: str):
+async def get_tunnel_detail(tunnel_id: ResourceID):
     tunnel = get_tunnel(tunnel_id)
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
@@ -77,7 +90,7 @@ async def get_tunnel_detail(tunnel_id: str):
 
 
 @router.delete("/api/tunnels/{tunnel_id}", status_code=204)
-async def remove_tunnel(tunnel_id: str):
+async def remove_tunnel(tunnel_id: ResourceID):
     tunnel = get_tunnel(tunnel_id)
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
@@ -98,7 +111,7 @@ async def remove_tunnel(tunnel_id: str):
 
 
 @router.post("/api/tunnels/{tunnel_id}/stop")
-async def stop_tunnel_endpoint(tunnel_id: str):
+async def stop_tunnel_endpoint(tunnel_id: ResourceID):
     tunnel = get_tunnel(tunnel_id)
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")
@@ -117,7 +130,7 @@ async def stop_tunnel_endpoint(tunnel_id: str):
 
 
 @router.post("/api/tunnels/{tunnel_id}/start")
-async def start_tunnel_endpoint(tunnel_id: str):
+async def start_tunnel_endpoint(tunnel_id: ResourceID):
     tunnel = get_tunnel(tunnel_id)
     if not tunnel:
         raise HTTPException(status_code=404, detail="Tunnel not found")

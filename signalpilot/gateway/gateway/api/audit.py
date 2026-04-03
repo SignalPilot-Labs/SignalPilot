@@ -15,8 +15,8 @@ router = APIRouter(prefix="/api")
 
 @router.get("/audit")
 async def get_audit(
-    limit: int = Query(default=100, le=500),
-    offset: int = Query(default=0),
+    limit: int = Query(default=100, ge=0, le=500),
+    offset: int = Query(default=0, ge=0, le=50_000),
     connection_name: str | None = None,
     event_type: str | None = None,
 ):

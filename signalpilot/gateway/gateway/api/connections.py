@@ -6,6 +6,7 @@ import asyncio
 import logging
 import socket
 import time
+import uuid
 from typing import Any
 from urllib.parse import quote_plus, urlparse, unquote, parse_qs
 
@@ -26,7 +27,16 @@ from ..store import (
     _build_connection_string,
     _extract_credential_extras,
 )
-from .deps import sanitize_db_error
+from pydantic import BaseModel, Field
+from typing import Any as TypingAny
+
+from .deps import sanitize_db_error, ConnectionName
+
+
+class ImportManifest(BaseModel):
+    """Validated import manifest structure."""
+    version: str = Field(default="1.0", max_length=10)
+    connections: list[dict[str, TypingAny]] = Field(..., max_length=100)
 
 logger = logging.getLogger(__name__)
 
@@ -423,12 +433,22 @@ async def export_connections(
 ):
     """Export all connections as a portable JSON manifest."""
     if include_credentials:
-        client_ip = request.client.host if request.client else "unknown"
+        from ..middleware import _client_ip
+        client_ip = _client_ip(request)
         logger.warning(
             "Credential export requested from %s — includes_credentials=True, "
             "all connection strings and SSL/SSH secrets will be returned",
             client_ip,
         )
+        # Audit trail for credential exports (compliance requirement)
+        from ..models import AuditEntry
+        from ..store import append_audit
+        await append_audit(AuditEntry(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            event_type="credential_export",
+            metadata={"client_ip": client_ip, "include_credentials": True},
+        ))
     all_conns = list_connections()
     exported = []
     for conn in all_conns:
@@ -470,9 +490,9 @@ async def export_connections(
 
 
 @router.post("/connections/import")
-async def import_connections(manifest: dict):
+async def import_connections(manifest: ImportManifest):
     """Import connections from an exported JSON manifest."""
-    connections = manifest.get("connections", [])
+    connections = manifest.connections
     results = {"imported": 0, "skipped": [], "errors": []}
 
     for entry in connections:
@@ -490,13 +510,16 @@ async def import_connections(manifest: dict):
             create_connection(conn)
             results["imported"] += 1
         except Exception as e:
-            results["errors"].append({"name": name, "error": str(e)})
+            error_msg = str(e)
+            if len(error_msg) > 200:
+                error_msg = error_msg[:200] + "..."
+            results["errors"].append({"name": name, "error": error_msg})
 
     return results
 
 
 @router.get("/connections/{name}")
-async def get_connection_detail(name: str):
+async def get_connection_detail(name: ConnectionName):
     conn = get_connection(name)
     if not conn:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
@@ -504,14 +527,14 @@ async def get_connection_detail(name: str):
 
 
 @router.delete("/connections/{name}", status_code=204)
-async def remove_connection(name: str):
+async def remove_connection(name: ConnectionName):
     if not delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
 
 
 @router.put("/connections/{name}")
-async def edit_connection(name: str, update: ConnectionUpdate):
+async def edit_connection(name: ConnectionName, update: ConnectionUpdate):
     """Update an existing connection. Only provided fields are changed."""
     existing = get_connection(name)
     if not existing:
@@ -544,7 +567,7 @@ async def edit_connection(name: str, update: ConnectionUpdate):
 
 
 @router.post("/connections/{name}/clone")
-async def clone_connection(name: str, new_name: str = Query(..., min_length=1, max_length=64)):
+async def clone_connection(name: ConnectionName, new_name: str = Query(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")):
     """Clone an existing connection with a new name."""
     existing = get_connection(name)
     if not existing:
@@ -575,7 +598,7 @@ async def clone_connection(name: str, new_name: str = Query(..., min_length=1, m
 
 
 @router.post("/connections/{name}/schema/refresh")
-async def refresh_connection_schema(name: str):
+async def refresh_connection_schema(name: ConnectionName):
     """Force-refresh the cached schema for a connection."""
     info = get_connection(name)
     if not info:
@@ -790,12 +813,13 @@ async def test_credentials(request: Request):
     try:
         conn = ConnectionCreate(**body)
     except Exception as e:
-        return {"status": "error", "message": f"Invalid connection parameters: {e}", "phases": []}
+        # Truncate error to avoid leaking internal model details
+        return {"status": "error", "message": f"Invalid connection parameters: {str(e)[:200]}", "phases": []}
 
     try:
         conn_str = conn.connection_string or _build_connection_string(conn)
     except Exception as e:
-        return {"status": "error", "message": f"Could not build connection string: {e}", "phases": []}
+        return {"status": "error", "message": f"Could not build connection string: {str(e)[:200]}", "phases": []}
 
     extras = _extract_credential_extras(conn)
     for field_name in ("auth_method", "oauth_access_token", "impersonate_service_account",
@@ -1116,7 +1140,7 @@ async def build_connection_url(body: dict):
 
 
 @router.post("/connections/{name}/test")
-async def test_connection(name: str):
+async def test_connection(name: ConnectionName):
     """Three-phase connection test."""
     info = get_connection(name)
     if not info:
@@ -1249,7 +1273,7 @@ async def test_connection(name: str):
 
 
 @router.get("/connections/{name}/health")
-async def get_connection_health(name: str, window: int = Query(default=300, ge=60, le=3600)):
+async def get_connection_health(name: ConnectionName, window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for a specific connection."""
     stats = health_monitor.connection_stats(name, window)
     if stats is None:
@@ -1259,7 +1283,7 @@ async def get_connection_health(name: str, window: int = Query(default=300, ge=6
 
 @router.get("/connections/{name}/health/history")
 async def get_connection_health_history(
-    name: str,
+    name: ConnectionName,
     window: int = Query(default=3600, ge=300, le=86400, description="History window in seconds"),
     bucket: int = Query(default=60, ge=10, le=3600, description="Bucket size in seconds"),
 ):
@@ -1316,7 +1340,7 @@ async def network_info():
 
 
 @router.post("/connections/{name}/diagnose")
-async def diagnose_connection(name: str):
+async def diagnose_connection(name: ConnectionName):
     """Run network-level diagnostics for a connection (DNS, TCP, TLS)."""
     import re as _re
 
@@ -1501,7 +1525,7 @@ async def get_connector_capabilities(db_type: str | None = None):
 
 
 @router.get("/connections/{name}/capabilities")
-async def get_connection_capabilities(name: str):
+async def get_connection_capabilities(name: ConnectionName):
     """Return capabilities for a specific connection based on its db_type."""
     info = get_connection(name)
     if not info:

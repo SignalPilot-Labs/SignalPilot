@@ -343,6 +343,11 @@ async def _run_loop(
                             # Auto-wait exhausted or disabled
                             resets_at = info.resets_at
                             wait_min = int(max(0, (resets_at or 0) - time.time()) / 60)
+                            await db.log_audit(run_id, "key_pool_exhausted", {
+                                "earliest_reset": int(resets_at) if resets_at else None,
+                                "wait_minutes": wait_min,
+                                "active_key_id": key_pool.active_key_id,
+                            })
                             print(f"[agent] All keys exhausted. Earliest reset in {wait_min}m. Pausing.")
                             await db.update_run_status(run_id, "rate_limited")
                             if resets_at:

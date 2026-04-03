@@ -25,7 +25,6 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher
 
 from agent import db, hooks, git_ops, permissions, prompt, session_gate, signals, subagents
-from agent.codex_client import CodexClient
 
 
 # =============================================================================
@@ -273,24 +272,22 @@ async def _run_loop(
                                 # Codex degraded mode — wait for Claude keys to reset
                                 # while keeping the run alive
                                 print(f"[agent] Codex fallback activated (degraded mode)")
-                                codex_client = CodexClient(api_key=next_key.decrypted_value)
                                 await db.log_audit(run_id, "codex_degraded_mode", {
                                     "codex_key_id": next_key.id,
-                                    "codex_model": codex_client.model,
+                                    "codex_model": "codex-mini-latest",
                                 })
                                 await db.update_run_status(run_id, "waiting_for_key")
 
-                                # Poll for Claude key availability every 60s
+                                # Poll for Claude key availability in 10s chunks
                                 config = await key_pool.get_config()
                                 max_wait = int(config.get("max_wait_minutes", "60")) * 60
                                 waited = 0
                                 claude_key = None
+                                signal_break = False
                                 while waited < max_wait:
-                                    await asyncio.sleep(min(60, max_wait - waited))
-                                    waited += 60
-
-                                    # Check for stop/pause signals
+                                    # Check signals before sleeping
                                     if signals.has_pending_signals():
+                                        signal_break = True
                                         break
 
                                     # Try to get a Claude key
@@ -298,7 +295,27 @@ async def _run_loop(
                                     if claude_key:
                                         break
 
-                                if claude_key:
+                                    # Sleep in 10s chunks for responsive signal handling
+                                    chunk_remaining = min(60, max_wait - waited)
+                                    while chunk_remaining > 0:
+                                        sleep_chunk = min(10, chunk_remaining)
+                                        await asyncio.sleep(sleep_chunk)
+                                        chunk_remaining -= sleep_chunk
+                                        if signals.has_pending_signals():
+                                            signal_break = True
+                                            break
+                                    if signal_break:
+                                        break
+                                    waited += 60
+
+                                if signal_break:
+                                    await db.log_audit(run_id, "codex_fallback_ended", {
+                                        "codex_key_id": next_key.id,
+                                        "reason": "signal_received",
+                                        "waited_seconds": waited,
+                                    })
+                                    # Fall through — signal will be handled by main loop
+                                elif claude_key:
                                     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = claude_key.decrypted_value
                                     await db.log_audit(run_id, "codex_fallback_ended", {
                                         "codex_key_id": next_key.id,

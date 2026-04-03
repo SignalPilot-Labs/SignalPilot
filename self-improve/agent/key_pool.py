@@ -245,7 +245,11 @@ class KeyPool:
         return None
 
     async def mark_rate_limited(self, resets_at: float | None = None, utilization: float | None = None) -> None:
-        """Mark the active key as rate-limited."""
+        """Mark the active key as rate-limited.
+
+        Note: When called concurrently, the caller should hold self._lock.
+        handle_rate_limit() does this automatically.
+        """
         if not self._active_key:
             return
         conn = db.get_db()
@@ -267,7 +271,11 @@ class KeyPool:
             })
 
     async def clear_rate_limit(self, key_id: str) -> None:
-        """Clear the rate limit on a key (it's available again)."""
+        """Clear the rate limit on a key (it's available again).
+
+        Note: When called concurrently, the caller should hold self._lock.
+        wait_for_next_available_key() does this automatically.
+        """
         conn = db.get_db()
         await conn.execute(
             """UPDATE api_keys SET

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import io
 import logging
+import re
+import shlex
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,15 +26,31 @@ except ImportError:
     HAS_SSHTUNNEL = False
 
 
+_HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9.\-:]+$')
+
+
+def _validate_hostname(value: str, field: str) -> None:
+    """Raise ValueError if value contains characters outside the safe hostname set."""
+    if not _HOSTNAME_RE.match(value):
+        raise ValueError(
+            f"Invalid {field} {value!r}: only alphanumeric characters, dots, "
+            "hyphens, and colons are allowed"
+        )
+
+
 def _build_proxy_command(proxy_host: str, proxy_port: int, ssh_host: str, ssh_port: int) -> str:
     """Build a ProxyCommand string for HTTP CONNECT proxy tunneling.
 
     This enables SSH through corporate HTTP proxies (e.g. Squid) that support
     the CONNECT method — common in VPC environments where direct SSH is blocked.
     """
-    # Use socat or nc (netcat) to tunnel through the HTTP proxy
-    # socat is preferred because it handles the CONNECT handshake properly
-    return f"socat - PROXY:{proxy_host}:{ssh_host}:{ssh_port},proxyport={proxy_port}"
+    _validate_hostname(proxy_host, "proxy_host")
+    _validate_hostname(ssh_host, "ssh_host")
+    # Use shlex.quote for defense-in-depth even after validation
+    return (
+        f"socat - PROXY:{shlex.quote(proxy_host)}:{shlex.quote(ssh_host)}"
+        f":{ssh_port},proxyport={proxy_port}"
+    )
 
 
 class SSHTunnel:
@@ -57,6 +75,8 @@ class SSHTunnel:
 
         if not ssh_host or not ssh_username:
             raise ValueError("SSH tunnel requires host and username")
+
+        _validate_hostname(ssh_host, "ssh_host")
 
         tunnel_kwargs: dict[str, Any] = {
             "ssh_address_or_host": (ssh_host, ssh_port),

@@ -141,7 +141,11 @@ def _load_credentials():
 
 
 def _ensure_data_dir():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        DATA_DIR.chmod(0o700)
+    except OSError:
+        pass
 
 
 def _load_json(path: Path, default: Any) -> Any:

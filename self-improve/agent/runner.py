@@ -262,27 +262,16 @@ async def _run_loop(
                 })
                 if info.status == "rejected":
                     if key_pool:
-                        # Step 1: Mark current key as rate-limited
-                        await key_pool.mark_rate_limited(
+                        # Try to rotate to next available key (marks current key internally)
+                        next_key = await key_pool.handle_rate_limit(
                             resets_at=info.resets_at,
                             utilization=info.utilization,
                         )
-                        # Step 2: Try to rotate to next available key
-                        next_key = await key_pool.handle_rate_limit()
                         if next_key is not None:
                             if next_key.provider == "codex":
-                                await db.log_audit(run_id, "codex_fallback", {
-                                    "key_id": next_key.id,
-                                    "reason": "all_claude_keys_rate_limited",
-                                })
                                 # Codex is degraded mode — for now, log and fall through to wait/pause
                                 print(f"[agent] Codex fallback activated (degraded mode)")
                             else:
-                                await db.log_audit(run_id, "key_rotated", {
-                                    "from_key": key_pool.previous_key_id,
-                                    "to_key": next_key.id,
-                                    "resets_at": info.resets_at,
-                                })
                                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = next_key.decrypted_value
                                 print(f"[agent] Key rotated to {next_key.label or next_key.id[:8]}")
                                 return final_status, total_cost, total_input_tokens, total_output_tokens, True

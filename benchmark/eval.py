@@ -294,28 +294,82 @@ def load_eval_config(eval_config_path: Path) -> dict[str, dict]:
     return config
 
 
+def _resolve_condition_cols(
+    condition_cols: Any,
+    variant_idx: int,
+    gold_rows: list[dict[str, Any]],
+) -> list[str] | None:
+    """Convert Spider2 condition_cols (column indices) to column names.
+
+    Spider2 eval config formats:
+    - [] or None → compare all columns
+    - [0] or [1] → column indices for all variants
+    - [[1], [0], [0]] → per-variant column indices
+    """
+    if not condition_cols:
+        return None
+
+    # Determine which indices apply to this variant
+    if isinstance(condition_cols[0], list):
+        # Per-variant: [[1], [0], [0]]
+        if variant_idx < len(condition_cols):
+            col_indices = condition_cols[variant_idx]
+        else:
+            col_indices = condition_cols[0]
+    else:
+        # Shared across variants: [0] or [1]
+        col_indices = condition_cols
+
+    if not col_indices:
+        return None
+
+    # Convert indices to column names using gold CSV headers
+    if not gold_rows:
+        return None
+    col_names = list(gold_rows[0].keys())
+    result = []
+    for idx in col_indices:
+        if isinstance(idx, int) and 0 <= idx < len(col_names):
+            result.append(col_names[idx])
+    return result if result else None
+
+
 def evaluate_task(
     instance_id: str,
     predicted_rows: list[dict[str, Any]],
-    gold_csv_path: Path,
+    gold_csv_path: Path | list[Path],
     eval_config: dict | None = None,
 ) -> bool:
-    """Evaluate a single task against its gold result."""
-    gold_rows = load_gold_csv(gold_csv_path)
+    """Evaluate a single task against its gold result.
+
+    gold_csv_path may be a single Path or a list of Paths (variant files like
+    local002_a.csv, local002_b.csv).  The task is CORRECT if it matches ANY
+    variant.
+    """
+    if isinstance(gold_csv_path, list):
+        gold_paths = gold_csv_path
+    else:
+        gold_paths = [gold_csv_path]
 
     ignore_order = True
-    condition_cols = None
+    raw_condition_cols = None
 
     if eval_config:
         ignore_order = eval_config.get("ignore_order", True)
-        condition_cols = eval_config.get("condition_cols")
+        raw_condition_cols = eval_config.get("condition_cols")
 
-    return compare_results(
-        predicted_rows,
-        gold_rows,
-        ignore_order=ignore_order,
-        condition_cols=condition_cols,
-    )
+    for i, path in enumerate(gold_paths):
+        gold_rows = load_gold_csv(path)
+        condition_cols = _resolve_condition_cols(raw_condition_cols, i, gold_rows)
+        if compare_results(
+            predicted_rows,
+            gold_rows,
+            ignore_order=ignore_order,
+            condition_cols=condition_cols,
+        ):
+            return True
+
+    return False
 
 
 def parse_query_result_to_rows(result_text: str) -> list[dict[str, Any]]:

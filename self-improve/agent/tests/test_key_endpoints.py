@@ -463,6 +463,14 @@ class TestUpdateConfig:
         assert data["max_wait_minutes"] == "30"
 
     @pytest.mark.asyncio
+    async def test_update_config_unknown_key_via_pool_rejected(self, app_client):
+        """Verify unknown config keys are rejected at the KeyPool level."""
+        from agent.key_pool import KeyPool
+        pool = KeyPool()
+        with pytest.raises(ValueError, match="Unknown config key"):
+            await pool.update_config({"evil_injection": "true"})
+
+    @pytest.mark.asyncio
     async def test_update_config_directly_via_pool(self, app_client):
         """Verify config updates work at the KeyPool level even if the HTTP route is shadowed."""
         from agent.key_pool import KeyPool

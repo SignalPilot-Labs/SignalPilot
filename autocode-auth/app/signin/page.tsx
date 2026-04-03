@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import AuthLayout from "@/components/AuthLayout";
 import OAuthButtons from "@/components/OAuthButtons";
+import TextInput from "@/components/TextInput";
 
 export default function SigninPage() {
   const router = useRouter();
@@ -68,43 +69,31 @@ export default function SigninPage() {
       )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-        <div>
-          <label htmlFor="signin-email" className="sr-only">Email</label>
-          <input
-            id="signin-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onBlur={() => setTouched((t) => ({ ...t, email: true }))}
-            placeholder="EMAIL"
-            autoComplete="email"
-            disabled={submitPath !== null}
-            aria-describedby={emailError ? "email-error" : credentialsError ? "credentials-error" : undefined}
-            className="w-full bg-transparent border-0 border-b-2 border-[var(--color-border)] text-[var(--color-text)] font-mono text-sm tracking-[0.1em] py-3 placeholder:text-[var(--color-dim)] placeholder:uppercase focus-visible:border-[var(--color-accent)] outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] focus-visible:outline-offset-2"
-          />
-          {emailError && (
-            <p id="email-error" role="alert" className="text-[var(--color-error)] text-xs tracking-[0.1em] mt-2">{emailError}</p>
-          )}
-        </div>
+        <TextInput
+          id="signin-email"
+          type="email"
+          value={email}
+          onChange={setEmail}
+          onBlur={() => setTouched((t) => ({ ...t, email: true }))}
+          placeholder="EMAIL"
+          autoComplete="email"
+          disabled={submitPath !== null}
+          error={emailError}
+          errorId="email-error"
+        />
 
-        <div>
-          <label htmlFor="signin-password" className="sr-only">Password</label>
-          <input
-            id="signin-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onBlur={() => setTouched((t) => ({ ...t, password: true }))}
-            placeholder="PASSWORD"
-            autoComplete="current-password"
-            disabled={submitPath !== null}
-            aria-describedby={passwordError ? "password-error" : credentialsError ? "credentials-error" : undefined}
-            className="w-full bg-transparent border-0 border-b-2 border-[var(--color-border)] text-[var(--color-text)] font-mono text-sm tracking-[0.1em] py-3 placeholder:text-[var(--color-dim)] placeholder:uppercase focus-visible:border-[var(--color-accent)] outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] focus-visible:outline-offset-2"
-          />
-          {passwordError && (
-            <p id="password-error" role="alert" className="text-[var(--color-error)] text-xs tracking-[0.1em] mt-2">{passwordError}</p>
-          )}
-        </div>
+        <TextInput
+          id="signin-password"
+          type="password"
+          value={password}
+          onChange={setPassword}
+          onBlur={() => setTouched((t) => ({ ...t, password: true }))}
+          placeholder="PASSWORD"
+          autoComplete="current-password"
+          disabled={submitPath !== null}
+          error={passwordError}
+          errorId="password-error"
+        />
 
         <button
           type="submit"

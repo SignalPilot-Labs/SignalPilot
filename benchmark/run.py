@@ -81,14 +81,8 @@ async def run_benchmark(config: BenchmarkConfig) -> BenchmarkMetrics:
 
     print(f"Tasks to run: {len(tasks)}")
 
-    # Load skills
-    skills = get_skills(
-        names=config.skills if config.skills else None,
-        db_type="sqlite",
-    )
-    skills_prompt = skills_to_prompt(skills)
-    if skills:
-        print(f"Skills loaded: {[s.name for s in skills]}")
+    # Skills are loaded per-task to include db-specific skills
+    base_skill_names = config.skills if config.skills else None
 
     # Load evaluation config
     eval_configs = load_eval_config(SPIDER2_EVAL_CONFIG)
@@ -143,6 +137,14 @@ async def run_benchmark(config: BenchmarkConfig) -> BenchmarkMetrics:
             if ext_knowledge:
                 print(f"  External knowledge: {ext_knowledge_file} ({len(ext_knowledge)} chars)")
 
+        # Load skills (per-task to include db-specific skills)
+        skills = get_skills(
+            names=base_skill_names,
+            db_type="sqlite",
+            db_id=db_id,
+        )
+        skills_prompt = skills_to_prompt(skills)
+
         # Build task context
         task_ctx = TaskContext(
             instance_id=instance_id,
@@ -154,8 +156,12 @@ async def run_benchmark(config: BenchmarkConfig) -> BenchmarkMetrics:
             connection_name=connection_name,
         )
 
-        # Find gold result
-        gold_csv_path = SPIDER2_GOLD_EXEC / f"{instance_id}.csv"
+        # Find gold result — prefer variant files (local002_a.csv, local002_b.csv …)
+        # then fall back to bare instance_id.csv
+        gold_csv_variants = sorted(SPIDER2_GOLD_EXEC.glob(f"{instance_id}_*.csv"))
+        if not gold_csv_variants:
+            bare = SPIDER2_GOLD_EXEC / f"{instance_id}.csv"
+            gold_csv_variants = [bare] if bare.exists() else []
         eval_config = eval_configs.get(instance_id)
 
         # Run task
@@ -163,7 +169,7 @@ async def run_benchmark(config: BenchmarkConfig) -> BenchmarkMetrics:
             result = await run_task_with_eval(
                 task=task_ctx,
                 config=config,
-                gold_csv_path=gold_csv_path if gold_csv_path.exists() else None,
+                gold_csv_path=gold_csv_variants if gold_csv_variants else None,
                 eval_config=eval_config,
             )
         except Exception as e:
@@ -448,7 +454,10 @@ def main():
         for db, db_tasks in sorted(by_db.items()):
             gold_count = sum(
                 1 for t in db_tasks
-                if (SPIDER2_GOLD_EXEC / f"{t['instance_id']}.csv").exists()
+                if (
+                    list(SPIDER2_GOLD_EXEC.glob(f"{t['instance_id']}_*.csv"))
+                    or (SPIDER2_GOLD_EXEC / f"{t['instance_id']}.csv").exists()
+                )
             )
             print(f"  {db} ({len(db_tasks)} tasks, {gold_count} with gold CSV)")
             if args.limit:

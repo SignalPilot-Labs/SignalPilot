@@ -1,18 +1,82 @@
 [
-  {
-    "name": "spider2_approach",
-    "description": "General approach for Spider2 benchmark tasks",
-    "prompt": "For Spider2 benchmark questions:\n1. The question asks about data in a specific database — your job is to write SQL that produces the exact answer\n2. Be precise: if the question asks for a count, return exactly one number. If it asks 'which X', return the specific entities\n3. Pay attention to column ordering in the result — match what the question implies\n4. Handle NULL values explicitly — use COALESCE or IFNULL where appropriate\n5. When the question says 'distinct', always use SELECT DISTINCT or COUNT(DISTINCT ...)\n6. For percentage calculations, multiply by 100.0 (not 100) to avoid integer division\n7. Round numeric results to 2 decimal places unless the question specifies otherwise",
-    "category": "sql_generation",
-    "applicable_dbs": ["sqlite"],
-    "priority": 10
-  },
-  {
-    "name": "schema_discovery_sqlite",
-    "description": "SQLite schema discovery strategy for unknown databases",
-    "prompt": "To discover the schema of an unknown SQLite database:\n1. Run: SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name\n2. For each table: SELECT * FROM table_name LIMIT 3 — to see actual data\n3. For column details: PRAGMA table_info(table_name)\n4. For foreign keys: PRAGMA foreign_key_list(table_name)\n5. Check for indexes: PRAGMA index_list(table_name)\n6. Count rows: SELECT COUNT(*) FROM table_name\n\nDo steps 1-2 first to get a broad overview, then dive into specific tables relevant to the question.",
-    "category": "schema_exploration",
-    "applicable_dbs": ["sqlite"],
-    "priority": 9
-  }
+    {
+        "name": "spider2_approach",
+        "description": "High-level approach for Spider2 benchmark tasks",
+        "prompt": "For Spider2 benchmark questions, follow this STRICT approach:\n\n## Step 1: PLAN before SQL\nBefore writing ANY SQL, state explicitly:\n- What columns should the final output have? (match EXACTLY what the question asks)\n- How many rows should the result have? (1 row, N rows per group, etc.)\n- What unit/format should numeric values be in? (percentage 0-100, fraction 0-1, count, etc.)\n\n## Step 2: Explore Schema\nAlways run list_tables + describe_table before writing queries. Sample data with LIMIT 3.\nDO NOT use PRAGMA statements — they are blocked. Use describe_table tool instead.\n\n## Step 3: Write SQL\n- SELECT ONLY the columns the question asks for — no extra columns\n- Use CAST(x AS REAL) for all division to avoid integer truncation\n- For percentages: if question says 'percentage' or 'rate', express as 0-100 (e.g., 45.5 not 0.455)\n- For averages: use AVG() or SUM()/COUNT() with REAL division\n- Never round intermediate results. Use full precision.\n- Do NOT add LIMIT unless the question explicitly asks for 'top N'. Return ALL matching rows.\n- Output dates in YYYY-MM-DD format unless the question specifies otherwise.\n\n## Step 4: Verify\nAfter running your query, check:\n- Does the number of result rows match expectations?\n- Are the column names/count correct?\n- Do numeric values have the right scale/units?\n- If the question asks for TOP N, did you use ORDER BY + LIMIT?\n- Did you accidentally add a LIMIT that the question didn't ask for?\n\n## Step 5: Output\nMark your final SQL clearly with ```sql\\n-- FINAL SQL\\n...```",
+        "category": "sql_generation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 10
+    },
+    {
+        "name": "schema_discovery_sqlite",
+        "description": "How to explore SQLite schemas before writing queries",
+        "prompt": "Always explore the schema before writing your main query. Follow these steps in order:\n1. Call `list_tables` to get all tables in the database.\n2. Call `describe_table` for each table that looks relevant to the question.\n3. Sample data from relevant tables: SELECT * FROM table_name LIMIT 3 — this reveals actual values, formats, and NULLs.\n4. If column names are still unclear, run: PRAGMA table_info(table_name)\n5. For join relationships, run: PRAGMA foreign_key_list(table_name)\n\nDo not skip this step even if the question seems simple. Mismatched column names and unexpected data formats are a leading cause of incorrect answers. Spend time here to avoid wasted query attempts later.",
+        "category": "schema_exploration",
+        "applicable_dbs": ["sqlite"],
+        "priority": 9
+    },
+    {
+        "name": "answer_format_checker",
+        "description": "Critical checklist to verify answer format — failures here are the #1 cause of wrong results",
+        "prompt": "CRITICAL: Before declaring your FINAL SQL, verify ALL of these. Getting even one wrong means the answer is WRONG.\n\n1. COLUMN DISCIPLINE (most common failure!):\n   - SELECT ONLY the columns explicitly requested in the question\n   - If question says 'provide the customer name' → SELECT only name, not name + id + other\n   - If question says 'list X along with Y' → SELECT X, Y only\n   - Extra columns WILL cause evaluation failure\n\n2. UNITS AND SCALE:\n   - 'percentage' or 'rate' → output 0-100 (e.g., 45.5), NOT 0-1\n   - 'proportion' or 'share' → output 0-1 (e.g., 0.455), NOT 0-100\n   - 'average' → ensure REAL division: CAST(SUM(x) AS REAL) / COUNT(x)\n   - 'per year' / 'annual' → divide by number of years, not months\n   - Do NOT round unless the question explicitly says to round\n\n3. AGGREGATION SEMANTICS:\n   - Am I counting the RIGHT entity? (orders vs payments vs customers)\n   - Am I filtering on the RIGHT column? (order_date vs delivery_date vs created_at)\n   - Am I using the RIGHT status filter? (delivered vs all statuses)\n   - DISTINCT: should I count unique items or all occurrences?\n\n4. ROW COUNT:\n   - 'What is the X?' → 1 row\n   - 'For each Y' → 1 row per Y\n   - 'Top N' → exactly N rows\n\n5. ZERO-ROW CHECK: If your query returns 0 rows, something is wrong. Investigate filters.",
+        "category": "answer_validation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 8
+    },
+    {
+        "name": "sqlite_functions",
+        "description": "Common SQLite function patterns for benchmark queries",
+        "prompt": "Reference for SQLite built-in functions frequently needed in Spider2 tasks:\n\nDATES:\n- strftime('%Y', date_col) → extract year\n- strftime('%m', date_col) → extract month (zero-padded)\n- julianday(date1) - julianday(date2) → days between two dates\n- date('now') → today's date\n\nTYPE CONVERSION:\n- CAST(col AS REAL) → convert to float\n- CAST(col AS INTEGER) → convert to int\n- printf('%.2f', col) → format number as string with 2 decimal places\n\nNULLS:\n- COALESCE(col, 0) → replace NULL with 0\n- IFNULL(col, default) → same as COALESCE with one fallback\n- NULLIF(col, 0) → return NULL if col equals 0 (avoid divide-by-zero)\n\nSTRINGS:\n- SUBSTR(col, start, length) → substring (1-indexed)\n- INSTR(col, substr) → position of substring\n- REPLACE(col, old, new) → replace occurrences\n- GROUP_CONCAT(col, ', ') → aggregate rows into a delimited string\n- TRIM / LTRIM / RTRIM → strip whitespace\n- UPPER / LOWER → case conversion\n- LENGTH(col) → character count\n\nAGGREGATES:\n- SUM(col) → returns NULL if all values are NULL; use TOTAL(col) to get 0 instead\n- COUNT(*) vs COUNT(col) → COUNT(*) counts all rows, COUNT(col) skips NULLs\n- ROUND(value, digits) → round to N decimal places\n- ABS(col) → absolute value\n\nWINDOW FUNCTIONS (supported in SQLite 3.25+):\n- ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)\n- RANK(), DENSE_RANK()\n- LAG(col, 1) OVER (...), LEAD(col, 1) OVER (...)\n- SUM(col) OVER (PARTITION BY ...) → running totals",
+        "category": "sql_generation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 7
+    },
+    {
+        "name": "complex_computation",
+        "description": "Use execute_code for complex math instead of SQL when appropriate",
+        "prompt": "Some computations are error-prone or impossible in pure SQL. Use `execute_code` to run Python for:\n\n- LINEAR REGRESSION: SQL has no built-in regression. Fetch the raw data with a query, then use Python (numpy or scipy) to compute slope, intercept, R-squared.\n- HAVERSINE DISTANCE: Compute geographic distance between coordinates in Python using the haversine formula rather than approximating in SQL.\n- MOVING AVERAGES / ROLLING STATISTICS: Easier and less error-prone with pandas.\n- STATISTICAL FUNCTIONS: stddev, variance, percentiles, correlation — use scipy.stats or numpy.\n- MULTI-STEP NUMERIC PIPELINES: If the computation requires multiple passes over data or iterative logic, Python is clearer and less bug-prone than nested SQL CTEs.\n\nWorkflow:\n1. Write a SQL query to extract the raw data you need (keep it simple — just fetch the rows).\n2. Pass the result to `execute_code` as a Python list/dict or use pandas read_sql.\n3. Perform the complex math in Python.\n4. Return the final computed value as your answer.\n\nDo NOT attempt linear regression or haversine distance entirely in SQL — the chance of a subtle numeric error is high.",
+        "category": "computation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 6
+    },
+    {
+        "name": "error_recovery",
+        "description": "Steps to diagnose and recover from SQL errors",
+        "prompt": "When a query returns an error or unexpected result, follow these steps:\n\n1. READ THE ERROR MESSAGE. SQLite error messages are descriptive — 'no such column: X' means column X does not exist under that name.\n2. CHECK COLUMN NAMES. Run PRAGMA table_info(table_name) or SELECT * FROM table_name LIMIT 1 to confirm exact column names (case-sensitive in some contexts).\n3. SIMPLIFY THE QUERY. Remove JOINs, subqueries, and WHERE clauses one at a time until the query works, then add complexity back.\n4. CHECK TABLE NAMES. If you get 'no such table', re-run list_tables to confirm the exact table name.\n5. COMMON SQLITE GOTCHAS:\n   - Column name with a space or reserved word: wrap in double quotes or backticks\n   - Mixing types in comparisons (e.g., comparing '2020' string to an integer year column) — use CAST\n   - Aggregate in WHERE clause: move it to HAVING\n   - Window functions require SQLite 3.25+ — if they fail, rewrite with subqueries\n6. IF A JOIN PRODUCES WRONG ROW COUNTS: check for many-to-many relationships causing fan-out, and use DISTINCT or aggregation to deduplicate.\n7. After fixing the error, re-read the original question to confirm your corrected query still answers what was asked.",
+        "category": "error_handling",
+        "applicable_dbs": ["sqlite"],
+        "priority": 5
+    },
+    {
+        "name": "brazilian_ecommerce_tips",
+        "description": "Domain knowledge for Brazilian_E_Commerce (Olist) database",
+        "prompt": "For Brazilian_E_Commerce database (Olist):\n- ALWAYS filter by order_status = 'delivered' unless asked about other statuses\n- customer_id is per-order; customer_unique_id is per-person. Use customer_unique_id for customer-level analysis\n- olist_products and olist_products_dataset are duplicates — use either\n- Date columns are strings — use strftime() or substr() for extraction\n- For monthly pivot tables, month names should match gold format (check if '1' or 'January')\n- Payment analysis: one order can have multiple payments (installments) — check if question asks per-order or per-payment",
+        "category": "domain_knowledge",
+        "applicable_dbs": ["Brazilian_E_Commerce"],
+        "priority": 7
+    },
+    {
+        "name": "ipl_cricket_tips",
+        "description": "Domain knowledge for IPL cricket database",
+        "prompt": "For IPL database:\n- ball_by_ball links to batsman_scored, wicket_taken, extra_runs via composite key (match_id, over_id, ball_id, innings_no)\n- BOWLING STATS: Exclude 'run out', 'retired hurt', 'obstructing the field' from bowler wickets\n- ECONOMY RATE: Use only bat runs (from batsman_scored), exclude extra_runs (wides, noballs, legbyes, byes)\n- OVERS BOWLED: balls / 6.0 — count only legal deliveries (exclude wides and no-balls)\n- BATTING AVERAGE: runs / dismissals (NOT runs / matches). Division by zero for players never dismissed → 0.00\n- Check the external knowledge document for cricket-specific definitions\n- Partnership runs: pair striker + non_striker from ball_by_ball, compute combined runs",
+        "category": "domain_knowledge",
+        "applicable_dbs": ["IPL"],
+        "priority": 7
+    },
+    {
+        "name": "bank_sales_trading_tips",
+        "description": "Domain knowledge for bank_sales_trading multi-domain database",
+        "prompt": "For bank_sales_trading database (18 tables spanning multiple domains):\n- BANKING: customer_transactions has txn_type: deposit, withdrawal, purchase. Deposits are positive, BOTH withdrawals AND purchases are negative.\n- VEGETABLE WHOLESALE: Column names have special characters — wrap in double quotes: \"whsle_px_rmb-kg\", \"qty_sold(kg)\", \"loss_rate_%\"\n- WEEKLY SALES: cleaned_weekly_sales has week_date_formatted (date) and calendar_year. Be precise about date boundary definitions (inclusive vs exclusive).\n- BITCOIN: Check column names carefully — prices may be in different units.\n- When computing rolling averages or running totals, verify window frame boundaries carefully.",
+        "category": "domain_knowledge",
+        "applicable_dbs": ["bank_sales_trading"],
+        "priority": 7
+    },
+    {
+        "name": "column_order_warning",
+        "description": "Critical warning about column ordering in output",
+        "prompt": "CRITICAL: The evaluation compares columns BY POSITION, not by name.\n- If the question says 'show X and Y', your first column must be X and second must be Y\n- If the question says 'for each A, calculate B and C', the column order is: A, B, C\n- Getting the column order wrong means WRONG answer even if values are correct\n- Double-check: does the order of columns in your SELECT match the order implied by the question?\n- For comparison queries (change from period A to period B), ensure period A comes before period B in the output",
+        "category": "answer_validation",
+        "applicable_dbs": ["*"],
+        "priority": 9
+    }
 ]

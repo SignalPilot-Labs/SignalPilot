@@ -200,43 +200,59 @@ def compare_results(
     """
     Compare predicted and gold result sets using Spider2's methodology.
 
-    - Column-vector comparison
+    Spider2 compares by COLUMN POSITION (not name), since predicted and gold
+    may have different column names for the same data.
+
+    - Column-vector comparison by position
     - Numeric tolerance of 1e-2
     - NaN normalized to 0
     - Optional order-independent comparison
-    - Optional column subset matching
+    - Optional column subset matching (by position index)
     """
     if not predicted and not gold:
         return True
     if not predicted or not gold:
         return False
 
-    # If condition_cols specified, only compare those columns
-    if condition_cols:
-        pred_cols = condition_cols
-        gold_cols = condition_cols
-    else:
-        pred_cols = list(predicted[0].keys())
-        gold_cols = list(gold[0].keys())
-
-        # Column count must match
-        if len(pred_cols) != len(gold_cols):
-            return False
-
     # Row count must match
     if len(predicted) != len(gold):
         return False
 
-    # Extract column vectors
-    def extract_col_vectors(rows: list[dict], cols: list[str]) -> list[list[Any]]:
+    # Convert rows from dicts to positional lists for position-based comparison
+    pred_all_cols = list(predicted[0].keys())
+    gold_all_cols = list(gold[0].keys())
+
+    # Determine which column indices to compare
+    if condition_cols:
+        # condition_cols contains gold column NAMES — convert to indices
+        gold_indices = []
+        for col_name in condition_cols:
+            if col_name in gold_all_cols:
+                gold_indices.append(gold_all_cols.index(col_name))
+        if not gold_indices:
+            gold_indices = list(range(len(gold_all_cols)))
+    else:
+        # Compare all columns — must have same count
+        if len(pred_all_cols) != len(gold_all_cols):
+            return False
+        gold_indices = list(range(len(gold_all_cols)))
+
+    # Use same position indices for predicted (clamped to available columns)
+    pred_indices = [i for i in gold_indices if i < len(pred_all_cols)]
+    if len(pred_indices) != len(gold_indices):
+        return False
+
+    # Extract column vectors by position
+    def extract_positional_vectors(rows: list[dict], all_cols: list[str], indices: list[int]) -> list[list[Any]]:
         vectors = []
-        for col in cols:
+        for idx in indices:
+            col = all_cols[idx]
             vec = [_normalize_value(row.get(col)) for row in rows]
             vectors.append(vec)
         return vectors
 
-    pred_vectors = extract_col_vectors(predicted, pred_cols)
-    gold_vectors = extract_col_vectors(gold, gold_cols)
+    pred_vectors = extract_positional_vectors(predicted, pred_all_cols, pred_indices)
+    gold_vectors = extract_positional_vectors(gold, gold_all_cols, gold_indices)
 
     if ignore_order:
         # Sort each vector independently and compare
@@ -294,28 +310,82 @@ def load_eval_config(eval_config_path: Path) -> dict[str, dict]:
     return config
 
 
+def _resolve_condition_cols(
+    condition_cols: Any,
+    variant_idx: int,
+    gold_rows: list[dict[str, Any]],
+) -> list[str] | None:
+    """Convert Spider2 condition_cols (column indices) to column names.
+
+    Spider2 eval config formats:
+    - [] or None → compare all columns
+    - [0] or [1] → column indices for all variants
+    - [[1], [0], [0]] → per-variant column indices
+    """
+    if not condition_cols:
+        return None
+
+    # Determine which indices apply to this variant
+    if isinstance(condition_cols[0], list):
+        # Per-variant: [[1], [0], [0]]
+        if variant_idx < len(condition_cols):
+            col_indices = condition_cols[variant_idx]
+        else:
+            col_indices = condition_cols[0]
+    else:
+        # Shared across variants: [0] or [1]
+        col_indices = condition_cols
+
+    if not col_indices:
+        return None
+
+    # Convert indices to column names using gold CSV headers
+    if not gold_rows:
+        return None
+    col_names = list(gold_rows[0].keys())
+    result = []
+    for idx in col_indices:
+        if isinstance(idx, int) and 0 <= idx < len(col_names):
+            result.append(col_names[idx])
+    return result if result else None
+
+
 def evaluate_task(
     instance_id: str,
     predicted_rows: list[dict[str, Any]],
-    gold_csv_path: Path,
+    gold_csv_path: Path | list[Path],
     eval_config: dict | None = None,
 ) -> bool:
-    """Evaluate a single task against its gold result."""
-    gold_rows = load_gold_csv(gold_csv_path)
+    """Evaluate a single task against its gold result.
+
+    gold_csv_path may be a single Path or a list of Paths (variant files like
+    local002_a.csv, local002_b.csv).  The task is CORRECT if it matches ANY
+    variant.
+    """
+    if isinstance(gold_csv_path, list):
+        gold_paths = gold_csv_path
+    else:
+        gold_paths = [gold_csv_path]
 
     ignore_order = True
-    condition_cols = None
+    raw_condition_cols = None
 
     if eval_config:
         ignore_order = eval_config.get("ignore_order", True)
-        condition_cols = eval_config.get("condition_cols")
+        raw_condition_cols = eval_config.get("condition_cols")
 
-    return compare_results(
-        predicted_rows,
-        gold_rows,
-        ignore_order=ignore_order,
-        condition_cols=condition_cols,
-    )
+    for i, path in enumerate(gold_paths):
+        gold_rows = load_gold_csv(path)
+        condition_cols = _resolve_condition_cols(raw_condition_cols, i, gold_rows)
+        if compare_results(
+            predicted_rows,
+            gold_rows,
+            ignore_order=ignore_order,
+            condition_cols=condition_cols,
+        ):
+            return True
+
+    return False
 
 
 def parse_query_result_to_rows(result_text: str) -> list[dict[str, Any]]:

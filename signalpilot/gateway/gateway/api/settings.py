@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from ..models import GatewaySettings
 from ..store import load_settings, save_settings
@@ -26,7 +26,22 @@ async def get_settings():
 
 
 @router.put("/settings")
-async def update_settings(settings: GatewaySettings):
-    save_settings(settings)
-    reset_sandbox_client()  # Reconnect with new URL
-    return _redact_settings(settings)
+async def update_settings(new_settings: GatewaySettings):
+    current = load_settings()
+
+    # Prevent disabling auth by clearing the API key
+    if current.api_key and not new_settings.api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot disable authentication by removing the API key. Set a new key or keep the existing one.",
+        )
+
+    # If the redacted placeholder was sent back, preserve the existing key
+    if new_settings.api_key == "***":
+        new_settings.api_key = current.api_key
+    if hasattr(new_settings, 'sandbox_api_key') and new_settings.sandbox_api_key == "***":
+        new_settings.sandbox_api_key = current.sandbox_api_key
+
+    save_settings(new_settings)
+    reset_sandbox_client()
+    return _redact_settings(new_settings)

@@ -7,6 +7,7 @@ This file is the app shell: lifespan, middleware, and router registration.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -15,7 +16,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from .middleware import (
+    APIKeyAuthMiddleware,
+    AuthBruteForceMiddleware,
+    RateLimitMiddleware,
+    RequestIDMiddleware,
+    SecurityHeadersMiddleware,
+)
 from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
@@ -116,6 +123,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled exceptions to prevent stack trace leaks in responses."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.error(
+        "Unhandled exception [request_id=%s] %s: %s",
+        request_id, type(exc).__name__, str(exc)[:200],
+    )
+    # Don't expose internal details in production
+    return Response(
+        content=json.dumps({"detail": "Internal server error", "request_id": request_id}),
+        status_code=500,
+        media_type="application/json",
+    )
+
+
 # CORS — dynamic origin allowlist (supports tunnel URLs added at runtime)
 _ALLOWED_ORIGINS: set[str] = {
     "http://localhost:3200",
@@ -151,21 +174,27 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
                     "Access-Control-Allow-Headers": _CORS_HEADERS,
                     "Access-Control-Allow-Credentials": "true",
                     "Access-Control-Max-Age": "600",
+                    "Vary": "Origin",
                 },
             )
         response = await call_next(request)
+        # Always set Vary: Origin for correct cache behavior
+        response.headers["Vary"] = "Origin"
         if origin in _ALLOWED_ORIGINS:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
 
-app.add_middleware(DynamicCORSMiddleware)
-
-# Security middleware stack (order matters: outermost runs first)
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30)
+# Security middleware stack
+# Registration order is reverse of execution order (last registered = outermost = first to execute)
+# Execution order: RequestID → CORS → SecurityHeaders → RateLimit → BruteForce → Auth → App
 app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(AuthBruteForceMiddleware)
+app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(DynamicCORSMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # Register all API routers
 register_routers(app)

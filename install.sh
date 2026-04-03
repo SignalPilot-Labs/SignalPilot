@@ -23,13 +23,22 @@ for arg in "$@"; do
       printf "  Flags:\n"
       printf "    --skip-build    Skip Docker build step\n"
       printf "    --dev           Use docker-compose.dev.yml\n"
-      printf "    --no-color      Disable ANSI color codes\n"
-      printf "    --help          Show this help\n\n"
+      printf "    --no-color        Disable ANSI color codes\n"
+      printf "    --non-interactive  Skip interactive prompts (for curl | sh)\n"
+      printf "    --help            Show this help\n\n"
       exit 0
       ;;
     --no-color) export SP_NO_COLOR=1 ;;
+    --non-interactive) NON_INTERACTIVE=1 ;;
   esac
 done
+
+# ─── Pipe detection ─────────────────────────────────────────────────────────
+
+if [ ! -t 0 ]; then
+  # stdin is a pipe (curl | sh) — enable non-interactive mode
+  NON_INTERACTIVE="${NON_INTERACTIVE:-1}"
+fi
 
 # ─── Header ──────────────────────────────────────────────────────────────────
 
@@ -112,4 +121,8 @@ printf "\033[1A\033[2K"
 
 # ─── Delegate to sp install ──────────────────────────────────────────────────
 
-exec "${VENV_DIR}/bin/sp" install "$@"
+if [ "${NON_INTERACTIVE:-}" = "1" ]; then
+  exec "${VENV_DIR}/bin/sp" install --non-interactive "$@"
+else
+  exec "${VENV_DIR}/bin/sp" install "$@"
+fi

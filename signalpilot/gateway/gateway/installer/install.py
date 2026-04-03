@@ -97,7 +97,7 @@ def _wait_for_docker(max_seconds: int = 60) -> bool:
     return False
 
 
-def _configure_env(repo_root: Path, step: int = 0, total: int = 0) -> None:
+def _configure_env(repo_root: Path, non_interactive: bool = False, step: int = 0, total: int = 0) -> None:
     """Interactive .env configuration."""
     env_file = repo_root / ".env"
     example_file = repo_root / ".env.example"
@@ -111,6 +111,15 @@ def _configure_env(repo_root: Path, step: int = 0, total: int = 0) -> None:
     if example_file.exists():
         import shutil
         shutil.copy2(example_file, env_file)
+
+    if non_interactive:
+        if env_file.exists():
+            env_file.chmod(0o600)
+            ui.check(".env", "copied from .env.example")
+        else:
+            ui.hint("No .env.example found — create .env manually.")
+        ui.hint("Edit .env with your tokens before starting services.")
+        return
 
     try:
         answer = input(f"    Configure environment now? {ui.dim_text('[y/N]')} ")
@@ -180,23 +189,27 @@ def _build_services(compose_file: Path, services: list[str], step: int = 0, tota
     """Build Docker services with progress display."""
     ui.section("Building", step, total)
 
+    svc_total = len(services)
+
     for svc in services:
         ui.dot(svc, "queued")
 
     # Move cursor up to overwrite the dot lines
     if ui.IS_TTY:
-        sys.stdout.write(f"\033[{len(services)}A")
+        sys.stdout.write(f"\033[{svc_total}A")
         sys.stdout.flush()
 
-    for svc in services:
+    for svc_idx, svc in enumerate(services, 1):
+        progress = f"{ui.DIM}[{svc_idx}/{svc_total}]{ui.RESET}  "
+
         if ui.IS_TTY:
             sys.stdout.write(f"{ui.CLEAR_LINE}")
         action_label = "pulling..." if svc == "postgres" else "building..."
-        ui.wait_item(svc, action_label)
+        print(f"    {progress}{svc:<14}{ui.DIM}◐{ui.RESET}  {action_label}", end="", flush=True)
 
         timer = ui.Timer().start()
 
-        spinner = ui.Spinner(f"Building {svc}")
+        spinner = ui.Spinner(f"[{svc_idx}/{svc_total}]  {svc}")
         spinner.start()
 
         try:
@@ -208,7 +221,7 @@ def _build_services(compose_file: Path, services: list[str], step: int = 0, tota
             spinner.stop()
             if ui.IS_TTY:
                 sys.stdout.write(f"{ui.CURSOR_UP}{ui.CLEAR_LINE}")
-            ui.fail(svc, "timed out")
+            print(f"    {progress}{svc:<14}✗  timed out")
             return False
 
         spinner.stop()
@@ -219,9 +232,9 @@ def _build_services(compose_file: Path, services: list[str], step: int = 0, tota
         if result.returncode == 0:
             action = "pulled" if svc == "postgres" else "built"
             elapsed = timer.elapsed_display()
-            ui.check(svc, f"{action:<10} {ui.dim_text(elapsed)}")
+            print(f"    {progress}{svc:<14}{ui.GREEN}✓{ui.RESET}  {action:<10} {ui.dim_text(elapsed)}")
         else:
-            ui.fail(svc, "build failed")
+            print(f"    {progress}{svc:<14}✗  build failed")
             ui.error_block("Build output:", "")
             output = result.stderr or result.stdout or ""
             for line in output.strip().split("\n")[-20:]:
@@ -316,6 +329,7 @@ def _verify_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 
 def run_install(
     dev: bool = False,
     skip_build: bool = False,
+    non_interactive: bool = False,
 ) -> None:
     """Main install entry point."""
 
@@ -343,7 +357,7 @@ def run_install(
     docker = checks.check_docker()
 
     # Docker install loop — prompt until installed
-    while not docker["installed"]:
+    if not docker["installed"]:
         ui.fail("Docker Desktop", "not found")
         print()
         print(f"  {ui.bold_text('Docker Desktop is required to run SignalPilot.')}")
@@ -351,27 +365,38 @@ def run_install(
         print(f"  Download:")
         print(f"    {ui.bold_text(plat['docker_url'])}")
         print()
-        try:
-            answer = input(f"    Open download page? {ui.dim_text('[y/N]')} ")
-            if answer.lower() in ("y", "yes"):
-                subprocess.run([plat["open_cmd"], plat["docker_url"]], capture_output=True)
-        except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(130)
 
-        print()
-        print(f"  {ui.dim_text('Install Docker Desktop, then press Enter...')}")
-        try:
-            input()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(130)
+        if non_interactive:
+            ui.hint("Install Docker Desktop and re-run the installer.")
+            sys.exit(1)
 
-        docker = checks.check_docker()
+        while not docker["installed"]:
+            try:
+                answer = input(f"    Open download page? {ui.dim_text('[y/N]')} ")
+                if answer.lower() in ("y", "yes"):
+                    subprocess.run([plat["open_cmd"], plat["docker_url"]], capture_output=True)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                sys.exit(130)
+
+            print()
+            print(f"  {ui.dim_text('Install Docker Desktop, then press Enter...')}")
+            try:
+                input()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                sys.exit(130)
+
+            docker = checks.check_docker()
 
     # Docker daemon check
     if not docker["running"]:
         ui.fail("Docker Desktop", "installed but not running")
+
+        if non_interactive:
+            ui.hint("Start Docker Desktop and re-run the installer.")
+            sys.exit(1)
+
         print()
         print(f"  {ui.dim_text('Start Docker Desktop, then press Enter...')}")
         try:
@@ -442,7 +467,7 @@ def run_install(
         sys.exit(1)
 
     # Configuration
-    _configure_env(repo_root, next_step(), total_steps)
+    _configure_env(repo_root, non_interactive=non_interactive, step=next_step(), total=total_steps)
 
     # Build
     if skip_build:

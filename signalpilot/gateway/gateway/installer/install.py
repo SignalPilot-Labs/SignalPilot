@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import checks, ui
+from . import checks, config, ui
 
 
 def _find_repo_root() -> Path:
@@ -173,6 +173,7 @@ def _configure_env(repo_root: Path, step: int = 0, total: int = 0) -> None:
     env_file.chmod(0o600)
     print()
     ui.hint(f"Written to {env_file}")
+    ui.hint(f"Non-secret settings: ~/.signalpilot/config.yml  (run: sp config)")
 
 
 def _build_services(compose_file: Path, services: list[str], step: int = 0, total: int = 0) -> bool:
@@ -404,9 +405,17 @@ def run_install(
         ui.hint("Install from https://git-scm.com/downloads")
         sys.exit(1)
 
+    # Resolve repo root early so config can load
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        repo_root = _clone_repo()
+
+    cfg = config.load_config(repo_root)
+
     # Port availability
     ports_ok = True
-    for port in checks.REQUIRED_PORTS:
+    for port in checks.required_ports(cfg):
         if checks.check_port(port):
             ui.check(f"Port {port}", "available")
         else:
@@ -418,12 +427,6 @@ def run_install(
     if not ports_ok:
         ui.hint("Stop the processes using those ports and re-run.")
         sys.exit(1)
-
-    # Resolve compose file — clone repo if not found
-    try:
-        repo_root = _find_repo_root()
-    except FileNotFoundError:
-        repo_root = _clone_repo()
 
     compose_file = _compose_file(repo_root, dev=dev)
 

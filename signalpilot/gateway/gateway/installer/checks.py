@@ -152,6 +152,20 @@ def port_owner(port: int) -> str | None:
     return None
 
 
+def required_ports(config: dict | None = None) -> list[int]:
+    """Return ports to check, reading from config if available."""
+    if config is None:
+        return [3200, 3300, 3400, 3401, 5600]
+    return [
+        config.get("web", {}).get("port", 3200),
+        config.get("gateway", {}).get("port", 3300),
+        config.get("monitor", {}).get("port", 3400),
+        config.get("monitor", {}).get("api_port", 3401),
+        config.get("database", {}).get("port", 5600),
+    ]
+
+
+# Legacy constant for backwards compatibility
 REQUIRED_PORTS = [3200, 3300, 3400, 3401, 5600]
 
 

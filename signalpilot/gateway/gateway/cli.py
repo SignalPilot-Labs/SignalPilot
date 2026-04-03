@@ -85,5 +85,45 @@ def doctor(
     run_doctor(dev=dev)
 
 
+@app.command(name="config")
+def show_config():
+    """Show resolved configuration with source annotations."""
+    from .installer.config import resolve_with_sources
+    from .installer.install import _find_repo_root
+    from .installer import ui
+
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        repo_root = None
+
+    resolved = resolve_with_sources(repo_root)
+
+    print()
+    print(f"  {ui.BOLD}SignalPilot — resolved configuration{ui.RESET}")
+    print()
+
+    current_section = ""
+    for flat_key in sorted(resolved):
+        value, source = resolved[flat_key]
+        section, key = flat_key.split(".", 1)
+
+        if section != current_section:
+            current_section = section
+            print(f"  {ui.BOLD}{section}{ui.RESET}")
+
+        # Mask sensitive values
+        display_val = value
+        if key in ("password",) and isinstance(value, str) and len(value) > 0:
+            display_val = "****"
+
+        source_tag = f"{ui.DIM}← {source}{ui.RESET}"
+        print(f"    {key:<20}{str(display_val):<20}{source_tag}")
+
+    print()
+    print(f"  {ui.DIM}Cascade: defaults → config/config.yml → ~/.signalpilot/config.yml → .signalpilot/config.yml → SP_* env{ui.RESET}")
+    print()
+
+
 if __name__ == "__main__":
     app()

@@ -29,3 +29,6 @@ id_rsa*
 
 # Docker volumes / runtime
 *.log
+.gstack/
+autocode-auth/.next/
+autocode-auth/node_modules/

@@ -359,6 +359,7 @@ def run_install(
     """Main install entry point."""
 
     ui.header()
+    overall_timer = ui.Timer().start()
 
     # Step tracking for progress display
     step = 0
@@ -534,12 +535,15 @@ def run_install(
     gw_port = cfg.get("gateway", {}).get("port", 3300)
     db_port = cfg.get("database", {}).get("port", 5600)
 
+    elapsed = overall_timer.elapsed_display()
+
     print("\n")
     ui.box([
         f"    {ui.GREEN}✓{ui.RESET}  SignalPilot is running",
         f"    {'Web UI':<15}http://localhost:{web_port}",
         f"    {'Gateway API':<15}http://localhost:{gw_port}",
         f"    {'PostgreSQL':<15}localhost:{db_port}",
+        f"    {ui.DIM}completed in {elapsed}{ui.RESET}",
     ])
 
     print(f"\n  {ui.bold_text('Next steps')}\n")

@@ -737,36 +737,6 @@ async def add_key(body: dict):
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
-@app.patch("/api/keys/{key_id}")
-async def update_key(key_id: str, body: dict):
-    """Update key metadata."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.patch(f"{AGENT_API_URL}/keys/{key_id}", json=body)
-            if res.status_code >= 400:
-                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
-            return res.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
-
-
-@app.delete("/api/keys/{key_id}")
-async def delete_key(key_id: str):
-    """Remove a key from the pool."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.delete(f"{AGENT_API_URL}/keys/{key_id}")
-            if res.status_code >= 400:
-                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
-            return res.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
-
-
 @app.get("/api/keys/status")
 async def key_pool_status():
     """Get key pool status."""
@@ -795,6 +765,36 @@ async def update_key_config(body: dict):
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.patch(f"{AGENT_API_URL}/keys/config", json=body)
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.patch("/api/keys/{key_id}")
+async def update_key(key_id: str, body: dict):
+    """Update key metadata."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.patch(f"{AGENT_API_URL}/keys/{key_id}", json=body)
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.delete("/api/keys/{key_id}")
+async def delete_key(key_id: str):
+    """Remove a key from the pool."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.delete(f"{AGENT_API_URL}/keys/{key_id}")
             if res.status_code >= 400:
                 raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
             return res.json()

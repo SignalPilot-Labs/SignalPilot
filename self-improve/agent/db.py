@@ -145,6 +145,11 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
         await _db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
     if "agent_id" not in tc_cols:
         await _db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
+    # Migrate: rename total_requests -> rate_limit_hits in api_keys if needed
+    cursor = await _db.execute("PRAGMA table_info(api_keys)")
+    ak_cols = {row[1] for row in await cursor.fetchall()}
+    if "total_requests" in ak_cols and "rate_limit_hits" not in ak_cols:
+        await _db.execute("ALTER TABLE api_keys RENAME COLUMN total_requests TO rate_limit_hits")
     # NOTE: Do NOT mark runs as crashed here — workers share this DB.
     # Cleanup is handled by the orchestrator in lifespan() via mark_crashed_runs().
     await _db.commit()

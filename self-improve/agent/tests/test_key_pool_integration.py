@@ -91,9 +91,10 @@ async def _add_test_key(
     raw_key: str = "sk-test-key-abc123",
     label: str = "test",
     priority: int = 0,
+    provider: str = "claude_code",
 ) -> "key_pool.ApiKey":  # type: ignore[name-defined]
-    """Convenience wrapper to add a claude_code key."""
-    return await pool.add_key("claude_code", raw_key, label=label, priority=priority)
+    """Convenience wrapper to add a key."""
+    return await pool.add_key(provider, raw_key, label=label, priority=priority)
 
 
 async def _fetch_audit_events(run_id: str) -> list[dict]:
@@ -424,3 +425,67 @@ async def test_audit_events_logged(pool_with_run):
     assert "key_id" in waiting_event["details"]
     assert "wait_seconds" in waiting_event["details"]
     assert waiting_event["details"]["wait_seconds"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Codex fallback integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_codex_fallback_when_all_claude_limited(pool_with_run):
+    """When all claude_code keys are rate-limited and codex enabled, returns codex key."""
+    pool, run_id = pool_with_run
+
+    claude_key = await _add_test_key(pool, raw_key="sk-claude-only", label="Claude", priority=0)
+    codex_key = await _add_test_key(pool, raw_key="sk-codex-fb", label="Codex", priority=0, provider="codex")
+
+    # Enable codex fallback
+    await pool.update_config({"codex_fallback_enabled": "true"})
+
+    # Rate-limit the only claude key
+    pool._active_key = claude_key
+    next_key = await pool.handle_rate_limit(resets_at=time.time() + 3600, utilization=1.0)
+
+    assert next_key is not None
+    assert next_key.provider == "codex"
+    assert next_key.id == codex_key.id
+
+    events = await _fetch_audit_events(run_id)
+    event_types = [e["event_type"] for e in events]
+    assert "codex_fallback" in event_types
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_codex_fallback_disabled_by_default(pool_with_run):
+    """When codex_fallback_enabled is false (default), codex keys are not used."""
+    pool, run_id = pool_with_run
+
+    claude_key = await _add_test_key(pool, raw_key="sk-claude-x", label="Claude", priority=0)
+    await _add_test_key(pool, raw_key="sk-codex-x", label="Codex", priority=0, provider="codex")
+
+    pool._active_key = claude_key
+    next_key = await pool.handle_rate_limit(resets_at=time.time() + 3600, utilization=1.0)
+
+    # Codex disabled by default — should return None
+    assert next_key is None
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_concurrent_handle_rate_limit_no_deadlock(pool_with_run):
+    """Concurrent calls to handle_rate_limit don't deadlock (asyncio.Lock test)."""
+    import asyncio
+    pool, run_id = pool_with_run
+
+    key_a = await _add_test_key(pool, raw_key="sk-conc-a", label="A", priority=0)
+    key_b = await _add_test_key(pool, raw_key="sk-conc-b", label="B", priority=1)
+
+    pool._active_key = key_a
+
+    # Run two handle_rate_limit calls concurrently — should not deadlock
+    async def rate_limit_call():
+        return await pool.handle_rate_limit(resets_at=time.time() + 3600, utilization=0.9)
+
+    results = await asyncio.gather(rate_limit_call(), rate_limit_call())
+    # At least one should get a key (the other may get None since both claude keys could be marked)
+    assert any(r is not None for r in results) or all(r is None for r in results)

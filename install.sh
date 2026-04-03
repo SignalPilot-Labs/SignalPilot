@@ -107,7 +107,7 @@ printf "  ${DIM}Using %s (%s)${RESET}\n\n" "$PYTHON_CMD" "$PYTHON_VER"
 
 # ─── Create venv and install ─────────────────────────────────────────────────
 
-VENV_DIR="/tmp/sp-install-venv-$$"
+VENV_DIR=$(mktemp -d /tmp/sp-install-venv-XXXXXX)
 
 cleanup() {
   rm -rf "$VENV_DIR" 2>/dev/null || true
@@ -116,7 +116,10 @@ trap cleanup EXIT INT TERM
 
 printf "  ${DIM}Preparing installer...${RESET}\n"
 "$PYTHON_CMD" -m venv "$VENV_DIR" 2>/dev/null
-"${VENV_DIR}/bin/pip" install -q -e "${REPO_DIR}/signalpilot/gateway" 2>/dev/null
+if ! "${VENV_DIR}/bin/pip" install -q -e "${REPO_DIR}/signalpilot/gateway" 2>/dev/null; then
+  printf "  ✗  Failed to install SignalPilot CLI.\n\n"
+  exit 1
+fi
 printf "\033[1A\033[2K"
 
 # ─── Delegate to sp install ──────────────────────────────────────────────────

@@ -1124,7 +1124,7 @@ class TestConfigureEnvNonInteractive:
 
         monkeypatch.setattr(
             "builtins.input",
-            lambda _: (_ for _ in ()).throw(AssertionError("input() should not be called")),
+            lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
         )
 
         # Should complete without raising AssertionError
@@ -1174,7 +1174,7 @@ class TestRunInstallNonInteractive:
         })
         monkeypatch.setattr(
             "builtins.input",
-            lambda _: (_ for _ in ()).throw(AssertionError("input() should not be called")),
+            lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -1197,7 +1197,7 @@ class TestRunInstallNonInteractive:
         })
         monkeypatch.setattr(
             "builtins.input",
-            lambda _: (_ for _ in ()).throw(AssertionError("input() should not be called")),
+            lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
         )
 
         with pytest.raises(SystemExit) as exc_info:

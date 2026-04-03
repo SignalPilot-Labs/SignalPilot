@@ -111,10 +111,10 @@ def _configure_env(repo_root: Path, non_interactive: bool = False, step: int = 0
     if example_file.exists():
         import shutil
         shutil.copy2(example_file, env_file)
+        env_file.chmod(0o600)
 
     if non_interactive:
         if env_file.exists():
-            env_file.chmod(0o600)
             ui.check(".env", "copied from .env.example")
         else:
             ui.hint("No .env.example found — create .env manually.")

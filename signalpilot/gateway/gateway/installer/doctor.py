@@ -223,7 +223,7 @@ def _check_resources(diag: _DiagResult, step: int, total: int) -> None:
 
     try:
         result = subprocess.run(
-            ["docker", "system", "df", "--format", "json"],
+            ["docker", "system", "df"],
             capture_output=True, text=True, timeout=15,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -234,41 +234,16 @@ def _check_resources(diag: _DiagResult, step: int, total: int) -> None:
         diag.fail("Docker disk", "query failed")
         return
 
-    # Sum up total size from JSON lines
-    total_bytes = 0
-    for line in result.stdout.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-            size_str = obj.get("TotalCount", obj.get("Size", "0"))
-            # Docker returns human-readable sizes, just display the raw output
-            reclaimable = obj.get("Reclaimable", "")
-            if reclaimable:
-                total_bytes += 1  # Just count entries
-        except (json.JSONDecodeError, ValueError):
-            continue
+    # Parse the text table for images size
+    for line in result.stdout.strip().splitlines()[1:]:
+        parts = line.split()
+        if parts and parts[0] == "Images":
+            size = parts[3] if len(parts) > 3 else "unknown"
+            unit = parts[4] if len(parts) > 4 else ""
+            diag.ok("Docker disk", f"{size} {unit} used (images)")
+            return
 
-    # Simpler approach: just run docker system df and grab the summary
-    try:
-        result2 = subprocess.run(
-            ["docker", "system", "df"],
-            capture_output=True, text=True, timeout=15,
-        )
-        lines = result2.stdout.strip().splitlines()
-        # Show total images size from the table
-        for line in lines[1:]:
-            parts = line.split()
-            if parts and parts[0] == "Images":
-                size = parts[3] if len(parts) > 3 else "unknown"
-                unit = parts[4] if len(parts) > 4 else ""
-                diag.ok("Docker disk", f"{size} {unit} used (images)")
-                return
-        # Fallback: just say we checked
-        diag.ok("Docker disk", "accessible")
-    except (subprocess.TimeoutExpired, OSError):
-        diag.fail("Docker disk", "could not query")
+    diag.ok("Docker disk", "accessible")
 
 
 def run_doctor(dev: bool = False) -> int:

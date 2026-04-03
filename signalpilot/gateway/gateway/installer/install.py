@@ -16,8 +16,6 @@ def _find_repo_root() -> Path:
     for parent in current.parents:
         if (parent / ".env.example").exists():
             return parent
-        if (parent / "signalpilot").is_dir() and (parent / ".env.example").exists():
-            return parent
     # Fallback: assume standard layout (installer -> gateway -> gateway -> signalpilot -> repo)
     fallback = Path(__file__).resolve().parents[4]
     if (fallback / "signalpilot").is_dir():
@@ -183,7 +181,9 @@ def _configure_env(repo_root: Path, non_interactive: bool = False, step: int = 0
             continue
         key = line.split("=")[0].strip() if "=" in line else ""
         if key in replacements:
-            new_lines.append(f"{key}={replacements[key]}")
+            val = replacements[key]
+            escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+            new_lines.append(f'{key}="{escaped}"')
             replaced.add(key)
         else:
             new_lines.append(line)
@@ -191,7 +191,8 @@ def _configure_env(repo_root: Path, non_interactive: bool = False, step: int = 0
     # Append any keys not already present in the file
     for key, val in replacements.items():
         if key not in replaced and val:
-            new_lines.append(f"{key}={val}")
+            escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+            new_lines.append(f'{key}="{escaped}"')
 
     env_file.write_text("\n".join(new_lines) + "\n")
     env_file.chmod(0o600)

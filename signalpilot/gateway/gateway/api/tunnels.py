@@ -31,8 +31,19 @@ async def get_tunnels():
     return list_tunnels()
 
 
+# Ports allowed for tunneling — prevents exposing privileged or internal services
+_ALLOWED_TUNNEL_PORTS = {3000, 3200, 3400, 3401, 8180}
+_BLOCKED_TUNNEL_PORTS = frozenset(range(1, 1024))  # well-known/privileged ports
+
+
 @router.post("/api/tunnels", status_code=201)
 async def create_tunnel_endpoint(req: TunnelCreate):
+    # Block privileged ports and enforce allowlist when configured
+    if req.local_port in _BLOCKED_TUNNEL_PORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Port {req.local_port} is a privileged port and cannot be tunneled.",
+        )
     for t in list_tunnels():
         if t.local_port == req.local_port and t.status in (TunnelStatus.running, TunnelStatus.starting):
             raise HTTPException(status_code=409, detail=f"Port {req.local_port} is already tunneled")

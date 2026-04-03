@@ -128,23 +128,25 @@ class TestCheckConfiguration:
 # ---------------------------------------------------------------------------
 
 class TestCheckEndpoints:
+    _DEFAULT_CFG = {"gateway": {"port": 3300}, "web": {"port": 3200}}
+
     def test_passes_on_200(self, capsys):
         d = _DiagResult()
         with patch.object(checks, "verify_endpoint", return_value=(200, 25)):
-            _check_endpoints(d, 4, 5)
+            _check_endpoints(d, self._DEFAULT_CFG, 4, 5)
         assert d.passed == 2
         assert d.failed == 0
 
     def test_fails_on_unreachable(self, capsys):
         d = _DiagResult()
         with patch.object(checks, "verify_endpoint", return_value=(None, 0)):
-            _check_endpoints(d, 4, 5)
+            _check_endpoints(d, self._DEFAULT_CFG, 4, 5)
         assert d.failed == 2
 
     def test_fails_on_502(self, capsys):
         d = _DiagResult()
         with patch.object(checks, "verify_endpoint", return_value=(502, 15)):
-            _check_endpoints(d, 4, 5)
+            _check_endpoints(d, self._DEFAULT_CFG, 4, 5)
         assert d.failed == 2
         assert any("502" in i for i in d.issues)
 

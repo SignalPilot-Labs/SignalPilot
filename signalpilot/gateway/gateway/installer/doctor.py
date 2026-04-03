@@ -6,7 +6,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from . import checks, ui
+from . import checks, config, ui
 from .install import _compose_file, _find_repo_root
 
 # Placeholder values from .env.example that mean "not configured"
@@ -55,7 +55,10 @@ def _check_system(diag: _DiagResult, step: int, total: int) -> None:
 
     docker = checks.check_docker()
     if docker["installed"]:
-        diag.ok("Docker", f"v{docker['version']}")
+        if checks.meets_min_version(docker["version"], checks.MIN_DOCKER_VERSION):
+            diag.ok("Docker", f"v{docker['version']}")
+        else:
+            diag.fail("Docker", f"v{docker['version']} — requires {checks.MIN_DOCKER_VERSION}+", "update Docker Desktop")
     else:
         diag.fail("Docker", "not installed", f"install from {plat['docker_url']}")
 
@@ -65,15 +68,20 @@ def _check_system(diag: _DiagResult, step: int, total: int) -> None:
         diag.fail("Docker daemon", "not running", "start Docker Desktop")
 
     if docker["compose_installed"]:
-        diag.ok("Compose", f"v{docker['compose_version']}")
+        if checks.meets_min_version(docker["compose_version"], checks.MIN_COMPOSE_VERSION):
+            diag.ok("Compose", f"v{docker['compose_version']}")
+        else:
+            diag.fail("Compose", f"v{docker['compose_version']} — requires {checks.MIN_COMPOSE_VERSION}+", "update Docker Desktop")
     elif docker["installed"]:
         diag.fail("Compose", "plugin not found", "reinstall Docker Desktop")
 
     git_ver = checks.check_command("git")
-    if git_ver:
+    if not git_ver:
+        diag.fail("Git", "not found", "install from https://git-scm.com")
+    elif checks.meets_min_version(git_ver, checks.MIN_GIT_VERSION):
         diag.ok("Git", f"v{git_ver}")
     else:
-        diag.fail("Git", "not found", "install from https://git-scm.com")
+        diag.fail("Git", f"v{git_ver} — requires {checks.MIN_GIT_VERSION}+", "update from https://git-scm.com")
 
 
 def _check_configuration(diag: _DiagResult, repo_root: Path, step: int, total: int) -> None:
@@ -158,13 +166,16 @@ def _check_containers(diag: _DiagResult, compose_file: Path, step: int, total: i
             diag.fail(svc, "not running", f"run: docker compose -f {compose_file} up -d")
 
 
-def _check_endpoints(diag: _DiagResult, step: int, total: int) -> None:
+def _check_endpoints(diag: _DiagResult, cfg: dict, step: int, total: int) -> None:
     """Verify health endpoints respond correctly."""
     ui.section("Endpoints", step, total)
 
+    gw_port = cfg.get("gateway", {}).get("port", 3300)
+    web_port = cfg.get("web", {}).get("port", 3200)
+
     endpoints = [
-        ("Gateway API", "http://localhost:3300/health", 200, 300),
-        ("Web UI", "http://localhost:3200", 200, 400),
+        ("Gateway API", f"http://localhost:{gw_port}/health", 200, 300),
+        ("Web UI", f"http://localhost:{web_port}", 200, 400),
     ]
 
     for label, url, expect_min, expect_max in endpoints:
@@ -245,10 +256,12 @@ def run_doctor(dev: bool = False) -> None:
         repo_root = Path.cwd()
         compose_file = repo_root / "signalpilot" / "docker" / "docker-compose.yml"
 
+    cfg = config.load_config(repo_root)
+
     _check_system(diag, 1, total_steps)
     _check_configuration(diag, repo_root, 2, total_steps)
     _check_containers(diag, compose_file, 3, total_steps)
-    _check_endpoints(diag, 4, total_steps)
+    _check_endpoints(diag, cfg, 4, total_steps)
     _check_resources(diag, 5, total_steps)
 
     # Summary

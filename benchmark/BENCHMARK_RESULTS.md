@@ -6,26 +6,27 @@
 |--------|-------|
 | Benchmark subset | Spider2-Lite SQLite |
 | Total tasks | 135 |
-| Correct | 52 |
-| Failing | 83 |
-| Accuracy | **38.5%** |
+| Correct | 61 |
+| Failing | 74 |
+| Accuracy | **45.2%** |
 | Starting accuracy | 0% (no working pipeline) |
 
-## Correct Tasks (52)
+## Correct Tasks (61)
 
-local004, local008, local009, local015, local019, local021, local022, local025, local026, local029, local030, local038, local039, local040, local041, local050, local054, local055, local058, local061, local062, local065, local068, local071, local073, local077, local078, local081, local099, local100, local114, local128, local130, local132, local152, local156, local163, local168, local198, local212, local228, local230, local244, local262, local264, local269, local270, local277, local298, local300, local302, local329
+local004, local008, local009, local015, local018, local019, local021, local022, local025, local026, local029, local030, local038, local039, local040, local041, local050, local054, local055, local058, local061, local062, local065, local068, local071, local073, local077, local078, local081, local098, local099, local100, local114, local128, local130, local132, local152, local156, local163, local168, local169, local171, local193, local198, local201, local212, local218, local219, local221, local228, local230, local244, local262, local264, local269, local270, local277, local298, local300, local302, local329
 
-## Failure Categories (83 tasks)
+## Failure Categories (74 tasks)
 
 | Category | Count |
 |----------|-------|
-| Misunderstood question | ~15 |
-| Wrong aggregation/join logic | ~18 |
+| Misunderstood question | ~12 |
+| Wrong aggregation/join logic | ~16 |
 | Complex computation (moving avg, haversine, regression) | ~12 |
-| Edge case parsing / empty results | ~12 |
-| Wrong units/scale (% vs fraction) | ~10 |
-| Wrong column order | ~8 |
-| Persistent errors (CLI crashes, connection issues) | ~8 |
+| Edge case parsing / empty results | ~8 |
+| Wrong units/scale (% vs fraction) | ~8 |
+| Wrong column order | ~6 |
+| Persistent errors (CLI crashes, connection issues) | ~5 |
+| Domain-specific knowledge gaps | ~7 |
 
 ## Database Performance
 
@@ -34,8 +35,10 @@ local004, local008, local009, local015, local019, local021, local022, local025, 
 | chinook | 3/3 | 100% |
 | imdb_movies | 2/2 | 100% |
 | european_football | 2/2 | 100% |
+| EU_soccer | 3/4 | 75% |
+| city_legislation | 2/4 | 50% |
 | bank_sales_trading | 0/9 | 0% |
-| Brazilian_E_Commerce | 0/7 | 0% |
+| Brazilian_E_Commerce | 1/7 | 14% |
 | IPL | 0/6 | 0% |
 | f1 | 0/3 | 0% |
 

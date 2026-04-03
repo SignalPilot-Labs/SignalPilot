@@ -52,6 +52,7 @@ This checks your system dependencies, `.env` configuration, port conflicts, cont
 ```bash
 sp ps          # Show running containers
 sp logs        # View container logs (add -f to follow)
+sp restart     # Restart all or specific containers
 sp config      # Show resolved configuration with sources
 sp version     # Show CLI and environment info
 ```

@@ -130,9 +130,9 @@ fi
 [ -t 1 ] && printf "\033[1A\033[2K"
 
 # ─── Delegate to sp install ──────────────────────────────────────────────────
+# Other flags (--dev, --skip-build) are passed through via "$@"
 
-SP_FLAGS=""
-[ "${NON_INTERACTIVE:-}" = "1" ] && SP_FLAGS="$SP_FLAGS --non-interactive"
-[ "${VERBOSE:-}" = "1" ] && SP_FLAGS="$SP_FLAGS --verbose"
+[ "${NON_INTERACTIVE:-}" = "1" ] && set -- --non-interactive "$@"
+[ "${VERBOSE:-}" = "1" ] && set -- --verbose "$@"
 
-exec "${VENV_DIR}/bin/sp" install $SP_FLAGS "$@"
+exec "${VENV_DIR}/bin/sp" install "$@"

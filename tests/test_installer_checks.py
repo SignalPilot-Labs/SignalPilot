@@ -401,18 +401,18 @@ class TestParseVersion:
         assert checks._parse_version("3") == (3,)
 
     def test_empty_string(self):
-        result = checks._parse_version("")
-        # Empty string has no digit parts, fallback behavior
-        assert result <= (0,) or len(result) == 0
+        assert checks._parse_version("") == (0,)
 
     def test_none(self):
         assert checks._parse_version(None) == (0,)
 
     def test_version_with_suffix(self):
-        # "2.24.0-beta" → "0-beta" is not purely digits, so skipped
-        result = checks._parse_version("2.24.0-beta")
-        # At least major.minor parsed correctly
-        assert result[:2] == (2, 24)
+        # "2.24.0-beta" → extracts leading integer from each segment
+        assert checks._parse_version("2.24.0-beta") == (2, 24, 0)
+
+    def test_version_with_distro_suffix(self):
+        # "24.0.0-ubuntu" should still parse correctly
+        assert checks._parse_version("24.0.0-ubuntu") == (24, 0, 0)
 
 
 # ---------------------------------------------------------------------------

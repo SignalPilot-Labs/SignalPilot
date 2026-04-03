@@ -89,10 +89,17 @@ MIN_COMPOSE_VERSION = "2.20.0"
 MIN_GIT_VERSION = "2.30.0"
 
 
-def _parse_version(ver: str) -> tuple[int, ...]:
+def _parse_version(ver: str | None) -> tuple[int, ...]:
     """Parse a version string like '27.5.1' into a comparable tuple (27, 5, 1)."""
+    if not ver:
+        return (0,)
     try:
-        return tuple(int(p) for p in ver.split(".") if p.isdigit())
+        nums = []
+        for part in ver.split("."):
+            match = re.match(r"(\d+)", part)
+            if match:
+                nums.append(int(match.group(1)))
+        return tuple(nums) if nums else (0,)
     except (ValueError, AttributeError):
         return (0,)
 

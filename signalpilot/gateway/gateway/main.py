@@ -126,10 +126,14 @@ app = FastAPI(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Catch unhandled exceptions to prevent stack trace leaks in responses."""
+    from .api.deps import sanitize_db_error
+
     request_id = getattr(request.state, "request_id", "unknown")
+    # Sanitize the error message to strip connection strings and credentials
+    safe_msg = sanitize_db_error(str(exc)[:500])
     logger.error(
         "Unhandled exception [request_id=%s] %s: %s",
-        request_id, type(exc).__name__, str(exc)[:200],
+        request_id, type(exc).__name__, safe_msg,
     )
     # Don't expose internal details in production
     return Response(
@@ -178,8 +182,8 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
                 },
             )
         response = await call_next(request)
-        # Always set Vary: Origin for correct cache behavior
-        response.headers["Vary"] = "Origin"
+        # Append Vary: Origin for correct cache behavior (don't clobber existing Vary)
+        response.headers.append("Vary", "Origin")
         if origin in _ALLOWED_ORIGINS:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"

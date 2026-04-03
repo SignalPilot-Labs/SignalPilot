@@ -22,7 +22,8 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "healthy"
         assert "version" in data
-        assert "connections" in data
+        # Internal details intentionally omitted from public health endpoint
+        assert "connections" not in data
 
     def test_health_no_auth_required(self, client):
         """Health is a public endpoint — no API key needed."""

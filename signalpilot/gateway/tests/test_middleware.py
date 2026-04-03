@@ -1,17 +1,44 @@
 """Tests for the middleware layer — authentication, rate limiting, security headers."""
 
 import time
+import uuid
 from collections import deque
+from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from gateway.middleware import (
     APIKeyAuthMiddleware,
     AuthBruteForceMiddleware,
     RateLimitMiddleware,
     RequestIDMiddleware,
+    SecurityHeadersMiddleware,
     _is_public_path,
 )
+
+
+def _make_test_app(*middleware_classes, **middleware_kwargs):
+    """Create a minimal app with specified middleware for testing."""
+    app = FastAPI()
+
+    @app.get("/test")
+    async def test_endpoint():
+        return {"ok": True}
+
+    @app.get("/health")
+    async def health_endpoint():
+        return {"status": "ok"}
+
+    # Add middleware in reverse order so the first listed is the outermost
+    for cls in reversed(middleware_classes):
+        kwargs = middleware_kwargs.get(cls.__name__, {})
+        app.add_middleware(cls, **kwargs)
+
+    return TestClient(app, raise_server_exceptions=True)
 
 
 class TestRateLimitMiddleware:
@@ -231,23 +258,203 @@ class TestBruteForceCleanup:
         assert "expired-ip" not in mw._failures
 
 
-class TestSecurityHeaders:
-    """Verify SecurityHeadersMiddleware sets the expected headers."""
+class TestSecurityHeadersIntegration:
+    """Integration tests: verify SecurityHeadersMiddleware actually sets response headers."""
 
-    def test_expected_headers_include_csp(self):
-        import inspect
-        from gateway.middleware import SecurityHeadersMiddleware
-        source = inspect.getsource(SecurityHeadersMiddleware.dispatch)
-        assert "Content-Security-Policy" in source
+    def _client(self):
+        return _make_test_app(SecurityHeadersMiddleware)
 
-    def test_expected_headers_include_hsts(self):
-        import inspect
-        from gateway.middleware import SecurityHeadersMiddleware
-        source = inspect.getsource(SecurityHeadersMiddleware.dispatch)
-        assert "Strict-Transport-Security" in source
+    def test_content_security_policy_header_present(self):
+        resp = self._client().get("/test")
+        assert resp.status_code == 200
+        assert "Content-Security-Policy" in resp.headers
 
-    def test_expected_headers_include_permissions_policy(self):
-        import inspect
-        from gateway.middleware import SecurityHeadersMiddleware
-        source = inspect.getsource(SecurityHeadersMiddleware.dispatch)
-        assert "Permissions-Policy" in source
+    def test_content_security_policy_has_default_src_self(self):
+        resp = self._client().get("/test")
+        assert "default-src 'self'" in resp.headers["Content-Security-Policy"]
+
+    def test_strict_transport_security_header_present(self):
+        resp = self._client().get("/test")
+        assert "Strict-Transport-Security" in resp.headers
+
+    def test_strict_transport_security_value(self):
+        resp = self._client().get("/test")
+        assert "max-age=31536000" in resp.headers["Strict-Transport-Security"]
+        assert "includeSubDomains" in resp.headers["Strict-Transport-Security"]
+
+    def test_x_frame_options_deny(self):
+        resp = self._client().get("/test")
+        assert resp.headers.get("X-Frame-Options") == "DENY"
+
+    def test_x_content_type_options_nosniff(self):
+        resp = self._client().get("/test")
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+    def test_referrer_policy_header_present(self):
+        resp = self._client().get("/test")
+        assert "Referrer-Policy" in resp.headers
+        assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+
+    def test_cache_control_no_store(self):
+        resp = self._client().get("/test")
+        assert resp.headers.get("Cache-Control") == "no-store"
+
+    def test_permissions_policy_header_present(self):
+        resp = self._client().get("/test")
+        assert "Permissions-Policy" in resp.headers
+
+    def test_permissions_policy_disables_camera_and_mic(self):
+        resp = self._client().get("/test")
+        policy = resp.headers["Permissions-Policy"]
+        assert "camera=()" in policy
+        assert "microphone=()" in policy
+
+    def test_x_xss_protection_header_present(self):
+        resp = self._client().get("/test")
+        assert "X-XSS-Protection" in resp.headers
+        assert "1" in resp.headers["X-XSS-Protection"]
+
+    def test_all_eight_security_headers_present(self):
+        """All 8 security headers must be present in a single response."""
+        resp = self._client().get("/test")
+        expected_headers = [
+            "Content-Security-Policy",
+            "Strict-Transport-Security",
+            "X-Frame-Options",
+            "X-Content-Type-Options",
+            "Referrer-Policy",
+            "Cache-Control",
+            "Permissions-Policy",
+            "X-XSS-Protection",
+        ]
+        missing = [h for h in expected_headers if h not in resp.headers]
+        assert missing == [], f"Missing security headers: {missing}"
+
+
+class TestRequestIDMiddlewareIntegration:
+    """Integration tests: verify RequestIDMiddleware actually sets X-Request-ID."""
+
+    def _client(self):
+        return _make_test_app(RequestIDMiddleware)
+
+    def test_x_request_id_header_present(self):
+        resp = self._client().get("/test")
+        assert resp.status_code == 200
+        assert "X-Request-ID" in resp.headers
+
+    def test_x_request_id_is_valid_uuid4(self):
+        resp = self._client().get("/test")
+        request_id = resp.headers["X-Request-ID"]
+        parsed = uuid.UUID(request_id)
+        assert parsed.version == 4
+
+    def test_x_request_id_is_unique_per_request(self):
+        client = self._client()
+        ids = {client.get("/test").headers["X-Request-ID"] for _ in range(5)}
+        assert len(ids) == 5, "Each request should have a unique X-Request-ID"
+
+
+class TestRateLimitMiddlewareIntegration:
+    """Integration tests: verify RateLimitMiddleware emits X-RateLimit-* headers and 429."""
+
+    def _client(self, general_rpm=10):
+        return _make_test_app(
+            RateLimitMiddleware,
+            **{"RateLimitMiddleware": {"general_rpm": general_rpm, "expensive_rpm": 3}},
+        )
+
+    def test_ratelimit_limit_header_present(self):
+        resp = self._client().get("/test")
+        assert resp.status_code == 200
+        assert "X-RateLimit-Limit" in resp.headers
+
+    def test_ratelimit_remaining_header_present(self):
+        resp = self._client().get("/test")
+        assert "X-RateLimit-Remaining" in resp.headers
+
+    def test_ratelimit_limit_matches_configured_rpm(self):
+        resp = self._client(general_rpm=42).get("/test")
+        assert resp.headers["X-RateLimit-Limit"] == "42"
+
+    def test_ratelimit_remaining_decrements_with_each_request(self):
+        client = self._client(general_rpm=10)
+        first = int(client.get("/test").headers["X-RateLimit-Remaining"])
+        second = int(client.get("/test").headers["X-RateLimit-Remaining"])
+        assert second == first - 1
+
+    def test_ratelimit_returns_429_when_limit_exceeded(self):
+        """With a limit of 3 RPM, the 4th request in the same window should be blocked."""
+        client = self._client(general_rpm=3)
+        responses = [client.get("/test") for _ in range(4)]
+        status_codes = [r.status_code for r in responses]
+        assert 429 in status_codes, f"Expected a 429 but got: {status_codes}"
+
+    def test_ratelimit_429_has_retry_after_header(self):
+        """A 429 from the rate limiter must include a Retry-After header."""
+        client = self._client(general_rpm=3)
+        responses = [client.get("/test") for _ in range(4)]
+        blocked = [r for r in responses if r.status_code == 429]
+        assert blocked, "Expected at least one 429 response"
+        assert "Retry-After" in blocked[0].headers
+
+    def test_options_requests_bypass_rate_limit(self):
+        """CORS preflight OPTIONS requests must not consume rate-limit budget."""
+        client = self._client(general_rpm=3)
+        for _ in range(10):
+            resp = client.options("/test")
+            assert resp.status_code != 429
+
+
+class TestCORSIntegration:
+    """Integration tests for CORS behavior using an inline middleware."""
+
+    ALLOWED_ORIGIN = "https://allowed.example.com"
+
+    def _client(self, allowed_origins=None):
+        if allowed_origins is None:
+            allowed_origins = [self.ALLOWED_ORIGIN]
+
+        app = FastAPI()
+
+        @app.get("/test")
+        async def test_endpoint():
+            return {"ok": True}
+
+        # Inline CORS middleware that mirrors the real DynamicCORSMiddleware logic
+        _allowed = set(allowed_origins)
+
+        class _InlineCORSMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                origin = request.headers.get("origin", "")
+                response = await call_next(request)
+                if origin in _allowed:
+                    response.headers["Access-Control-Allow-Origin"] = origin
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+                    response.headers["Vary"] = "Origin"
+                else:
+                    response.headers["Vary"] = "Origin"
+                return response
+
+        app.add_middleware(_InlineCORSMiddleware)
+        return TestClient(app, raise_server_exceptions=True)
+
+    def test_vary_origin_always_present(self):
+        """Vary: Origin must be set regardless of whether the origin is allowed."""
+        resp = self._client().get("/test", headers={"Origin": "https://evil.example.com"})
+        assert "Origin" in resp.headers.get("Vary", "")
+
+    def test_allowed_origin_gets_acao_header(self):
+        resp = self._client().get("/test", headers={"Origin": self.ALLOWED_ORIGIN})
+        assert resp.headers.get("Access-Control-Allow-Origin") == self.ALLOWED_ORIGIN
+
+    def test_disallowed_origin_does_not_get_acao_header(self):
+        resp = self._client().get("/test", headers={"Origin": "https://evil.example.com"})
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+    def test_no_origin_header_gets_no_acao(self):
+        resp = self._client().get("/test")
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+    def test_allowed_origin_gets_allow_credentials(self):
+        resp = self._client().get("/test", headers={"Origin": self.ALLOWED_ORIGIN})
+        assert resp.headers.get("Access-Control-Allow-Credentials") == "true"

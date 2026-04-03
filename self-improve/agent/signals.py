@@ -42,6 +42,13 @@ def push_signal(signal: str, payload: str | None = None) -> None:
         _signal_queue.put_nowait({"signal": signal, "payload": payload})
 
 
+def has_pending_signals() -> bool:
+    """Check if there are pending signals without consuming them."""
+    if not _signal_queue:
+        return False
+    return not _signal_queue.empty()
+
+
 async def drain_signal() -> dict | None:
     """Non-blocking check for a pending signal."""
     if not _signal_queue:

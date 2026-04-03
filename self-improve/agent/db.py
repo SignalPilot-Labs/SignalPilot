@@ -97,6 +97,30 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_control_signals_run_id ON control_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id, consumed);
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('claude_code', 'codex')),
+    label TEXT NOT NULL DEFAULT '',
+    encrypted_key TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    rate_limit_resets_at INTEGER,
+    rate_limit_utilization REAL,
+    last_used_at TEXT,
+    rate_limit_hits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_provider ON api_keys(provider);
+CREATE INDEX IF NOT EXISTS idx_api_keys_priority ON api_keys(provider, priority, is_enabled);
+
+CREATE TABLE IF NOT EXISTS key_rotation_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -121,6 +145,11 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
         await _db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
     if "agent_id" not in tc_cols:
         await _db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
+    # Migrate: rename total_requests -> rate_limit_hits in api_keys if needed
+    cursor = await _db.execute("PRAGMA table_info(api_keys)")
+    ak_cols = {row[1] for row in await cursor.fetchall()}
+    if "total_requests" in ak_cols and "rate_limit_hits" not in ak_cols:
+        await _db.execute("ALTER TABLE api_keys RENAME COLUMN total_requests TO rate_limit_hits")
     # NOTE: Do NOT mark runs as crashed here — workers share this DB.
     # Cleanup is handled by the orchestrator in lifespan() via mark_crashed_runs().
     await _db.commit()

@@ -15,9 +15,26 @@ from pathlib import Path
 
 import aiosqlite
 import httpx
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import Depends, FastAPI, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+
+from agent.rate_limit import RateLimiter
+
+
+# Rate limiter for monitor-side /api/keys/* proxy routes (separate from agent's limiter)
+_monitor_keys_limiter = RateLimiter(max_requests=10, window_seconds=60)
+
+
+async def _check_monitor_keys_rate_limit():
+    """Enforce rate limiting on monitor's key management proxy routes."""
+    retry_after = _monitor_keys_limiter.check()
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded on key management endpoints",
+            headers={"Retry-After": str(int(retry_after))},
+        )
 from pydantic import BaseModel
 
 from monitor import crypto
@@ -98,6 +115,30 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_run_id ON audit_log(run_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_control_signals_run_id ON control_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id, consumed);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('claude_code', 'codex')),
+    label TEXT NOT NULL DEFAULT '',
+    encrypted_key TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    rate_limit_resets_at INTEGER,
+    rate_limit_utilization REAL,
+    last_used_at TEXT,
+    rate_limit_hits INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_provider ON api_keys(provider);
+CREATE INDEX IF NOT EXISTS idx_api_keys_priority ON api_keys(provider, priority, is_enabled);
+
+CREATE TABLE IF NOT EXISTS key_rotation_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 db: aiosqlite.Connection | None = None
@@ -678,6 +719,125 @@ async def cleanup_parallel():
         async with httpx.AsyncClient(timeout=30) as client:
             res = await client.post(f"{AGENT_API_URL}/parallel/cleanup")
             return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+
+# ---------------------------------------------------------------------------
+# Key Pool APIs (proxy to agent)
+# ---------------------------------------------------------------------------
+
+# --- Key Pool Proxy Models ---
+
+class AddKeyProxyRequest(BaseModel):
+    provider: str
+    key: str
+    label: str = ""
+    priority: int = 0
+
+class UpdateKeyProxyRequest(BaseModel):
+    label: str | None = None
+    priority: int | None = None
+    is_enabled: bool | None = None
+
+class RotationConfigProxyUpdate(BaseModel):
+    codex_fallback_enabled: bool | None = None
+    auto_wait_enabled: bool | None = None
+    max_wait_minutes: int | None = None
+    rotation_strategy: str | None = None
+    prefer_model_downgrade_over_codex: bool | None = None
+
+
+@app.get("/api/keys", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def list_keys():
+    """List all API keys (masked)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/keys")
+            return res.json()
+    except Exception as e:
+        return []
+
+
+@app.post("/api/keys", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def add_key(body: AddKeyProxyRequest):
+    """Add a new API key to the pool."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/keys", json=body.model_dump())
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.get("/api/keys/status", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def key_pool_status():
+    """Get key pool status."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/keys/status")
+            return res.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/keys/config", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def get_key_config():
+    """Get rotation config."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/keys/config")
+            return res.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.patch("/api/keys/config", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def update_key_config(body: RotationConfigProxyUpdate):
+    """Update rotation config."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.patch(f"{AGENT_API_URL}/keys/config", json=body.model_dump(exclude_none=True))
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.patch("/api/keys/{key_id}", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def update_key(key_id: str, body: UpdateKeyProxyRequest):
+    """Update key metadata."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.patch(f"{AGENT_API_URL}/keys/{key_id}", json=body.model_dump(exclude_none=True))
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.delete("/api/keys/{key_id}", dependencies=[Depends(_check_monitor_keys_rate_limit)])
+async def delete_key(key_id: str):
+    """Remove a key from the pool."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.delete(f"{AGENT_API_URL}/keys/{key_id}")
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
+            return res.json()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 

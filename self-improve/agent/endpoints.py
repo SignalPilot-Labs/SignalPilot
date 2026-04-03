@@ -8,10 +8,12 @@ import asyncio
 import os
 import traceback
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from agent import db, git_ops, session_gate, signals, runner
+from agent.key_pool import KeyPool
+from agent.rate_limit import check_keys_rate_limit
 
 
 router = APIRouter()
@@ -42,6 +44,29 @@ class ResumeRequest(BaseModel):
 
 class InjectRequest(BaseModel):
     payload: str | None = None
+
+
+# --- Key Pool Models ---
+
+class AddKeyRequest(BaseModel):
+    provider: str  # "claude_code" or "codex"
+    key: str       # Raw API key/token (will be encrypted)
+    label: str = ""
+    priority: int = 0
+
+
+class UpdateKeyRequest(BaseModel):
+    label: str | None = None
+    priority: int | None = None
+    is_enabled: bool | None = None
+
+
+class RotationConfigUpdate(BaseModel):
+    codex_fallback_enabled: bool | None = None
+    auto_wait_enabled: bool | None = None
+    max_wait_minutes: int | None = None
+    rotation_strategy: str | None = None
+    prefer_model_downgrade_over_codex: bool | None = None
 
 
 # =============================================================================
@@ -238,3 +263,100 @@ async def get_branch_diff(branch: str, base: str = "main"):
     except Exception as e:
         print(f"[agent] /diff/{branch} error: {e}")
         return {"files": [], "error": "Failed to compute diff"}
+
+
+# =============================================================================
+# Key Pool Management
+# =============================================================================
+
+@router.post("/keys", status_code=201, dependencies=[Depends(check_keys_rate_limit)])
+async def add_key(req: AddKeyRequest):
+    """Add a new API key to the pool."""
+    pool = KeyPool()
+    try:
+        key = await pool.add_key(
+            provider=req.provider,
+            raw_key=req.key,
+            label=req.label,
+            priority=req.priority,
+        )
+        keys = await pool.list_keys()
+        # Find the newly added key in the masked list
+        added = next((k for k in keys if k["id"] == key.id), {})
+        return added
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/keys", dependencies=[Depends(check_keys_rate_limit)])
+async def list_keys():
+    """List all keys (masked values, never raw)."""
+    pool = KeyPool()
+    return await pool.list_keys()
+
+
+@router.get("/keys/status", dependencies=[Depends(check_keys_rate_limit)])
+async def key_pool_status():
+    """Current pool status: active key, rate limit states, next reset ETA."""
+    pool = KeyPool()
+    return await pool.get_pool_status()
+
+
+@router.get("/keys/config", dependencies=[Depends(check_keys_rate_limit)])
+async def get_rotation_config():
+    """Get current rotation configuration."""
+    pool = KeyPool()
+    return await pool.get_config()
+
+
+@router.patch("/keys/config", dependencies=[Depends(check_keys_rate_limit)])
+async def update_rotation_config(req: RotationConfigUpdate):
+    """Update rotation configuration."""
+    pool = KeyPool()
+    updates = {}
+    if req.codex_fallback_enabled is not None:
+        updates["codex_fallback_enabled"] = str(req.codex_fallback_enabled).lower()
+    if req.auto_wait_enabled is not None:
+        updates["auto_wait_enabled"] = str(req.auto_wait_enabled).lower()
+    if req.max_wait_minutes is not None:
+        updates["max_wait_minutes"] = str(req.max_wait_minutes)
+    if req.rotation_strategy is not None:
+        updates["rotation_strategy"] = req.rotation_strategy
+    if req.prefer_model_downgrade_over_codex is not None:
+        updates["prefer_model_downgrade_over_codex"] = str(req.prefer_model_downgrade_over_codex).lower()
+    try:
+        return await pool.update_config(updates)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.patch("/keys/{key_id}", dependencies=[Depends(check_keys_rate_limit)])
+async def update_key(key_id: str, req: UpdateKeyRequest):
+    """Update key metadata (label, priority, enabled)."""
+    pool = KeyPool()
+    try:
+        key = await pool.update_key(
+            key_id=key_id,
+            label=req.label,
+            priority=req.priority,
+            is_enabled=req.is_enabled,
+        )
+        # Return masked version
+        keys = await pool.list_keys()
+        updated = next((k for k in keys if k["id"] == key.id), {})
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/keys/{key_id}", dependencies=[Depends(check_keys_rate_limit)])
+async def delete_key(key_id: str):
+    """Remove a key from the pool."""
+    pool = KeyPool()
+    try:
+        await pool.delete_key(key_id)
+        return {"ok": True, "deleted": key_id}
+    except ValueError as e:
+        if "last enabled" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e))

@@ -60,7 +60,7 @@ async def client(mock_manager):
 @pytest.mark.asyncio
 async def test_health_idle(client):
     """Returns idle status when no run is active."""
-    with patch("agent.main._current_run_id", None):
+    with patch("agent.signals.current_run_id", None):
         resp = await client.get("/health")
     assert resp.status_code == 200
     data = resp.json()

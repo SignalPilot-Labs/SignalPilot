@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from agent import db
+from agent.key_pool import KeyPool
 
 
 MAX_CONCURRENT = 10
@@ -251,14 +252,25 @@ class RunManager:
         env = self._detect_environment()
         mount_flags = self._build_worker_mounts(worker_id)
 
-        # Pass credentials as env vars so they're available from container start
+        # Pass credentials as env vars so they're available from container start.
+        # Try the key pool first — each worker gets a distinct key via LRU selection.
+        # Falls back to the raw credential if the pool is empty or unavailable.
+        worker_token = safe_creds.get("claude_token")
+        try:
+            pool_key = await self._get_worker_key()
+            if pool_key:
+                worker_token = pool_key
+                print(f"[run_manager] Assigned pool key to worker {container_name}")
+        except Exception as e:
+            print(f"[run_manager] Key pool lookup failed, using credential: {e}")
+
         env_flags: list[str] = [
             "-e", "GIT_TERMINAL_PROMPT=0",
             "-e", "DB_PATH=/data/improve.db",
             "-e", "WORKER_MODE=1",
         ]
-        if safe_creds.get("claude_token"):
-            env_flags += ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={safe_creds['claude_token']}"]
+        if worker_token:
+            env_flags += ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={worker_token}"]
         if safe_creds.get("git_token"):
             env_flags += ["-e", f"GIT_TOKEN={safe_creds['git_token']}"]
         if safe_creds.get("github_repo"):
@@ -302,14 +314,17 @@ class RunManager:
         slot.status = "running"
         await db.update_worker_status(container_name, "running")
 
-        # Send start request — credentials also passed via env vars above,
-        # but the /start endpoint uses them from the POST body to set os.environ
+        # Send start request — use the pool-assigned token if available,
+        # otherwise fall back to the original credentials
+        worker_creds = dict(safe_creds)
+        if worker_token:
+            worker_creds["claude_token"] = worker_token
         run_config = {
             "prompt": prompt,
             "max_budget_usd": max_budget_usd,
             "duration_minutes": duration_minutes,
             "base_branch": base_branch,
-            **safe_creds,
+            **worker_creds,
         }
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -501,6 +516,19 @@ class RunManager:
                     print(f"[run_manager] Removed volume {slot.volume_name}")
                 except Exception as e:
                     print(f"[run_manager] volume rm {slot.volume_name} (ignored): {e}")
+
+    async def _get_worker_key(self) -> str | None:
+        """Get the next available key from the pool for a worker.
+
+        Returns the decrypted key value, or None if the pool is empty.
+        Uses get_next_key() which updates last_used_at, so consecutive
+        calls naturally distribute different keys to different workers.
+        """
+        pool = KeyPool()
+        key = await pool.get_next_key(provider="claude_code")
+        if key:
+            return key.decrypted_value
+        return None
 
     def cleanup_all_finished(self, remove_volumes: bool = False) -> int:
         """Clean up containers and remove slots for finished runs. Returns count cleaned."""

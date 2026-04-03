@@ -1,10 +1,15 @@
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from signalpilot.gateway.gateway.installer import checks, ui
-from signalpilot.gateway.gateway.installer.install import _configure_env, _find_repo_root, run_install
+from signalpilot.gateway.gateway.installer.install import (
+    _configure_env,
+    _find_repo_root,
+    run_install,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +33,6 @@ class TestFindRepoRoot:
 
     def test_env_example_present_at_root(self):
         result = _find_repo_root()
-        # The function walks up to find .env.example
         assert (result / ".env.example").exists()
 
     def test_result_is_absolute(self):
@@ -37,17 +41,13 @@ class TestFindRepoRoot:
 
     def test_fallback_returns_path_when_no_env_example(self, tmp_path):
         """When .env.example is nowhere in the tree, fallback uses parents[4]."""
-        # Construct a fake installer file deeply nested without a .env.example
         fake_installer = tmp_path / "a" / "b" / "c" / "d" / "install.py"
         fake_installer.parent.mkdir(parents=True)
         fake_installer.touch()
 
-        # Patch __file__ inside the install module so parents[4] == tmp_path
         import signalpilot.gateway.gateway.installer.install as install_mod
         with patch.object(install_mod, "__file__", str(fake_installer)):
             from signalpilot.gateway.gateway.installer.install import _find_repo_root as frr
-            # Since the fake tree has no .env.example or signalpilot/ dir,
-            # the function should raise FileNotFoundError with a clear message.
             with pytest.raises(FileNotFoundError, match="repo root"):
                 frr()
 
@@ -95,12 +95,21 @@ class TestConfigureEnvNonInteractive:
             lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
         )
 
-        # Should complete without raising AssertionError
         _configure_env(tmp_path, non_interactive=True)
+
+    def test_missing_env_example_prints_hint(self, tmp_path, capsys):
+        """When .env.example doesn't exist, prints a helpful hint."""
+        _configure_env(tmp_path, non_interactive=True)
+
+        env = tmp_path / ".env"
+        assert not env.exists(), ".env should NOT be created without .env.example"
+
+        out = capsys.readouterr().out
+        assert "create .env manually" in out or "No .env.example" in out
 
 
 # ---------------------------------------------------------------------------
-# install.run_install() — non-interactive mode
+# Shared fixtures for run_install tests
 # ---------------------------------------------------------------------------
 
 _FAKE_PLATFORM = {
@@ -114,61 +123,265 @@ _FAKE_PLATFORM = {
     "is_wsl": False,
 }
 
+_DOCKER_OK = {
+    "installed": True,
+    "running": True,
+    "version": "27.5.1",
+    "compose_installed": True,
+    "compose_version": "2.32.0",
+}
 
-class TestRunInstallNonInteractive:
+_DOCKER_MISSING = {
+    "installed": False,
+    "running": False,
+    "version": None,
+    "compose_installed": False,
+    "compose_version": None,
+}
+
+_DOCKER_NOT_RUNNING = {
+    "installed": True,
+    "running": False,
+    "version": "24.0.0",
+    "compose_installed": True,
+    "compose_version": "2.20.0",
+}
+
+
+def _setup_fake_repo(tmp_path):
+    """Create a minimal fake repo structure at tmp_path."""
+    # .env.example so _configure_env works
+    (tmp_path / ".env.example").write_text("GITHUB_REPO=\nGIT_TOKEN=\n")
+
+    # compose file so _compose_file() returns an existing path
+    docker_dir = tmp_path / "signalpilot" / "docker"
+    docker_dir.mkdir(parents=True)
+    (docker_dir / "docker-compose.dev.yml").write_text("services: {}")
+    (docker_dir / "docker-compose.yml").write_text("services: {}")
+
+    return tmp_path
+
+
+def _mock_successful_compose(*args, capture=False, **kwargs):
+    """Return a successful CompletedProcess for any _run_compose call."""
+    proc = MagicMock(spec=subprocess.CompletedProcess)
+    proc.returncode = 0
+    proc.stdout = '{"Service":"test","State":"running","Status":"Up 1m"}'
+    proc.stderr = ""
+    return proc
+
+
+def _mock_failed_compose(*args, capture=False, **kwargs):
+    """Return a failed CompletedProcess for _run_compose."""
+    proc = MagicMock(spec=subprocess.CompletedProcess)
+    proc.returncode = 1
+    proc.stdout = ""
+    proc.stderr = "error: build failed"
+    return proc
+
+
+class _BaseInstallTest:
+    """Base class with shared mocking helpers for run_install tests."""
+
+    def _apply_happy_path_mocks(self, monkeypatch, tmp_path):
+        """Set up all mocks for a successful install run."""
+        import signalpilot.gateway.gateway.installer.checks as _checks
+        import signalpilot.gateway.gateway.installer.install as _install
+
+        repo_root = _setup_fake_repo(tmp_path)
+
+        # Platform and dependency checks
+        monkeypatch.setattr(_checks, "detect_platform", lambda: _FAKE_PLATFORM)
+        monkeypatch.setattr(_checks, "check_docker", lambda: _DOCKER_OK)
+        monkeypatch.setattr(_checks, "check_command", lambda cmd, **kw: "2.43.0")
+        monkeypatch.setattr(_checks, "check_port", lambda port: True)
+        monkeypatch.setattr(_checks, "port_owner", lambda port: None)
+        monkeypatch.setattr(_checks, "verify_endpoint", lambda url, **kw: (200, 25))
+        monkeypatch.setattr(_checks, "verify_postgres", lambda cf, **kw: (True, 10))
+
+        # Repo root resolution
+        monkeypatch.setattr(_install, "_find_repo_root", lambda: repo_root)
+
+        # Docker compose operations
+        monkeypatch.setattr(_install, "_run_compose", _mock_successful_compose)
+
+        # Avoid real sleeps in health check loops
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        # Prevent input() from being called
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
+        )
+
+        return repo_root
+
+
+# ---------------------------------------------------------------------------
+# run_install() — non-interactive failure paths
+# ---------------------------------------------------------------------------
+
+
+class TestRunInstallNonInteractive(_BaseInstallTest):
     """run_install(non_interactive=True) must exit with code 1 and never call input()."""
 
-    def _mock_ui(self, monkeypatch):
-        """Silence all ui output functions."""
-        import signalpilot.gateway.gateway.installer.ui as _ui
-        for fn in ("header", "section", "kv", "fail", "hint", "check", "dot", "error_block"):
-            if hasattr(_ui, fn):
-                monkeypatch.setattr(_ui, fn, lambda *a, **kw: None)
-        monkeypatch.setattr(_ui, "bold_text", lambda s: s)
-        monkeypatch.setattr(_ui, "dim_text", lambda s: s)
-
-    def test_exits_when_docker_missing(self, monkeypatch):
-        """Exits with code 1 and never calls input() when Docker is not installed."""
+    def test_exits_when_docker_missing(self, monkeypatch, tmp_path):
+        """Exits with code 1 when Docker is not installed."""
         import signalpilot.gateway.gateway.installer.checks as _checks
 
-        self._mock_ui(monkeypatch)
-        monkeypatch.setattr(_checks, "detect_platform", lambda: _FAKE_PLATFORM)
-        monkeypatch.setattr(_checks, "check_docker", lambda: {
-            "installed": False,
-            "running": False,
-            "version": None,
-            "compose_installed": False,
-            "compose_version": None,
-        })
-        monkeypatch.setattr(
-            "builtins.input",
-            lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
-        )
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        monkeypatch.setattr(_checks, "check_docker", lambda: _DOCKER_MISSING)
 
         with pytest.raises(SystemExit) as exc_info:
             run_install(non_interactive=True)
 
         assert exc_info.value.code == 1
 
-    def test_exits_when_docker_not_running(self, monkeypatch):
-        """Exits with code 1 and never calls input() when Docker daemon is not running."""
+    def test_exits_when_docker_not_running(self, monkeypatch, tmp_path):
+        """Exits with code 1 when Docker daemon is not running."""
         import signalpilot.gateway.gateway.installer.checks as _checks
 
-        self._mock_ui(monkeypatch)
-        monkeypatch.setattr(_checks, "detect_platform", lambda: _FAKE_PLATFORM)
-        monkeypatch.setattr(_checks, "check_docker", lambda: {
-            "installed": True,
-            "running": False,
-            "version": "24.0.0",
-            "compose_installed": True,
-            "compose_version": "2.20.0",
-        })
-        monkeypatch.setattr(
-            "builtins.input",
-            lambda *a: (_ for _ in ()).throw(AssertionError("input() should not be called")),
-        )
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        monkeypatch.setattr(_checks, "check_docker", lambda: _DOCKER_NOT_RUNNING)
 
         with pytest.raises(SystemExit) as exc_info:
             run_install(non_interactive=True)
 
         assert exc_info.value.code == 1
+
+    def test_exits_when_git_not_found(self, monkeypatch, tmp_path):
+        """Exits with code 1 when git is not installed."""
+        import signalpilot.gateway.gateway.installer.checks as _checks
+
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        monkeypatch.setattr(_checks, "check_command", lambda cmd, **kw: None)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_install(non_interactive=True)
+
+        assert exc_info.value.code == 1
+
+    def test_exits_when_port_in_use(self, monkeypatch, tmp_path):
+        """Exits with code 1 when a required port is occupied."""
+        import signalpilot.gateway.gateway.installer.checks as _checks
+
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        # First port check fails, rest succeed
+        port_results = iter([False, True, True, True, True])
+        monkeypatch.setattr(_checks, "check_port", lambda port: next(port_results))
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_install(non_interactive=True)
+
+        assert exc_info.value.code == 1
+
+    def test_exits_when_compose_file_missing(self, monkeypatch, tmp_path):
+        """Exits with code 1 when the docker-compose file doesn't exist."""
+        import signalpilot.gateway.gateway.installer.install as _install
+
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        # Override compose file to a nonexistent path
+        monkeypatch.setattr(
+            _install, "_compose_file",
+            lambda root, dev=False: tmp_path / "nonexistent" / "docker-compose.yml",
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_install(dev=True, non_interactive=True)
+
+        assert exc_info.value.code == 1
+
+    def test_exits_when_build_fails(self, monkeypatch, tmp_path):
+        """Exits with code 1 when docker compose build fails."""
+        import signalpilot.gateway.gateway.installer.install as _install
+
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        monkeypatch.setattr(_install, "_run_compose", _mock_failed_compose)
+
+        with pytest.raises(SystemExit) as exc_info:
+            # skip_build=False to exercise the build path
+            run_install(dev=True, skip_build=False, non_interactive=True)
+
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# run_install() — end-to-end happy path
+# ---------------------------------------------------------------------------
+
+
+class TestRunInstallHappyPath(_BaseInstallTest):
+    """Full happy path: run_install completes without SystemExit."""
+
+    def test_completes_without_exit(self, monkeypatch, tmp_path, capsys):
+        """Full install flow with skip_build completes successfully."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        # Should NOT raise SystemExit
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        assert "SignalPilot is running" in out
+
+    def test_output_contains_box(self, monkeypatch, tmp_path, capsys):
+        """Completion banner renders with box-drawing characters."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        assert "┌" in out
+        assert "┘" in out
+        assert "│" in out
+
+    def test_output_contains_service_urls(self, monkeypatch, tmp_path, capsys):
+        """Completion banner shows all service endpoints."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        assert "localhost:3200" in out
+        assert "localhost:3300" in out
+        assert "localhost:5600" in out
+
+    def test_output_contains_next_steps(self, monkeypatch, tmp_path, capsys):
+        """Completion output includes next steps guidance."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        assert "Next steps" in out
+        assert "sp connect" in out
+
+    def test_env_file_created(self, monkeypatch, tmp_path):
+        """Non-interactive mode creates .env from .env.example."""
+        repo_root = self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        env_file = repo_root / ".env"
+        assert env_file.exists()
+        assert env_file.stat().st_mode & 0o777 == 0o600
+
+    def test_all_sections_appear(self, monkeypatch, tmp_path, capsys):
+        """Output contains all 6 install sections."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        for section in ["System", "Dependencies", "Configuration", "Building", "Starting", "Verifying"]:
+            assert section in out, f"Missing section: {section}"
+
+    def test_dependency_checks_reported(self, monkeypatch, tmp_path, capsys):
+        """Output shows Docker, Compose, and Git check results."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+
+        run_install(dev=True, skip_build=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        assert "Docker Desktop" in out
+        assert "Docker Compose" in out
+        assert "Git" in out

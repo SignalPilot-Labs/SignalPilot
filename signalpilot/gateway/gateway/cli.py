@@ -138,5 +138,34 @@ def show_config():
     print()
 
 
+@app.command()
+def version():
+    """Show SignalPilot version and environment info."""
+    from .installer import checks
+
+    print()
+    print(f"  SignalPilot CLI  v0.1.0")
+    print()
+
+    plat = checks.detect_platform()
+    docker = checks.check_docker()
+
+    print(f"    {'OS':<18}{plat['os_pretty']}")
+    if docker["installed"]:
+        print(f"    {'Docker':<18}v{docker['version']}")
+    else:
+        print(f"    {'Docker':<18}not installed")
+    if docker["compose_installed"]:
+        print(f"    {'Compose':<18}v{docker['compose_version']}")
+
+    git_ver = checks.check_command("git")
+    if git_ver:
+        print(f"    {'Git':<18}v{git_ver}")
+
+    import sys
+    print(f"    {'Python':<18}{sys.version.split()[0]}")
+    print()
+
+
 if __name__ == "__main__":
     app()

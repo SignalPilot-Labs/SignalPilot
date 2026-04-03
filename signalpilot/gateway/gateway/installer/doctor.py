@@ -83,6 +83,17 @@ def _check_system(diag: _DiagResult, step: int, total: int) -> None:
     else:
         diag.fail("Git", f"v{git_ver} — requires {checks.MIN_GIT_VERSION}+", "update from https://git-scm.com")
 
+    # Docker socket access
+    docker_socket = Path("/var/run/docker.sock")
+    if docker_socket.exists():
+        if os.access(str(docker_socket), os.R_OK | os.W_OK):
+            diag.ok("Docker socket", "accessible")
+        else:
+            diag.fail("Docker socket", "permission denied", "add user to docker group or chmod 660 /var/run/docker.sock")
+    elif docker["installed"]:
+        # Docker installed but no socket — might be using Docker Desktop's VM
+        diag.ok("Docker socket", "using Docker Desktop")
+
 
 def _check_configuration(diag: _DiagResult, repo_root: Path, step: int, total: int) -> None:
     """Check .env file presence, permissions, and required keys."""

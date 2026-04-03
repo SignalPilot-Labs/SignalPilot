@@ -68,8 +68,8 @@ class TestCheckSystem:
             "compose_installed": True, "compose_version": "2.32.0",
         }), patch.object(checks, "check_command", return_value="2.43.0"):
             _check_system(d, 1, 5)
-        # Docker + daemon + compose + git = 4 passes
-        assert d.passed == 4
+        # Docker + daemon + compose + git + socket = 5 passes
+        assert d.passed == 5
         assert d.failed == 0
 
     def test_fails_when_docker_missing(self, capsys):

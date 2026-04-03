@@ -27,10 +27,11 @@ from claude_agent_sdk import (
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     query,
 )
 
-from .config import BenchmarkConfig, SIGNALPILOT_MCP_CWD
+from .config import BenchmarkConfig, SIGNALPILOT_GATEWAY_URL, SIGNALPILOT_MCP_CWD
 from .eval import EvalResult, parse_query_result_to_rows
 from .skills import Skill, skills_to_prompt
 
@@ -65,23 +66,28 @@ class AgentOutput:
 def _build_system_prompt(task: TaskContext, config: BenchmarkConfig) -> str:
     """Build the system prompt for the benchmark agent."""
     parts = [
-        "You are a SQL expert tasked with answering a natural language question by querying a database.",
+        "You are a SQL expert tasked with answering a natural language question by querying a SQLite database.",
         "",
         "## Instructions",
         f"- The database is registered as connection '{task.connection_name}' in SignalPilot",
         "- Use `query_database` to run SQL queries (read-only, governed by SignalPilot)",
-        "- Use `list_database_connections` to verify the connection exists",
-        "- First explore the database schema to understand the tables and columns",
-        "- Then write and execute SQL to answer the question",
+        "- Use `list_tables` or `describe_table` for schema exploration",
         "- Your goal is to produce the CORRECT result set that answers the question",
         "",
         "## Approach",
-        "1. List connections to confirm the database is available",
-        "2. Explore schema: query sqlite_master or use PRAGMA table_info",
-        "3. Sample data from relevant tables to understand formats",
-        "4. Write your SQL query",
-        "5. Execute it and verify the results make sense",
-        "6. If results look wrong, iterate on your query",
+        "1. Explore schema: use `list_tables` or query `SELECT name, sql FROM sqlite_master WHERE type='table'`",
+        "2. Examine relevant tables: use `describe_table` or `SELECT * FROM table_name LIMIT 3`",
+        "3. Write your SQL query to answer the question",
+        "4. Execute it with `query_database` and verify the results make sense",
+        "5. If results look wrong, iterate — check data types, NULLs, joins",
+        "",
+        "## SQLite Tips",
+        "- Use `strftime('%Y-%m', date_col)` for date grouping, NOT DATE_FORMAT",
+        "- Use `CAST(x AS REAL)` for decimal division, not just x/y",
+        "- Use `COALESCE(col, 0)` to handle NULLs in aggregations",
+        "- PRAGMA table_info(table_name) shows column names and types",
+        "- Use `GROUP BY` with `HAVING` for filtered aggregations",
+        "- For ranking, use `ROW_NUMBER() OVER (ORDER BY ...)` or simple ORDER BY + LIMIT",
         "",
         "## Output Format",
         "After you have the final correct result, output EXACTLY this block:",
@@ -90,8 +96,7 @@ def _build_system_prompt(task: TaskContext, config: BenchmarkConfig) -> str:
         "<your final SQL query here>",
         "```",
         "",
-        "Then output the results in a clearly marked block.",
-        "If the query returns results through query_database, that is sufficient.",
+        "The results from your last `query_database` call are captured automatically.",
     ]
 
     if task.external_knowledge:
@@ -148,52 +153,30 @@ async def register_sqlite_connection(
     db_path: str,
     gateway_url: str = "http://localhost:3300",
 ) -> bool:
-    """Register a SQLite database as a SignalPilot connection via the gateway API."""
-    import httpx
+    """Register a SQLite database in the local SignalPilot store.
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            # Check if connection already exists
-            resp = await client.get(f"{gateway_url}/api/connections")
-            if resp.status_code == 200:
-                connections = resp.json()
-                for conn in connections:
-                    if conn.get("name") == connection_name:
-                        return True  # Already registered
+    The benchmark MCP server runs locally (stdio) and reads connections from
+    the local store, so we register directly rather than via the gateway API.
+    """
+    try:
+        import sys
+        sys.path.insert(0, str(Path(SIGNALPILOT_MCP_CWD)))
+        from gateway.models import ConnectionCreate, DBType
+        from gateway.store import create_connection, get_connection
 
-            # Register new connection
-            resp = await client.post(
-                f"{gateway_url}/api/connections",
-                json={
-                    "name": connection_name,
-                    "db_type": "sqlite",
-                    "database": db_path,
-                    "description": f"Spider2 benchmark database: {connection_name}",
-                },
-            )
-            return resp.status_code in (200, 201)
-        except Exception as e:
-            print(f"Warning: Could not register connection via API: {e}")
-            # Fall back to direct store manipulation
-            try:
-                import sys
-                sys.path.insert(0, str(Path(SIGNALPILOT_MCP_CWD)))
-                from gateway.models import ConnectionCreate, DBType
-                from gateway.store import create_connection, get_connection
+        if get_connection(connection_name):
+            return True
 
-                if get_connection(connection_name):
-                    return True
-
-                create_connection(ConnectionCreate(
-                    name=connection_name,
-                    db_type=DBType.sqlite,
-                    database=db_path,
-                    description=f"Spider2 benchmark: {connection_name}",
-                ))
-                return True
-            except Exception as e2:
-                print(f"Error registering connection: {e2}")
-                return False
+        create_connection(ConnectionCreate(
+            name=connection_name,
+            db_type=DBType.sqlite,
+            database=db_path,
+            description=f"Spider2 benchmark: {connection_name}",
+        ))
+        return True
+    except Exception as e:
+        print(f"Error registering connection in local store: {e}")
+        return False
 
 
 async def run_task(
@@ -207,13 +190,16 @@ async def run_task(
     system_prompt = _build_system_prompt(task, config)
     user_prompt = _build_user_prompt(task)
 
-    # Configure MCP server for SignalPilot
+    # Configure MCP server for SignalPilot (stdio transport).
+    # Use bash wrapper to set cwd since McpStdioServerConfig lacks a cwd field.
     mcp_config = {
         "signalpilot": {
             "type": "stdio",
-            "command": "python",
-            "args": ["-m", "gateway.mcp_server"],
-            "cwd": SIGNALPILOT_MCP_CWD,
+            "command": "/bin/bash",
+            "args": ["-c", f"cd {SIGNALPILOT_MCP_CWD} && exec python -m gateway.mcp_server"],
+            "env": {
+                "SP_GATEWAY_URL": SIGNALPILOT_GATEWAY_URL,
+            },
         }
     }
 
@@ -227,11 +213,19 @@ async def run_task(
         allowed_tools=[
             "mcp__signalpilot__query_database",
             "mcp__signalpilot__list_database_connections",
+            "mcp__signalpilot__describe_table",
+            "mcp__signalpilot__list_tables",
+            "mcp__signalpilot__schema_ddl",
+            "mcp__signalpilot__explore_column",
+            "mcp__signalpilot__schema_overview",
             "mcp__signalpilot__execute_code",
             "mcp__signalpilot__sandbox_status",
         ],
         disallowed_tools=["Write", "Edit", "Bash", "Agent"],
     )
+
+    # Track the last tool_use name to correlate with tool results
+    last_tool_name = ""
 
     try:
         async for message in query(prompt=user_prompt, options=options):
@@ -240,23 +234,50 @@ async def run_task(
                     if isinstance(block, TextBlock):
                         output.messages.append(block.text)
                     elif isinstance(block, ToolUseBlock):
+                        last_tool_name = block.name
                         # Track tool usage
                         if block.name == "mcp__signalpilot__query_database":
                             sql = block.input.get("sql", "")
                             if sql:
                                 output.final_sql = sql
                         output.turns_used += 1
-                    elif isinstance(block, ToolResultBlock):
-                        # Capture query results from tool responses
-                        text = getattr(block, "text", "") or ""
-                        if not text and hasattr(block, "content"):
-                            text = str(block.content)
-                        if text:
-                            if "Query blocked" in text:
-                                output.governance_blocked = True
-                                output.block_reason = text
-                            else:
-                                output.final_result_text = text
+
+            elif isinstance(message, UserMessage):
+                # Tool results arrive in UserMessage blocks (not AssistantMessage)
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock):
+                        # content is str | list[dict] | None
+                        content = block.content
+                        if isinstance(content, list):
+                            # List of content items — concatenate text parts
+                            text = " ".join(
+                                item.get("text", "") for item in content
+                                if isinstance(item, dict)
+                            )
+                        elif isinstance(content, str):
+                            text = content
+                        else:
+                            text = ""
+
+                        # MCP tool results may be JSON-wrapped: {"result":"..."}
+                        if text.startswith("{"):
+                            try:
+                                parsed = json.loads(text)
+                                if isinstance(parsed, dict) and "result" in parsed:
+                                    text = parsed["result"]
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
+                        if not text:
+                            continue
+
+                        if "Query blocked" in text:
+                            output.governance_blocked = True
+                            output.block_reason = text
+                        elif last_tool_name == "mcp__signalpilot__query_database":
+                            # Only capture results from query_database, not schema
+                            # exploration or other tool calls
+                            output.final_result_text = text
 
             elif isinstance(message, ResultMessage):
                 if hasattr(message, "usage"):
@@ -281,26 +302,36 @@ async def run_task(
 async def run_task_with_eval(
     task: TaskContext,
     config: BenchmarkConfig,
-    gold_csv_path: Path | None = None,
+    gold_csv_path: Path | list[Path] | None = None,
     eval_config: dict | None = None,
 ) -> EvalResult:
-    """Run a task and evaluate against gold standard."""
-    from .eval import evaluate_task
+    """Run a task and evaluate against gold standard.
+
+    gold_csv_path may be a single Path, a list of variant Paths, or None.
+    """
+    from .eval import evaluate_task, load_gold_csv
 
     output = await run_task(task, config)
 
+    # Normalise to list for uniform handling below
+    if isinstance(gold_csv_path, list):
+        gold_paths: list[Path] = [p for p in gold_csv_path if p.exists()]
+    elif gold_csv_path is not None and gold_csv_path.exists():
+        gold_paths = [gold_csv_path]
+    else:
+        gold_paths = []
+
     correct = False
-    if gold_csv_path and gold_csv_path.exists() and output.result_rows:
+    if gold_paths and output.result_rows:
         correct = evaluate_task(
             task.instance_id,
             output.result_rows,
-            gold_csv_path,
+            gold_paths,
             eval_config,
         )
 
-    # Load gold rows for the report
-    from .eval import load_gold_csv
-    gold_rows = load_gold_csv(gold_csv_path) if gold_csv_path and gold_csv_path.exists() else []
+    # Load gold rows from the first available variant for the report
+    gold_rows = load_gold_csv(gold_paths[0]) if gold_paths else []
 
     return EvalResult(
         instance_id=task.instance_id,

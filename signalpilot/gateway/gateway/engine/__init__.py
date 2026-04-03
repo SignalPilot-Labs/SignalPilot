@@ -111,7 +111,9 @@ def validate_sql(
             blocked_reason=f"Blocked: {stmt_type} statements are not allowed (read-only mode)",
         )
 
-    if stmt_type not in ("Select", "With", "Union", "Intersect", "Except", "Subquery"):
+    # Allow PRAGMA for SQLite schema introspection (read-only PRAGMAs like
+    # table_info, table_list, index_list are essential for schema discovery)
+    if stmt_type not in ("Select", "With", "Union", "Intersect", "Except", "Subquery", "Pragma"):
         return ValidationResult(
             ok=False,
             blocked_reason=f"Blocked: only SELECT queries are allowed (got {stmt_type})",

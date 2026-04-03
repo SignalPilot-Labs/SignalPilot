@@ -6,14 +6,14 @@
 |--------|-------|
 | Benchmark subset | Spider2-Lite SQLite |
 | Total tasks | 135 |
-| Correct | 61 |
-| Failing | 74 |
-| Accuracy | **45.2%** |
+| Correct | 67 |
+| Failing | 68 |
+| Accuracy | **49.6%** |
 | Starting accuracy | 0% (no working pipeline) |
 
-## Correct Tasks (61)
+## Correct Tasks (67)
 
-local004, local008, local009, local015, local018, local019, local021, local022, local025, local026, local029, local030, local038, local039, local040, local041, local050, local054, local055, local058, local061, local062, local065, local068, local071, local073, local077, local078, local081, local098, local099, local100, local114, local128, local130, local132, local152, local156, local163, local168, local169, local171, local193, local198, local201, local212, local218, local219, local221, local228, local230, local244, local262, local264, local269, local270, local277, local298, local300, local302, local329
+local004, local008, local009, local015, local018, local019, local021, local022, local024, local025, local026, local029, local030, local035, local038, local039, local040, local041, local050, local054, local055, local058, local061, local062, local065, local068, local071, local073, local077, local078, local081, local085, local098, local099, local100, local114, local128, local130, local132, local152, local156, local163, local167, local168, local169, local170, local171, local193, local198, local201, local212, local218, local219, local221, local228, local230, local244, local262, local264, local269, local270, local277, local298, local300, local302, local310, local329
 
 ## Failure Categories (74 tasks)
 

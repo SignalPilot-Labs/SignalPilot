@@ -461,6 +461,23 @@ async def test_handle_rate_limit_all_exhausted_codex_disabled(pool):
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_rotation_preserves_run_id(pool_with_run):
+    """Key rotation preserves the same run_id — no new run created."""
+    pool, run_id = pool_with_run
+    k1 = await pool.add_key("claude_code", "sk-run-id-1", "k1", 0)
+    k2 = await pool.add_key("claude_code", "sk-run-id-2", "k2", 1)
+    pool._active_key = k1
+    await pool.handle_rate_limit(resets_at=time.time() + 3600)
+    assert pool._run_id == run_id
+    conn = agent_db_module.get_db()
+    cursor = await conn.execute(
+        "SELECT count(*) FROM audit_log WHERE run_id = ?", (run_id,),
+    )
+    count = (await cursor.fetchone())[0]
+    assert count >= 2  # at least key_rate_limited + key_rotated
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_handle_rate_limit_all_exhausted_codex_enabled(pool):
     """handle_rate_limit falls back to codex when all claude_code keys are rate-limited and codex enabled."""
     k1 = await pool.add_key("claude_code", "sk-test-1", "k1", 0)

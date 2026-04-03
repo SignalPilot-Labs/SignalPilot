@@ -458,3 +458,86 @@ class TestCORSIntegration:
     def test_allowed_origin_gets_allow_credentials(self):
         resp = self._client().get("/test", headers={"Origin": self.ALLOWED_ORIGIN})
         assert resp.headers.get("Access-Control-Allow-Credentials") == "true"
+
+
+class TestAuthMiddlewareIntegration:
+    """Integration tests: verify APIKeyAuthMiddleware authenticates requests."""
+
+    _TEST_API_KEY = "test-secret-key-for-auth-middleware"
+
+    def _mock_settings(self, api_key=None):
+        """Return a mock settings object."""
+        settings = MagicMock()
+        settings.api_key = api_key if api_key is not None else self._TEST_API_KEY
+        return settings
+
+    def _client(self, api_key=None):
+        """Create test client with auth middleware and mocked settings."""
+        settings = self._mock_settings(api_key)
+        client = _make_test_app(APIKeyAuthMiddleware)
+        client._settings_mock = settings
+        return client, settings
+
+    @pytest.fixture(autouse=True)
+    def _patch_settings(self):
+        """Patch load_settings for all auth tests — must be active during request dispatch."""
+        self._settings = self._mock_settings()
+        with patch("gateway.store.load_settings", return_value=self._settings):
+            yield
+
+    def test_no_key_configured_allows_all(self):
+        """When no API key is configured (dev mode), requests pass through."""
+        self._settings.api_key = None
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test")
+        assert resp.status_code == 200
+        assert resp.headers.get("X-SignalPilot-Auth") == "none"
+
+    def test_valid_bearer_token_allowed(self):
+        """Request with correct Bearer token is allowed."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test", headers={"Authorization": f"Bearer {self._TEST_API_KEY}"})
+        assert resp.status_code == 200
+
+    def test_valid_x_api_key_allowed(self):
+        """Request with correct X-API-Key header is allowed."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test", headers={"X-API-Key": self._TEST_API_KEY})
+        assert resp.status_code == 200
+
+    def test_missing_key_returns_401(self):
+        """Request with no API key returns 401."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test")
+        assert resp.status_code == 401
+
+    def test_wrong_key_returns_403(self):
+        """Request with wrong API key returns 403."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test", headers={"X-API-Key": "wrong-key"})
+        assert resp.status_code == 403
+
+    def test_public_path_bypasses_auth(self):
+        """Public paths (e.g. /health) don't require authentication."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/health")
+        assert resp.status_code == 200
+
+    def test_options_request_bypasses_auth(self):
+        """CORS preflight OPTIONS requests bypass auth."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.options("/test")
+        assert resp.status_code != 401
+        assert resp.status_code != 403
+
+    def test_401_response_body_contains_detail(self):
+        """401 response body should include a helpful detail message."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test")
+        assert "Authentication required" in resp.json()["detail"]
+
+    def test_403_response_body_contains_detail(self):
+        """403 response body should include a detail message."""
+        client = _make_test_app(APIKeyAuthMiddleware)
+        resp = client.get("/test", headers={"X-API-Key": "wrong"})
+        assert "Invalid API key" in resp.json()["detail"]

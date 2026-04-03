@@ -83,7 +83,7 @@ export function ParallelRunsPanel({
     const key = slot.run_id;
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3401"}/api/parallel/runs/${key}/health`,
+        `/api/parallel/runs/${key}/health`,
       );
       setHealthMap((prev) => ({ ...prev, [key]: res.ok ? "ok" : "degraded" }));
     } catch {

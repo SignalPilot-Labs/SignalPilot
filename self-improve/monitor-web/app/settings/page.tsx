@@ -55,7 +55,7 @@ const FIELDS: FieldConfig[] = [
 
 function getApiBase(): string {
   if (typeof window === "undefined") return "http://localhost:3401";
-  return `${window.location.protocol}//${window.location.hostname}:3401`;
+  return "";
 }
 
 export default function SettingsPage() {

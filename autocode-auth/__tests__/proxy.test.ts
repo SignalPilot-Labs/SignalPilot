@@ -6,7 +6,7 @@ vi.mock("@/lib/auth", () => ({
   auth: (callback: Function) => callback,
 }));
 
-import proxy, { config } from "@/proxy";
+import proxy, { config } from "@/middleware";
 
 function makeRequest(pathname: string, isAuthenticated: boolean) {
   const url = new URL(pathname, "http://localhost:3000");
@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("proxy", () => {
+describe("middleware", () => {
   // 1. Unauthenticated user hitting /setup → redirected to /signup
   it("redirects unauthenticated user on /setup to /signup", () => {
     const response = proxy(makeRequest("/setup", false));
@@ -41,30 +41,14 @@ describe("proxy", () => {
     expect(response.headers.get("location")).toBeNull();
   });
 
-  // 4. Unauthenticated user hitting /dashboard → redirected to /signup (auth guard fires first)
-  it("redirects unauthenticated user on /dashboard to /signup", () => {
-    const response = proxy(makeRequest("/dashboard", false));
-    expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3000/signup");
+  // 4. Unprotected paths pass through for unauthenticated users
+  it("passes through unauthenticated user on unprotected path", () => {
+    const response = proxy(makeRequest("/signin", false));
+    expect(response.headers.get("location")).toBeNull();
   });
 
-  // 5. Authenticated user hitting /dashboard → redirected to /setup
-  it("redirects authenticated user on /dashboard to /setup", () => {
-    const response = proxy(makeRequest("/dashboard", true));
-    expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3000/setup");
-  });
-
-  // 6. Authenticated user hitting /dashboard/settings → redirected to /setup
-  it("redirects authenticated user on /dashboard/settings to /setup", () => {
-    const response = proxy(makeRequest("/dashboard/settings", true));
-    expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3000/setup");
-  });
-
-  // 7. config.matcher includes the correct patterns
-  it("config.matcher includes /setup and /dashboard path patterns", () => {
+  // 5. config.matcher includes the correct patterns
+  it("config.matcher includes /setup path pattern", () => {
     expect(config.matcher).toContain("/setup/:path*");
-    expect(config.matcher).toContain("/dashboard/:path*");
   });
 });

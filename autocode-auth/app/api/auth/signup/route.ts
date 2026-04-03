@@ -4,7 +4,15 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) {
+      return NextResponse.json(
+        { error: "INVALID_JSON" },
+        { status: 400 }
+      );
+    }
+
+    const { email, password } = body;
 
     if (!email || !password) {
       return NextResponse.json(
@@ -13,16 +21,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (typeof email !== "string" || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (typeof email !== "string" || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return NextResponse.json(
         { error: "INVALID_EMAIL" },
         { status: 400 }
       );
     }
 
-    if (typeof password !== "string" || password.length < 8) {
+    if (typeof password !== "string" || password.length < 8 || password.length > 128) {
       return NextResponse.json(
-        { error: "PASSWORD_MIN_8_CHARACTERS" },
+        { error: "PASSWORD_MUST_BE_8_TO_128_CHARACTERS" },
         { status: 400 }
       );
     }

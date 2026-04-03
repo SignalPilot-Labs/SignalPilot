@@ -5,7 +5,7 @@ export default auth((req) => {
   const isAuthenticated = !!req.auth;
   const path = req.nextUrl.pathname;
 
-  const protectedPaths = ["/setup", "/dashboard"];
+  const protectedPaths = ["/setup"];
   const isProtected = protectedPaths.some((p) => path.startsWith(p));
 
   if (isProtected && !isAuthenticated) {
@@ -13,15 +13,9 @@ export default auth((req) => {
     return NextResponse.redirect(signupUrl);
   }
 
-  // Redirect /dashboard to /setup (no dashboard page yet)
-  if (path.startsWith("/dashboard")) {
-    const setupUrl = new URL("/setup", req.nextUrl.origin);
-    return NextResponse.redirect(setupUrl);
-  }
-
   return NextResponse.next();
 });
 
 export const config = {
-  matcher: ["/setup/:path*", "/dashboard/:path*"],
+  matcher: ["/setup/:path*"],
 };

@@ -14,6 +14,16 @@ const createCliMock = vi.fn().mockResolvedValue({});
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
+    $transaction: async (fn: Function) => {
+      const tx = {
+        cliToken: {
+          deleteMany: (...args: unknown[]) => deleteManyCliMock(...args),
+          findMany: (...args: unknown[]) => findManyCliMock(...args),
+          create: (...args: unknown[]) => createCliMock(...args),
+        },
+      };
+      return fn(tx);
+    },
     cliToken: {
       deleteMany: (...args: unknown[]) => deleteManyCliMock(...args),
       findMany: (...args: unknown[]) => findManyCliMock(...args),
@@ -153,15 +163,15 @@ describe("POST /api/auth/cli-token", () => {
 });
 
 describe("GET /api/auth/cli-token", () => {
-  // 7. Unauthenticated request returns { authenticated: false }
-  it("returns { authenticated: false } when not authenticated", async () => {
+  // 7. Unauthenticated request returns 401 with UNAUTHORIZED
+  it("returns 401 with UNAUTHORIZED when not authenticated", async () => {
     authMock.mockResolvedValue(null);
 
     const response = await GET();
     const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(body).toEqual({ authenticated: false });
+    expect(response.status).toBe(401);
+    expect(body).toEqual({ error: "UNAUTHORIZED", authenticated: false });
   });
 
   // 8. Authenticated request returns user name and email but not image

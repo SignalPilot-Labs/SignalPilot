@@ -132,35 +132,35 @@ describe("POST /api/auth/signup", () => {
     expect(body).toEqual({ error: "INVALID_EMAIL" });
   });
 
-  // 9. Short password (< 8 chars) returns 400 with PASSWORD_MIN_8_CHARACTERS
-  it("returns 400 with PASSWORD_MIN_8_CHARACTERS for a 7-character password", async () => {
+  // 9. Short password (< 8 chars) returns 400 with PASSWORD_MUST_BE_8_TO_128_CHARACTERS
+  it("returns 400 with PASSWORD_MUST_BE_8_TO_128_CHARACTERS for a 7-character password", async () => {
     const req = makeRequest({ email: "test@example.com", password: "short7!" });
     const res = await POST(req as never);
 
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body).toEqual({ error: "PASSWORD_MIN_8_CHARACTERS" });
+    expect(body).toEqual({ error: "PASSWORD_MUST_BE_8_TO_128_CHARACTERS" });
   });
 
-  // 10. Empty password returns 400 with PASSWORD_MIN_8_CHARACTERS
-  it("returns 400 with PASSWORD_MIN_8_CHARACTERS for an empty password", async () => {
+  // 10. Empty password returns 400 with PASSWORD_MUST_BE_8_TO_128_CHARACTERS
+  it("returns 400 with PASSWORD_MUST_BE_8_TO_128_CHARACTERS for an empty password", async () => {
     const req = makeRequest({ email: "test@example.com", password: "" });
     const res = await POST(req as never);
 
     // Empty string is falsy so hits EMAIL_AND_PASSWORD_REQUIRED first
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toMatch(/EMAIL_AND_PASSWORD_REQUIRED|PASSWORD_MIN_8_CHARACTERS/);
+    expect(body.error).toMatch(/EMAIL_AND_PASSWORD_REQUIRED|PASSWORD_MUST_BE_8_TO_128_CHARACTERS/);
   });
 
-  // 11. Non-string password returns 400 with PASSWORD_MIN_8_CHARACTERS
-  it("returns 400 with PASSWORD_MIN_8_CHARACTERS when password is a number", async () => {
+  // 11. Non-string password returns 400 with PASSWORD_MUST_BE_8_TO_128_CHARACTERS
+  it("returns 400 with PASSWORD_MUST_BE_8_TO_128_CHARACTERS when password is a number", async () => {
     const req = makeRequest({ email: "test@example.com", password: 12345678 });
     const res = await POST(req as never);
 
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body).toEqual({ error: "PASSWORD_MIN_8_CHARACTERS" });
+    expect(body).toEqual({ error: "PASSWORD_MUST_BE_8_TO_128_CHARACTERS" });
   });
 
   // 12. Exactly 8-character password is accepted

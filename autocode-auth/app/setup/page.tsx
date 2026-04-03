@@ -27,7 +27,7 @@ const TERMINAL_LINES = [
   "✓ first improvement shipped in 4m 23s",
 ];
 
-const FALLBACK_EMAIL = "user@example.com";
+const FALLBACK_EMAIL = "";
 const PLACEHOLDER_REPO = "github.com/user/repo";
 
 function statusLabel(s: Status): string {
@@ -222,7 +222,7 @@ export default function SetupPage() {
           id="terminal-heading"
           className="text-xs text-[var(--color-dim)] tracking-[0.15em] uppercase mb-4"
         >
-          {allGreen ? "LIVE OUTPUT" : "WAITING FOR CLI..."}
+          {allGreen ? "EXAMPLE OUTPUT" : "WAITING FOR CLI..."}
         </h2>
         <div
           role="log"

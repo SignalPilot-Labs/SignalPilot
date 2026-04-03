@@ -422,3 +422,4 @@ class SnowflakeConnector(BaseConnector):
         if self._conn:
             self._conn.close()
             self._conn = None
+        self._cleanup_temp_files()

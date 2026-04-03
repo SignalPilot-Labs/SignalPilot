@@ -112,19 +112,11 @@ class TrinoConnector(BaseConnector):
             key_pem = self._client_key or params.get("client_key", "")
             if not cert_pem:
                 raise RuntimeError("Certificate auth requires client_cert (PEM)")
-            # Write cert/key to temp files for the requests library
-            import tempfile, os
-            cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem", mode="w")
-            cert_file.write(cert_pem)
-            cert_file.close()
-            cert_path = cert_file.name
+            # Write cert/key to tracked temp files via base class helper
+            cert_path = self._write_ssl_temp_file(cert_pem)
             key_path = None
             if key_pem:
-                key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem", mode="w")
-                key_file.write(key_pem)
-                key_file.close()
-                os.chmod(key_file.name, 0o600)
-                key_path = key_file.name
+                key_path = self._write_ssl_temp_file(key_pem, chmod=0o600)
             connect_kwargs["http_scheme"] = "https"
             connect_kwargs["auth"] = trino_lib.auth.CertificateAuthentication(
                 cert_path, key_path
@@ -519,3 +511,4 @@ class TrinoConnector(BaseConnector):
         if self._conn:
             self._conn.close()
             self._conn = None
+        self._cleanup_temp_files()

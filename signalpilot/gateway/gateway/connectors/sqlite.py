@@ -26,6 +26,8 @@ class SQLiteConnector(BaseConnector):
             self._conn.row_factory = sqlite3.Row
             # Enable foreign keys (required for FK-related schema queries)
             self._conn.execute("PRAGMA foreign_keys = ON")
+            # Defense-in-depth: enforce read-only mode at the engine level
+            self._conn.execute("PRAGMA query_only = ON")
         except sqlite3.OperationalError as e:
             err_str = str(e).lower()
             if "unable to open" in err_str:
@@ -178,3 +180,4 @@ class SQLiteConnector(BaseConnector):
         if self._conn:
             self._conn.close()
             self._conn = None
+        self._cleanup_temp_files()

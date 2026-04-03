@@ -5,6 +5,7 @@ import AuthLayout from "@/components/AuthLayout";
 
 vi.mock("next-auth/react", () => ({
   useSession: vi.fn(),
+  signOut: vi.fn(),
 }));
 
 vi.mock("next/image", () => ({

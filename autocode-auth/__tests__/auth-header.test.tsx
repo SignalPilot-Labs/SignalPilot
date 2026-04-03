@@ -1,12 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import AuthHeader from "@/components/AuthHeader";
+
+const signOutMock = vi.fn();
 
 vi.mock("next/image", () => ({
   default: (props: Record<string, unknown>) => {
-    // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
     return <img {...props} />;
   },
+}));
+
+vi.mock("next-auth/react", () => ({
+  signOut: (...args: unknown[]) => signOutMock(...args),
 }));
 
 describe("AuthHeader", () => {
@@ -81,19 +86,17 @@ describe("AuthHeader", () => {
     expect(screen.getByRole("button", { name: /sign out/i })).toBeInTheDocument();
   });
 
-  // 12. Sign out form uses POST method (not GET)
-  it("sign out form uses POST method", () => {
-    const { container } = render(<AuthHeader user={{ name: "Alice" }} />);
-    const form = container.querySelector("form");
-    expect(form).not.toBeNull();
-    expect(form!.method).toBe("post");
+  // 12. Sign out button calls signOut with callbackUrl
+  it("sign out button calls signOut with callbackUrl", () => {
+    signOutMock.mockClear();
+    render(<AuthHeader user={{ name: "Alice" }} />);
+    fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+    expect(signOutMock).toHaveBeenCalledWith({ callbackUrl: "/signup" });
   });
 
-  // 13. Sign out form action points to /api/auth/signout
-  it("sign out form action points to /api/auth/signout", () => {
+  // 13. No raw form element for sign out (uses client-side signOut)
+  it("does not render a form for sign out", () => {
     const { container } = render(<AuthHeader user={{ name: "Alice" }} />);
-    const form = container.querySelector("form");
-    expect(form).not.toBeNull();
-    expect(form!.getAttribute("action")).toBe("/api/auth/signout");
+    expect(container.querySelector("form")).toBeNull();
   });
 });

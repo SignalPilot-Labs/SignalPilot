@@ -4,6 +4,7 @@ import NotFound from "@/app/not-found";
 
 vi.mock("next-auth/react", () => ({
   useSession: () => ({ data: null, status: "unauthenticated" }),
+  signOut: vi.fn(),
 }));
 
 describe("NotFound", () => {

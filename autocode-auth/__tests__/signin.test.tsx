@@ -11,6 +11,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("next-auth/react", () => ({
   signIn: (...args: unknown[]) => signInMock(...args),
+  signOut: vi.fn(),
   useSession: () => ({ data: null, status: "unauthenticated" }),
 }));
 

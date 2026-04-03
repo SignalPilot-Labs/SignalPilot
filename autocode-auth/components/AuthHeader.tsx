@@ -1,4 +1,7 @@
+"use client";
+
 import Image from "next/image";
+import { signOut } from "next-auth/react";
 
 export interface AuthUser {
   name?: string | null;
@@ -29,14 +32,13 @@ export default function AuthHeader({ user }: { user?: AuthUser | null }) {
           <span className="text-[11px] text-[var(--color-dim)] tracking-[0.1em] uppercase">
             {user.name || user.email}
           </span>
-          <form action="/api/auth/signout" method="post" className="inline">
-            <button
-              type="submit"
-              className="text-[11px] text-[var(--color-dim)] tracking-[0.1em] uppercase hover:text-[var(--color-accent)] cursor-pointer bg-transparent border-0 p-0"
-            >
-              [SIGN OUT]
-            </button>
-          </form>
+          <button
+            type="button"
+            onClick={() => signOut({ callbackUrl: "/signup" })}
+            className="text-[11px] text-[var(--color-dim)] tracking-[0.1em] uppercase hover:text-[var(--color-accent)] cursor-pointer bg-transparent border-0 p-0"
+          >
+            [SIGN OUT]
+          </button>
         </div>
       )}
     </nav>

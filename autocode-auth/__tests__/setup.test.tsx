@@ -7,6 +7,7 @@ vi.mock("next-auth/react", () => ({
     data: { user: { name: "Test User", email: "test@example.com" } },
     status: "authenticated",
   }),
+  signOut: vi.fn(),
 }));
 
 beforeEach(() => {

@@ -43,7 +43,7 @@ export function RunItem({
       layout
       onClick={onClick}
       className={clsx(
-        "group relative w-full text-left px-4 py-3 border-b border-[#1a1a1a]/60 transition-colors",
+        "group relative w-full text-left px-4 py-3 sm:py-3 border-b border-[#1a1a1a]/60 transition-colors min-h-[56px] sm:min-h-0",
         active ? "bg-[#00ff88]/[0.04]" : "hover:bg-white/[0.02]",
       )}
     >

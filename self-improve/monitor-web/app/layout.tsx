@@ -1,5 +1,14 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#050505",
+};
 
 export const metadata: Metadata = {
   title: "SignalPilot \u00B7 Self-Improve Monitor",
@@ -11,6 +20,14 @@ export const metadata: Metadata = {
       { url: "/favicon-96x96.png", sizes: "96x96", type: "image/png" },
     ],
     apple: "/apple-touch-icon.png",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "SP Monitor",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
   },
 };
 

@@ -75,7 +75,7 @@ export function InjectPanel({ open, onClose, onSend, busy }: InjectPanelProps) {
                 <button
                   key={p.label}
                   onClick={() => setText(p.text)}
-                  className="text-[9px] px-2 py-1 rounded bg-white/[0.03] text-[#777] hover:bg-white/[0.06] hover:text-[#aaa] transition-colors border border-[#1a1a1a]"
+                  className="text-[11px] sm:text-[9px] px-3 sm:px-2 py-2 sm:py-1 rounded bg-white/[0.03] text-[#777] hover:bg-white/[0.06] hover:text-[#aaa] transition-colors border border-[#1a1a1a]"
                 >
                   {p.label}
                 </button>

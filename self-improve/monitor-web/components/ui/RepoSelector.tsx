@@ -95,7 +95,7 @@ export function RepoSelector({
                     onSelect(r.repo);
                     setOpen(false);
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.04] transition-colors ${
+                  className={`w-full flex items-center gap-2 px-3 py-3 sm:py-2 text-left hover:bg-white/[0.04] transition-colors ${
                     r.repo === activeRepo ? "bg-white/[0.02]" : ""
                   }`}
                 >
@@ -136,7 +136,7 @@ export function RepoSelector({
                   onSelect("");
                   setOpen(false);
                 }}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.04] transition-colors ${
+                className={`w-full flex items-center gap-2 px-3 py-3 sm:py-2 text-left hover:bg-white/[0.04] transition-colors ${
                   !activeRepo ? "bg-white/[0.02]" : ""
                 }`}
               >

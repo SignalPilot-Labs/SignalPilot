@@ -494,3 +494,83 @@ async def test_concurrent_handle_rate_limit_no_deadlock(pool_with_run):
     assert len(non_none) <= 2  # Can't get more keys than exist
     # Verify we actually ran both calls (no deadlock = both returned)
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# Parallel Worker Key Distribution Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_parallel_workers_get_different_keys(pool_with_run):
+    """Two workers spawned sequentially get distinct keys from the pool.
+
+    Simulates what RunManager._get_worker_key() does: each call to
+    get_next_key() updates last_used_at, so LRU tiebreaker distributes
+    keys across workers.
+    """
+    pool, run_id = pool_with_run
+
+    key_a = await _add_test_key(pool, raw_key="sk-worker-a", label="Worker A", priority=0)
+    key_b = await _add_test_key(pool, raw_key="sk-worker-b", label="Worker B", priority=0)
+
+    # Simulate two workers each calling get_next_key (like _get_worker_key)
+    worker1_key = await pool.get_next_key(provider="claude_code")
+    worker2_key = await pool.get_next_key(provider="claude_code")
+
+    assert worker1_key is not None
+    assert worker2_key is not None
+    # LRU: worker1 gets key_a (first created, never used), worker2 gets key_b
+    assert worker1_key.id != worker2_key.id
+    # Both should be from the pool
+    assert {worker1_key.id, worker2_key.id} == {key_a.id, key_b.id}
+
+
+@pytest.mark.asyncio
+async def test_worker_rate_limit_visible_to_other_workers(pool_with_run):
+    """Worker A marks a key as rate-limited; Worker B's get_next_key skips it.
+
+    Since all workers share the same SQLite DB, rate limit state written by
+    one worker's KeyPool is immediately visible to another worker's KeyPool.
+    """
+    pool, run_id = pool_with_run
+
+    key_a = await _add_test_key(pool, raw_key="sk-shared-a", label="Shared A", priority=0)
+    key_b = await _add_test_key(pool, raw_key="sk-shared-b", label="Shared B", priority=0)
+
+    # Worker A gets key_a and hits a rate limit
+    worker_a_pool = KeyPool(run_id=run_id)
+    worker_a_key = await worker_a_pool.get_next_key(provider="claude_code")
+    assert worker_a_key is not None
+    assert worker_a_key.id == key_a.id
+
+    # Worker A marks key_a as rate-limited
+    await worker_a_pool.handle_rate_limit(
+        resets_at=time.time() + 3600, utilization=0.95
+    )
+
+    # Worker B (separate pool instance, same DB) should skip the limited key
+    worker_b_pool = KeyPool(run_id=run_id)
+    worker_b_key = await worker_b_pool.get_next_key(provider="claude_code")
+    assert worker_b_key is not None
+    assert worker_b_key.id == key_b.id  # Gets key_b, not the rate-limited key_a
+
+
+@pytest.mark.asyncio
+async def test_single_key_shared_across_workers(pool_with_run):
+    """With only 1 key in the pool, both workers get the same key.
+
+    This is graceful degradation — both workers use the same token and
+    will both be affected if it gets rate-limited.
+    """
+    pool, run_id = pool_with_run
+
+    key_only = await _add_test_key(pool, raw_key="sk-only-key", label="Only Key", priority=0)
+
+    # Both workers get the same key
+    worker1_key = await pool.get_next_key(provider="claude_code")
+    worker2_key = await pool.get_next_key(provider="claude_code")
+
+    assert worker1_key is not None
+    assert worker2_key is not None
+    assert worker1_key.id == key_only.id
+    assert worker2_key.id == key_only.id

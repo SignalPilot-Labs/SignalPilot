@@ -48,7 +48,8 @@ export async function POST(req: NextRequest) {
       { id: user.id, email: user.email },
       { status: 201 }
     );
-  } catch {
+  } catch (err) {
+    console.error("[signup] error:", err);
     return NextResponse.json(
       { error: "INTERNAL_ERROR" },
       { status: 500 }

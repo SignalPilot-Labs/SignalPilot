@@ -27,12 +27,14 @@ export default function AuthHeader({ user }: { user?: AuthUser | null }) {
           <span className="text-[11px] text-[var(--color-dim)] tracking-[0.1em] uppercase">
             {user.name || user.email}
           </span>
-          <a
-            href="/api/auth/signout"
-            className="text-[11px] text-[var(--color-dim)] tracking-[0.1em] uppercase hover:text-[var(--color-accent)]"
-          >
-            [SIGN OUT]
-          </a>
+          <form action="/api/auth/signout" method="post" className="inline">
+            <button
+              type="submit"
+              className="text-[11px] text-[var(--color-dim)] tracking-[0.1em] uppercase hover:text-[var(--color-accent)] cursor-pointer bg-transparent border-0 p-0"
+            >
+              [SIGN OUT]
+            </button>
+          </form>
         </div>
       )}
     </nav>

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
+
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 export async function POST() {
   const session = await auth();
@@ -13,22 +17,39 @@ export async function POST() {
     );
   }
 
-  const token = randomBytes(32).toString("hex");
+  // Clean up expired tokens
+  await prisma.cliToken.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+
+  // Limit to 5 active tokens per user — delete oldest if over
+  const existing = await prisma.cliToken.findMany({
+    where: { userId: session.user.id },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing.length >= 5) {
+    const toDelete = existing.slice(0, existing.length - 4);
+    await prisma.cliToken.deleteMany({
+      where: { id: { in: toDelete.map((t) => t.id) } },
+    });
+  }
+
+  const rawToken = randomBytes(32).toString("hex");
+  const hashedToken = hashToken(rawToken);
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
   await prisma.cliToken.create({
     data: {
-      token,
+      token: hashedToken,
       userId: session.user.id,
       expiresAt,
     },
   });
 
-  return NextResponse.json({ token, expiresAt: expiresAt.toISOString() });
+  return NextResponse.json({ token: rawToken, expiresAt: expiresAt.toISOString() });
 }
 
 export async function GET() {
-  // CLI polls this to check if browser auth is complete
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -40,7 +61,6 @@ export async function GET() {
     user: {
       name: session.user.name,
       email: session.user.email,
-      image: session.user.image,
     },
   });
 }

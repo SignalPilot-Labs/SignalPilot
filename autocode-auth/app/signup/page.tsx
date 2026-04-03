@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { signIn } from "next-auth/react";
 import AuthLayout from "@/components/AuthLayout";
 
 export default function SignupPage() {
@@ -10,27 +11,64 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [touched, setTouched] = useState({ email: false, password: false });
-  const [submitPath, setSubmitPath] = useState<"github" | "email" | null>(null);
+  const [submitPath, setSubmitPath] = useState<"github" | "google" | "email" | null>(null);
+  const [apiError, setApiError] = useState<string>("");
 
   const isValidEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
   const emailError = touched.email && !isValidEmail ? "INVALID EMAIL" : "";
   const passwordError = touched.password && password.length < 8 ? "MIN 8 CHARACTERS" : "";
 
   function handleGitHub() {
-    // TODO: redirect to /api/auth/github — must be server-side OAuth flow, not client-side push
     setSubmitPath("github");
     if (process.env.NODE_ENV !== "production") console.log("[signup] github oauth initiated");
-    router.push("/setup");
+    signIn("github", { callbackUrl: "/setup" });
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  function handleGoogle() {
+    setSubmitPath("google");
+    if (process.env.NODE_ENV !== "production") console.log("[signup] google oauth initiated");
+    signIn("google", { callbackUrl: "/setup" });
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setTouched({ email: true, password: true });
     if (!isValidEmail || password.length < 8) return;
-    // TODO: wire to auth provider — POST to /api/auth/signup
     setSubmitPath("email");
+    setApiError("");
     if (process.env.NODE_ENV !== "production") console.log("[signup] email/password submit", { email });
-    router.push("/setup");
+
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setApiError(data.error ?? "SIGNUP_FAILED");
+        setSubmitPath(null);
+        return;
+      }
+
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      });
+
+      if (result?.error) {
+        setApiError(result.error);
+        setSubmitPath(null);
+        return;
+      }
+
+      router.push("/setup");
+    } catch {
+      setApiError("NETWORK_ERROR");
+      setSubmitPath(null);
+    }
   }
 
   return (
@@ -45,6 +83,14 @@ export default function SignupPage() {
           className="w-full border-2 border-[var(--color-accent)] bg-transparent text-[var(--color-text)] font-bold text-sm uppercase tracking-[0.1em] py-4 px-6 cursor-pointer hover:bg-[var(--color-accent)] hover:text-[var(--color-bg)] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {submitPath === "github" ? "REDIRECTING..." : "CONTINUE WITH GITHUB"}
+        </button>
+
+        <button
+          onClick={handleGoogle}
+          disabled={submitPath !== null}
+          className="w-full border-2 border-[var(--color-accent)] bg-transparent text-[var(--color-text)] font-bold text-sm uppercase tracking-[0.1em] py-4 px-6 cursor-pointer hover:bg-[var(--color-accent)] hover:text-[var(--color-bg)] disabled:opacity-50 disabled:cursor-not-allowed mt-4"
+        >
+          {submitPath === "google" ? "REDIRECTING..." : "CONTINUE WITH GOOGLE"}
         </button>
 
         <div className="flex items-center gap-4 my-12">
@@ -92,6 +138,10 @@ export default function SignupPage() {
             )}
           </div>
 
+          {apiError && (
+            <p id="api-error" role="alert" className="text-[var(--color-error)] text-xs tracking-[0.1em]">{apiError}</p>
+          )}
+
           <button
             type="submit"
             disabled={submitPath !== null}
@@ -112,10 +162,9 @@ export default function SignupPage() {
           </a>
         </p>
 
-        {/* TODO: update href to /signin when that route exists */}
         <p className="text-[var(--color-dim)] text-xs tracking-[0.05em] mt-6 text-center">
           Already have an account?{" "}
-          <a href="/signup" className="text-[var(--color-dim)] underline hover:text-[var(--color-accent)]">
+          <a href="/signin" className="text-[var(--color-dim)] underline hover:text-[var(--color-accent)]">
             Sign in
           </a>
         </p>

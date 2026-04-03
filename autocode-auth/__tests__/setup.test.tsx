@@ -2,11 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import SetupPage from "@/app/setup/page";
 
-let logSpy: ReturnType<typeof vi.spyOn>;
-
 beforeEach(() => {
   vi.useFakeTimers();
-  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   Object.assign(navigator, {
     clipboard: {
       writeText: vi.fn().mockResolvedValue(undefined),
@@ -15,361 +12,152 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  logSpy.mockRestore();
   vi.useRealTimers();
 });
 
-/** Advance fake timers and flush pending microtasks (e.g. clipboard Promise). */
 async function advance(ms: number) {
   await act(async () => {
     vi.advanceTimersByTime(ms);
   });
 }
 
-/** Navigate from step 1 to step 3 (connect repo complete). */
-async function advanceToStep3() {
-  fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-  const repoInput = screen.getByLabelText(/paste your github repo url/i);
-  fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo" } });
-  fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-  await advance(1200);
-}
-
 describe("SetupPage", () => {
-  it("renders step 1 as active with I'VE RUN THIS button", () => {
+  // 1. Renders SETUP heading
+  it("renders SETUP heading", () => {
     render(<SetupPage />);
-    expect(screen.getByRole("heading", { name: /install cli/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /i've run this/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /setup/i })).toBeInTheDocument();
   });
 
-  it("renders locked steps with pointer-events-none", () => {
+  // 2. Renders install command
+  it("renders install command", () => {
     render(<SetupPage />);
-    const step2Section = screen.getByRole("heading", { name: /connect repo/i }).closest("section");
-    expect(step2Section?.className).toContain("pointer-events-none");
+    expect(screen.getByText(/npm install -g signalpilot-autocode/)).toBeInTheDocument();
   });
 
-  it("advances from step 1 to step 2 on button click", () => {
+  // 3. Renders signalpilot login command
+  it("renders signalpilot login command", () => {
     render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    expect(repoInput).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: /^connect$/i })).toBeInTheDocument();
+    // The command is shown in a <code> element; use getAllBy since it also appears in the description text
+    const matches = screen.getAllByText(/signalpilot login/);
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+    // The code element specifically contains the $ prefix
+    expect(screen.getByText(/\$ signalpilot login/)).toBeInTheDocument();
   });
 
-  it("updates copy button text to COPIED on click", async () => {
+  // 4. Copy button works and shows COPIED
+  it("copy button works and shows COPIED", async () => {
     render(<SetupPage />);
-    const copyButton = screen.getByRole("button", { name: /copy/i });
-    fireEvent.click(copyButton);
-    // Flush the clipboard Promise microtask
+    fireEvent.click(screen.getByRole("button", { name: /\[copy\]/i }));
     await advance(0);
-    expect(screen.getByRole("button", { name: /copied/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /\[copied\]/i })).toBeInTheDocument();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("npm install -g signalpilot-autocode");
   });
 
-  it("sets aria-checked on selected mode button", async () => {
+  // 5. Copy resets after timeout
+  it("copy button resets to COPY after 2000ms", async () => {
     render(<SetupPage />);
-    await advanceToStep3();
-    const autonomousBtn = screen.getByRole("radio", { name: /autonomous/i });
-    fireEvent.click(autonomousBtn);
-    expect(autonomousBtn).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("completes the full wizard flow end-to-end", async () => {
-    render(<SetupPage />);
-    // Step 1 → 2
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    // Step 2: connect repo
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    await advance(1200);
-    expect(screen.getByText(/847 files indexed/)).toBeInTheDocument();
-    // Step 3: select mode
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    await advance(300);
-    // Step 4: start run
-    expect(screen.getByRole("button", { name: /start autocode/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /start autocode/i }));
-    // 11 terminal lines × 400ms each = 4400ms
-    await advance(4400);
-    expect(screen.getByText(/autocode is running/i)).toBeInTheDocument();
-  });
-
-  it("rejects invalid repo URLs", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "not-a-github-url" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByRole("button", { name: /^connect$/i })).toBeInTheDocument();
-    const step3Section = screen.getByRole("heading", { name: /select mode/i }).closest("section");
-    expect(step3Section?.className).toContain("pointer-events-none");
-  });
-
-  it("rejects github.com root URL with no owner or repo", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByText("ENTER A VALID GITHUB REPO URL")).toBeInTheDocument();
-    const step3Section = screen.getByRole("heading", { name: /select mode/i }).closest("section");
-    expect(step3Section?.className).toContain("pointer-events-none");
-  });
-
-  it("rejects repo URLs with query strings", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo?evil=true" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByText("ENTER A VALID GITHUB REPO URL")).toBeInTheDocument();
-    const step3Section = screen.getByRole("heading", { name: /select mode/i }).closest("section");
-    expect(step3Section?.className).toContain("pointer-events-none");
-  });
-
-  it("rejects empty repo URL", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByRole("button", { name: /^connect$/i })).toBeInTheDocument();
-  });
-
-  it("sets tabIndex={-1} on locked step inputs", () => {
-    render(<SetupPage />);
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    expect(repoInput).toHaveAttribute("tabindex", "-1");
-    const radios = screen.getAllByRole("radio");
-    for (const radio of radios) {
-      expect(radio).toHaveAttribute("tabindex", "-1");
-    }
-  });
-
-  it("shows checkmark on completed step", () => {
-    render(<SetupPage />);
-    const step1Heading = screen.getByRole("heading", { name: /install cli/i });
-    const step1Indicator = step1Heading.previousElementSibling!;
-    expect(step1Indicator.textContent).toBe("01");
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    expect(step1Indicator.textContent).toContain("✓");
-  });
-
-  it("submits repo URL on Enter key press", async () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo" } });
-    fireEvent.keyDown(repoInput, { key: "Enter" });
-    await advance(1200);
-    expect(screen.getByText(/847 files indexed/)).toBeInTheDocument();
-    const step3Section = screen.getByRole("heading", { name: /select mode/i }).closest("section");
-    expect(step3Section?.className).not.toContain("pointer-events-none");
-  });
-
-  it("terminal output uses the selected mode", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    // Select SUPERVISED mode
-    fireEvent.click(screen.getByRole("radio", { name: /supervised/i }));
-    await advance(300);
-    // Start run
-    fireEvent.click(screen.getByRole("button", { name: /start autocode/i }));
-    // 11 lines × 400ms
-    await advance(4400);
-    expect(screen.getByText(/--mode supervised/)).toBeInTheDocument();
-  });
-
-  it("shows error when connecting with invalid repo URL", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "not-a-github-url" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByText("ENTER A VALID GITHUB REPO URL")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("ENTER A VALID GITHUB REPO URL");
-  });
-
-  it("clears repo error when user types", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByText("ENTER A VALID GITHUB REPO URL")).toBeInTheDocument();
-    fireEvent.change(repoInput, { target: { value: "h" } });
-    expect(screen.queryByText("ENTER A VALID GITHUB REPO URL")).not.toBeInTheDocument();
-  });
-
-  it("logs repo URL when connecting", async () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(logSpy).toHaveBeenCalledWith("[setup] connecting repo", { url: "https://github.com/user/repo" });
-  });
-
-  it("focuses repo input when advancing to step 2", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    expect(document.activeElement).toBe(repoInput);
-  });
-
-  it("focuses mode group when advancing to step 3", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    const modeGroup = screen.getByRole("radiogroup");
-    expect(document.activeElement).toBe(modeGroup);
-  });
-
-  it("focuses start button when advancing to step 4", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    await advance(300);
-    const startButton = screen.getByRole("button", { name: /start autocode/i });
-    expect(document.activeElement).toBe(startButton);
-  });
-
-  it("resets copy button text back to COPY after timeout", async () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    fireEvent.click(screen.getByRole("button", { name: /\[copy\]/i }));
     await advance(0);
-    expect(screen.getByRole("button", { name: /copied/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /\[copied\]/i })).toBeInTheDocument();
     await advance(2000);
-    expect(screen.queryByRole("button", { name: /copied/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /copy/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /\[copy\]/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\[copied\]/i })).not.toBeInTheDocument();
   });
 
-  it("calls clipboard.writeText with the install command", async () => {
+  // 6. Status indicators start as WAITING/CHECKING/PENDING
+  it("status indicators start in initial waiting state", () => {
     render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /copy/i }));
-    await advance(0);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("npx signalpilot-autocode init");
+    expect(screen.getByText("WAITING...")).toBeInTheDocument();
+    expect(screen.getByText("CHECKING...")).toBeInTheDocument();
+    expect(screen.getByText("PENDING...")).toBeInTheDocument();
   });
 
-  it("shows CONNECTING... during repo connection", async () => {
+  // 7. CLI status updates to CONNECTED after 800ms
+  it("CLI status updates to CONNECTED after 800ms", async () => {
     render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByRole("button", { name: /connecting\.\.\./i })).toBeInTheDocument();
+    expect(screen.queryByText(/CONNECTED ✓/)).not.toBeInTheDocument();
+    await advance(800);
+    expect(screen.getByText("CONNECTED ✓")).toBeInTheDocument();
   });
 
-  it("displays OPEN DASHBOARD link after terminal completes", async () => {
+  // 8. Docker status updates to RUNNING after 1600ms
+  it("Docker status updates to RUNNING after 1600ms", async () => {
     render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    await advance(300);
-    fireEvent.click(screen.getByRole("button", { name: /start autocode/i }));
-    await advance(4400);
-    expect(screen.getByRole("link", { name: /open dashboard/i })).toBeInTheDocument();
+    expect(screen.queryByText(/RUNNING ✓/)).not.toBeInTheDocument();
+    await advance(1600);
+    expect(screen.getByText("RUNNING ✓")).toBeInTheDocument();
   });
 
-  it("logs mode selection", async () => {
+  // 9. Auth status updates to AUTHENTICATED after 2400ms
+  it("Auth status updates to AUTHENTICATED after 2400ms", async () => {
     render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    expect(logSpy).toHaveBeenCalledWith("[setup] mode selected", { mode: "autonomous" });
+    expect(screen.queryByText(/AUTHENTICATED/)).not.toBeInTheDocument();
+    await advance(2400);
+    expect(screen.getByText(/AUTHENTICATED/)).toBeInTheDocument();
   });
 
-  it("logs first run start", async () => {
+  // 10. Repo + mode appear after 3200ms
+  it("repo and mode appear after 3200ms", async () => {
     render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    await advance(300);
-    fireEvent.click(screen.getByRole("button", { name: /start autocode/i }));
-    expect(logSpy).toHaveBeenCalledWith("[setup] starting first run", { mode: "autonomous" });
+    expect(screen.getByText("NOT CONNECTED")).toBeInTheDocument();
+    expect(screen.getByText("NOT SET")).toBeInTheDocument();
+    await advance(3200);
+    // The repo status indicator shows repo ✓; may appear in multiple places once terminal also renders
+    const repoMatches = screen.getAllByText(/github\.com\/user\/repo ✓/);
+    expect(repoMatches.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("AUTONOMOUS")).toBeInTheDocument();
   });
 
-  it("terminal output region has aria-live polite", async () => {
+  // 11. Terminal starts streaming after all green
+  it("terminal starts streaming lines after 3200ms", async () => {
     render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    await advance(300);
-    fireEvent.click(screen.getByRole("button", { name: /start autocode/i }));
-    await advance(400);
+    // Before all green: no terminal lines yet
+    expect(screen.queryByText(/signalpilot run/)).not.toBeInTheDocument();
+    await advance(3200 + 300);
+    // First line: "$ signalpilot run --mode autonomous"
+    expect(screen.getByText(/signalpilot run --mode autonomous/)).toBeInTheDocument();
+  });
+
+  // 12. Terminal shows all lines after full timing
+  it("terminal shows all 10 lines after full timing", async () => {
+    render(<SetupPage />);
+    // 3200ms for statuses + 10 lines * 300ms each = 3200 + 3000 = 6200ms
+    await advance(3200 + 10 * 300);
+    expect(screen.getByText(/first improvement shipped/)).toBeInTheDocument();
+  });
+
+  // 13. Shows AUTOCODE IS RUNNING after completion
+  it("shows AUTOCODE IS RUNNING after completion", async () => {
+    render(<SetupPage />);
+    await advance(3200 + 10 * 300);
+    expect(screen.getByText("AUTOCODE IS RUNNING.")).toBeInTheDocument();
+  });
+
+  // 14. Shows OPEN DASHBOARD link after completion
+  it("shows OPEN DASHBOARD link after completion", async () => {
+    render(<SetupPage />);
+    await advance(3200 + 10 * 300);
+    const dashboardLink = screen.getByRole("link", { name: /open dashboard/i });
+    expect(dashboardLink).toBeInTheDocument();
+    expect(dashboardLink).toHaveAttribute("href", "/dashboard");
+  });
+
+  // 15. Terminal has aria-live polite
+  it("terminal region has aria-live='polite'", () => {
+    render(<SetupPage />);
     const log = screen.getByRole("log");
     expect(log).toHaveAttribute("aria-live", "polite");
   });
 
-  it("prevents double-clicking START AUTOCODE", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /autonomous/i }));
-    await advance(300);
-    const startBtn = screen.getByRole("button", { name: /start autocode/i });
-    fireEvent.click(startBtn);
-    fireEvent.click(startBtn); // second click
-    await advance(4400);
-    // Should only log once
-    const startCalls = logSpy.mock.calls.filter(
-      (c) => c[0] === "[setup] starting first run"
-    );
-    expect(startCalls).toHaveLength(1);
-  });
-
-  it("uses review-only mode string in terminal for REVIEW ONLY", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    fireEvent.click(screen.getByRole("radio", { name: /review only/i }));
-    await advance(300);
-    fireEvent.click(screen.getByRole("button", { name: /start autocode/i }));
-    await advance(4400);
-    expect(screen.getByText(/--mode review-only/)).toBeInTheDocument();
-  });
-
-  it("arrow down moves focus to next radio in mode group", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    const autonomousRadio = screen.getByRole("radio", { name: /autonomous/i });
-    const supervisedRadio = screen.getByRole("radio", { name: /supervised/i });
-    autonomousRadio.focus();
-    fireEvent.keyDown(autonomousRadio, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(supervisedRadio);
-  });
-
-  it("arrow up wraps from first to last radio", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    const autonomousRadio = screen.getByRole("radio", { name: /autonomous/i });
-    const reviewOnlyRadio = screen.getByRole("radio", { name: /review only/i });
-    autonomousRadio.focus();
-    fireEvent.keyDown(autonomousRadio, { key: "ArrowUp" });
-    expect(document.activeElement).toBe(reviewOnlyRadio);
-  });
-
-  it("arrow down wraps from last to first radio", async () => {
-    render(<SetupPage />);
-    await advanceToStep3();
-    const reviewOnlyRadio = screen.getByRole("radio", { name: /review only/i });
-    const autonomousRadio = screen.getByRole("radio", { name: /autonomous/i });
-    reviewOnlyRadio.focus();
-    fireEvent.keyDown(reviewOnlyRadio, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(autonomousRadio);
-  });
-
+  // 16. Renders main landmark
   it("renders main landmark", () => {
     render(<SetupPage />);
     expect(screen.getByRole("main")).toBeInTheDocument();
   });
 
-  it("displays connected repo URL in success message", async () => {
+  // 17. Sign in link points to /signin
+  it("sign in link points to /signin", () => {
     render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/acme/widget" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    await advance(1200);
-    expect(screen.getByText(/github\.com\/acme\/widget/)).toBeInTheDocument();
-  });
-
-  it("disables connect button while connecting", () => {
-    render(<SetupPage />);
-    fireEvent.click(screen.getByRole("button", { name: /i've run this/i }));
-    const repoInput = screen.getByLabelText(/paste your github repo url/i);
-    fireEvent.change(repoInput, { target: { value: "https://github.com/user/repo" } });
-    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-    expect(screen.getByRole("button", { name: /connecting\.\.\./i })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /sign in/i })).toHaveAttribute("href", "/signin");
   });
 });

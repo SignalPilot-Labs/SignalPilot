@@ -141,6 +141,29 @@ def show_config():
 
 
 @app.command()
+def restart(
+    service: str = typer.Argument(None, help="Service to restart (default: all)"),
+    dev: bool = typer.Option(False, "--dev", help="Use dev compose file"),
+):
+    """Restart SignalPilot containers."""
+    from .installer.install import _compose_file, _find_repo_root
+
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        typer.echo("  Not in a SignalPilot repository.")
+        raise typer.Exit(1)
+
+    compose = _compose_file(repo_root, dev=dev)
+    cmd = ["docker", "compose", "-f", str(compose), "restart"]
+    if service:
+        cmd.append(service)
+
+    result = subprocess.run(cmd)
+    raise typer.Exit(result.returncode)
+
+
+@app.command()
 def ps(
     dev: bool = typer.Option(False, "--dev", help="Use dev compose file"),
 ):

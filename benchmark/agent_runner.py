@@ -139,6 +139,15 @@ def _extract_final_sql(messages: list[str]) -> str:
     return ""
 
 
+def _sql_matches(sql_a: str, sql_b: str) -> bool:
+    """Check if two SQL strings match (ignoring whitespace/comments)."""
+    def _normalize(s: str) -> str:
+        s = re.sub(r'--[^\n]*', '', s)
+        s = re.sub(r'/\*.*?\*/', '', s, flags=re.DOTALL)
+        return ' '.join(s.split()).strip().rstrip(';').lower()
+    return _normalize(sql_a) == _normalize(sql_b)
+
+
 def _extract_query_results(messages: list[str]) -> list[dict[str, Any]]:
     """Extract the last query_database result from messages."""
     for msg in reversed(messages):
@@ -223,6 +232,8 @@ async def run_task(
 
     # Track the last tool_use name to correlate with tool results
     last_tool_name = ""
+    # Keep all query results to pick the best one at the end
+    all_query_results: list[tuple[str, str]] = []  # (sql, result_text)
 
     try:
         async for message in query(prompt=user_prompt, options=options):
@@ -272,8 +283,8 @@ async def run_task(
                             output.governance_blocked = True
                             output.block_reason = text
                         elif last_tool_name == "mcp__signalpilot__query_database":
-                            # Only capture results from query_database, not schema
-                            # exploration or other tool calls
+                            # Track all query results for later selection
+                            all_query_results.append((output.final_sql, text))
                             output.final_result_text = text
 
             elif isinstance(message, ResultMessage):
@@ -344,13 +355,25 @@ async def run_task(
 
     output.execution_ms = (time.monotonic() - start_time) * 1000
 
-    # Parse result rows from the final result text
-    if output.final_result_text:
-        output.result_rows = parse_query_result_to_rows(output.final_result_text)
-
     # Try to extract final SQL from messages if not captured from tool calls
     if not output.final_sql:
         output.final_sql = _extract_final_sql(output.messages)
+
+    # If the agent marked a FINAL SQL in its messages, find the corresponding
+    # query result rather than blindly using the last one (which may be a
+    # verification/exploratory query).
+    final_marked_sql = _extract_final_sql(output.messages)
+    if final_marked_sql and all_query_results:
+        # Try to match the marked SQL to a captured query result
+        for sql, result_text in reversed(all_query_results):
+            if _sql_matches(sql, final_marked_sql):
+                output.final_result_text = result_text
+                output.final_sql = sql
+                break
+
+    # Parse result rows from the final result text
+    if output.final_result_text:
+        output.result_rows = parse_query_result_to_rows(output.final_result_text)
 
     return output
 

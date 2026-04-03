@@ -1,18 +1,50 @@
 [
-  {
-    "name": "spider2_approach",
-    "description": "General approach for Spider2 benchmark tasks",
-    "prompt": "For Spider2 benchmark questions:\n1. The question asks about data in a specific database — your job is to write SQL that produces the exact answer\n2. Be precise: if the question asks for a count, return exactly one number. If it asks 'which X', return the specific entities\n3. Pay attention to column ordering in the result — match what the question implies\n4. Handle NULL values explicitly — use COALESCE or IFNULL where appropriate\n5. When the question says 'distinct', always use SELECT DISTINCT or COUNT(DISTINCT ...)\n6. For percentage calculations, multiply by 100.0 (not 100) to avoid integer division\n7. Round numeric results to 2 decimal places unless the question specifies otherwise",
-    "category": "sql_generation",
-    "applicable_dbs": ["sqlite"],
-    "priority": 10
-  },
-  {
-    "name": "schema_discovery_sqlite",
-    "description": "SQLite schema discovery strategy for unknown databases",
-    "prompt": "To discover the schema of an unknown SQLite database:\n1. Run: SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name\n2. For each table: SELECT * FROM table_name LIMIT 3 — to see actual data\n3. For column details: PRAGMA table_info(table_name)\n4. For foreign keys: PRAGMA foreign_key_list(table_name)\n5. Check for indexes: PRAGMA index_list(table_name)\n6. Count rows: SELECT COUNT(*) FROM table_name\n\nDo steps 1-2 first to get a broad overview, then dive into specific tables relevant to the question.",
-    "category": "schema_exploration",
-    "applicable_dbs": ["sqlite"],
-    "priority": 9
-  }
+    {
+        "name": "spider2_approach",
+        "description": "High-level approach for Spider2 benchmark tasks",
+        "prompt": "For Spider2 benchmark questions, follow this approach:\n1. Read the question carefully and identify EXACTLY what is being asked.\n2. Determine the expected aggregation level before writing any SQL:\n   - 'What is the average X?' → your answer must be ONE row with ONE value\n   - 'What is the total X per group?' → your answer must have ONE row PER GROUP\n   - 'List all X that...' → your answer may have multiple rows, one per item\n3. Explore the schema before writing queries (see schema_discovery_sqlite skill).\n4. Write your SQL, run it, then compare the result shape against what the question expects.\n5. Before declaring a final answer, ask yourself: does my result have the right number of rows? The right columns? The right level of aggregation?\n6. Common pitfalls:\n   - Returning individual rows when the question wants an aggregate (e.g., returning every player's stats instead of AVG across all players)\n   - Wrong column count or column order in the result\n   - Integer division when a decimal is needed — use 100.0 not 100\n   - Forgetting DISTINCT when uniqueness is implied",
+        "category": "sql_generation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 10
+    },
+    {
+        "name": "schema_discovery_sqlite",
+        "description": "How to explore SQLite schemas before writing queries",
+        "prompt": "Always explore the schema before writing your main query. Follow these steps in order:\n1. Call `list_tables` to get all tables in the database.\n2. Call `describe_table` for each table that looks relevant to the question.\n3. Sample data from relevant tables: SELECT * FROM table_name LIMIT 3 — this reveals actual values, formats, and NULLs.\n4. If column names are still unclear, run: PRAGMA table_info(table_name)\n5. For join relationships, run: PRAGMA foreign_key_list(table_name)\n\nDo not skip this step even if the question seems simple. Mismatched column names and unexpected data formats are a leading cause of incorrect answers. Spend time here to avoid wasted query attempts later.",
+        "category": "schema_exploration",
+        "applicable_dbs": ["sqlite"],
+        "priority": 9
+    },
+    {
+        "name": "answer_format_checker",
+        "description": "Checklist to verify the final answer matches the expected format before finishing",
+        "prompt": "Before declaring your final answer, run through this checklist:\n1. ROW COUNT: Does your result have the right number of rows?\n   - Single-value questions ('what is the average?', 'how many total?') → must return exactly 1 row\n   - Per-group questions ('for each country, what is...') → must return 1 row per group\n   - List questions ('which players...') → may return multiple rows\n2. COLUMN COUNT: Does your result have exactly the columns the question implies? No extra columns.\n3. AGGREGATION LEVEL: If the question asks for a summary statistic (average, total, max, min), your result must not be a list of individual values — apply GROUP BY or aggregate the entire result set.\n4. COLUMN ORDER: Match the implied order from the question (e.g., if asked 'name and salary', return name first).\n5. DATA TYPE: If a number is expected, don't return a string. If a date is expected, format it correctly.\n6. NULL HANDLING: If NULLs appear in your result, decide if that is correct or if you need COALESCE/IFNULL.\n\nIf any check fails, rewrite the query before submitting the answer.",
+        "category": "answer_validation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 8
+    },
+    {
+        "name": "sqlite_functions",
+        "description": "Common SQLite function patterns for benchmark queries",
+        "prompt": "Reference for SQLite built-in functions frequently needed in Spider2 tasks:\n\nDATES:\n- strftime('%Y', date_col) → extract year\n- strftime('%m', date_col) → extract month (zero-padded)\n- julianday(date1) - julianday(date2) → days between two dates\n- date('now') → today's date\n\nTYPE CONVERSION:\n- CAST(col AS REAL) → convert to float\n- CAST(col AS INTEGER) → convert to int\n- printf('%.2f', col) → format number as string with 2 decimal places\n\nNULLS:\n- COALESCE(col, 0) → replace NULL with 0\n- IFNULL(col, default) → same as COALESCE with one fallback\n- NULLIF(col, 0) → return NULL if col equals 0 (avoid divide-by-zero)\n\nSTRINGS:\n- SUBSTR(col, start, length) → substring (1-indexed)\n- INSTR(col, substr) → position of substring\n- REPLACE(col, old, new) → replace occurrences\n- GROUP_CONCAT(col, ', ') → aggregate rows into a delimited string\n- TRIM / LTRIM / RTRIM → strip whitespace\n- UPPER / LOWER → case conversion\n- LENGTH(col) → character count\n\nAGGREGATES:\n- SUM(col) → returns NULL if all values are NULL; use TOTAL(col) to get 0 instead\n- COUNT(*) vs COUNT(col) → COUNT(*) counts all rows, COUNT(col) skips NULLs\n- ROUND(value, digits) → round to N decimal places\n- ABS(col) → absolute value\n\nWINDOW FUNCTIONS (supported in SQLite 3.25+):\n- ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)\n- RANK(), DENSE_RANK()\n- LAG(col, 1) OVER (...), LEAD(col, 1) OVER (...)\n- SUM(col) OVER (PARTITION BY ...) → running totals",
+        "category": "sql_generation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 7
+    },
+    {
+        "name": "complex_computation",
+        "description": "Use execute_code for complex math instead of SQL when appropriate",
+        "prompt": "Some computations are error-prone or impossible in pure SQL. Use `execute_code` to run Python for:\n\n- LINEAR REGRESSION: SQL has no built-in regression. Fetch the raw data with a query, then use Python (numpy or scipy) to compute slope, intercept, R-squared.\n- HAVERSINE DISTANCE: Compute geographic distance between coordinates in Python using the haversine formula rather than approximating in SQL.\n- MOVING AVERAGES / ROLLING STATISTICS: Easier and less error-prone with pandas.\n- STATISTICAL FUNCTIONS: stddev, variance, percentiles, correlation — use scipy.stats or numpy.\n- MULTI-STEP NUMERIC PIPELINES: If the computation requires multiple passes over data or iterative logic, Python is clearer and less bug-prone than nested SQL CTEs.\n\nWorkflow:\n1. Write a SQL query to extract the raw data you need (keep it simple — just fetch the rows).\n2. Pass the result to `execute_code` as a Python list/dict or use pandas read_sql.\n3. Perform the complex math in Python.\n4. Return the final computed value as your answer.\n\nDo NOT attempt linear regression or haversine distance entirely in SQL — the chance of a subtle numeric error is high.",
+        "category": "computation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 6
+    },
+    {
+        "name": "error_recovery",
+        "description": "Steps to diagnose and recover from SQL errors",
+        "prompt": "When a query returns an error or unexpected result, follow these steps:\n\n1. READ THE ERROR MESSAGE. SQLite error messages are descriptive — 'no such column: X' means column X does not exist under that name.\n2. CHECK COLUMN NAMES. Run PRAGMA table_info(table_name) or SELECT * FROM table_name LIMIT 1 to confirm exact column names (case-sensitive in some contexts).\n3. SIMPLIFY THE QUERY. Remove JOINs, subqueries, and WHERE clauses one at a time until the query works, then add complexity back.\n4. CHECK TABLE NAMES. If you get 'no such table', re-run list_tables to confirm the exact table name.\n5. COMMON SQLITE GOTCHAS:\n   - Column name with a space or reserved word: wrap in double quotes or backticks\n   - Mixing types in comparisons (e.g., comparing '2020' string to an integer year column) — use CAST\n   - Aggregate in WHERE clause: move it to HAVING\n   - Window functions require SQLite 3.25+ — if they fail, rewrite with subqueries\n6. IF A JOIN PRODUCES WRONG ROW COUNTS: check for many-to-many relationships causing fan-out, and use DISTINCT or aggregation to deduplicate.\n7. After fixing the error, re-read the original question to confirm your corrected query still answers what was asked.",
+        "category": "error_handling",
+        "applicable_dbs": ["sqlite"],
+        "priority": 5
+    }
 ]

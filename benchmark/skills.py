@@ -34,8 +34,10 @@ class Skill:
     applicable_dbs: list[str] = field(default_factory=list)
     priority: int = 0  # higher = applied first
 
-    def applies_to(self, db_type: str) -> bool:
-        return not self.applicable_dbs or db_type in self.applicable_dbs
+    def applies_to(self, db_type: str, db_id: str = "") -> bool:
+        if not self.applicable_dbs or "*" in self.applicable_dbs:
+            return True
+        return db_type in self.applicable_dbs or db_id in self.applicable_dbs
 
 
 # ─── Built-in skills ─────────────────────────────────────────────────────────
@@ -191,6 +193,7 @@ def load_skills_from_db(db_path: str | None = None) -> list[Skill]:
 def get_skills(
     names: list[str] | None = None,
     db_type: str = "",
+    db_id: str = "",
     include_builtin: bool = True,
     db_path: str | None = None,
 ) -> list[Skill]:
@@ -207,9 +210,9 @@ def get_skills(
     if names:
         all_skills = [s for s in all_skills if s.name in names]
 
-    # Filter by DB type
-    if db_type:
-        all_skills = [s for s in all_skills if s.applies_to(db_type)]
+    # Filter by DB type and/or db_id
+    if db_type or db_id:
+        all_skills = [s for s in all_skills if s.applies_to(db_type, db_id)]
 
     # Sort by priority (highest first)
     all_skills.sort(key=lambda s: s.priority, reverse=True)

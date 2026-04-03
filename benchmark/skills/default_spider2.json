@@ -46,5 +46,37 @@
         "category": "error_handling",
         "applicable_dbs": ["sqlite"],
         "priority": 5
+    },
+    {
+        "name": "brazilian_ecommerce_tips",
+        "description": "Domain knowledge for Brazilian_E_Commerce (Olist) database",
+        "prompt": "For Brazilian_E_Commerce database (Olist):\n- ALWAYS filter by order_status = 'delivered' unless asked about other statuses\n- customer_id is per-order; customer_unique_id is per-person. Use customer_unique_id for customer-level analysis\n- olist_products and olist_products_dataset are duplicates — use either\n- Date columns are strings — use strftime() or substr() for extraction\n- For monthly pivot tables, month names should match gold format (check if '1' or 'January')\n- Payment analysis: one order can have multiple payments (installments) — check if question asks per-order or per-payment",
+        "category": "domain_knowledge",
+        "applicable_dbs": ["Brazilian_E_Commerce"],
+        "priority": 7
+    },
+    {
+        "name": "ipl_cricket_tips",
+        "description": "Domain knowledge for IPL cricket database",
+        "prompt": "For IPL database:\n- ball_by_ball links to batsman_scored, wicket_taken, extra_runs via composite key (match_id, over_id, ball_id, innings_no)\n- BOWLING STATS: Exclude 'run out', 'retired hurt', 'obstructing the field' from bowler wickets\n- ECONOMY RATE: Use only bat runs (from batsman_scored), exclude extra_runs (wides, noballs, legbyes, byes)\n- OVERS BOWLED: balls / 6.0 — count only legal deliveries (exclude wides and no-balls)\n- BATTING AVERAGE: runs / dismissals (NOT runs / matches). Division by zero for players never dismissed → 0.00\n- Check the external knowledge document for cricket-specific definitions\n- Partnership runs: pair striker + non_striker from ball_by_ball, compute combined runs",
+        "category": "domain_knowledge",
+        "applicable_dbs": ["IPL"],
+        "priority": 7
+    },
+    {
+        "name": "bank_sales_trading_tips",
+        "description": "Domain knowledge for bank_sales_trading multi-domain database",
+        "prompt": "For bank_sales_trading database (18 tables spanning multiple domains):\n- BANKING: customer_transactions has txn_type: deposit, withdrawal, purchase. Deposits are positive, BOTH withdrawals AND purchases are negative.\n- VEGETABLE WHOLESALE: Column names have special characters — wrap in double quotes: \"whsle_px_rmb-kg\", \"qty_sold(kg)\", \"loss_rate_%\"\n- WEEKLY SALES: cleaned_weekly_sales has week_date_formatted (date) and calendar_year. Be precise about date boundary definitions (inclusive vs exclusive).\n- BITCOIN: Check column names carefully — prices may be in different units.\n- When computing rolling averages or running totals, verify window frame boundaries carefully.",
+        "category": "domain_knowledge",
+        "applicable_dbs": ["bank_sales_trading"],
+        "priority": 7
+    },
+    {
+        "name": "column_order_warning",
+        "description": "Critical warning about column ordering in output",
+        "prompt": "CRITICAL: The evaluation compares columns BY POSITION, not by name.\n- If the question says 'show X and Y', your first column must be X and second must be Y\n- If the question says 'for each A, calculate B and C', the column order is: A, B, C\n- Getting the column order wrong means WRONG answer even if values are correct\n- Double-check: does the order of columns in your SELECT match the order implied by the question?\n- For comparison queries (change from period A to period B), ensure period A comes before period B in the output",
+        "category": "answer_validation",
+        "applicable_dbs": ["*"],
+        "priority": 9
     }
 ]

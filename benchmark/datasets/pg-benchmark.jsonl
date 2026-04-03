@@ -1,0 +1,10 @@
+{"instance_id": "pg_ent_001", "db": "enterprise-pg", "question": "How many customers are in each loyalty tier?", "external_knowledge": null}
+{"instance_id": "pg_ent_002", "db": "enterprise-pg", "question": "What is the total revenue and number of orders per order status?", "external_knowledge": null}
+{"instance_id": "pg_ent_003", "db": "enterprise-pg", "question": "Show the top 10 customers by total spending. Include their full name, email, and total amount spent across all orders.", "external_knowledge": null}
+{"instance_id": "pg_ent_004", "db": "enterprise-pg", "question": "How many customers have never placed an order?", "external_knowledge": null}
+{"instance_id": "pg_ent_005", "db": "enterprise-pg", "question": "For each product category, what is the average unit price and total stock quantity for active products?", "external_knowledge": null}
+{"instance_id": "pg_ent_006", "db": "enterprise-pg", "question": "Which employees have handled orders totaling more than $60,000? Show their name, department, and total order value.", "external_knowledge": null}
+{"instance_id": "pg_ent_007", "db": "enterprise-pg", "question": "What percentage of support tickets were resolved within their SLA deadline? Break down by priority.", "external_knowledge": null}
+{"instance_id": "pg_wh_001", "db": "warehouse-pg", "question": "What is the total revenue by year?", "external_knowledge": null}
+{"instance_id": "pg_wh_002", "db": "warehouse-pg", "question": "List all product categories and their total profit from sales.", "external_knowledge": null}
+{"instance_id": "pg_wh_003", "db": "warehouse-pg", "question": "What is the month-over-month revenue growth rate?", "external_knowledge": null}

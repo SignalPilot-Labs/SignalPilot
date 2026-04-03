@@ -179,6 +179,14 @@ def _check_token_exposure(cmd: str) -> str | None:
         # /proc filesystem access to environment
         r"cat\s+.*/proc/.*/environ",
         r"/proc/self/environ",
+        # Block access to /data directory (master key, databases)
+        r"cat\s+.*/data/",
+        r"head\s+.*/data/",
+        r"tail\s+.*/data/",
+        r"less\s+.*/data/",
+        r"cp\s+.*/data/",
+        r"xxd\s+.*/data/",
+        r"base64\s+.*/data/",
     ]
     for pattern in exposure_patterns:
         if re.search(pattern, cmd):

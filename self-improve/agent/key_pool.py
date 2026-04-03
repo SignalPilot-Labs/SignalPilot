@@ -376,9 +376,11 @@ class KeyPool:
         return {row["key"]: row["value"] for row in rows}
 
     async def update_config(self, updates: dict[str, str]) -> dict[str, str]:
-        """Update rotation config values."""
+        """Update rotation config values. Only keys in DEFAULT_CONFIG are accepted."""
         conn = db.get_db()
         for key, value in updates.items():
+            if key not in DEFAULT_CONFIG:
+                raise ValueError(f"Unknown config key: {key}")
             if key == "rotation_strategy" and value not in VALID_STRATEGIES:
                 raise ValueError(f"Invalid rotation strategy: {value}")
             await conn.execute(

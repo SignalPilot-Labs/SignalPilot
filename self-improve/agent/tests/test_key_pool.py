@@ -535,6 +535,13 @@ async def test_invalid_rotation_strategy_rejected(pool):
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_unknown_config_key_rejected(pool):
+    """update_config raises ValueError for keys not in DEFAULT_CONFIG."""
+    with pytest.raises(ValueError, match="Unknown config key"):
+        await pool.update_config({"evil_key": "malicious_value"})
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_valid_rotation_strategy_accepted(pool):
     """update_config accepts every strategy in VALID_STRATEGIES."""
     for strategy in VALID_STRATEGIES:

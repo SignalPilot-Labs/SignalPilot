@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from gateway.connectors.ssh_tunnel import _build_proxy_command, _validate_hostname
 from gateway.governance.pii import _hash_value
 from gateway.api.deps import ConnectionName, validate_connection_name
-from gateway.api.tunnels import _BLOCKED_TUNNEL_PORTS
+from gateway.api.tunnels import _ALLOWED_TUNNEL_PORTS
 from gateway.models import GatewaySettings
 
 
@@ -268,40 +268,33 @@ class TestConnectionNameType:
 # ─── Tunnel port blocking ─────────────────────────────────────────────────────
 
 
-class TestBlockedTunnelPorts:
-    """_BLOCKED_TUNNEL_PORTS must cover all well-known/privileged ports 1-1023."""
+class TestAllowedTunnelPorts:
+    """_ALLOWED_TUNNEL_PORTS must be an explicit allowlist of safe ports."""
 
     def test_is_frozenset(self):
-        assert isinstance(_BLOCKED_TUNNEL_PORTS, frozenset)
+        assert isinstance(_ALLOWED_TUNNEL_PORTS, frozenset)
 
-    def test_contains_all_privileged_ports(self):
-        expected = frozenset(range(1, 1024))
-        assert expected == _BLOCKED_TUNNEL_PORTS
+    def test_contains_expected_ports(self):
+        assert 3200 in _ALLOWED_TUNNEL_PORTS
+        assert 3000 in _ALLOWED_TUNNEL_PORTS
+        assert 8180 in _ALLOWED_TUNNEL_PORTS
 
-    def test_port_1_is_blocked(self):
-        assert 1 in _BLOCKED_TUNNEL_PORTS
+    def test_privileged_ports_not_allowed(self):
+        """Privileged ports must not be in the allowlist."""
+        assert 22 not in _ALLOWED_TUNNEL_PORTS
+        assert 80 not in _ALLOWED_TUNNEL_PORTS
+        assert 443 not in _ALLOWED_TUNNEL_PORTS
 
-    def test_port_22_ssh_is_blocked(self):
-        assert 22 in _BLOCKED_TUNNEL_PORTS
+    def test_database_ports_not_allowed(self):
+        """Database ports must not be in the allowlist."""
+        assert 5432 not in _ALLOWED_TUNNEL_PORTS  # PostgreSQL
+        assert 3306 not in _ALLOWED_TUNNEL_PORTS  # MySQL
+        assert 27017 not in _ALLOWED_TUNNEL_PORTS  # MongoDB
 
-    def test_port_443_https_is_blocked(self):
-        assert 443 in _BLOCKED_TUNNEL_PORTS
-
-    def test_port_80_http_is_blocked(self):
-        assert 80 in _BLOCKED_TUNNEL_PORTS
-
-    def test_port_1023_boundary_is_blocked(self):
-        assert 1023 in _BLOCKED_TUNNEL_PORTS
-
-    def test_port_3200_is_not_blocked(self):
-        assert 3200 not in _BLOCKED_TUNNEL_PORTS
-
-    def test_port_1024_is_not_blocked(self):
-        """1024 is the first unprivileged port and must not be in the blocked set."""
-        assert 1024 not in _BLOCKED_TUNNEL_PORTS
-
-    def test_port_8080_is_not_blocked(self):
-        assert 8080 not in _BLOCKED_TUNNEL_PORTS
+    def test_arbitrary_ports_not_allowed(self):
+        """Random high ports must not be in the allowlist."""
+        assert 8080 not in _ALLOWED_TUNNEL_PORTS
+        assert 9090 not in _ALLOWED_TUNNEL_PORTS
 
 
 # ─── Settings API key validation logic ───────────────────────────────────────

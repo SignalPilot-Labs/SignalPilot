@@ -567,7 +567,7 @@ async def edit_connection(name: ConnectionName, update: ConnectionUpdate):
 
 
 @router.post("/connections/{name}/clone")
-async def clone_connection(name: ConnectionName, new_name: str = Query(..., min_length=1, max_length=64)):
+async def clone_connection(name: ConnectionName, new_name: str = Query(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")):
     """Clone an existing connection with a new name."""
     existing = get_connection(name)
     if not existing:

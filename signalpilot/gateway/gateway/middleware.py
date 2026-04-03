@@ -174,8 +174,7 @@ class AuthBruteForceMiddleware(BaseHTTPMiddleware):
             del self._failures[ip]
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Only track mutating methods
-        if request.method not in ("POST", "PUT", "DELETE"):
+        if request.method == "OPTIONS":
             return await call_next(request)
 
         ip = _client_ip(request)

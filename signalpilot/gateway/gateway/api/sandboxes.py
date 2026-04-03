@@ -16,7 +16,7 @@ from ..store import (
     upsert_sandbox,
     append_audit,
 )
-from .deps import get_sandbox_client
+from .deps import get_sandbox_client, ResourceID
 
 router = APIRouter(prefix="/api")
 
@@ -61,7 +61,7 @@ async def create_sandbox(req: SandboxCreate):
 
 
 @router.get("/sandboxes/{sandbox_id}")
-async def get_sandbox_detail(sandbox_id: str):
+async def get_sandbox_detail(sandbox_id: ResourceID):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
@@ -69,7 +69,7 @@ async def get_sandbox_detail(sandbox_id: str):
 
 
 @router.delete("/sandboxes/{sandbox_id}", status_code=204)
-async def kill_sandbox(sandbox_id: str):
+async def kill_sandbox(sandbox_id: ResourceID):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
@@ -87,7 +87,7 @@ async def kill_sandbox(sandbox_id: str):
 
 
 @router.post("/sandboxes/{sandbox_id}/execute")
-async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
+async def execute_in_sandbox(sandbox_id: ResourceID, req: ExecuteRequest):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")

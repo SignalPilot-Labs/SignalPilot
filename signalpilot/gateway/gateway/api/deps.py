@@ -162,6 +162,9 @@ def validate_connection_name(name: str) -> str:
 # FastAPI dependency for validated connection name path parameters
 ConnectionName = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")]
 
+# FastAPI dependency for validated UUID path parameters (tunnel IDs, sandbox IDs)
+ResourceID = Annotated[str, Path(min_length=36, max_length=36, pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")]
+
 
 # ─── Connection lookup ────────────────────────────────────────────────────────
 

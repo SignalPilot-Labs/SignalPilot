@@ -21,11 +21,20 @@ sp install
 
 **Flags:**
 
-| Flag             | Description                          |
-| ---------------- | ------------------------------------ |
-| `--dev`          | Use the dev compose file (no sandbox) |
-| `--skip-build`   | Skip Docker image builds             |
-| `--no-color`     | Disable ANSI color codes (shell only) |
+| Flag                | Description                              |
+| ------------------- | ---------------------------------------- |
+| `--dev`             | Use the dev compose file (no sandbox)    |
+| `--skip-build`      | Skip Docker image builds                 |
+| `--non-interactive` | Skip interactive prompts (for curl \| sh) |
+| `--no-color`        | Disable ANSI color codes (shell only)    |
+
+### Uninstall
+
+To completely remove all containers and data:
+
+```bash
+sp uninstall
+```
 
 ### Troubleshooting
 

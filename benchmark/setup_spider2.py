@@ -125,23 +125,37 @@ def list_sqlite_tasks() -> list[dict]:
 
 def get_sqlite_db_path(db_id: str) -> Path | None:
     """Find the SQLite database file for a given db_id."""
-    if not SPIDER2_DATABASES_DIR.exists():
-        return None
+    # Spider2-Lite stores actual .sqlite files in spider2-localdb/ directory
+    localdb_dir = SPIDER2_DIR / "resource" / "databases" / "spider2-localdb"
 
-    # Spider2 stores SQLite DBs as: sqlite/{db_id}/{db_id}.sqlite
-    db_path = SPIDER2_DATABASES_DIR / db_id / f"{db_id}.sqlite"
-    if db_path.exists():
-        return db_path
+    # Search locations in priority order
+    search_dirs = [localdb_dir, SPIDER2_DATABASES_DIR]
 
-    # Try without subdirectory
-    db_path = SPIDER2_DATABASES_DIR / f"{db_id}.sqlite"
-    if db_path.exists():
-        return db_path
+    for search_dir in search_dirs:
+        if not search_dir.exists():
+            continue
 
-    # Search recursively
-    for p in SPIDER2_DATABASES_DIR.rglob("*.sqlite"):
-        if p.stem == db_id:
-            return p
+        # Direct match: {db_id}.sqlite
+        db_path = search_dir / f"{db_id}.sqlite"
+        if db_path.exists():
+            return db_path
+
+        # Subdirectory match: {db_id}/{db_id}.sqlite
+        db_path = search_dir / db_id / f"{db_id}.sqlite"
+        if db_path.exists():
+            return db_path
+
+        # Case-insensitive search for mismatches like Db-IMDB vs DB_IMDB
+        for p in search_dir.glob("*.sqlite"):
+            if p.stem.lower().replace("-", "_") == db_id.lower().replace("-", "_"):
+                return p
+
+    # Last resort: recursive search across all database dirs
+    databases_root = SPIDER2_DIR / "resource" / "databases"
+    if databases_root.exists():
+        for p in databases_root.rglob("*.sqlite"):
+            if p.stem == db_id:
+                return p
 
     return None
 

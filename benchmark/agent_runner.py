@@ -215,9 +215,6 @@ async def run_task(
             "mcp__signalpilot__list_database_connections",
             "mcp__signalpilot__describe_table",
             "mcp__signalpilot__list_tables",
-            "mcp__signalpilot__schema_ddl",
-            "mcp__signalpilot__explore_column",
-            "mcp__signalpilot__schema_overview",
             "mcp__signalpilot__execute_code",
             "mcp__signalpilot__sandbox_status",
         ],
@@ -284,7 +281,66 @@ async def run_task(
                     output.tokens_used = getattr(message.usage, "total_tokens", 0)
 
     except Exception as e:
-        output.error = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        err_str = str(e)
+        # Retry on transient CLI/MCP failures (exit code 1, connection reset)
+        if ("exit code 1" in err_str or "Connection reset" in err_str) and output.turns_used < 3:
+            print(f"    Retrying after transient error: {err_str[:80]}")
+            await asyncio.sleep(2)
+            output2 = AgentOutput()
+            start2 = time.monotonic()
+            try:
+                async for message in query(prompt=user_prompt, options=options):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                output2.messages.append(block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                last_tool_name = block.name
+                                if block.name == "mcp__signalpilot__query_database":
+                                    sql = block.input.get("sql", "")
+                                    if sql:
+                                        output2.final_sql = sql
+                                output2.turns_used += 1
+                    elif isinstance(message, UserMessage):
+                        for block in message.content:
+                            if isinstance(block, ToolResultBlock):
+                                content = block.content
+                                if isinstance(content, list):
+                                    text = " ".join(
+                                        item.get("text", "") for item in content
+                                        if isinstance(item, dict)
+                                    )
+                                elif isinstance(content, str):
+                                    text = content
+                                else:
+                                    text = ""
+                                if text.startswith("{"):
+                                    try:
+                                        parsed = json.loads(text)
+                                        if isinstance(parsed, dict) and "result" in parsed:
+                                            text = parsed["result"]
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
+                                if not text:
+                                    continue
+                                if "Query blocked" in text:
+                                    output2.governance_blocked = True
+                                    output2.block_reason = text
+                                elif last_tool_name == "mcp__signalpilot__query_database":
+                                    output2.final_result_text = text
+                    elif isinstance(message, ResultMessage):
+                        if hasattr(message, "usage"):
+                            output2.tokens_used = getattr(message.usage, "total_tokens", 0)
+                output2.execution_ms = (time.monotonic() - start2) * 1000
+                if output2.final_result_text:
+                    output2.result_rows = parse_query_result_to_rows(output2.final_result_text)
+                if not output2.final_sql:
+                    output2.final_sql = _extract_final_sql(output2.messages)
+                return output2
+            except Exception as e2:
+                output.error = f"{type(e2).__name__}: {e2}"
+        else:
+            output.error = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
 
     output.execution_ms = (time.monotonic() - start_time) * 1000
 

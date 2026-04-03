@@ -471,16 +471,13 @@ class TestAuthMiddlewareIntegration:
         settings.api_key = api_key if api_key is not None else self._TEST_API_KEY
         return settings
 
-    def _client(self, api_key=None):
-        """Create test client with auth middleware and mocked settings."""
-        settings = self._mock_settings(api_key)
-        client = _make_test_app(APIKeyAuthMiddleware)
-        client._settings_mock = settings
-        return client, settings
-
     @pytest.fixture(autouse=True)
     def _patch_settings(self):
-        """Patch load_settings for all auth tests — must be active during request dispatch."""
+        """Patch load_settings for all auth tests.
+
+        Targets gateway.store.load_settings because the middleware uses a late
+        inline import (from .store import load_settings) inside dispatch().
+        """
         self._settings = self._mock_settings()
         with patch("gateway.store.load_settings", return_value=self._settings):
             yield

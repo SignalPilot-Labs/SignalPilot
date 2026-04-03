@@ -129,8 +129,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     from .api.deps import sanitize_db_error
 
     request_id = getattr(request.state, "request_id", "unknown")
-    # Sanitize the error message to strip connection strings and credentials
-    safe_msg = sanitize_db_error(str(exc)[:500])
+    # Sanitize first, then truncate — sanitize_db_error handles its own truncation
+    # (truncating before sanitization can split credentials mid-token, evading regex)
+    safe_msg = sanitize_db_error(str(exc))
     logger.error(
         "Unhandled exception [request_id=%s] %s: %s",
         request_id, type(exc).__name__, safe_msg,
@@ -183,7 +184,9 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
             )
         response = await call_next(request)
         # Append Vary: Origin for correct cache behavior (don't clobber existing Vary)
-        response.headers.append("Vary", "Origin")
+        existing_vary = response.headers.get("Vary", "")
+        if "Origin" not in existing_vary:
+            response.headers.append("Vary", "Origin")
         if origin in _ALLOWED_ORIGINS:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"

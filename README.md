@@ -27,6 +27,16 @@ sp install
 | `--skip-build`   | Skip Docker image builds             |
 | `--no-color`     | Disable ANSI color codes (shell only) |
 
+### Troubleshooting
+
+If something isn't working, run the diagnostic command:
+
+```bash
+sp doctor
+```
+
+This checks your system dependencies, `.env` configuration, container health, endpoint responses, and Docker disk usage — then prints a summary of any issues with fix suggestions.
+
 ### Manual Setup
 
 If you prefer to set things up manually:

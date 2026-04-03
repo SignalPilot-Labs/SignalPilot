@@ -75,5 +75,15 @@ def install(
     run_install(dev=dev, skip_build=skip_build)
 
 
+@app.command()
+def doctor(
+    dev: bool = typer.Option(False, "--dev", help="Check dev compose stack"),
+):
+    """Diagnose SignalPilot stack health."""
+    from .installer import run_doctor
+
+    run_doctor(dev=dev)
+
+
 if __name__ == "__main__":
     app()

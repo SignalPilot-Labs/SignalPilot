@@ -77,6 +77,16 @@ def install(
 
 
 @app.command()
+def uninstall(
+    dev: bool = typer.Option(False, "--dev", help="Use dev compose file"),
+):
+    """Stop and remove all SignalPilot containers and volumes."""
+    from .installer import run_uninstall
+
+    run_uninstall(dev=dev)
+
+
+@app.command()
 def doctor(
     dev: bool = typer.Option(False, "--dev", help="Check dev compose stack"),
 ):

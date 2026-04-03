@@ -264,8 +264,13 @@ def _start_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0
         ("web", web_port, 90),
     ]
 
-    for svc, port, timeout in health_services:
-        spinner = ui.Spinner(f"Waiting for {svc}")
+    svc_total = len(health_services)
+
+    for svc_idx, (svc, port, timeout) in enumerate(health_services, 1):
+        progress = f"{ui.DIM}[{svc_idx}/{svc_total}]{ui.RESET}  "
+        timer = ui.Timer().start()
+
+        spinner = ui.Spinner(f"[{svc_idx}/{svc_total}]  {svc}")
         spinner.start()
 
         healthy = False
@@ -284,10 +289,11 @@ def _start_services(compose_file: Path, cfg: dict, step: int = 0, total: int = 0
 
         spinner.stop()
 
+        elapsed = timer.elapsed_display()
         if healthy:
-            ui.check(svc, f"healthy    (localhost:{port})")
+            print(f"    {progress}{svc:<14}{ui.GREEN}✓{ui.RESET}  {'healthy':<12}(localhost:{port})  {ui.dim_text(elapsed)}")
         else:
-            ui.fail(svc, "did not become healthy in time")
+            print(f"    {progress}{svc:<14}✗  timed out after {timeout}s")
             ui.hint(f"Check logs: docker compose -f {compose_file} logs {svc}")
 
     return True
@@ -505,4 +511,52 @@ def run_install(
     print(f"    1. Open {ui.bold_text(f'http://localhost:{web_port}')}")
     print(f"    2. Connect a database:  {ui.dim_text('sp connect mydb postgresql://...')}")
     print(f"    3. Read the docs:       {ui.dim_text('github.com/SignalPilot-Labs/SignalPilot')}")
+    print()
+
+
+def run_uninstall(dev: bool = False) -> None:
+    """Stop and remove all SignalPilot containers and volumes."""
+
+    print()
+    ui.section("Uninstall")
+
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        ui.fail("Repository", "not found")
+        ui.hint("Nothing to uninstall.")
+        sys.exit(1)
+
+    compose_file = _compose_file(repo_root, dev=dev)
+
+    if not compose_file.exists():
+        ui.fail("Compose file", f"not found: {compose_file}")
+        sys.exit(1)
+
+    spinner = ui.Spinner("Stopping containers")
+    spinner.start()
+    timer = ui.Timer().start()
+
+    try:
+        result = _run_compose(compose_file, "down", "-v", capture=True)
+    except subprocess.TimeoutExpired:
+        spinner.stop()
+        ui.fail("docker compose", "timed out")
+        sys.exit(1)
+
+    spinner.stop()
+    elapsed = timer.elapsed_display()
+
+    if result.returncode == 0:
+        print(f"    {'Containers':<18}{ui.GREEN}✓{ui.RESET}  removed  {ui.dim_text(elapsed)}")
+        print()
+        ui.hint("All containers and volumes removed.")
+        ui.hint("Re-run: sp install")
+    else:
+        ui.fail("docker compose down", "failed")
+        output = result.stderr or result.stdout or ""
+        for line in output.strip().split("\n")[-10:]:
+            print(f"      {line}")
+        sys.exit(1)
+
     print()

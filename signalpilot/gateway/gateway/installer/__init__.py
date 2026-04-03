@@ -1,3 +1,3 @@
 from .config import load_config
 from .doctor import run_doctor
-from .install import run_install
+from .install import run_install, run_uninstall

@@ -433,7 +433,8 @@ async def export_connections(
 ):
     """Export all connections as a portable JSON manifest."""
     if include_credentials:
-        client_ip = request.client.host if request.client else "unknown"
+        from ..middleware import _client_ip
+        client_ip = _client_ip(request)
         logger.warning(
             "Credential export requested from %s — includes_credentials=True, "
             "all connection strings and SSL/SSH secrets will be returned",

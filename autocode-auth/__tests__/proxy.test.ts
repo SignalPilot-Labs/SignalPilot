@@ -6,7 +6,7 @@ vi.mock("@/lib/auth", () => ({
   auth: (callback: Function) => callback,
 }));
 
-import middleware, { config } from "@/middleware";
+import proxy, { config } from "@/proxy";
 
 function makeRequest(pathname: string, isAuthenticated: boolean) {
   const url = new URL(pathname, "http://localhost:3000");
@@ -20,44 +20,44 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("middleware", () => {
+describe("proxy", () => {
   // 1. Unauthenticated user hitting /setup → redirected to /signup
   it("redirects unauthenticated user on /setup to /signup", () => {
-    const response = middleware(makeRequest("/setup", false));
+    const response = proxy(makeRequest("/setup", false));
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://localhost:3000/signup");
   });
 
   // 2. Unauthenticated user hitting /setup/something → redirected to /signup
   it("redirects unauthenticated user on /setup/something to /signup", () => {
-    const response = middleware(makeRequest("/setup/something", false));
+    const response = proxy(makeRequest("/setup/something", false));
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://localhost:3000/signup");
   });
 
   // 3. Authenticated user hitting /setup → passes through (NextResponse.next())
   it("allows authenticated user on /setup to pass through", () => {
-    const response = middleware(makeRequest("/setup", true));
+    const response = proxy(makeRequest("/setup", true));
     expect(response.headers.get("location")).toBeNull();
   });
 
   // 4. Unauthenticated user hitting /dashboard → redirected to /signup (auth guard fires first)
   it("redirects unauthenticated user on /dashboard to /signup", () => {
-    const response = middleware(makeRequest("/dashboard", false));
+    const response = proxy(makeRequest("/dashboard", false));
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://localhost:3000/signup");
   });
 
   // 5. Authenticated user hitting /dashboard → redirected to /setup
   it("redirects authenticated user on /dashboard to /setup", () => {
-    const response = middleware(makeRequest("/dashboard", true));
+    const response = proxy(makeRequest("/dashboard", true));
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://localhost:3000/setup");
   });
 
   // 6. Authenticated user hitting /dashboard/settings → redirected to /setup
   it("redirects authenticated user on /dashboard/settings to /setup", () => {
-    const response = middleware(makeRequest("/dashboard/settings", true));
+    const response = proxy(makeRequest("/dashboard/settings", true));
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe("http://localhost:3000/setup");
   });

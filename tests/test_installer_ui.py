@@ -227,3 +227,75 @@ class TestUiSectionSteps:
         ui.section("Config", step=0, total=0)
         out = capsys.readouterr().out
         assert "[0/0]" in out
+
+
+# ---------------------------------------------------------------------------
+# ui.box()
+# ---------------------------------------------------------------------------
+
+
+class TestUiBox:
+    """box() renders a monochrome bordered box with left-aligned content."""
+
+    def test_renders_box_characters(self, capsys):
+        ui.box(["hello"])
+        out = capsys.readouterr().out
+        assert "┌" in out
+        assert "┘" in out
+        assert "│" in out
+
+    def test_content_appears(self, capsys):
+        ui.box(["test content"])
+        out = capsys.readouterr().out
+        assert "test content" in out
+
+    def test_multiple_lines(self, capsys):
+        ui.box(["line one", "line two", "line three"])
+        out = capsys.readouterr().out
+        assert "line one" in out
+        assert "line two" in out
+        assert "line three" in out
+
+    def test_all_lines_same_width(self, capsys):
+        ui.box(["short", "a longer line here"])
+        out = capsys.readouterr().out
+        lines_with_border = [l for l in out.splitlines() if "│" in l]
+        widths = [len(l) for l in lines_with_border]
+        assert len(set(widths)) == 1, f"Lines have different widths: {widths}"
+
+    def test_blank_line_after_title(self, capsys):
+        """When multiple lines, a blank row appears after the first (title) line."""
+        ui.box(["title", "detail"])
+        out = capsys.readouterr().out
+        lines = out.splitlines()
+        # Find the title line, next should be a blank padded line
+        for i, line in enumerate(lines):
+            if "title" in line:
+                assert lines[i + 1].strip().startswith("│") and "title" not in lines[i + 1]
+                break
+
+
+# ---------------------------------------------------------------------------
+# ui.header() — left-aligned layout
+# ---------------------------------------------------------------------------
+
+
+class TestUiHeaderLayout:
+    """header() uses left-aligned text with github URL."""
+
+    def test_contains_github_url(self, capsys):
+        ui.header()
+        out = capsys.readouterr().out
+        assert "github.com/SignalPilot-Labs" in out
+
+    def test_left_aligned_not_centered(self, capsys):
+        ui.header()
+        out = capsys.readouterr().out
+        # Find the line with the brand name
+        for line in out.splitlines():
+            if "s i g n a l p i l o t" in line:
+                # Left-aligned: text starts before the midpoint of the box
+                content_start = line.index("s i g n a l p i l o t")
+                midpoint = len(line) // 2
+                assert content_start < midpoint, "Brand name should be left-aligned"
+                break

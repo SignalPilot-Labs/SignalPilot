@@ -493,12 +493,16 @@ def run_install(
     gw_port = cfg.get("gateway", {}).get("port", 3300)
     db_port = cfg.get("database", {}).get("port", 5600)
 
-    print(f"\n\n  {ui.GREEN}{ui.BOLD}✓  SignalPilot is running{ui.RESET}\n\n")
-    print(f"  {'Web UI':<18}http://localhost:{web_port}")
-    print(f"  {'Gateway API':<18}http://localhost:{gw_port}")
-    print(f"  {'PostgreSQL':<18}localhost:{db_port}")
-    print(f"\n\n  {ui.bold_text('Next steps')}\n")
-    print(f"    1. Open {ui.bold_text(f'http://localhost:{web_port}')} in your browser")
+    print("\n")
+    ui.box([
+        f"    {ui.GREEN}✓{ui.RESET}  SignalPilot is running",
+        f"    {'Web UI':<15}http://localhost:{web_port}",
+        f"    {'Gateway API':<15}http://localhost:{gw_port}",
+        f"    {'PostgreSQL':<15}localhost:{db_port}",
+    ])
+
+    print(f"\n  {ui.bold_text('Next steps')}\n")
+    print(f"    1. Open {ui.bold_text(f'http://localhost:{web_port}')}")
     print(f"    2. Connect a database:  {ui.dim_text('sp connect mydb postgresql://...')}")
-    print(f"    3. Read the docs:       {ui.dim_text('https://github.com/SignalPilot-Labs/SignalPilot')}")
+    print(f"    3. Read the docs:       {ui.dim_text('github.com/SignalPilot-Labs/SignalPilot')}")
     print()

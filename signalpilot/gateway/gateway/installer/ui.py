@@ -16,21 +16,33 @@ CLEAR_LINE = "\033[2K" if IS_TTY else ""
 CURSOR_UP = "\033[1A" if IS_TTY else ""
 
 
+_BOX_WIDTH = 41  # inner content width
+
+
+def box(lines: list[str]) -> None:
+    """Print a monochrome box with left-aligned content lines."""
+    w = _BOX_WIDTH
+    bar = "─" * (w + 2)
+    pad = " " * w
+    print(f"  ┌{bar}┐")
+    print(f"  │ {pad} │")
+    for line in lines:
+        print(f"  │ {line:<{w}} │")
+        # Add a blank line after the title (first line)
+        if line is lines[0] and len(lines) > 1:
+            print(f"  │ {pad} │")
+    print(f"  │ {pad} │")
+    print(f"  └{bar}┘")
+
+
 def header() -> None:
     """Print the branded install header."""
     print()
-    w = 41  # inner width
-    bar = "─" * (w + 2)
-    pad = " " * w
-    t1 = "s i g n a l p i l o t"
-    t2 = "Install  v0.1.0"
-    print(f"  ┌{bar}┐")
-    print(f"  │ {pad} │")
-    print(f"  │ {t1:^{w}} │")
-    print(f"  │ {pad} │")
-    print(f"  │ {t2:^{w}} │")
-    print(f"  │ {pad} │")
-    print(f"  └{bar}┘")
+    box([
+        "    s i g n a l p i l o t",
+        "    Installer  v0.1.0",
+        "    github.com/SignalPilot-Labs",
+    ])
     print()
 
 

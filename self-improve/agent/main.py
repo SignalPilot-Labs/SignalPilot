@@ -25,10 +25,12 @@ Module layout:
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import uvicorn
 
 from agent import db, endpoints
+from agent.run_manager import RunManager
 
 
 class ParallelStartRequest(BaseModel):
@@ -45,7 +47,9 @@ class ParallelSignalRequest(BaseModel):
     payload: str | None = None
 
 
-@asynccontextmanager
+_run_manager = RunManager()
+
+
 def _is_worker() -> bool:
     """Check if this process is running inside a worker container (not the orchestrator)."""
     try:
@@ -55,6 +59,7 @@ def _is_worker() -> bool:
         return False
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     db_path = os.environ.get("DB_PATH", "/data/improve.db")
     await db.init_db(db_path)

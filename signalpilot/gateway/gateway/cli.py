@@ -139,6 +139,56 @@ def show_config():
 
 
 @app.command()
+def ps(
+    dev: bool = typer.Option(False, "--dev", help="Use dev compose file"),
+):
+    """Show running SignalPilot containers."""
+    from .installer.install import _compose_file, _find_repo_root
+
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        typer.echo("  Not in a SignalPilot repository.")
+        raise typer.Exit(1)
+
+    compose = _compose_file(repo_root, dev=dev)
+    import subprocess
+
+    subprocess.run(["docker", "compose", "-f", str(compose), "ps"])
+
+
+@app.command()
+def logs(
+    service: str = typer.Argument(None, help="Service name (gateway, web, postgres)"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output"),
+    tail: int = typer.Option(50, "--tail", "-n", help="Number of lines to show"),
+    dev: bool = typer.Option(False, "--dev", help="Use dev compose file"),
+):
+    """View container logs."""
+    from .installer.install import _compose_file, _find_repo_root
+
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        typer.echo("  Not in a SignalPilot repository.")
+        raise typer.Exit(1)
+
+    compose = _compose_file(repo_root, dev=dev)
+    import subprocess
+
+    cmd = ["docker", "compose", "-f", str(compose), "logs", f"--tail={tail}"]
+    if follow:
+        cmd.append("--follow")
+    if service:
+        cmd.append(service)
+
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
+
+
+@app.command()
 def version():
     """Show SignalPilot version and environment info."""
     from .installer import checks

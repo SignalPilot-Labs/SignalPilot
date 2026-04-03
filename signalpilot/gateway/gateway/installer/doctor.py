@@ -187,7 +187,7 @@ def _check_ports(diag: _DiagResult, cfg: dict, step: int, total: int) -> None:
         else:
             owner = checks.port_owner(port)
             # If owned by docker, it's likely our container — that's fine
-            if owner and owner.lower() in ("docker", "com.docke"):
+            if owner and "docker" in owner.lower():
                 diag.ok(f"Port {port}", f"in use by {owner} (expected)")
             elif owner:
                 diag.fail(f"Port {port}", f"in use by {owner}", f"stop {owner} or change port in config")

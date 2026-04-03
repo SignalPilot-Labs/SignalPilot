@@ -1,5 +1,7 @@
 """SignalPilot CLI — sp command."""
 
+import subprocess
+
 import typer
 import uvicorn
 
@@ -152,9 +154,8 @@ def ps(
         raise typer.Exit(1)
 
     compose = _compose_file(repo_root, dev=dev)
-    import subprocess
-
-    subprocess.run(["docker", "compose", "-f", str(compose), "ps"])
+    result = subprocess.run(["docker", "compose", "-f", str(compose), "ps"])
+    raise typer.Exit(result.returncode)
 
 
 @app.command()
@@ -174,7 +175,6 @@ def logs(
         raise typer.Exit(1)
 
     compose = _compose_file(repo_root, dev=dev)
-    import subprocess
 
     cmd = ["docker", "compose", "-f", str(compose), "logs", f"--tail={tail}"]
     if follow:
@@ -183,7 +183,8 @@ def logs(
         cmd.append(service)
 
     try:
-        subprocess.run(cmd)
+        result = subprocess.run(cmd)
+        raise typer.Exit(result.returncode)
     except KeyboardInterrupt:
         pass
 

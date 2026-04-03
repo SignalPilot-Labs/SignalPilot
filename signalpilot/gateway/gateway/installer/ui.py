@@ -133,7 +133,7 @@ class Spinner:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1)
-        if clear:
+        if clear and self._thread and IS_TTY:
             sys.stdout.write(f"\r{CLEAR_LINE}")
             sys.stdout.flush()
 

@@ -301,10 +301,11 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     columns = list(rows[0].keys())
     lines = [" | ".join(str(c) for c in columns)]
     lines.append("-" * len(lines[0]))
-    for row in rows[:50]:  # Cap display at 50 rows
+    display_limit = 2500  # High cap to ensure eval captures all rows
+    for row in rows[:display_limit]:
         lines.append(" | ".join(str(row.get(c, "")) for c in columns))
-    if len(rows) > 50:
-        lines.append(f"... ({len(rows)} rows total, showing first 50)")
+    if len(rows) > display_limit:
+        lines.append(f"... ({len(rows)} rows total, showing first {display_limit})")
 
     return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]"
 

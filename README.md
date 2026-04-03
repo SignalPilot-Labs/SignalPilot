@@ -45,7 +45,16 @@ If something isn't working, run the diagnostic command:
 sp doctor
 ```
 
-This checks your system dependencies, `.env` configuration, container health, endpoint responses, and Docker disk usage — then prints a summary of any issues with fix suggestions.
+This checks your system dependencies, `.env` configuration, port conflicts, container health, endpoint responses, and Docker disk usage — then prints a summary of any issues with fix suggestions.
+
+### Other Commands
+
+```bash
+sp ps          # Show running containers
+sp logs        # View container logs (add -f to follow)
+sp config      # Show resolved configuration with sources
+sp version     # Show CLI and environment info
+```
 
 ### Manual Setup
 

@@ -307,6 +307,65 @@ class TestRunInstallNonInteractive(_BaseInstallTest):
 
 
 # ---------------------------------------------------------------------------
+# run_install() — verbose mode
+# ---------------------------------------------------------------------------
+
+
+class TestRunInstallVerbose(_BaseInstallTest):
+    """run_install(verbose=True) shows additional debug output."""
+
+    def test_verbose_completes(self, monkeypatch, tmp_path, capsys):
+        """Verbose mode completes successfully."""
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        run_install(dev=True, skip_build=True, non_interactive=True, verbose=True)
+        out = capsys.readouterr().out
+        assert "SignalPilot is running" in out
+
+
+# ---------------------------------------------------------------------------
+# run_install() — version validation
+# ---------------------------------------------------------------------------
+
+
+class TestRunInstallVersionValidation(_BaseInstallTest):
+    """run_install fails when dependency versions are too old."""
+
+    _OLD_DOCKER = {
+        "installed": True,
+        "running": True,
+        "version": "20.10.0",
+        "compose_installed": True,
+        "compose_version": "2.32.0",
+    }
+
+    _OLD_COMPOSE = {
+        "installed": True,
+        "running": True,
+        "version": "27.5.1",
+        "compose_installed": True,
+        "compose_version": "1.29.0",
+    }
+
+    def test_exits_when_docker_version_too_old(self, monkeypatch, tmp_path):
+        import signalpilot.gateway.gateway.installer.checks as _checks
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        monkeypatch.setattr(_checks, "check_docker", lambda: self._OLD_DOCKER)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_install(non_interactive=True)
+        assert exc_info.value.code == 1
+
+    def test_exits_when_compose_version_too_old(self, monkeypatch, tmp_path):
+        import signalpilot.gateway.gateway.installer.checks as _checks
+        self._apply_happy_path_mocks(monkeypatch, tmp_path)
+        monkeypatch.setattr(_checks, "check_docker", lambda: self._OLD_COMPOSE)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_install(non_interactive=True)
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
 # run_install() — end-to-end happy path
 # ---------------------------------------------------------------------------
 

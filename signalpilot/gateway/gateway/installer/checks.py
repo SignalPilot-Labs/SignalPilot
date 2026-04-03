@@ -83,6 +83,27 @@ def check_command(cmd: str, version_flag: str = "--version") -> str | None:
         return "installed"
 
 
+# Minimum required versions for core dependencies
+MIN_DOCKER_VERSION = "24.0.0"
+MIN_COMPOSE_VERSION = "2.20.0"
+MIN_GIT_VERSION = "2.30.0"
+
+
+def _parse_version(ver: str) -> tuple[int, ...]:
+    """Parse a version string like '27.5.1' into a comparable tuple (27, 5, 1)."""
+    try:
+        return tuple(int(p) for p in ver.split(".") if p.isdigit())
+    except (ValueError, AttributeError):
+        return (0,)
+
+
+def meets_min_version(version: str | None, minimum: str) -> bool:
+    """Return True if version >= minimum. Returns False for None or 'installed'."""
+    if not version or version == "installed":
+        return False
+    return _parse_version(version) >= _parse_version(minimum)
+
+
 def check_docker() -> dict:
     """Check Docker installation, daemon status, and compose plugin."""
     result = {

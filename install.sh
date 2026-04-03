@@ -5,33 +5,35 @@
 
 set -e
 
-# ─── ANSI ────────────────────────────────────────────────────────────────────
+# ─── Parse flags (before ANSI so --no-color takes effect) ────────────────────
+
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      printf "\n  SignalPilot Installer\n\n"
+      printf "  Usage:  ./install.sh [flags]\n\n"
+      printf "  Flags:\n"
+      printf "    --dev              Use docker-compose.dev.yml\n"
+      printf "    --skip-build       Skip Docker build step\n"
+      printf "    --non-interactive  Skip interactive prompts (for curl | sh)\n"
+      printf "    --verbose, -v      Show docker compose output\n"
+      printf "    --no-color         Disable ANSI color codes\n"
+      printf "    --help             Show this help\n\n"
+      exit 0
+      ;;
+    --no-color) export SP_NO_COLOR=1 ;;
+    --non-interactive) NON_INTERACTIVE=1 ;;
+    --verbose|-v) VERBOSE=1 ;;
+  esac
+done
+
+# ─── ANSI (after flag parsing so --no-color is respected) ────────────────────
 
 if [ "${SP_NO_COLOR:-}" = "1" ] || [ ! -t 1 ]; then
   BOLD="" DIM="" RESET=""
 else
   BOLD="\033[1m" DIM="\033[2m" RESET="\033[0m"
 fi
-
-# ─── Help ────────────────────────────────────────────────────────────────────
-
-for arg in "$@"; do
-  case "$arg" in
-    --help|-h)
-      printf "\n  ${BOLD}SignalPilot Installer${RESET}\n\n"
-      printf "  Usage:  ./install.sh [flags]\n\n"
-      printf "  Flags:\n"
-      printf "    --skip-build    Skip Docker build step\n"
-      printf "    --dev           Use docker-compose.dev.yml\n"
-      printf "    --no-color        Disable ANSI color codes\n"
-      printf "    --non-interactive  Skip interactive prompts (for curl | sh)\n"
-      printf "    --help            Show this help\n\n"
-      exit 0
-      ;;
-    --no-color) export SP_NO_COLOR=1 ;;
-    --non-interactive) NON_INTERACTIVE=1 ;;
-  esac
-done
 
 # ─── Pipe detection ─────────────────────────────────────────────────────────
 
@@ -81,7 +83,7 @@ check_python() {
       _ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
       _major=$(echo "$_ver" | cut -d. -f1)
       _minor=$(echo "$_ver" | cut -d. -f2)
-      if [ "$_major" -ge 3 ] && [ "$_minor" -ge 12 ] 2>/dev/null; then
+      if { [ "$_major" -gt 3 ] || { [ "$_major" -eq 3 ] && [ "$_minor" -ge 12 ]; }; } 2>/dev/null; then
         PYTHON_CMD="$cmd"
         PYTHON_VER="$_ver"
         return 0
@@ -116,17 +118,21 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 printf "  ${DIM}Preparing installer...${RESET}\n"
-"$PYTHON_CMD" -m venv "$VENV_DIR" 2>/dev/null
+if ! "$PYTHON_CMD" -m venv "$VENV_DIR" 2>/dev/null; then
+  printf "  ✗  Failed to create virtual environment.\n"
+  printf "  ${DIM}Install the venv module: apt install python3-venv${RESET}\n\n"
+  exit 1
+fi
 if ! "${VENV_DIR}/bin/pip" install -q -e "${REPO_DIR}/signalpilot/gateway" 2>/dev/null; then
   printf "  ✗  Failed to install SignalPilot CLI.\n\n"
   exit 1
 fi
-printf "\033[1A\033[2K"
+[ -t 1 ] && printf "\033[1A\033[2K"
 
 # ─── Delegate to sp install ──────────────────────────────────────────────────
 
-if [ "${NON_INTERACTIVE:-}" = "1" ]; then
-  exec "${VENV_DIR}/bin/sp" install --non-interactive "$@"
-else
-  exec "${VENV_DIR}/bin/sp" install "$@"
-fi
+SP_FLAGS=""
+[ "${NON_INTERACTIVE:-}" = "1" ] && SP_FLAGS="$SP_FLAGS --non-interactive"
+[ "${VERBOSE:-}" = "1" ] && SP_FLAGS="$SP_FLAGS --verbose"
+
+exec "${VENV_DIR}/bin/sp" install $SP_FLAGS "$@"

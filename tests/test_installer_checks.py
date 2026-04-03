@@ -381,3 +381,80 @@ class TestRequiredPorts:
         }
         result = installer_checks.required_ports(cfg)
         assert result == [8080, 8081, 8082, 8083, 9432]
+
+
+# ---------------------------------------------------------------------------
+# checks._parse_version()
+# ---------------------------------------------------------------------------
+
+
+class TestParseVersion:
+    """_parse_version() converts version strings to comparable tuples."""
+
+    def test_major_minor_patch(self):
+        assert checks._parse_version("27.5.1") == (27, 5, 1)
+
+    def test_major_minor(self):
+        assert checks._parse_version("2.24") == (2, 24)
+
+    def test_single_number(self):
+        assert checks._parse_version("3") == (3,)
+
+    def test_empty_string(self):
+        result = checks._parse_version("")
+        # Empty string has no digit parts, fallback behavior
+        assert result <= (0,) or len(result) == 0
+
+    def test_none(self):
+        assert checks._parse_version(None) == (0,)
+
+    def test_version_with_suffix(self):
+        # "2.24.0-beta" → "0-beta" is not purely digits, so skipped
+        result = checks._parse_version("2.24.0-beta")
+        # At least major.minor parsed correctly
+        assert result[:2] == (2, 24)
+
+
+# ---------------------------------------------------------------------------
+# checks.meets_min_version()
+# ---------------------------------------------------------------------------
+
+
+class TestMeetsMinVersion:
+    """meets_min_version() compares version strings against a minimum."""
+
+    def test_exact_match(self):
+        assert checks.meets_min_version("24.0.0", "24.0.0") is True
+
+    def test_newer_major(self):
+        assert checks.meets_min_version("25.0.0", "24.0.0") is True
+
+    def test_newer_minor(self):
+        assert checks.meets_min_version("24.1.0", "24.0.0") is True
+
+    def test_newer_patch(self):
+        assert checks.meets_min_version("24.0.1", "24.0.0") is True
+
+    def test_older_major(self):
+        assert checks.meets_min_version("23.0.0", "24.0.0") is False
+
+    def test_older_minor(self):
+        assert checks.meets_min_version("24.0.0", "24.1.0") is False
+
+    def test_none_version(self):
+        assert checks.meets_min_version(None, "24.0.0") is False
+
+    def test_installed_string(self):
+        assert checks.meets_min_version("installed", "24.0.0") is False
+
+    def test_empty_string(self):
+        assert checks.meets_min_version("", "24.0.0") is False
+
+    def test_real_docker_version(self):
+        assert checks.meets_min_version("27.5.1", checks.MIN_DOCKER_VERSION) is True
+
+    def test_real_compose_version(self):
+        assert checks.meets_min_version("2.32.0", checks.MIN_COMPOSE_VERSION) is True
+
+    def test_old_docker_fails(self):
+        assert checks.meets_min_version("20.10.0", checks.MIN_DOCKER_VERSION) is False

@@ -444,10 +444,20 @@ def run_install(
                 )
             sys.exit(1)
 
-    ui.check("Docker Desktop", f"v{docker['version']}")
+    if checks.meets_min_version(docker["version"], checks.MIN_DOCKER_VERSION):
+        ui.check("Docker Desktop", f"v{docker['version']}")
+    else:
+        ui.fail("Docker Desktop", f"v{docker['version']} — requires {checks.MIN_DOCKER_VERSION}+")
+        ui.hint("Update Docker Desktop to the latest version.")
+        sys.exit(1)
 
     if docker["compose_installed"]:
-        ui.check("Docker Compose", f"v{docker['compose_version']}")
+        if checks.meets_min_version(docker["compose_version"], checks.MIN_COMPOSE_VERSION):
+            ui.check("Docker Compose", f"v{docker['compose_version']}")
+        else:
+            ui.fail("Docker Compose", f"v{docker['compose_version']} — requires {checks.MIN_COMPOSE_VERSION}+")
+            ui.hint("Update Docker Desktop to get a newer Compose plugin.")
+            sys.exit(1)
     else:
         ui.fail("Docker Compose", "plugin not found")
         ui.hint("Docker Compose ships with Docker Desktop — reinstall or update Docker Desktop.")
@@ -455,11 +465,15 @@ def run_install(
 
     # Git
     git_ver = checks.check_command("git")
-    if git_ver:
-        ui.check("Git", f"v{git_ver}")
-    else:
+    if not git_ver:
         ui.fail("Git", "not found")
         ui.hint("Install from https://git-scm.com/downloads")
+        sys.exit(1)
+    if checks.meets_min_version(git_ver, checks.MIN_GIT_VERSION):
+        ui.check("Git", f"v{git_ver}")
+    else:
+        ui.fail("Git", f"v{git_ver} — requires {checks.MIN_GIT_VERSION}+")
+        ui.hint("Update from https://git-scm.com/downloads")
         sys.exit(1)
 
     # Resolve repo root early so config can load

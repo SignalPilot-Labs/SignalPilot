@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict, deque
@@ -22,23 +23,44 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 logger = logging.getLogger(__name__)
 
-# Paths that don't require authentication
+# Paths that don't require authentication (exact matches only)
 PUBLIC_PATHS = frozenset({
     "/health",
     "/docs",
+    "/docs/oauth2-redirect",
     "/openapi.json",
 })
 
+# Number of trusted reverse proxies. When > 0, X-Forwarded-For is trusted
+# and the Nth-from-right entry is used as the real client IP. When 0,
+# X-Forwarded-For is ignored entirely and request.client.host is used.
+_TRUSTED_PROXY_COUNT = int(os.getenv("SP_TRUSTED_PROXY_COUNT", "0"))
+
 
 def _is_public_path(path: str) -> bool:
-    """Return True if the path is a public (unauthenticated) path."""
+    """Return True if the path is a public (unauthenticated) path.
+
+    Uses exact match only to prevent path traversal attacks.
+    """
     normalized = path.rstrip("/")
-    if normalized in PUBLIC_PATHS:
-        return True
-    for public in PUBLIC_PATHS:
-        if normalized.startswith(public + "/"):
-            return True
-    return False
+    return normalized in PUBLIC_PATHS
+
+
+def _client_ip(request: Request) -> str:
+    """Extract client IP from request, respecting trusted proxy configuration.
+
+    When SP_TRUSTED_PROXY_COUNT > 0, uses the Nth-from-right entry in
+    X-Forwarded-For (the entry added by the outermost trusted proxy).
+    Otherwise ignores X-Forwarded-For entirely to prevent spoofing.
+    """
+    if _TRUSTED_PROXY_COUNT > 0:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",")]
+            # Take the entry added by the trusted proxy (Nth from right)
+            idx = max(0, len(parts) - _TRUSTED_PROXY_COUNT)
+            return parts[idx]
+    return request.client.host if request.client else "unknown"
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -93,9 +115,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             provided_key = request.headers.get("x-api-key", "").strip()
 
         if not provided_key:
-            client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-                request.client.host if request.client else "unknown"
-            )
+            client_ip = _client_ip(request)
             logger.warning("Auth required but no key provided — ip=%s path=%s", client_ip, request.url.path)
             return Response(
                 content='{"detail":"Authentication required. Provide API key via Authorization: Bearer <key> or X-API-Key header."}',
@@ -105,9 +125,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
         # Constant-time comparison to prevent timing attacks
         if not hmac.compare_digest(provided_key, expected_key):
-            client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-                request.client.host if request.client else "unknown"
-            )
+            client_ip = _client_ip(request)
             logger.warning("Invalid API key supplied — ip=%s path=%s", client_ip, request.url.path)
             return Response(
                 content='{"detail":"Invalid API key."}',
@@ -130,26 +148,44 @@ class AuthBruteForceMiddleware(BaseHTTPMiddleware):
     _MAX_FAILURES = 10          # failures before block
     _BLOCK_SECONDS = 900        # 15-minute block
 
+    _MAX_TRACKED_IPS = 10_000  # cap to prevent memory exhaustion
+
     def __init__(self, app):
         super().__init__(app)
         # {ip: deque of failure timestamps}
         self._failures: dict[str, deque[float]] = defaultdict(deque)
         # {ip: block-expiry timestamp}
         self._blocked: dict[str, float] = {}
+        self._cleanup_counter = 0
 
-    def _client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+    def _cleanup_stale(self):
+        """Remove expired blocks and stale failure entries."""
+        now = time.monotonic()
+        # Clean expired blocks
+        expired = [ip for ip, exp in self._blocked.items() if now >= exp]
+        for ip in expired:
+            del self._blocked[ip]
+            self._failures.pop(ip, None)
+        # Clean stale failure entries (no hits in 2x window)
+        stale_cutoff = now - self._WINDOW_SECONDS * 2
+        stale = [ip for ip, hits in self._failures.items()
+                 if not hits or hits[-1] < stale_cutoff]
+        for ip in stale:
+            del self._failures[ip]
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Only track mutating methods
         if request.method not in ("POST", "PUT", "DELETE"):
             return await call_next(request)
 
-        ip = self._client_ip(request)
+        ip = _client_ip(request)
         now = time.monotonic()
+
+        # Periodic cleanup to prevent unbounded memory growth
+        self._cleanup_counter += 1
+        if self._cleanup_counter >= 100 or len(self._failures) > self._MAX_TRACKED_IPS:
+            self._cleanup_counter = 0
+            self._cleanup_stale()
 
         # Check if IP is currently blocked
         block_expiry = self._blocked.get(ip)
@@ -163,7 +199,7 @@ class AuthBruteForceMiddleware(BaseHTTPMiddleware):
                 )
             # Block expired — clean up
             del self._blocked[ip]
-            self._failures[ip].clear()
+            self._failures.pop(ip, None)
 
         response = await call_next(request)
 
@@ -234,12 +270,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             for ip in stale_ips:
                 del store[ip]
 
-    def _client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
-
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method == "OPTIONS":
             return await call_next(request)
@@ -249,7 +279,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if total_tracked > 100:
             self._cleanup_stale_ips()
 
-        ip = self._client_ip(request)
+        ip = _client_ip(request)
 
         expensive_remaining: int | None = None
         expensive_limit: int | None = None

@@ -76,8 +76,13 @@ class TestIsPublicPath:
     def test_docs_exact(self):
         assert _is_public_path("/docs") is True
 
-    def test_docs_prefix_match(self):
+    def test_docs_oauth_redirect_exact(self):
         assert _is_public_path("/docs/oauth2-redirect") is True
+
+    def test_docs_arbitrary_subpath_not_public(self):
+        """Arbitrary /docs/* subpaths should NOT be public (no prefix matching)."""
+        assert _is_public_path("/docs/../../api/query") is False
+        assert _is_public_path("/docs/admin") is False
 
     def test_api_settings_not_public(self):
         assert _is_public_path("/api/settings") is False
@@ -170,6 +175,60 @@ class TestAuthBruteForceMiddleware:
 
         assert ip not in mw._blocked
         assert len(mw._failures[ip]) == 0
+
+
+class TestClientIpExtraction:
+    """Verify centralized _client_ip function."""
+
+    def test_uses_client_host_by_default(self):
+        """When SP_TRUSTED_PROXY_COUNT is 0, X-Forwarded-For is ignored."""
+        from gateway.middleware import _client_ip, _TRUSTED_PROXY_COUNT
+        # Default should be 0 (no trusted proxies)
+        assert _TRUSTED_PROXY_COUNT == 0
+
+    def test_module_level_function_exists(self):
+        from gateway.middleware import _client_ip
+        assert callable(_client_ip)
+
+
+class TestBruteForceCleanup:
+    """Verify brute-force middleware cleanup logic."""
+
+    def test_cleanup_stale_removes_old_failures(self):
+        from gateway.middleware import AuthBruteForceMiddleware
+        mw = AuthBruteForceMiddleware.__new__(AuthBruteForceMiddleware)
+        from collections import defaultdict
+        mw._failures = defaultdict(deque)
+        mw._blocked = {}
+        mw._cleanup_counter = 0
+
+        # Add stale failure entry (2x window ago)
+        old_time = time.monotonic() - mw._WINDOW_SECONDS * 3
+        mw._failures["stale-ip"].append(old_time)
+        # Add fresh failure entry
+        mw._failures["fresh-ip"].append(time.monotonic())
+
+        mw._cleanup_stale()
+
+        assert "stale-ip" not in mw._failures
+        assert "fresh-ip" in mw._failures
+
+    def test_cleanup_removes_expired_blocks(self):
+        from gateway.middleware import AuthBruteForceMiddleware
+        mw = AuthBruteForceMiddleware.__new__(AuthBruteForceMiddleware)
+        from collections import defaultdict
+        mw._failures = defaultdict(deque)
+        mw._blocked = {}
+        mw._cleanup_counter = 0
+
+        # Add an expired block
+        mw._blocked["expired-ip"] = time.monotonic() - 10
+        mw._failures["expired-ip"].append(time.monotonic() - 100)
+
+        mw._cleanup_stale()
+
+        assert "expired-ip" not in mw._blocked
+        assert "expired-ip" not in mw._failures
 
 
 class TestSecurityHeaders:

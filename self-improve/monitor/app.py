@@ -15,9 +15,26 @@ from pathlib import Path
 
 import aiosqlite
 import httpx
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import Depends, FastAPI, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+
+from agent.rate_limit import RateLimiter
+
+
+# Rate limiter for monitor-side /api/keys/* proxy routes (separate from agent's limiter)
+_monitor_keys_limiter = RateLimiter(max_requests=10, window_seconds=60)
+
+
+async def _check_monitor_keys_rate_limit():
+    """Enforce rate limiting on monitor's key management proxy routes."""
+    retry_after = _monitor_keys_limiter.check()
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded on key management endpoints",
+            headers={"Retry-After": str(int(retry_after))},
+        )
 from pydantic import BaseModel
 
 from monitor import crypto
@@ -732,7 +749,7 @@ class RotationConfigProxyUpdate(BaseModel):
     prefer_model_downgrade_over_codex: bool | None = None
 
 
-@app.get("/api/keys")
+@app.get("/api/keys", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def list_keys():
     """List all API keys (masked)."""
     try:
@@ -743,7 +760,7 @@ async def list_keys():
         return []
 
 
-@app.post("/api/keys")
+@app.post("/api/keys", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def add_key(body: AddKeyProxyRequest):
     """Add a new API key to the pool."""
     try:
@@ -758,7 +775,7 @@ async def add_key(body: AddKeyProxyRequest):
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
-@app.get("/api/keys/status")
+@app.get("/api/keys/status", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def key_pool_status():
     """Get key pool status."""
     try:
@@ -769,7 +786,7 @@ async def key_pool_status():
         return {"error": str(e)}
 
 
-@app.get("/api/keys/config")
+@app.get("/api/keys/config", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def get_key_config():
     """Get rotation config."""
     try:
@@ -780,7 +797,7 @@ async def get_key_config():
         return {"error": str(e)}
 
 
-@app.patch("/api/keys/config")
+@app.patch("/api/keys/config", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def update_key_config(body: RotationConfigProxyUpdate):
     """Update rotation config."""
     try:
@@ -795,7 +812,7 @@ async def update_key_config(body: RotationConfigProxyUpdate):
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
-@app.patch("/api/keys/{key_id}")
+@app.patch("/api/keys/{key_id}", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def update_key(key_id: str, body: UpdateKeyProxyRequest):
     """Update key metadata."""
     try:
@@ -810,7 +827,7 @@ async def update_key(key_id: str, body: UpdateKeyProxyRequest):
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
-@app.delete("/api/keys/{key_id}")
+@app.delete("/api/keys/{key_id}", dependencies=[Depends(_check_monitor_keys_rate_limit)])
 async def delete_key(key_id: str):
     """Remove a key from the pool."""
     try:

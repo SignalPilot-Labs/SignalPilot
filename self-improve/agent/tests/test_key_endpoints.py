@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from agent import db as db_module
 from agent.db import init_db, close_db
 from agent import endpoints
+from agent.rate_limit import keys_limiter
 import monitor.crypto as crypto
 import agent.key_pool as kp_module
 
@@ -72,6 +73,7 @@ async def app_client(tmp_path):
 
     # Teardown: restore state so other tests are not affected
     kp_module.MASTER_KEY_PATH = orig_key_path
+    keys_limiter.reset()
     await close_db()
     db_module._db = None
     crypto._fernet = None
@@ -538,3 +540,61 @@ class TestKeyEndpointsIntegration:
         await _add_key(app_client, key="sk-b-222222222")
         resp2 = await app_client.get("/keys/status")
         assert resp2.json()["total_keys"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Rate Limiting Tests
+# ---------------------------------------------------------------------------
+
+class TestRateLimit:
+    """Tests for rate limiting on /keys/* endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_allows_under_threshold(self, app_client):
+        """10 requests within the window all succeed."""
+        keys_limiter.reset()
+        for _ in range(10):
+            resp = await app_client.get("/keys")
+            assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_blocks_at_threshold(self, app_client):
+        """11th request returns 429 with Retry-After header."""
+        keys_limiter.reset()
+        for _ in range(10):
+            resp = await app_client.get("/keys")
+            assert resp.status_code == 200
+
+        resp = await app_client.get("/keys")
+        assert resp.status_code == 429
+        assert "retry-after" in resp.headers
+        retry_after = int(resp.headers["retry-after"])
+        assert retry_after > 0
+        assert resp.json()["detail"] == "Rate limit exceeded on key management endpoints"
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_resets_after_window(self, app_client):
+        """After the window passes, requests succeed again."""
+        from agent.rate_limit import RateLimiter
+
+        # Create a limiter with controllable time
+        fake_time = 1000.0
+
+        def time_func():
+            return fake_time
+
+        test_limiter = RateLimiter(max_requests=3, window_seconds=10, time_func=time_func)
+
+        # Fill the window
+        for _ in range(3):
+            assert test_limiter.check() is None
+
+        # 4th request blocked
+        retry = test_limiter.check()
+        assert retry is not None
+
+        # Advance time past the window
+        fake_time = 1011.0
+
+        # Request succeeds again
+        assert test_limiter.check() is None

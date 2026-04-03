@@ -8,11 +8,12 @@ import asyncio
 import os
 import traceback
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from agent import db, git_ops, session_gate, signals, runner
 from agent.key_pool import KeyPool
+from agent.rate_limit import check_keys_rate_limit
 
 
 router = APIRouter()
@@ -268,7 +269,7 @@ async def get_branch_diff(branch: str, base: str = "main"):
 # Key Pool Management
 # =============================================================================
 
-@router.post("/keys", status_code=201)
+@router.post("/keys", status_code=201, dependencies=[Depends(check_keys_rate_limit)])
 async def add_key(req: AddKeyRequest):
     """Add a new API key to the pool."""
     pool = KeyPool()
@@ -287,28 +288,28 @@ async def add_key(req: AddKeyRequest):
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@router.get("/keys")
+@router.get("/keys", dependencies=[Depends(check_keys_rate_limit)])
 async def list_keys():
     """List all keys (masked values, never raw)."""
     pool = KeyPool()
     return await pool.list_keys()
 
 
-@router.get("/keys/status")
+@router.get("/keys/status", dependencies=[Depends(check_keys_rate_limit)])
 async def key_pool_status():
     """Current pool status: active key, rate limit states, next reset ETA."""
     pool = KeyPool()
     return await pool.get_pool_status()
 
 
-@router.get("/keys/config")
+@router.get("/keys/config", dependencies=[Depends(check_keys_rate_limit)])
 async def get_rotation_config():
     """Get current rotation configuration."""
     pool = KeyPool()
     return await pool.get_config()
 
 
-@router.patch("/keys/config")
+@router.patch("/keys/config", dependencies=[Depends(check_keys_rate_limit)])
 async def update_rotation_config(req: RotationConfigUpdate):
     """Update rotation configuration."""
     pool = KeyPool()
@@ -329,7 +330,7 @@ async def update_rotation_config(req: RotationConfigUpdate):
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@router.patch("/keys/{key_id}")
+@router.patch("/keys/{key_id}", dependencies=[Depends(check_keys_rate_limit)])
 async def update_key(key_id: str, req: UpdateKeyRequest):
     """Update key metadata (label, priority, enabled)."""
     pool = KeyPool()
@@ -348,7 +349,7 @@ async def update_key(key_id: str, req: UpdateKeyRequest):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/keys/{key_id}")
+@router.delete("/keys/{key_id}", dependencies=[Depends(check_keys_rate_limit)])
 async def delete_key(key_id: str):
     """Remove a key from the pool."""
     pool = KeyPool()

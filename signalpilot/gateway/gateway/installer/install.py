@@ -27,6 +27,43 @@ def _find_repo_root() -> Path:
     )
 
 
+_CLONE_URL = "https://github.com/SignalPilot-Labs/SignalPilot.git"
+_DEFAULT_CLONE_DIR = Path.home() / ".signalpilot"
+
+
+def _clone_repo() -> Path:
+    """Clone the SignalPilot repo when running outside the repository."""
+    dest = _DEFAULT_CLONE_DIR
+
+    if (dest / ".git").is_dir():
+        ui.check("Repository", f"already cloned at {dest}")
+        return dest
+
+    ui.hint("Not running from a SignalPilot repository. Cloning...")
+    spinner = ui.Spinner("Cloning SignalPilot")
+    spinner.start()
+
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", _CLONE_URL, str(dest)],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        spinner.stop()
+        ui.fail("Repository", f"clone failed: {exc}")
+        sys.exit(1)
+
+    spinner.stop()
+
+    if result.returncode != 0:
+        ui.fail("Repository", "clone failed")
+        ui.hint("Check your network connection and repo access.")
+        sys.exit(1)
+
+    ui.check("Repository", f"cloned to {dest}")
+    return dest
+
+
 def _compose_file(repo_root: Path, dev: bool = False) -> Path:
     docker_dir = repo_root / "signalpilot" / "docker"
     if dev:
@@ -382,8 +419,12 @@ def run_install(
         ui.hint("Stop the processes using those ports and re-run.")
         sys.exit(1)
 
-    # Resolve compose file
-    repo_root = _find_repo_root()
+    # Resolve compose file — clone repo if not found
+    try:
+        repo_root = _find_repo_root()
+    except FileNotFoundError:
+        repo_root = _clone_repo()
+
     compose_file = _compose_file(repo_root, dev=dev)
 
     if not compose_file.exists():

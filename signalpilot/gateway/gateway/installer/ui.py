@@ -1,11 +1,12 @@
 """Terminal UI — monochrome, typographic, calm."""
 
+import os
 import sys
 import threading
 import time
 
-# ANSI codes - only when stdout is a TTY
-IS_TTY = sys.stdout.isatty()
+# ANSI codes - disabled when not a TTY or SP_NO_COLOR=1
+IS_TTY = sys.stdout.isatty() and os.environ.get("SP_NO_COLOR") != "1"
 BOLD = "\033[1m" if IS_TTY else ""
 DIM = "\033[2m" if IS_TTY else ""
 GREEN = "\033[32m" if IS_TTY else ""

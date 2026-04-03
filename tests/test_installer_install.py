@@ -9,6 +9,7 @@ from signalpilot.gateway.gateway.installer.install import (
     _configure_env,
     _find_repo_root,
     run_install,
+    run_uninstall,
 )
 
 
@@ -385,3 +386,40 @@ class TestRunInstallHappyPath(_BaseInstallTest):
         assert "Docker Desktop" in out
         assert "Docker Compose" in out
         assert "Git" in out
+
+
+# ---------------------------------------------------------------------------
+# run_uninstall()
+# ---------------------------------------------------------------------------
+
+
+class TestRunUninstall:
+    """run_uninstall() tears down containers via docker compose down -v."""
+
+    def test_successful_teardown(self, monkeypatch, tmp_path, capsys):
+        """Successful uninstall removes containers and shows confirmation."""
+        import signalpilot.gateway.gateway.installer.install as _install
+
+        repo_root = _setup_fake_repo(tmp_path)
+        monkeypatch.setattr(_install, "_find_repo_root", lambda: repo_root)
+        monkeypatch.setattr(_install, "_run_compose", _mock_successful_compose)
+
+        run_uninstall(dev=True)
+
+        out = capsys.readouterr().out
+        assert "removed" in out
+        assert "✓" in out
+        assert "sp install" in out
+
+    def test_compose_down_failure(self, monkeypatch, tmp_path):
+        """Exits with code 1 when docker compose down fails."""
+        import signalpilot.gateway.gateway.installer.install as _install
+
+        repo_root = _setup_fake_repo(tmp_path)
+        monkeypatch.setattr(_install, "_find_repo_root", lambda: repo_root)
+        monkeypatch.setattr(_install, "_run_compose", _mock_failed_compose)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_uninstall(dev=True)
+
+        assert exc_info.value.code == 1

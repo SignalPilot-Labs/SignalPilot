@@ -1,6 +1,7 @@
 """SignalPilot installer — main orchestration."""
 
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -82,7 +83,7 @@ def _run_compose(
 ) -> subprocess.CompletedProcess:
     cmd = ["docker", "compose", "-f", str(compose_file), *args]
     if verbose:
-        ui.hint(f"$ {' '.join(cmd)}")
+        ui.hint(f"$ {shlex.join(cmd)}")
     if capture:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if verbose and result.stdout:
@@ -563,7 +564,7 @@ def run_uninstall(dev: bool = False) -> None:
     except subprocess.TimeoutExpired:
         spinner.stop()
         ui.fail("docker compose", "timed out after 5 minutes")
-        ui.hint("Try manually: docker compose -f " + str(compose_file) + " down -v")
+        ui.hint(f"Try manually: docker compose -f {compose_file} down -v")
         sys.exit(1)
 
     spinner.stop()

@@ -1,3 +1,5 @@
+import Image from "next/image";
+
 export interface AuthUser {
   name?: string | null;
   email?: string | null;
@@ -16,7 +18,7 @@ export default function AuthHeader({ user }: { user?: AuthUser | null }) {
       {user && (
         <div className="flex items-center gap-3">
           {user.image && (
-            <img
+            <Image
               src={user.image}
               alt={user.name || "User avatar"}
               width={24}

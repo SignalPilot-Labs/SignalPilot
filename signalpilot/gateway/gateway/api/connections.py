@@ -813,12 +813,13 @@ async def test_credentials(request: Request):
     try:
         conn = ConnectionCreate(**body)
     except Exception as e:
-        return {"status": "error", "message": f"Invalid connection parameters: {e}", "phases": []}
+        # Truncate error to avoid leaking internal model details
+        return {"status": "error", "message": f"Invalid connection parameters: {str(e)[:200]}", "phases": []}
 
     try:
         conn_str = conn.connection_string or _build_connection_string(conn)
     except Exception as e:
-        return {"status": "error", "message": f"Could not build connection string: {e}", "phases": []}
+        return {"status": "error", "message": f"Could not build connection string: {str(e)[:200]}", "phases": []}
 
     extras = _extract_credential_extras(conn)
     for field_name in ("auth_method", "oauth_access_token", "impersonate_service_account",

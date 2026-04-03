@@ -26,6 +26,7 @@ sp install
 | `--dev`             | Use the dev compose file (no sandbox)    |
 | `--skip-build`      | Skip Docker image builds                 |
 | `--non-interactive` | Skip interactive prompts (for curl \| sh) |
+| `--verbose`, `-v`   | Show docker compose output for debugging |
 | `--no-color`        | Disable ANSI color codes (shell only)    |
 
 ### Uninstall

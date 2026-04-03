@@ -204,6 +204,10 @@ class AuthBruteForceMiddleware(BaseHTTPMiddleware):
 
         # Record failure on 401/403
         if response.status_code in (401, 403):
+            # Hard cap: skip recording new IPs when at capacity to prevent
+            # memory exhaustion from distributed brute-force attacks
+            if ip not in self._failures and len(self._failures) >= self._MAX_TRACKED_IPS:
+                return response
             hits = self._failures[ip]
             window_start = now - self._WINDOW_SECONDS
             while hits and hits[0] < window_start:

@@ -40,6 +40,9 @@ import { Button } from "@/components/ui/Button";
 import { RepoSelector } from "@/components/ui/RepoSelector";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
 import { ParallelRunsView } from "@/components/parallel/ParallelRunsView";
+import { MobileTab } from "@/components/mobile/MobileTab";
+import { MobileControlSheet } from "@/components/mobile/MobileControlSheet";
+import { useMobile } from "@/hooks/useMobile";
 
 export default function MonitorPage() {
   const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(
@@ -71,6 +74,9 @@ export default function MonitorPage() {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
   const [activeView, setActiveView] = useState<"feed" | "bots">("bots");
+  const isMobile = useMobile();
+  const [mobilePanel, setMobilePanel] = useState<"feed" | "runs" | "changes" | "bots">("bots");
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   const {
     status: parallelStatus,
@@ -383,8 +389,49 @@ export default function MonitorPage() {
 
   return (
     <div className="h-screen flex flex-col bg-[var(--color-bg)]">
-      {/* Header */}
-      <header className="relative z-10 flex items-center gap-3 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
+      {/* ── Mobile Top Bar ── */}
+      <header className="mobile-top-bar items-center gap-2 px-3 py-2 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow safe-area-top">
+        {/* Logo */}
+        <div className="relative flex items-center justify-center h-7 w-7">
+          <svg width="28" height="28" viewBox="0 0 28 28" className="absolute">
+            <circle cx="14" cy="14" r="12" fill="none"
+              stroke={runStatus === "running" ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}
+              strokeWidth="1" strokeDasharray="4 3"
+              style={runStatus === "running" ? { animation: "spin 8s linear infinite" } : undefined}
+            />
+          </svg>
+          <Image src="/logo.svg" alt="SignalPilot" width={18} height={18} className="relative z-[1]" />
+        </div>
+
+        <div>
+          <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">SignalPilot</h1>
+          <p className="text-[8px] text-[#777] tracking-[0.1em] uppercase -mt-0.5">Monitor</p>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Agent health dot */}
+        <span
+          className={`h-2 w-2 rounded-full ${
+            agentReachable ? (agentIdle ? "bg-[#00ff88]/60" : "bg-[#00ff88]") : "bg-[#ff4444]/60"
+          }`}
+          style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
+        />
+
+        {/* Run status */}
+        {selectedRun && <StatusBadge status={selectedRun.status as RunStatus} size="md" />}
+
+        {/* Settings */}
+        <Link href="/settings" className="p-2 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </Link>
+      </header>
+
+      {/* ── Desktop Header ── */}
+      <header className="desktop-header relative z-10 flex items-center gap-3 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
         {/* Logo */}
         <div className="flex items-center gap-2">
           <div className="relative flex items-center justify-center h-7 w-7">
@@ -632,45 +679,155 @@ export default function MonitorPage() {
 
       {/* Main Content */}
       <div className="flex flex-1 min-h-0">
-        {/* Left sidebar - Run list */}
-        <RunList
-          runs={runs}
-          activeId={selectedRunId}
-          onSelect={(id: string) => {
-            handleSelectRun(id);
-            setActiveView("feed");
-          }}
-          loading={runsLoading}
-        />
+        {/* ── Desktop Layout ── */}
+        <div className="desktop-sidebar">
+          <RunList
+            runs={runs}
+            activeId={selectedRunId}
+            onSelect={(id: string) => {
+              handleSelectRun(id);
+              setActiveView("feed");
+            }}
+            loading={runsLoading}
+          />
+        </div>
 
-        {activeView === "feed" ? (
+        {!isMobile && (
           <>
-            {/* Center - Event feed */}
-            <main className="flex-1 flex flex-col min-h-0 min-w-0">
-              <EventFeed events={allEvents} />
-              <StatsBar
-                run={selectedRun}
-                connected={connected}
-                events={allEvents}
-              />
-            </main>
-
-            {/* Right sidebar - WorkTree */}
-            <WorkTree events={allEvents} runId={selectedRunId} />
+            {activeView === "feed" ? (
+              <>
+                <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                  <EventFeed events={allEvents} />
+                  <StatsBar
+                    run={selectedRun}
+                    connected={connected}
+                    events={allEvents}
+                  />
+                </main>
+                <div className="desktop-worktree">
+                  <WorkTree events={allEvents} runId={selectedRunId} />
+                </div>
+              </>
+            ) : (
+              <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                <ParallelRunsView
+                  onStartNew={() => {
+                    fetchBranches(activeRepoFilter || undefined).then(setBranches);
+                    setStartModalOpen(true);
+                  }}
+                  branches={branches}
+                  label="Bots"
+                />
+              </main>
+            )}
           </>
-        ) : (
-          <main className="flex-1 flex flex-col min-h-0 min-w-0">
-            <ParallelRunsView
-              onStartNew={() => {
-                fetchBranches(activeRepoFilter || undefined).then(setBranches);
-                setStartModalOpen(true);
-              }}
-              branches={branches}
-              label="Bots"
-            />
-          </main>
+        )}
+
+        {/* ── Mobile Layout ── */}
+        {isMobile && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0" style={{ paddingBottom: "calc(56px + env(safe-area-inset-bottom, 0px))" }}>
+            {mobilePanel === "runs" && (
+              <RunList
+                runs={runs}
+                activeId={selectedRunId}
+                onSelect={(id: string) => {
+                  handleSelectRun(id);
+                  setMobilePanel("feed");
+                }}
+                loading={runsLoading}
+                mobile
+              />
+            )}
+
+            {mobilePanel === "feed" && (
+              <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                <EventFeed events={allEvents} />
+                <StatsBar
+                  run={selectedRun}
+                  connected={connected}
+                  events={allEvents}
+                />
+              </main>
+            )}
+
+            {mobilePanel === "changes" && (
+              <WorkTree events={allEvents} runId={selectedRunId} mobile />
+            )}
+
+            {mobilePanel === "bots" && (
+              <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                <ParallelRunsView
+                  onStartNew={() => {
+                    fetchBranches(activeRepoFilter || undefined).then(setBranches);
+                    setStartModalOpen(true);
+                  }}
+                  branches={branches}
+                  label="Bots"
+                />
+              </main>
+            )}
+          </div>
         )}
       </div>
+
+      {/* ── Mobile Bottom Tab Bar ── */}
+      <nav className="mobile-bottom-bar">
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="5" cy="5" r="3" /><circle cx="13" cy="5" r="3" /><circle cx="9" cy="13" r="3" /></svg>}
+          label="Bots"
+          active={mobilePanel === "bots"}
+          onClick={() => setMobilePanel("bots")}
+          badge={parallelActive || null}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="2" width="14" height="14" rx="2" /><line x1="2" y1="6" x2="16" y2="6" /><line x1="2" y1="10" x2="16" y2="10" /></svg>}
+          label="Runs"
+          active={mobilePanel === "runs"}
+          onClick={() => setMobilePanel("runs")}
+          badge={runs.length || null}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M3 9h12" /><path d="M3 5h8" /><path d="M3 13h10" /></svg>}
+          label="Feed"
+          active={mobilePanel === "feed"}
+          onClick={() => setMobilePanel("feed")}
+          badge={allEvents.length || null}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M9 2v14M9 2L5 6M9 2l4 4" /><circle cx="5" cy="10" r="1.5" /><circle cx="13" cy="12" r="1.5" /><line x1="5" y1="10" x2="9" y2="10" /><line x1="13" y1="12" x2="9" y2="12" /></svg>}
+          label="Changes"
+          active={mobilePanel === "changes"}
+          onClick={() => setMobilePanel("changes")}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="9" cy="6" r="2" /><path d="M5 14h8" /><path d="M4 10h10" /></svg>}
+          label="Controls"
+          active={controlsOpen}
+          onClick={() => setControlsOpen(!controlsOpen)}
+        />
+      </nav>
+
+      {/* ── Mobile Control Sheet ── */}
+      <MobileControlSheet
+        open={controlsOpen}
+        onClose={() => setControlsOpen(false)}
+        status={runStatus}
+        onPause={() => { if (selectedRunId) parallelPause(selectedRunId); }}
+        onResume={() => { if (selectedRunId) parallelResume(selectedRunId); }}
+        onStop={() => { if (selectedRunId) parallelStop(selectedRunId); }}
+        onKill={() => { if (selectedRunId) parallelKill(selectedRunId); }}
+        onUnlock={() => { if (selectedRunId) parallelUnlock(selectedRunId); }}
+        onToggleInject={() => { setInjectOpen(!injectOpen); }}
+        busy={parallelBusy}
+        repos={repos}
+        activeRepo={activeRepoFilter}
+        onRepoSelect={handleRepoSwitch}
+        onNewRun={() => {
+          fetchBranches(activeRepoFilter || undefined).then(setBranches);
+          setStartModalOpen(true);
+        }}
+        isConfigured={isConfigured}
+      />
     </div>
   );
 }

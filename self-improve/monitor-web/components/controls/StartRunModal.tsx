@@ -266,14 +266,14 @@ export function StartRunModal({
           />
 
           {/* Centering wrapper — uses flexbox, no transforms */}
-          <div className="fixed inset-0 z-[9991] flex items-center justify-center pointer-events-none">
+          <div className="fixed inset-0 z-[9991] flex items-end sm:items-center justify-center pointer-events-none">
             <motion.div
               key="modal-content"
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="w-[520px] max-h-[80vh] overflow-y-auto bg-[#0a0a0a] border border-[#1a1a1a] rounded-lg shadow-2xl shadow-black/60 card-accent-top pointer-events-auto"
+              className="w-full sm:w-[520px] max-w-[100vw] max-h-[90vh] sm:max-h-[80vh] overflow-y-auto bg-[#0a0a0a] border border-[#1a1a1a] rounded-t-xl sm:rounded-lg shadow-2xl shadow-black/60 card-accent-top pointer-events-auto"
             >
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a]">

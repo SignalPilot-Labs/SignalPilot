@@ -183,7 +183,7 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-[#0a0a0a] text-[#e8e8e8]">
       {/* Header */}
       <div className="border-b border-[#1a1a1a]">
-        <div className="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link
               href="/"
@@ -236,7 +236,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Content */}
-      <div className="max-w-2xl mx-auto px-6 py-8">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -421,7 +421,7 @@ export default function SettingsPage() {
                       ) : (
                         <button
                           onClick={() => handleSetActive(r.repo)}
-                          className="text-[9px] text-[#888] hover:text-[#00ff88] transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                          className="text-[9px] text-[#888] hover:text-[#00ff88] transition-colors sm:opacity-0 sm:group-hover:opacity-100 shrink-0"
                         >
                           Set Active
                         </button>
@@ -430,7 +430,7 @@ export default function SettingsPage() {
                       {/* Remove button */}
                       <button
                         onClick={() => handleRemoveRepo(r.repo)}
-                        className="text-[#666] hover:text-[#ff4444] transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                        className="text-[#666] hover:text-[#ff4444] transition-colors sm:opacity-0 sm:group-hover:opacity-100 shrink-0"
                         title="Remove repository"
                       >
                         <svg

@@ -424,9 +424,11 @@ function FileList({ files }: { files: DiffFile[] }) {
 export function WorkTree({
   events,
   runId,
+  mobile,
 }: {
   events: FeedEvent[];
   runId: string | null;
+  mobile?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<"tree" | "files" | "live">("tree");
   const [collapsed, setCollapsed] = useState(false);
@@ -480,8 +482,10 @@ export function WorkTree({
   return (
     <div
       className={clsx(
-        "flex flex-col border-l border-[#1a1a1a] bg-[#030303] transition-all duration-200 mr-1",
-        collapsed ? "w-[32px]" : "w-[280px]",
+        "flex flex-col bg-[#030303] transition-all duration-200",
+        mobile
+          ? "flex-1"
+          : clsx("border-l border-[#1a1a1a] mr-1", collapsed ? "w-[32px]" : "w-[280px]"),
       )}
     >
       {/* Header */}
@@ -530,7 +534,7 @@ export function WorkTree({
             </span>
           </>
         )}
-        <button
+        {!mobile && <button
           onClick={() => setCollapsed(!collapsed)}
           className="text-[#777] hover:text-[#ccc] transition-colors p-0.5"
         >
@@ -549,10 +553,10 @@ export function WorkTree({
               <polyline points="7 2 3 5 7 8" />
             )}
           </svg>
-        </button>
+        </button>}
       </div>
 
-      {!collapsed && (
+      {(!collapsed || mobile) && (
         <>
           {/* Stats */}
           {(totalAdded > 0 || totalRemoved > 0) && (

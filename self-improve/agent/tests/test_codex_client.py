@@ -263,6 +263,32 @@ class TestCompleteTimeout:
 
 
 # ---------------------------------------------------------------------------
+# Repr masking
+# ---------------------------------------------------------------------------
+
+
+class TestCodexClientRepr:
+    """Verify __repr__ masks the API key to prevent leaks in logs/tracebacks."""
+
+    def test_repr_masks_long_key(self):
+        client = CodexClient(api_key="sk-abcdef123456789")
+        r = repr(client)
+        assert "sk-a***" in r
+        assert "sk-abcdef123456789" not in r
+
+    def test_repr_masks_short_key(self):
+        client = CodexClient(api_key="abc")
+        r = repr(client)
+        assert "***" in r
+        assert "abc" not in r
+
+    def test_repr_includes_model(self):
+        client = CodexClient(api_key="sk-test1234", model="codex-mini-latest")
+        r = repr(client)
+        assert "codex-mini-latest" in r
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 

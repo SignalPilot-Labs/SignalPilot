@@ -31,6 +31,10 @@ class CodexClient:
         self.model = model
         self.base_url = "https://api.openai.com/v1"
 
+    def __repr__(self) -> str:
+        masked = self.api_key[:4] + "***" if len(self.api_key) > 4 else "***"
+        return f"CodexClient(model={self.model!r}, api_key={masked!r})"
+
     async def complete(self, prompt: str, max_tokens: int = 4096) -> CodexResponse:
         """Send a completion request to Codex."""
         async with httpx.AsyncClient() as client:

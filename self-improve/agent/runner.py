@@ -25,6 +25,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import RateLimitEvent, StreamEvent, HookMatcher
 
 from agent import db, hooks, git_ops, permissions, prompt, session_gate, signals, subagents
+from agent.codex_client import CodexClient
 
 
 # =============================================================================
@@ -269,8 +270,46 @@ async def _run_loop(
                         )
                         if next_key is not None:
                             if next_key.provider == "codex":
-                                # Codex is degraded mode — for now, log and fall through to wait/pause
+                                # Codex degraded mode — wait for Claude keys to reset
+                                # while keeping the run alive
                                 print(f"[agent] Codex fallback activated (degraded mode)")
+                                codex_client = CodexClient(api_key=next_key.decrypted_value)
+                                await db.log_audit(run_id, "codex_degraded_mode", {
+                                    "codex_key_id": next_key.id,
+                                    "codex_model": codex_client.model,
+                                })
+                                await db.update_run_status(run_id, "waiting_for_key")
+
+                                # Poll for Claude key availability every 60s
+                                config = await key_pool.get_config()
+                                max_wait = int(config.get("max_wait_minutes", "60")) * 60
+                                waited = 0
+                                claude_key = None
+                                while waited < max_wait:
+                                    await asyncio.sleep(min(60, max_wait - waited))
+                                    waited += 60
+
+                                    # Check for stop/pause signals
+                                    if signals.has_pending_signals():
+                                        break
+
+                                    # Try to get a Claude key
+                                    claude_key = await key_pool.get_next_key(provider="claude_code")
+                                    if claude_key:
+                                        break
+
+                                if claude_key:
+                                    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = claude_key.decrypted_value
+                                    await db.log_audit(run_id, "codex_fallback_ended", {
+                                        "codex_key_id": next_key.id,
+                                        "claude_key_id": claude_key.id,
+                                        "reason": "claude_key_available",
+                                        "waited_seconds": waited,
+                                    })
+                                    await db.update_run_status(run_id, "running")
+                                    print(f"[agent] Claude key available, leaving Codex mode: {claude_key.label or claude_key.id[:8]}")
+                                    return final_status, total_cost, total_input_tokens, total_output_tokens, True
+                                # Fall through to existing wait/pause logic below
                             else:
                                 os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = next_key.decrypted_value
                                 print(f"[agent] Key rotated to {next_key.label or next_key.id[:8]}")

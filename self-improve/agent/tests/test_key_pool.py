@@ -249,13 +249,13 @@ async def test_mark_rate_limited_sets_fields(pool):
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_mark_rate_limited_increments_total_requests(pool):
-    """mark_rate_limited increments the total_requests counter."""
+async def test_mark_rate_limited_increments_rate_limit_hits(pool):
+    """mark_rate_limited increments the rate_limit_hits counter."""
     k = await pool.add_key("claude_code", "sk-test", "k1", 0)
     pool._active_key = k
     await pool.mark_rate_limited(resets_at=time.time() + 3600)
     row = await _raw_key_row(k.id)
-    assert row["total_requests"] == 1
+    assert row["rate_limit_hits"] == 1
 
 
 @pytest.mark.asyncio(loop_scope="function")

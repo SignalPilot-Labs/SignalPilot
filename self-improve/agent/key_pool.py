@@ -41,7 +41,7 @@ class ApiKey:
     rate_limit_resets_at: int | None
     rate_limit_utilization: float | None
     last_used_at: str | None
-    total_requests: int
+    rate_limit_hits: int
     created_at: str
     updated_at: str
 
@@ -70,6 +70,7 @@ class KeyPool:
         self._active_key: ApiKey | None = None
         self._previous_key_id: str | None = None
         self._config_seeded = False
+        self._lock = asyncio.Lock()
 
     @property
     def active_key_id(self) -> str | None:
@@ -187,23 +188,24 @@ class KeyPool:
         2. Among those, by priority ASC
         3. Among same priority, by last_used_at ASC (LRU)
         """
-        conn = db.get_db()
-        now_ts = int(time.time())
-        cursor = await conn.execute(
-            """SELECT * FROM api_keys
-            WHERE provider = ? AND is_enabled = 1
-            AND (rate_limit_resets_at IS NULL OR rate_limit_resets_at <= ?)
-            ORDER BY priority ASC, last_used_at ASC NULLS FIRST
-            LIMIT 1""",
-            (provider, now_ts),
-        )
-        row = await cursor.fetchone()
-        if row:
-            key = self._row_to_key(row)
-            await self._touch_key(key.id)
-            self._active_key = key
-            return key
-        return None
+        async with self._lock:
+            conn = db.get_db()
+            now_ts = int(time.time())
+            cursor = await conn.execute(
+                """SELECT * FROM api_keys
+                WHERE provider = ? AND is_enabled = 1
+                AND (rate_limit_resets_at IS NULL OR rate_limit_resets_at <= ?)
+                ORDER BY priority ASC, last_used_at ASC NULLS FIRST
+                LIMIT 1""",
+                (provider, now_ts),
+            )
+            row = await cursor.fetchone()
+            if row:
+                key = self._row_to_key(row)
+                await self._touch_key(key.id)
+                self._active_key = key
+                return key
+            return None
 
     async def handle_rate_limit(self, resets_at: float | None = None, utilization: float | None = None) -> ApiKey | None:
         """Handle a rate limit event: mark current key, try to rotate.
@@ -211,11 +213,12 @@ class KeyPool:
         Returns the next available key, or None if all exhausted.
         The caller is responsible for auto-wait if None is returned.
         """
-        if self._active_key:
-            self._previous_key_id = self._active_key.id
-            await self.mark_rate_limited(resets_at=resets_at, utilization=utilization)
+        async with self._lock:
+            if self._active_key:
+                self._previous_key_id = self._active_key.id
+                await self.mark_rate_limited(resets_at=resets_at, utilization=utilization)
 
-        # Try next claude_code key
+        # Try next claude_code key (get_next_key acquires _lock internally)
         next_key = await self.get_next_key(provider="claude_code")
         if next_key:
             if self._run_id:
@@ -250,7 +253,7 @@ class KeyPool:
             """UPDATE api_keys SET
                 rate_limit_resets_at = ?,
                 rate_limit_utilization = ?,
-                total_requests = total_requests + 1,
+                rate_limit_hits = rate_limit_hits + 1,
                 updated_at = datetime('now')
             WHERE id = ?""",
             (int(resets_at) if resets_at else None, utilization, self._active_key.id),
@@ -286,40 +289,42 @@ class KeyPool:
 
         Returns the key, or None if max_wait exceeded or stop requested.
         """
-        config = await self.get_config()
-        if config.get("auto_wait_enabled") != "true":
-            return None
+        # Acquire lock for initial config/earliest-key check, then release before sleeping
+        async with self._lock:
+            config = await self.get_config()
+            if config.get("auto_wait_enabled") != "true":
+                return None
 
-        max_wait = int(config.get("max_wait_minutes", "60")) * 60
+            max_wait = int(config.get("max_wait_minutes", "60")) * 60
 
-        earliest = await self._get_earliest_resetting_key()
-        if earliest is None:
-            return None
+            earliest = await self._get_earliest_resetting_key()
+            if earliest is None:
+                return None
 
-        wait_seconds = max(0, (earliest.rate_limit_resets_at or 0) - time.time())
+            wait_seconds = max(0, (earliest.rate_limit_resets_at or 0) - time.time())
 
-        if wait_seconds <= 0:
-            await self.clear_rate_limit(earliest.id)
-            await self._touch_key(earliest.id)
-            self._active_key = earliest
-            return earliest
+            if wait_seconds <= 0:
+                await self.clear_rate_limit(earliest.id)
+                await self._touch_key(earliest.id)
+                self._active_key = earliest
+                return earliest
 
-        if wait_seconds > max_wait:
-            return None
+            if wait_seconds > max_wait:
+                return None
 
-        # Log and wait
-        if self._run_id:
-            await db.log_audit(self._run_id, "key_pool_waiting", {
-                "key_id": earliest.id,
-                "wait_seconds": int(wait_seconds),
-                "resets_at": earliest.rate_limit_resets_at,
-            })
+            # Log and wait
+            if self._run_id:
+                await db.log_audit(self._run_id, "key_pool_waiting", {
+                    "key_id": earliest.id,
+                    "wait_seconds": int(wait_seconds),
+                    "resets_at": earliest.rate_limit_resets_at,
+                })
 
-        # Update run status
-        if self._run_id:
-            await db.update_run_status(self._run_id, "waiting_for_key")
+            # Update run status
+            if self._run_id:
+                await db.update_run_status(self._run_id, "waiting_for_key")
 
-        # Sleep in 30-second chunks so we can be interrupted
+        # Sleep loop runs WITHOUT the lock so other tasks can proceed
         remaining = wait_seconds + 5  # 5s safety buffer
         while remaining > 0:
             chunk = min(remaining, 30)
@@ -328,16 +333,18 @@ class KeyPool:
             if should_stop_fn and should_stop_fn():
                 return None
 
-        await self.clear_rate_limit(earliest.id)
-        # Re-fetch from DB to get fresh state (key may have been modified during sleep)
-        try:
-            refreshed = await self._get_key_by_id(earliest.id)
-            if not refreshed.is_enabled:
-                return None  # Key was disabled during wait
-        except ValueError:
-            return None  # Key was deleted during wait
-        await self._touch_key(refreshed.id)
-        self._active_key = refreshed
+        # Re-acquire lock for post-wait state update
+        async with self._lock:
+            await self.clear_rate_limit(earliest.id)
+            # Re-fetch from DB to get fresh state (key may have been modified during sleep)
+            try:
+                refreshed = await self._get_key_by_id(earliest.id)
+                if not refreshed.is_enabled:
+                    return None  # Key was disabled during wait
+            except ValueError:
+                return None  # Key was deleted during wait
+            await self._touch_key(refreshed.id)
+            self._active_key = refreshed
 
         if self._run_id:
             await db.log_audit(self._run_id, "key_pool_resumed", {
@@ -483,7 +490,7 @@ class KeyPool:
             rate_limit_resets_at=row["rate_limit_resets_at"],
             rate_limit_utilization=row["rate_limit_utilization"],
             last_used_at=row["last_used_at"],
-            total_requests=row["total_requests"],
+            rate_limit_hits=row["rate_limit_hits"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

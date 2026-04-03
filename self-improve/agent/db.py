@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     rate_limit_resets_at INTEGER,
     rate_limit_utilization REAL,
     last_used_at TEXT,
-    total_requests INTEGER NOT NULL DEFAULT 0,
+    rate_limit_hits INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

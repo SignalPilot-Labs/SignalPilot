@@ -788,6 +788,7 @@ async def run_agent(
     finally:
         signals.stop_pulse_checker()
         signals.teardown_signal_queue()
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
 
     await _post_run(run_id, branch_name, base_branch, final_status, total_cost, total_input, total_output)
     signals.current_run_id = None
@@ -922,6 +923,7 @@ async def resume_agent(run_id: str, max_budget: float = 0):
     finally:
         signals.stop_pulse_checker()
         signals.teardown_signal_queue()
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
 
     await _post_run(run_id, branch_name, base_branch, final_status, total_cost, total_input, total_output)
     signals.current_run_id = None

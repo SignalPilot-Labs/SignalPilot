@@ -176,6 +176,11 @@ def _check_token_exposure(cmd: str) -> str | None:
         rf"(python3?|node|perl|ruby)\s+(-[ce]|--eval)\s+.*({_secret_vars})",
         rf"bash\s+-c\s+.*({_secret_vars})",
         rf"sh\s+-c\s+.*({_secret_vars})",
+        # Environment dump commands that would expose tokens (bare invocation only)
+        r"^\s*env\s*$",
+        r"^\s*printenv\s*$",
+        r"\|\s*env\s*$",
+        r"\|\s*printenv\s*$",
         # /proc filesystem access to environment
         r"cat\s+.*/proc/.*/environ",
         r"/proc/self/environ",

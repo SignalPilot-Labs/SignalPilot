@@ -56,6 +56,7 @@ class RunManager:
         self.slots: dict[str, RunSlot] = {}
         self._env_cache: dict[str, Any] | None = None
         self._start_lock = asyncio.Lock()
+        self._key_pool = KeyPool()
 
     async def cleanup_orphans(self) -> int:
         """Kill any improve-worker-* containers left from a previous process and mark them in DB."""
@@ -521,11 +522,10 @@ class RunManager:
         """Get the next available key from the pool for a worker.
 
         Returns the decrypted key value, or None if the pool is empty.
-        Uses get_next_key() which updates last_used_at, so consecutive
-        calls naturally distribute different keys to different workers.
+        Uses the shared _key_pool instance so the asyncio.Lock protects
+        concurrent worker launches from getting the same key.
         """
-        pool = KeyPool()
-        key = await pool.get_next_key(provider="claude_code")
+        key = await self._key_pool.get_next_key(provider="claude_code")
         if key:
             return key.decrypted_value
         return None

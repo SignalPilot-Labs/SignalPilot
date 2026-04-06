@@ -74,6 +74,8 @@ async def app_client(tmp_path):
     # Teardown: restore state so other tests are not affected
     kp_module.MASTER_KEY_PATH = orig_key_path
     keys_limiter.reset()
+    # Reset the singleton KeyPool so _config_seeded and _active_key are fresh
+    endpoints._key_pool = kp_module.KeyPool()
     await close_db()
     db_module._db = None
     crypto._fernet = None

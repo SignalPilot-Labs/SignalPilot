@@ -154,29 +154,26 @@ class KeyPool:
 
     async def delete_key(self, key_id: str) -> None:
         """Delete a key. Raises if it's the last enabled key for its provider."""
-        conn = db.get_db()
-        # Check it's not the last enabled key
-        cursor = await conn.execute(
-            "SELECT provider FROM api_keys WHERE id = ?", (key_id,)
-        )
-        row = await cursor.fetchone()
-        if not row:
-            raise ValueError(f"Key {key_id} not found")
-        provider = row["provider"]
-        cursor = await conn.execute(
-            "SELECT count(*) FROM api_keys WHERE provider = ? AND is_enabled = 1 AND id != ?",
-            (provider, key_id),
-        )
-        count_row = await cursor.fetchone()
-        # Check if this key is enabled
-        cursor2 = await conn.execute(
-            "SELECT is_enabled FROM api_keys WHERE id = ?", (key_id,)
-        )
-        key_row = await cursor2.fetchone()
-        if key_row and key_row["is_enabled"] and count_row[0] == 0:
-            raise ValueError(f"Cannot delete the last enabled {provider} key")
-        await conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
-        await conn.commit()
+        async with self._lock:
+            conn = db.get_db()
+            cursor = await conn.execute(
+                "SELECT provider, is_enabled FROM api_keys WHERE id = ?", (key_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise ValueError(f"Key {key_id} not found")
+            provider = row["provider"]
+            is_enabled = bool(row["is_enabled"])
+            if is_enabled:
+                cursor2 = await conn.execute(
+                    "SELECT count(*) FROM api_keys WHERE provider = ? AND is_enabled = 1 AND id != ?",
+                    (provider, key_id),
+                )
+                count_row = await cursor2.fetchone()
+                if count_row[0] == 0:
+                    raise ValueError(f"Cannot delete the last enabled {provider} key")
+            await conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+            await conn.commit()
 
     # ── Key Selection ─────────────────────────────────────────────────
 

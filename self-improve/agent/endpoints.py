@@ -269,10 +269,14 @@ async def get_branch_diff(branch: str, base: str = "main"):
 # Key Pool Management
 # =============================================================================
 
+# Singleton — shared across requests so the asyncio.Lock actually protects state
+_key_pool = KeyPool()
+
+
 @router.post("/keys", status_code=201, dependencies=[Depends(check_keys_rate_limit)])
 async def add_key(req: AddKeyRequest):
     """Add a new API key to the pool."""
-    pool = KeyPool()
+    pool = _key_pool
     try:
         key = await pool.add_key(
             provider=req.provider,
@@ -291,28 +295,25 @@ async def add_key(req: AddKeyRequest):
 @router.get("/keys", dependencies=[Depends(check_keys_rate_limit)])
 async def list_keys():
     """List all keys (masked values, never raw)."""
-    pool = KeyPool()
-    return await pool.list_keys()
+    return await _key_pool.list_keys()
 
 
 @router.get("/keys/status", dependencies=[Depends(check_keys_rate_limit)])
 async def key_pool_status():
     """Current pool status: active key, rate limit states, next reset ETA."""
-    pool = KeyPool()
-    return await pool.get_pool_status()
+    return await _key_pool.get_pool_status()
 
 
 @router.get("/keys/config", dependencies=[Depends(check_keys_rate_limit)])
 async def get_rotation_config():
     """Get current rotation configuration."""
-    pool = KeyPool()
-    return await pool.get_config()
+    return await _key_pool.get_config()
 
 
 @router.patch("/keys/config", dependencies=[Depends(check_keys_rate_limit)])
 async def update_rotation_config(req: RotationConfigUpdate):
     """Update rotation configuration."""
-    pool = KeyPool()
+    pool = _key_pool
     updates = {}
     if req.codex_fallback_enabled is not None:
         updates["codex_fallback_enabled"] = str(req.codex_fallback_enabled).lower()
@@ -333,7 +334,7 @@ async def update_rotation_config(req: RotationConfigUpdate):
 @router.patch("/keys/{key_id}", dependencies=[Depends(check_keys_rate_limit)])
 async def update_key(key_id: str, req: UpdateKeyRequest):
     """Update key metadata (label, priority, enabled)."""
-    pool = KeyPool()
+    pool = _key_pool
     try:
         key = await pool.update_key(
             key_id=key_id,
@@ -352,7 +353,7 @@ async def update_key(key_id: str, req: UpdateKeyRequest):
 @router.delete("/keys/{key_id}", dependencies=[Depends(check_keys_rate_limit)])
 async def delete_key(key_id: str):
     """Remove a key from the pool."""
-    pool = KeyPool()
+    pool = _key_pool
     try:
         await pool.delete_key(key_id)
         return {"ok": True, "deleted": key_id}

@@ -137,6 +137,40 @@ export async function fetchRunDiff(runId: string): Promise<DiffStats> {
   }
 }
 
+// ── Tunnel ───────────────────────────────────────────────────────────────────
+
+export interface TunnelStatus {
+  status: "running" | "exited" | "not_found" | "restarting" | "error";
+  url: string | null;
+  container_id?: string;
+}
+
+export async function fetchTunnelStatus(): Promise<TunnelStatus> {
+  try {
+    const res = await fetch(`${getApiBase()}/api/tunnel/status`);
+    if (!res.ok) return { status: "error", url: null };
+    return res.json();
+  } catch {
+    return { status: "error", url: null };
+  }
+}
+
+export async function startTunnel(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${getApiBase()}/api/tunnel/start`, {
+    method: "POST",
+  });
+  return res.json();
+}
+
+export async function stopTunnel(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${getApiBase()}/api/tunnel/stop`, {
+    method: "POST",
+  });
+  return res.json();
+}
+
+// ── Branches ─────────────────────────────────────────────────────────────────
+
 export async function fetchBranches(repo?: string): Promise<string[]> {
   try {
     const params = repo ? `?repo=${encodeURIComponent(repo)}` : "";

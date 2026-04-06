@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Ensure shared data volume is writable by all containers (agent runs as non-root)
+chmod -R a+rw /data 2>/dev/null || true
+
 # Start FastAPI backend on port 3401
 uvicorn monitor.app:app --host 0.0.0.0 --port 3401 &
 FASTAPI_PID=$!

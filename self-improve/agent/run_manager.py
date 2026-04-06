@@ -267,6 +267,7 @@ class RunManager:
         env_flags: list[str] = [
             "-e", "GIT_TERMINAL_PROMPT=0",
             "-e", "DB_PATH=/data/improve.db",
+            "-e", "WORKER_MODE=1",
         ]
         if worker_token:
             env_flags += ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={worker_token}"]
@@ -282,6 +283,7 @@ class RunManager:
         docker_args = (
             ["run", "-d",
              "--name", container_name,
+             "--hostname", container_name,
              "--network", env["network"],
              "--restart", "no",
              "--add-host", "host.docker.internal:host-gateway"]

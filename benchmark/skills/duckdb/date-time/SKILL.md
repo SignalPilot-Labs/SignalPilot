@@ -47,6 +47,19 @@ STRFTIME(d, '%b')           -- Jan (short month)
 STRFTIME(d, '%m/%d/%Y')    -- 01/15/2024
 ```
 
+## Parsing Non-Standard Date Formats
+```sql
+-- CAST only works with YYYY-MM-DD format. For other formats, use STRPTIME:
+STRPTIME(date_str, '%d/%m/%Y')::DATE    -- 01/01/2022 -> 2022-01-01
+STRPTIME(date_str, '%m/%d/%Y')::DATE    -- 01/15/2024 -> 2024-01-15
+STRPTIME(ts_str, '%Y-%m-%d %H:%M:%S')  -- to timestamp
+
+-- TRY_STRPTIME returns NULL on failure instead of erroring
+TRY_STRPTIME(date_str, '%d/%m/%Y')
+
+-- NEVER use CAST(date_str AS DATE) on non-ISO date strings — it WILL fail
+```
+
 ## Critical Differences from PostgreSQL/MySQL
 - **No `DATEADD()`** — use `date + INTERVAL '1' DAY`
 - **No `DATEDIFF()`** — use `DATE_DIFF('unit', start, end)`

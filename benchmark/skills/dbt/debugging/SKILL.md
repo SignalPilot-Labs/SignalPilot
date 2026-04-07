@@ -34,6 +34,16 @@ dbt test failures when your SQL output columns don't match the YAML `columns:` l
 4. If a model depends on another that failed, fix the upstream model first
 5. Use `dbt run --select model_name` to test a single model
 
+## DuckDB-Specific Errors
+- `Conversion Error: invalid date field format` → Use `STRPTIME(col, '%d/%m/%Y')::DATE` instead of `CAST(col AS DATE)`
+- `Catalog Error: Table ... does not exist!` → Use `explore_table` to check actual table names; don't guess
+- `Binder Error: column ... not found` → Check exact column names with `describe_table`; DuckDB is case-insensitive but aliases preserve case
+- `Binder Error: No function matches ... DOUBLE / VARCHAR` → Need explicit `CAST()` for type conversion
+- `Not implemented Error: ... LIKE` → DuckDB strings use `LIKE` or `ILIKE`, not `SIMILAR TO`
+- `Binder Error: Cannot mix values of type TIMESTAMP and INTEGER in COALESCE` → Cast both args to same type: `COALESCE(ts_col, CAST(NULL AS TIMESTAMP))`
+- `Conversion Error: Could not convert string '...' to INT64` → Don't cast strings with non-numeric content; use `TRY_CAST(col AS INTEGER)` instead of `CAST`
+- `'fivetran_utils' is undefined` → Run `dbt deps` first to install packages, or check that `packages.yml` exists
+
 ## Common dbt Mistakes
 - Using `ref('model')` when you need `source('schema', 'table')` for raw data
 - Forgetting `{{ config(materialized='table') }}` — defaults to view which may not persist

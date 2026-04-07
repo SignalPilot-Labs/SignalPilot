@@ -441,7 +441,10 @@ RULES:
 - Read YML column specs carefully: every column listed must appear in your SELECT
 - FOCUS: Complete all PRIORITY models first. Only work on OTHER models if PRIORITY models are done and working.
 - SPEED: Don't over-explore. Read 1-2 source tables, read the YML, write the SQL. Iterate on errors.
+- VERIFY: After dbt run succeeds, query result tables to check row counts match expected data size. If a report table has far fewer rows than the source table, your WHERE/JOIN may be too restrictive.
 - When writing SQL, produce columns in the EXACT order they appear in the YAML model definition (top to bottom)
+- Use COUNT(*) not COUNT(DISTINCT col) unless the column spec explicitly says "distinct" or "unique"
+- For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the gold data looks like by querying source tables first
 - If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
 - For wide aggregation models (e.g., counts by category), use CASE WHEN inside SUM/COUNT, not PIVOT
 - If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
@@ -508,7 +511,7 @@ def run_agent(
         cwd=str(work_dir),
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=900,  # 15 min — some tasks need many turns
     )
     elapsed = time.monotonic() - start
 

@@ -43,7 +43,7 @@ def _validate_sql(sql: str) -> str | None:
         return f"SQL query exceeds maximum length ({_MAX_SQL_LENGTH} characters)."
     return None
 
-from .engine import inject_limit, validate_sql
+from .engine import inject_limit, validate_sql as engine_validate_sql
 from .errors import query_error_hint
 from .models import AuditEntry
 from .store import (
@@ -189,7 +189,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     blocked_tables = annotations.blocked_tables
 
     # Validate SQL (with blocked tables from annotations)
-    validation = validate_sql(sql, blocked_tables=blocked_tables or None)
+    validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None)
     if not validation.ok:
         await append_audit(AuditEntry(
             id=str(uuid.uuid4()),

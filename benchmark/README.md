@@ -1,6 +1,6 @@
 # Spider2-DBT Benchmark with SignalPilot
 
-Run Spider2-DBT benchmark tasks inside a Docker container using Claude Agent SDK + SignalPilot MCP.
+Run [Spider2-DBT](https://github.com/xlang-ai/Spider2) benchmark tasks using Claude Agent SDK + SignalPilot MCP. Two modes: **local** (no Docker) and **Docker** (isolated container).
 
 The agent gets:
 - Full Claude Code tool access (Read, Write, Edit, Bash, Glob, Grep, Agent, etc.)
@@ -8,41 +8,33 @@ The agent gets:
 - Benchmark skills in `.claude/skills/` (dbt, DuckDB, SQL, SignalPilot)
 - dbt-duckdb for data transformation
 
-## Prerequisites
+## Quick Start (Local)
 
-- Docker Desktop
-- Python 3.11+ with conda/venv
-- Claude Code subscription (OAuth token)
-- ~5 GB disk for Spider2 datasets
+```bash
+# 1. Setup (one-time)
+python -m benchmark.setup_dbt
+
+# 2. Start SignalPilot gateway
+cd signalpilot && docker compose -f docker/docker-compose.dev.yml up -d
+
+# 3. Run a benchmark
+python -m benchmark.run_dbt_local chinook001
+```
 
 ## Setup
 
-### 1. Clone Spider2
+### 1. Clone Spider2 and download data
 
 ```bash
 git clone https://github.com/xlang-ai/Spider2.git ~/spider2-repo
 cd ~/spider2-repo/spider2-dbt
-
-# Download DuckDB databases
 pip install gdown
 gdown 'https://drive.google.com/uc?id=1N3f7BSWC4foj-V-1C9n8M2XmgV7FOcqL'  # DBT_start_db.zip
 gdown 'https://drive.google.com/uc?id=1s0USV_iQLo4oe05QqAMnhGGp5jeejCzp'  # dbt_gold.zip
-
-# Extract databases into task directories
 python setup.py
 ```
 
-### 2. Set paths
-
-Edit `benchmark/run_dbt_single.py` and update the paths at the top:
-
-```python
-SPIDER2_DBT_DIR = Path("~/spider2-repo/spider2-dbt")  # where you cloned Spider2
-WORK_DIR = Path("~/SignalPilot/benchmark/_dbt_workdir")
-GATEWAY_SRC = Path("~/SignalPilot/signalpilot/gateway")
-```
-
-### 3. Set your OAuth token
+### 2. Set your OAuth token
 
 Add to `.env` in the SignalPilot repo root:
 
@@ -50,163 +42,159 @@ Add to `.env` in the SignalPilot repo root:
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
-Get this from `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`, or from the Claude Code CLI settings.
+Get from `~/.claude/.credentials.json` -> `claudeAiOauth.accessToken`.
+
+### 3. Run the setup script
+
+```bash
+python -m benchmark.setup_dbt
+```
+
+This checks/installs Python deps, verifies Spider2 data, audits gold DBs, and reports any issues.
 
 ### 4. Start SignalPilot gateway
 
 ```bash
 cd signalpilot
 docker compose -f docker/docker-compose.dev.yml up -d
+curl http://localhost:3300/api/connections  # should return []
 ```
 
-Verify it's running:
+## Running Benchmarks
+
+### Local runner (recommended)
+
+No Docker required. Runs the agent directly on the host in `benchmark/test-env/<instance_id>`. Each run gets a clean workspace.
+
 ```bash
-curl http://localhost:3300/api/connections
-# Should return []
+python -m benchmark.run_dbt_local chinook001
+python -m benchmark.run_dbt_local chinook001 --model claude-sonnet-4-6
+python -m benchmark.run_dbt_local chinook001 --max-turns 15 --budget 2.0
+python -m benchmark.run_dbt_local chinook001 --no-mcp        # disable SignalPilot MCP
+python -m benchmark.run_dbt_local chinook001 --skip-agent     # just eval existing results
+python -m benchmark.run_dbt_local chinook001 --adopt-gold     # adopt result as new gold DB
 ```
 
-### 5. Build the benchmark Docker image
+### Docker runner
+
+Full isolation. Requires building the Docker image first.
 
 ```bash
-cd benchmark
-docker build -t sp-dbt-benchmark-agent -f Dockerfile.dbt-agent .
-```
+# Build image (one-time)
+docker build -t sp-dbt-benchmark-agent -f benchmark/Dockerfile.dbt-agent benchmark/
 
-### 6. Install Python deps (host)
-
-```bash
-pip install python-dotenv duckdb pandas
-```
-
-## Running a benchmark
-
-### Single task
-
-```bash
+# Run
 python -m benchmark.run_dbt_single chinook001
-```
-
-Options:
-```
-python -m benchmark.run_dbt_single <instance_id> [options]
-
-  --model MODEL        Claude model (default: claude-opus-4-6)
-  --max-turns N        Max agent turns (default: 30)
-  --budget AMOUNT      Max USD budget (default: 5.0)
-  --skip-build         Skip Docker image rebuild
-  --skip-agent         Skip agent run, just evaluate existing results
+python -m benchmark.run_dbt_single chinook001 --skip-build    # skip image rebuild
 ```
 
 ### What happens
 
-1. **Setup** — Copies task dbt project + skills to a working directory
-2. **SignalPilot** — Clears all DB connections, registers only the task's DuckDB
-3. **Docker** — Creates container, copies workspace in, mounts gateway source
-4. **Agent** — Claude Agent SDK runs inside the container with full tools + SignalPilot MCP
-5. **dbt run** — Agent writes missing SQL models, runs `dbt deps && dbt run`
-6. **Copy back** — Results copied from container to host
-7. **Evaluate** — Compares result DuckDB tables against gold standard
+1. **Clean workspace** — Copies task dbt project + skills to `test-env/<id>` (local) or container (Docker)
+2. **SignalPilot setup** — Clears all DB connections, registers only the task's DuckDB
+3. **Agent runs** — Claude Agent SDK with full tools + SignalPilot MCP
+4. **dbt run** — Agent writes missing SQL models, runs `dbt deps && dbt run`
+5. **Evaluate** — Compares result DuckDB tables against gold standard
 
-### Output
+## Gold Data
 
+### The problem
+
+Spider2's `dbt_gold.zip` has known issues:
+
+| Issue | Tasks affected | Description |
+|-------|---------------|-------------|
+| Missing gold DB | 7 tasks (xero_new001, airbnb002, biketheft001, google_ads001, social_media001, xero_new002, gitcoin001) | No gold DuckDB file in the zip at all |
+| Naming mismatch | chinook001 | Eval config expects `fct_invoice` but YAML defines `fact_invoice` |
+
+Out of 68 total tasks, **60 have correct gold data**, 7 have no gold DB file, and 1 has a table name mismatch in the eval config.
+
+### Auditing gold data
+
+```bash
+python -m benchmark.setup_dbt --audit
 ```
-============================================================
-Spider2-DBT E2E Benchmark - chinook001
-============================================================
-  [setup] Copied 6 skills to .claude/skills
-  SignalPilot: clean slate, 1 connection registered
-  Agent: 15 turns, 90s, 17/17 dbt models PASS
-  Eval: dim_customer PASS, obt_invoice PASS
-============================================================
-RESULT: PASS
-============================================================
+
+### Building missing gold DBs
+
+For tasks where gold DBs are missing, you can build them by running dbt on the example project (only works if the example already has all SQL models):
+
+```bash
+python -m benchmark.setup_dbt --build-gold              # build all missing
+python -m benchmark.setup_dbt --build-gold chinook001    # build specific task
 ```
 
-Agent results are saved to `benchmark/_dbt_workdir/<instance_id>/agent_result.json`.
+### Adopting agent results as gold
+
+After a successful benchmark run, you can adopt the result as the gold standard:
+
+```bash
+# Run the benchmark
+python -m benchmark.run_dbt_local chinook001
+
+# If it passes dbt run, adopt as gold
+python -m benchmark.run_dbt_local chinook001 --skip-agent --adopt-gold
+
+# Or manually:
+python -m benchmark.setup_dbt --adopt-result chinook001 benchmark/test-env/chinook001
+```
+
+This is useful for bootstrapping gold data for tasks where the Spider2 zip is incomplete.
 
 ## Architecture
 
 ```
-Host                              Docker Container
-────────────────────              ─────────────────────────────
-                                  sp-dbt-benchmark-agent
-run_dbt_single.py                 ┌─────────────────────────┐
-  │                               │ dbt_agent_runner.py      │
-  │ docker create/cp/start        │   │                      │
-  ├──────────────────────────────►│   ├─ Claude Agent SDK    │
-  │                               │   │    └─ Claude CLI     │
-  │                               │   │         ├─ Read/Write│
-  │                               │   │         ├─ Bash      │
-  │                               │   │         └─ MCP ──────┤
-  │                               │   │              │       │
-  │                               │   │    SignalPilot MCP   │
-  │                               │   │    (stdio server)    │
-  │                               │   │         │            │
-SignalPilot Gateway ◄─────────────┤   │    query_database    │
-(port 3300)                       │   │    list_tables        │
-  │                               │   │    describe_table    │
-  │                               │   │    explore_table     │
-  │ DuckDB connection             │   │    ...               │
-  │ registered via API            │   │                      │
-  │                               │ /workspace/              │
-  │                               │   ├─ chinook.duckdb      │
-  │ docker cp results ◄──────────│   ├─ models/             │
-  │                               │   ├─ .claude/skills/     │
-  │ evaluate()                    │   └─ dbt_project.yml     │
-  │   gold DB vs result DB        └─────────────────────────┘
+Host
+  run_dbt_local.py  (or run_dbt_single.py for Docker)
+    |
+    +-- prepare_test_env()    copy task project + .claude/skills/ to test-env/
+    +-- setup_signalpilot()   clear connections, register task DuckDB
+    +-- run_agent()           Claude Agent SDK with MCP
+    |     |
+    |     +-- Claude Code CLI
+    |     |     +-- Read, Write, Edit, Bash, Glob, Grep
+    |     |     +-- SignalPilot MCP (stdio subprocess)
+    |     |           +-- query_database (governed SQL)
+    |     |           +-- list_tables, describe_table, explore_table
+    |     |           +-- find_join_path, schema_overview
+    |     |
+    |     +-- /signalpilot/gateway/  (MCP server source)
+    |
+    +-- SignalPilot Gateway (port 3300)
+    |     +-- DuckDB connection registered
+    |     +-- Governance pipeline (read-only, LIMIT injection, audit)
+    |
+    +-- run_dbt()             final dbt deps + dbt run validation
+    +-- evaluate()            compare result DB vs gold DB
 ```
 
 ## Skills
 
-Skills live in `benchmark/skills/` and are copied to `.claude/skills/` in the container.
-Claude Code discovers and loads them automatically.
+Skills live in `benchmark/skills/` and are copied to `.claude/skills/` in the workspace. Claude Code discovers and loads them automatically.
 
 ```
 benchmark/skills/
-├── dbt/
-│   ├── expert/SKILL.md         — YAML-to-SQL workflow, naming, dbt syntax
-│   └── debugging/SKILL.md      — Error types, fix strategies, common mistakes
-├── duckdb/
-│   ├── patterns/SKILL.md       — String, aggregation, window, type casting
-│   └── date-time/SKILL.md      — Date arithmetic, formatting, PG/MySQL diffs
-├── signalpilot/
-│   └── data-tools/SKILL.md     — MCP tools for schema discovery and queries
-└── sql/
-    └── query-building/SKILL.md — CTEs, joins, validation, exploration
++-- dbt/
+|   +-- expert/SKILL.md         YAML-to-SQL workflow, naming, dbt syntax
+|   +-- debugging/SKILL.md      Error types, fix strategies, common mistakes
++-- duckdb/
+|   +-- patterns/SKILL.md       String, aggregation, window, type casting
+|   +-- date-time/SKILL.md      Date arithmetic, formatting, PG/MySQL diffs
++-- signalpilot/
+|   +-- data-tools/SKILL.md     MCP tools for schema discovery and queries
++-- sql/
+    +-- query-building/SKILL.md CTEs, joins, validation, exploration
 ```
 
-Add new skills by creating a directory with a `SKILL.md` file:
+Add new skills by creating a directory with a `SKILL.md`:
 ```bash
 mkdir -p benchmark/skills/sqlite/patterns
-cat > benchmark/skills/sqlite/patterns/SKILL.md << 'EOF'
----
-description: "SQLite-specific patterns and functions."
----
-# SQLite Patterns
-...
-EOF
+# Write SKILL.md with --- frontmatter (description field) + content
 ```
-
-## SignalPilot MCP Tools
-
-The agent has access to 25 SignalPilot tools including:
-
-| Tool | Purpose |
-|------|---------|
-| `query_database` | Execute governed read-only SQL |
-| `list_database_connections` | See registered databases |
-| `list_tables` | Table names + schema overview |
-| `describe_table` | Column details for a table |
-| `explore_table` | Deep-dive with sample values |
-| `schema_overview` | Quick DB stats |
-| `find_join_path` | FK-based join path between tables |
-| `validate_sql` | Check SQL without executing |
-
-All queries go through SignalPilot governance (read-only enforcement, LIMIT injection, audit logging).
 
 ## Available Tasks
 
-Spider2-DBT has 69 DuckDB transformation tasks. List them:
+Spider2-DBT has 68 DuckDB transformation tasks. List them:
 ```bash
 python -c "
 import json
@@ -217,4 +205,4 @@ with open('path/to/spider2-dbt/examples/spider2-dbt.jsonl') as f:
 "
 ```
 
-Start with `chinook001` (simplest), then try others like `formula1001`, `retail001`, etc.
+Start with `chinook001` (simplest), then try `f1001`, `playbook001`, `shopify001`, etc.

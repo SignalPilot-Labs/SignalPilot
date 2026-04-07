@@ -303,6 +303,35 @@ def _extract_model_columns(work_dir: Path) -> dict[str, list[str]]:
     return result
 
 
+def _check_package_availability(work_dir: Path) -> list[str]:
+    """Check if any SQL files reference macros from packages not in dbt_packages/."""
+    warnings = []
+    dbt_pkg_dir = work_dir / "dbt_packages"
+    installed_namespaces: set[str] = set()
+    if dbt_pkg_dir.exists():
+        for child in dbt_pkg_dir.iterdir():
+            if child.is_dir():
+                installed_namespaces.add(child.name)
+
+    # Check SQL files for namespace.macro() references
+    referenced_namespaces: set[str] = set()
+    for sql_file in work_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in (".claude", "dbt_packages", "target")):
+            continue
+        content = sql_file.read_text()
+        # Match {{ namespace.macro_name(...) }} but not dbt_utils which is common
+        for m in re.finditer(r'\{\{\s*(\w+)\.\w+\s*\(', content):
+            ns = m.group(1)
+            if ns not in ("ref", "source", "config", "this", "adapter", "var", "env_var"):
+                referenced_namespaces.add(ns)
+
+    missing = referenced_namespaces - installed_namespaces
+    for ns in missing:
+        if ns != "dbt_utils" or "dbt_utils" not in installed_namespaces:
+            warnings.append(f"Package '{ns}' referenced in SQL but not found in dbt_packages/")
+    return warnings
+
+
 def build_agent_prompt(
     instance_id: str,
     instruction: str,
@@ -365,7 +394,7 @@ def build_agent_prompt(
             "\n- Run `dbt deps` first, then use ref('stg_model_name') for these package models"
         )
 
-    return f"""You are a dbt/DuckDB expert. Complete this dbt project in {work_dir}.
+    prompt = f"""You are a dbt/DuckDB expert. Complete this dbt project in {work_dir}.
 
 TASK: {instruction}
 
@@ -404,7 +433,37 @@ RULES:
 - Read YML column specs carefully: every column listed must appear in your SELECT
 - FOCUS: Complete all PRIORITY models first. Only work on OTHER models if PRIORITY models are done and working.
 - SPEED: Don't over-explore. Read 1-2 source tables, read the YML, write the SQL. Iterate on errors.
+- When writing SQL, produce columns in the EXACT order they appear in the YAML model definition (top to bottom)
+- If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
+- For wide aggregation models (e.g., counts by category), use CASE WHEN inside SUM/COUNT, not PIVOT
+- If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
+- String columns: always use COALESCE(col, '') to avoid NULL comparison issues
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}"""
+
+    # Add source table hints
+    import yaml
+    source_hints: list[str] = []
+    for ext in ("*.yml", "*.yaml"):
+        for yml_file in work_dir.rglob(ext):
+            if any(skip in str(yml_file) for skip in (".claude", "dbt_packages", "target")):
+                continue
+            try:
+                data = yaml.safe_load(yml_file.read_text())
+                if data and "sources" in data:
+                    for src in data["sources"]:
+                        src_name = src.get("name", "")
+                        tables = src.get("tables", [])
+                        table_names = [t.get("name", "") for t in tables if isinstance(t, dict)]
+                        if src_name and table_names:
+                            source_hints.append(f"  source('{src_name}', '<table>') — tables: {', '.join(table_names)}")
+            except Exception:
+                pass
+
+    source_str = "\n".join(source_hints) if source_hints else ""
+    if source_str:
+        prompt += f"\n\nAVAILABLE SOURCES:\n{source_str}"
+
+    return prompt
 
 
 # ── Agent runner ───────────────────────────────────────────────────────────────
@@ -621,7 +680,10 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                 if is_num:
                     gn = pd.to_numeric(g_s, errors="coerce").fillna(0)
                     pn = pd.to_numeric(p_s, errors="coerce").fillna(0)
-                    if not all(abs(a - b) < 0.01 for a, b in zip(gn, pn)):
+                    if not all(
+                        abs(a - b) < 0.01 or (abs(b) > 1e-6 and abs(a - b) / abs(b) < 0.01)
+                        for a, b in zip(gn, pn)
+                    ):
                         return False, g_cols[ci] if ci < len(g_cols) else str(ci)
                 elif is_dt:
                     # Compare as timestamps — handles format differences like .000 suffix
@@ -772,14 +834,23 @@ def main() -> None:
         work_count = len(missing_models_set) + len(stub_sql_models)
 
         if args.max_turns == 20:
-            # Only auto-scale if user did not explicitly pass --max-turns
-            if work_count >= 7:
+            # Auto-scale based on work complexity
+            # Count total SQL files for project complexity
+            total_sql = len(list(work_dir.rglob("*.sql")))
+            has_macros = any(True for _ in (work_dir / "macros").rglob("*.sql")) if (work_dir / "macros").exists() else False
+
+            if work_count >= 7 or total_sql > 100:
                 max_turns = 40
-            elif work_count >= 4:
+            elif work_count >= 4 or (work_count >= 2 and has_macros):
                 max_turns = 30
             else:
                 max_turns = 20
-            log(f"Auto-scaled max_turns={max_turns} for {work_count} model(s) needing work ({len(missing_models_set)} missing, {len(stub_sql_models)} stubs)")
+            log(f"Auto-scaled max_turns={max_turns} for {work_count} model(s) needing work ({len(missing_models_set)} missing, {len(stub_sql_models)} stubs, {total_sql} total SQL files)")
+
+        # ── Check package availability ────────────────────────────────────────
+        pkg_warnings = _check_package_availability(work_dir)
+        for w in pkg_warnings:
+            log(w, "WARN")
 
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()

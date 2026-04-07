@@ -481,7 +481,7 @@ async def list_tables(connection_name: str) -> str:
     if schema is None:
         from .connectors.pool_manager import pool_manager
         try:
-            extras = get_credential_extras(connection_name)
+            extras = {}
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
@@ -624,7 +624,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/join-paths",
             params={"from_table": from_table, "to_table": to_table, "max_hops": max_hops, "include_implicit": "true"},
@@ -664,7 +664,7 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/relationships",
             params={"format": format},
@@ -706,7 +706,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/explore-table",
             params={"table": table_name, "include_samples": True},
@@ -780,7 +780,7 @@ async def schema_overview(connection_name: str) -> str:
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(f"/api/connections/{connection_name}/schema/overview")
         if resp.status_code != 200:
             return f"Error: {resp.text}"
@@ -1447,62 +1447,6 @@ async def explore_column(
 
     except Exception as e:
         return f"Error: {e}"
-
-
-@mcp.tool()
-async def find_join_path(connection_name: str, from_table: str, to_table: str, max_hops: int = 4) -> str:
-    """
-    Find join paths between two tables — critical for multi-table queries.
-
-    Uses BFS over the FK graph plus inferred joins from column naming
-    conventions (e.g., customer_id → customers.id). Works even on databases
-    without FK declarations (data lakes, Databricks, ClickHouse, etc.).
-
-    Example output: orders → order_items.order_id = orders.id → products.id = order_items.product_id
-
-    Args:
-        connection_name: Database connection to search.
-        from_table: Source table (e.g., 'public.orders' or just 'orders').
-        to_table: Target table (e.g., 'public.products' or just 'products').
-        max_hops: Maximum FK hops to search (1-6, default 4).
-    """
-    err = _validate_connection_name(connection_name)
-    if err:
-        return err
-
-    gw = _gateway_url()
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{gw}/api/connections/{connection_name}/schema/join-paths",
-                params={
-                    "from_table": from_table,
-                    "to_table": to_table,
-                    "max_hops": min(max_hops, 6),
-                    "include_implicit": "true",
-                },
-            )
-            if resp.status_code != 200:
-                return f"Error: {resp.text}"
-            data = resp.json()
-
-        paths = data.get("paths", [])
-        if not paths:
-            return f"No join path found between '{from_table}' and '{to_table}' within {max_hops} hops.\nTry checking the schema/relationships endpoint to see available FK connections."
-
-        lines = [f"Found {len(paths)} join path(s) from {from_table} → {to_table}:", ""]
-        for i, path in enumerate(paths):
-            lines.append(f"Path {i + 1} ({path['hops']} hop{'s' if path['hops'] != 1 else ''}):")
-            lines.append(f"  Tables: {' → '.join(path['tables'])}")
-            for join in path.get("joins", []):
-                lines.append(f"  JOIN ON {join['from']} = {join['to']}")
-            if path.get("sql_hint"):
-                lines.append(f"  SQL: {path['sql_hint']}")
-            lines.append("")
-
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error finding join paths: {e}"
 
 
 @mcp.tool()

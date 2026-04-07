@@ -1,8 +1,11 @@
 # SignalPilot — Windows dev stack (sandbox running separately)
 # Usage: docker compose -f docker-compose.dev.yml up --build
 
+name: signalpilot
+
 services:
   gateway:
+    image: signalpilot/gateway
     build:
       context: ../gateway
       dockerfile: ../docker/Dockerfile.gateway
@@ -22,6 +25,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: signalpilot/web
     build:
       context: ../web
       dockerfile: ../docker/Dockerfile.web

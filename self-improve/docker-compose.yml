@@ -1,5 +1,6 @@
 services:
   monitor:
+    image: signalpilot/improve-monitor
     build:
       context: .
       dockerfile: Dockerfile.monitor
@@ -16,6 +17,7 @@ services:
       - improve-db:/data
 
   agent:
+    image: signalpilot/improve-agent
     build:
       context: .
       dockerfile: Dockerfile.agent

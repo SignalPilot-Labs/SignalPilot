@@ -1,8 +1,11 @@
 # SignalPilot — local development stack
 # Usage: docker compose up --build
 
+name: signalpilot
+
 services:
   gateway:
+    image: signalpilot/gateway
     build:
       context: ../gateway
       dockerfile: ../docker/Dockerfile.gateway
@@ -20,6 +23,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: signalpilot/web
     build:
       context: ../web
       dockerfile: ../docker/Dockerfile.web
@@ -33,6 +37,7 @@ services:
     restart: unless-stopped
 
   sandbox:
+    image: signalpilot/sandbox
     build:
       context: ../../sp-firecracker-vm
       dockerfile: Dockerfile.sandbox

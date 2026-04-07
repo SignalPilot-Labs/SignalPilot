@@ -151,10 +151,10 @@ if ($needsReboot) {
     Write-Host "  2. Run this script again to verify" -ForegroundColor Yellow
 } elseif ($needsWslRestart) {
     Write-Host "ACTION REQUIRED: Restart Docker Desktop, then:" -ForegroundColor Yellow
-    Write-Host "  docker run --device /dev/kvm signalpilot-sandbox" -ForegroundColor White
+    Write-Host "  docker run --device /dev/kvm signalpilot/sandbox" -ForegroundColor White
 } else {
     Write-Host "Ready! Run:" -ForegroundColor Green
-    Write-Host "  docker run --device /dev/kvm signalpilot-sandbox" -ForegroundColor White
+    Write-Host "  docker run --device /dev/kvm signalpilot/sandbox" -ForegroundColor White
 }
 
 Write-Host ""

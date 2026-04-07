@@ -7,10 +7,10 @@
 #   macOS:   Docker Desktop → nested virtualization enabled
 #
 # BUILD:
-#   docker build -t signalpilot-sandbox .
+#   docker build -t signalpilot/sandbox .
 #
 # RUN:
-#   docker run --device /dev/kvm --cap-add NET_ADMIN -p 8080:8080 signalpilot-sandbox
+#   docker run --device /dev/kvm --cap-add NET_ADMIN -p 8080:8080 signalpilot/sandbox
 
 FROM ubuntu:22.04 AS base
 

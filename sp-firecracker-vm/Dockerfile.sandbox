@@ -2,7 +2,7 @@
 # Downloads kernel + builds rootfs at build time, runs sandbox_manager.py
 #
 # RUN:
-#   docker run --device /dev/kvm --privileged -p 8180:8080 sp-sandbox-manager
+#   docker run --device /dev/kvm --privileged -p 8180:8080 signalpilot/sandbox-manager
 
 FROM ubuntu:22.04
 
@@ -52,8 +52,8 @@ RUN mkdir -p /opt/signalpilot/rootfs \
     /opt/signalpilot/overlays \
     /opt/signalpilot/snapshot
 
-# Copy sandbox manager
-COPY sandbox_manager.py /opt/signalpilot/sandbox_manager.py
+# Copy sandbox manager and executor modules
+COPY sandbox_manager.py executor_base.py executor_firecracker.py executor_gvisor.py /opt/signalpilot/
 
 # Install Python deps for sandbox manager
 RUN pip3 install --no-cache-dir aiohttp

@@ -12,7 +12,7 @@ echo ""
 # Check KVM
 if [ ! -e /dev/kvm ]; then
     echo "[FAIL] /dev/kvm not found!"
-    echo "  Run with: docker run --rm -it --device /dev/kvm --privileged sp-firecracker-test"
+    echo "  Run with: docker run --rm -it --device /dev/kvm --privileged signalpilot/firecracker-test"
     exit 1
 fi
 echo "[OK] /dev/kvm found"

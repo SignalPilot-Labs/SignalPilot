@@ -108,7 +108,7 @@ It will:
 cd sp-firecracker-vm
 
 # Git Bash / MSYS users: MSYS_NO_PATHCONV=1 prevents path mangling
-MSYS_NO_PATHCONV=1 docker build -f Dockerfile.test -t sp-firecracker-test .
+MSYS_NO_PATHCONV=1 docker build -f Dockerfile.test -t signalpilot/firecracker-test .
 ```
 
 Build time: ~2 minutes (downloads Firecracker binary + kernel, builds rootfs).
@@ -123,7 +123,7 @@ What the build does:
 ## Running the test
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm --device /dev/kvm --privileged sp-firecracker-test
+MSYS_NO_PATHCONV=1 docker run --rm --device /dev/kvm --privileged signalpilot/firecracker-test
 ```
 
 Expected output (abbreviated):

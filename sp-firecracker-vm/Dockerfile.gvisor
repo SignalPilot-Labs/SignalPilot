@@ -2,10 +2,10 @@
 # Works on macOS (Apple Silicon), Linux, and CI environments.
 #
 # BUILD:
-#   docker build -f Dockerfile.gvisor -t signalpilot-sandbox-gvisor .
+#   docker build -f Dockerfile.gvisor -t signalpilot/sandbox-gvisor .
 #
 # RUN:
-#   docker run --cap-add SYS_PTRACE --cap-add SYS_ADMIN -p 8080:8080 signalpilot-sandbox-gvisor
+#   docker run --cap-add SYS_PTRACE --cap-add SYS_ADMIN -p 8080:8080 signalpilot/sandbox-gvisor
 
 FROM python:3.12-slim
 

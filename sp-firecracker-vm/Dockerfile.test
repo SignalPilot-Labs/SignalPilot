@@ -2,10 +2,10 @@
 # Self-contained: downloads Firecracker + kernel + rootfs during build.
 #
 # BUILD:
-#   docker build -f Dockerfile.test -t sp-firecracker-test .
+#   docker build -f Dockerfile.test -t signalpilot/firecracker-test .
 #
 # RUN:
-#   docker run --rm -it --device /dev/kvm sp-firecracker-test
+#   docker run --rm -it --device /dev/kvm signalpilot/firecracker-test
 
 FROM ubuntu:22.04
 

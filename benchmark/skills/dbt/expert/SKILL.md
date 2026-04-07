@@ -90,6 +90,26 @@ LEFT JOIN {{ ref('dim_date') }} dd ON f.invoice_date = dd.date_key
 4. Column mismatch: your SQL columns don't match YAML `columns:` list
 5. After fixing, always re-run `dbt run` to verify ALL models pass
 
+## Check for Incomplete/Truncated SQL
+Some existing `.sql` files may be incomplete (e.g., truncated CTEs ending with `,`).
+Before writing new models, quickly scan existing SQL files — if any end with a trailing comma,
+unbalanced parentheses, or are clearly truncated, **fix them first** as other models may depend on them.
+
+## Wide Aggregation Pattern
+For models with many columns counting categories (e.g., counts by position, status, type):
+```sql
+{{ config(materialized='table') }}
+SELECT
+    driver_id,
+    SUM(CASE WHEN position = 1 THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN position <= 3 THEN 1 ELSE 0 END) AS podiums,
+    SUM(CASE WHEN position IS NULL THEN 1 ELSE 0 END) AS dnf,
+    COUNT(*) AS total_entries
+FROM {{ ref('stg_results') }}
+GROUP BY driver_id
+```
+Use CASE WHEN inside SUM(), not PIVOT. Match column names exactly to YML.
+
 ## Do NOT
 - Modify `.yml` files — write SQL that matches the existing YAML
 - Use PostgreSQL/MySQL syntax — this is DuckDB

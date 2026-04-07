@@ -243,8 +243,9 @@ def _scan_yml_models(work_dir: Path) -> set[str]:
 def _classify_sql_models(work_dir: Path) -> tuple[set[str], set[str]]:
     """Return (complete_models, stub_models).
 
-    A file is a stub if it is 0 bytes or its entire content (stripped) is a
-    single ``select * from ...`` line.
+    A file is a stub/incomplete if it is 0 bytes, its entire content is a
+    single ``select * from ...`` line, or it ends with a trailing comma
+    (truncated CTE).
     """
     complete: set[str] = set()
     stubs: set[str] = set()
@@ -252,7 +253,14 @@ def _classify_sql_models(work_dir: Path) -> tuple[set[str], set[str]]:
         if any(skip in str(sql_file) for skip in (".claude", "dbt_packages", "target", "macros")):
             continue
         content = sql_file.read_text().strip()
-        if len(content) < 5 or re.match(r'^select\s+\*\s+from\s+', content, re.IGNORECASE):
+        is_stub = (
+            len(content) < 5
+            or re.match(r'^select\s+\*\s+from\s+', content, re.IGNORECASE)
+            or content.endswith(",")  # truncated CTE
+            or content.endswith("(")  # truncated subquery
+            or (content.count("(") > content.count(")"))  # unbalanced parens
+        )
+        if is_stub:
             stubs.add(sql_file.stem)
         else:
             complete.add(sql_file.stem)

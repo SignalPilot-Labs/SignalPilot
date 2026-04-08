@@ -398,6 +398,7 @@ def build_agent_prompt(
     instruction: str,
     work_dir: Path,
     eval_critical_models: set[str],
+    max_turns: int = 20,
 ) -> str:
     """Build a focused, action-oriented prompt for the Claude CLI agent."""
     yml_models = _scan_yml_models(work_dir)
@@ -481,6 +482,7 @@ def build_agent_prompt(
             )
 
     prompt = f"""You are a dbt/DuckDB expert. Complete this dbt project in {work_dir}.
+You have a budget of {max_turns} turns (tool calls). Plan accordingly — do not exhaust turns on exploration.
 
 TASK: {instruction}
 
@@ -597,6 +599,54 @@ NEVER finish a priority model without running this 5-step audit."""
         prompt += f"\n\nPRE-COMPUTED TABLES ALREADY IN DATABASE: {', '.join(precomputed)}"
         prompt += "\n- These tables already have data from pre-run simulations. Your summary models should SELECT from these tables, not re-run the simulation logic."
 
+    checkpoint_turn = min(10, max_turns // 2)
+    exploration_end = 3
+    priority_deadline = max(4, max_turns - 8)
+
+    prompt += f"""
+
+TURN BUDGET PLAN — follow this allocation strictly:
+- Turns 1-{exploration_end}: Discovery only (list_tables, explore 2-3 source tables, read YML)
+- Turns {exploration_end + 1}-{priority_deadline}: Write and run ALL priority models
+- Turns {priority_deadline + 1}+: Write other models, fix errors, verify
+
+PRIORITY MODEL HARD CHECKPOINT:
+By turn {checkpoint_turn}, every priority model must have a .sql file on disk.
+If you reach turn {checkpoint_turn} and any priority model is still missing:
+  - STOP all exploration and non-priority work immediately.
+  - Write a minimal but syntactically correct SQL for each missing priority model right now.
+  - A wrong-but-present model is evaluated and can be fixed; a missing model scores zero.
+  - Do NOT write more than 2 tool calls on any non-priority model until ALL priority models exist."""
+
+    prompt += """
+
+SAMPLE VALUE CHECK — MANDATORY before finishing any priority model:
+After the 5-step row count audit passes, run one additional query:
+  SELECT * FROM <model_name> LIMIT 5
+
+Look for these silent failure patterns in the output:
+- A numeric column that is 0 or NULL for every row: aggregation or JOIN condition is wrong.
+- A date column showing 1970 or far-future dates: date format mismatch (use STRPTIME).
+- A string column that echoes the join key instead of a label: wrong column in SELECT.
+- Any column that is identical for all 5 rows when it should vary: CASE WHEN literal typo.
+
+Fix any of the above before finishing. This costs 1 tool call and catches the most common
+silent-wrong-answer failures that pass row count checks but fail value evaluation."""
+
+    prompt += """
+
+DBT COMPILE FAILURE PROTOCOL — follow this order when dbt run fails:
+1. Find the failing model name in the error output (look for lines with ERROR or "in model").
+2. Run `dbt run --select <failing_model>` to isolate — do not re-run all models each attempt.
+3. Compilation error (ref not found, jinja error):
+   - Confirm the .sql filename exactly matches the ref() call: ref('stg_orders') needs stg_orders.sql
+   - If a ref() target is a raw DuckDB table, create an ephemeral stub (ephemeral rule above)
+4. Database error (column not found, type mismatch):
+   - Run explore_table on the source to confirm exact column names and types
+   - DuckDB type coercion is strict — add CAST() for any mixed-type expression
+5. After fixing, run `dbt run --select <model>+` to rebuild the model and all its dependents.
+6. Never run `dbt deps` unless this project has a packages.yml — it breaks pre-installed packages."""
+
     return prompt
 
 
@@ -613,7 +663,7 @@ def run_agent(
     """Run the Claude CLI agent in the work directory."""
     log_separator(f"AGENT  model={model}  max_turns={max_turns}  instance={instance_id}")
 
-    prompt = build_agent_prompt(instance_id, instruction, work_dir, eval_critical_models)
+    prompt = build_agent_prompt(instance_id, instruction, work_dir, eval_critical_models, max_turns=max_turns)
     log(f"Prompt length: {len(prompt)} chars")
 
     claude_cmd = [
@@ -1270,9 +1320,11 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                     pred_rows = _sample_table_values(str(pred_db_candidates[0]), tab)
                     if gold_rows is None or pred_rows is None:
                         continue
+                    if not gold_rows or not pred_rows:
+                        continue
                     col_diffs: list[tuple[str, object, object]] = []
-                    gold_cols_lower = {k.lower(): k for k in (gold_rows[0].keys() if gold_rows else [])}
-                    pred_cols_lower = {k.lower(): k for k in (pred_rows[0].keys() if pred_rows else [])}
+                    gold_cols_lower = {k.lower(): k for k in gold_rows[0].keys()}
+                    pred_cols_lower = {k.lower(): k for k in pred_rows[0].keys()}
                     common_cols = set(gold_cols_lower) & set(pred_cols_lower)
                     for col_lower in sorted(common_cols):
                         gold_col = gold_cols_lower[col_lower]

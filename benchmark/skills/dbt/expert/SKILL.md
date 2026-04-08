@@ -196,6 +196,23 @@ Run `SELECT COUNT(*) FROM model` and compare to expected:
 - Summary model (one row per group): count should equal COUNT(DISTINCT group_key) from source
 - If count is higher than expected: tighten JOIN, add WHERE, or fix GROUP BY columns
 
+## Row Count Audit — Mandatory After Every dbt Run
+
+After `dbt run` succeeds on any priority model, run these two queries before moving on:
+
+```sql
+-- Check for fan-out:
+SELECT COUNT(*) FROM {{ ref('my_model') }};
+SELECT COUNT(DISTINCT primary_key) FROM source_table;
+-- If model count > source distinct count: FAN-OUT — find and fix before finishing.
+
+-- If too few rows — find the culprit condition:
+SELECT COUNT(*) FROM source_table;                         -- expected
+SELECT COUNT(*) FROM source_table WHERE your_condition;    -- if drops: condition is wrong
+```
+
+A passing `dbt run` with wrong row counts is a failed evaluation. This audit takes 2 tool calls. Always run it.
+
 ## Do NOT
 - Modify `.yml` files — write SQL that matches the existing YAML
 - Use PostgreSQL/MySQL syntax — this is DuckDB

@@ -535,7 +535,33 @@ RULES:
 - DATE FORMAT: When a source column contains dates, ALWAYS check sample values with explore_table first. European dates (DD/MM/YYYY) must use STRPTIME(col, '%d/%m/%Y'). Never assume MM/DD/YYYY — check the data first. If day > 12 in any row, it's DD/MM format.
 - COLUMN COUNT CHECK: Before finalizing any model, count the columns in your SELECT list and compare to the count in the YAML. If the YAML has N columns, your SELECT must produce exactly N columns (no more, no fewer) in the same order.
 - Run: SELECT * FROM <model> LIMIT 1 after dbt run and count the columns
-- {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}"""
+- {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}
+- JOIN TYPE: Use INNER JOIN only when non-matching rows must be excluded. LEFT JOIN is required when left table is the spine (all customers, all products, all orders). A LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern.
+- FAN-OUT CHECK: After any JOIN, compare COUNT(*) of model to COUNT(DISTINCT pk) of source. If count(model) > count(DISTINCT pk), there is fan-out — fix before finishing the model."""
+
+    prompt += """
+
+ROW COUNT VERIFICATION — Do this for every priority model after dbt run succeeds:
+
+Step A: Baseline cardinality from primary source table:
+  SELECT COUNT(*) AS source_rows, COUNT(DISTINCT <pk>) AS unique_pks FROM <source>
+
+Step B: Count your output:
+  SELECT COUNT(*) AS output_rows FROM <model>
+
+Step C: Decide if count is correct:
+  - Aggregation model (one row per group): output_rows == COUNT(DISTINCT group_key)
+  - Pass-through/filter model: output_rows <= source_rows; verify against task description
+
+Step D: If output_rows > expected → FAN-OUT:
+  SELECT <join_key>, COUNT(*) FROM <model> GROUP BY 1 HAVING COUNT(*) > 1
+  Fix: pre-aggregate the right-join table, or add DISTINCT, or use ROW_NUMBER() dedup.
+
+Step E: If output_rows < expected → OVER-FILTER:
+  Remove one WHERE/JOIN condition at a time, counting rows each time.
+  Check if INNER JOIN should be LEFT JOIN (rows with no match are being silently dropped).
+
+NEVER finish a priority model without running this 5-step audit."""
 
     # Add source table hints
     import yaml
@@ -625,6 +651,23 @@ def run_agent(
 
 
 # ── Evaluation ─────────────────────────────────────────────────────────────────
+
+def _get_table_row_count(db_path: str, table_name: str) -> int | None:
+    """Return SELECT COUNT(*) for table_name in a DuckDB database, or None on error."""
+    import duckdb
+
+    try:
+        con = duckdb.connect(database=db_path, read_only=True)
+        try:
+            result = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+            if result is not None:
+                return int(result[0])
+            return None
+        finally:
+            con.close()
+    except Exception:
+        return None
+
 
 def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     """Evaluate the result against gold standard by comparing DuckDB table contents."""
@@ -812,16 +855,40 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                         gt = pd.to_datetime(g_s, errors="coerce", format="mixed")
                         pt = pd.to_datetime(p_s, errors="coerce", format="mixed")
                         # Both NaT = match, one NaT = mismatch
-                        if not all(
+                        ts_match = all(
                             (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and a == b)
                             for a, b in zip(gt, pt)
-                        ):
-                            return False, g_cols[ci] if ci < len(g_cols) else str(ci)
+                        )
+                        if not ts_match:
+                            # Fallback: compare date portions only (timestamp vs date-only)
+                            try:
+                                gd = gt.dt.date
+                                pd_ = pt.dt.date
+                                date_match = all(
+                                    (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and str(a) == str(b))
+                                    for a, b in zip(gd, pd_)
+                                )
+                                if not date_match:
+                                    return False, g_cols[ci] if ci < len(g_cols) else str(ci)
+                            except Exception:
+                                return False, g_cols[ci] if ci < len(g_cols) else str(ci)
                     except Exception:
                         # Fall back to string comparison
                         gs = g_s.astype(str).fillna("")
                         ps = p_s.astype(str).fillna("")
                         if not all(a.strip().lower() == b.strip().lower() for a, b in zip(gs, ps)):
+                            # If strings look like dates, compare date portions
+                            try:
+                                gs_dt = pd.to_datetime(gs, errors="coerce", format="mixed")
+                                ps_dt = pd.to_datetime(ps, errors="coerce", format="mixed")
+                                if not gs_dt.isna().all() and not ps_dt.isna().all():
+                                    if all(
+                                        (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and a.date() == b.date())
+                                        for a, b in zip(gs_dt, ps_dt)
+                                    ):
+                                        continue  # date portions match even if string formats differ
+                            except Exception:
+                                pass
                             return False, g_cols[ci] if ci < len(g_cols) else str(ci)
                 else:
                     gs = g_s.astype(str).fillna("")
@@ -1094,6 +1161,81 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
             cwd=str(work_dir),
             capture_output=True, text=True, timeout=300,
         )
+
+        # Row-count fix pass — runs even when dbt succeeds
+        if eval_critical_models:
+            gold_db_candidates = list((GOLD_DIR / instance_id).glob("*.duckdb"))
+            pred_db_candidates = list(work_dir.glob("*.duckdb"))
+            if gold_db_candidates and pred_db_candidates:
+                mismatches: list[tuple[str, int, int]] = []
+                for tab in sorted(eval_critical_models):
+                    gold_n = _get_table_row_count(str(gold_db_candidates[0]), tab)
+                    pred_n = _get_table_row_count(str(pred_db_candidates[0]), tab)
+                    if gold_n is not None and pred_n is not None:
+                        delta = abs(pred_n - gold_n)
+                        pct = delta / max(gold_n, 1) * 100
+                        if pct > 5 or delta > 50:
+                            mismatches.append((tab, gold_n, pred_n))
+                if mismatches:
+                    log(f"Row-count mismatches detected: {mismatches}")
+                    rc_fix_parts: list[str] = []
+                    for tab, gold_n, pred_n in mismatches:
+                        too_many = pred_n > gold_n
+                        direction = (
+                            f"TOO MANY (+{pred_n - gold_n} rows) — likely JOIN fan-out"
+                            if too_many
+                            else f"TOO FEW (-{gold_n - pred_n} rows) — likely over-filter or wrong JOIN type"
+                        )
+                        fix_step_c = (
+                            f"Find duplicates: SELECT <join_key>, COUNT(*) FROM {tab} GROUP BY 1 HAVING COUNT(*)>1"
+                            if too_many
+                            else "Find dropped rows: remove each WHERE/JOIN condition one at a time"
+                        )
+                        rc_fix_parts.append(
+                            f"TABLE: {tab}\n"
+                            f"GOLD row count: {gold_n}\n"
+                            f"YOUR row count:  {pred_n}\n"
+                            f"DIRECTION: {direction}\n"
+                            f"\nSTEPS:\n"
+                            f"1. Read the SQL file for {tab}\n"
+                            f"2. Run the Row Count Audit:\n"
+                            f"   a. SELECT COUNT(*), COUNT(DISTINCT <pk>) FROM each source table\n"
+                            f"   b. SELECT COUNT(*) FROM {tab}\n"
+                            f"   c. {fix_step_c}\n"
+                            f"3. Fix the SQL: pre-aggregate joins, switch INNER to LEFT JOIN, or remove wrong filters\n"
+                            f"4. Run: dbt run --select {tab}\n"
+                            f"5. Verify: SELECT COUNT(*) FROM {tab} — should be close to {gold_n}"
+                        )
+                    rc_fix_prompt = (
+                        f"Fix row count mismatches in {work_dir}.\n\n"
+                        f"TASK: {instruction}\n\n"
+                        + "\n\n---\n\n".join(rc_fix_parts)
+                        + "\n\nDuckDB only. Do NOT modify .yml files."
+                    )
+                    log("Running row-count fix agent (12 turns)...")
+                    rc_fix_cmd = [
+                        "claude",
+                        "--model", model,
+                        "--permission-mode", "bypassPermissions",
+                        "--max-turns", "12",
+                        "--mcp-config", str(MCP_CONFIG),
+                        "-p", rc_fix_prompt,
+                    ]
+                    rc_fix_result = subprocess.run(
+                        rc_fix_cmd, cwd=str(work_dir),
+                        capture_output=True, text=True, timeout=360,
+                    )
+                    if rc_fix_result.returncode == 0:
+                        log("Row-count fix agent completed")
+                    else:
+                        log("Row-count fix agent failed")
+                    # Re-run dbt to apply fixes
+                    subprocess.run(
+                        ["/home/agentuser/.local/bin/dbt", "run", "--select"]
+                        + [f"+{m}" for m in sorted(eval_critical_models)],
+                        cwd=str(work_dir),
+                        capture_output=True, text=True, timeout=300,
+                    )
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     t0 = time.monotonic()

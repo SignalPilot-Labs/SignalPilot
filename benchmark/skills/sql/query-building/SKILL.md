@@ -49,6 +49,14 @@ After getting query results:
 4. Check edge cases: empty results, NULL values, duplicate rows
 5. If counting, verify against a simpler `COUNT(*)` query
 
+## JOIN Fan-Out Self-Check
+
+Before finishing any model with JOINs:
+1. `SELECT COUNT(*) FROM model` — your output count
+2. `SELECT COUNT(DISTINCT <grain_key>) FROM <primary_source>` — expected count
+3. If (1) > (2): fan-out. Run: `SELECT join_key, COUNT(*) FROM model GROUP BY 1 HAVING COUNT(*) > 1`
+4. Fix: pre-aggregate the right-join table before joining, or use `SELECT DISTINCT`.
+
 ## Common Pitfalls
 - Forgetting GROUP BY for non-aggregated columns
 - Using INNER JOIN when LEFT JOIN is needed (dropping unmatched rows)

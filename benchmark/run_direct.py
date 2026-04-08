@@ -669,6 +669,21 @@ def _get_table_row_count(db_path: str, table_name: str) -> int | None:
         return None
 
 
+def _sample_table_values(db_path: str, table_name: str, n: int = 5) -> list[dict] | None:
+    """Return up to n rows from table as list of dicts, or None on error."""
+    import duckdb
+
+    try:
+        con = duckdb.connect(database=db_path, read_only=True)
+        try:
+            rows = con.execute(f"SELECT * FROM {table_name} LIMIT {n}").fetchdf()
+            return rows.to_dict(orient="records")
+        finally:
+            con.close()
+    except Exception:
+        return None
+
+
 def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     """Evaluate the result against gold standard by comparing DuckDB table contents."""
     import duckdb
@@ -1166,15 +1181,15 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
         if eval_critical_models:
             gold_db_candidates = list((GOLD_DIR / instance_id).glob("*.duckdb"))
             pred_db_candidates = list(work_dir.glob("*.duckdb"))
+            mismatches: list[tuple[str, int, int]] = []
             if gold_db_candidates and pred_db_candidates:
-                mismatches: list[tuple[str, int, int]] = []
                 for tab in sorted(eval_critical_models):
                     gold_n = _get_table_row_count(str(gold_db_candidates[0]), tab)
                     pred_n = _get_table_row_count(str(pred_db_candidates[0]), tab)
                     if gold_n is not None and pred_n is not None:
                         delta = abs(pred_n - gold_n)
                         pct = delta / max(gold_n, 1) * 100
-                        if pct > 5 or delta > 50:
+                        if pct > 2 or delta > 10:
                             mismatches.append((tab, gold_n, pred_n))
                 if mismatches:
                     log(f"Row-count mismatches detected: {mismatches}")
@@ -1212,6 +1227,13 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                         + "\n\n---\n\n".join(rc_fix_parts)
                         + "\n\nDuckDB only. Do NOT modify .yml files."
                     )
+                    model_columns = _extract_model_columns(work_dir)
+                    rc_col_specs: list[str] = []
+                    for tab, _, _ in mismatches:
+                        if tab in model_columns:
+                            rc_col_specs.append(f"  {tab}: {', '.join(model_columns[tab])}")
+                    if rc_col_specs:
+                        rc_fix_prompt += "\n\nREQUIRED COLUMN SPECS:\n" + "\n".join(rc_col_specs)
                     log("Running row-count fix agent (12 turns)...")
                     rc_fix_cmd = [
                         "claude",
@@ -1236,6 +1258,81 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                         cwd=str(work_dir),
                         capture_output=True, text=True, timeout=300,
                     )
+
+            # Value-check fix phase — runs for tables with matching row counts but wrong values
+            if gold_db_candidates and pred_db_candidates:
+                mismatch_tabs = {tab for tab, _, _ in mismatches} if mismatches else set()
+                value_mismatches: list[tuple[str, list[tuple[str, object, object]]]] = []
+                for tab in sorted(eval_critical_models):
+                    if tab in mismatch_tabs:
+                        continue
+                    gold_rows = _sample_table_values(str(gold_db_candidates[0]), tab)
+                    pred_rows = _sample_table_values(str(pred_db_candidates[0]), tab)
+                    if gold_rows is None or pred_rows is None:
+                        continue
+                    col_diffs: list[tuple[str, object, object]] = []
+                    gold_cols_lower = {k.lower(): k for k in (gold_rows[0].keys() if gold_rows else [])}
+                    pred_cols_lower = {k.lower(): k for k in (pred_rows[0].keys() if pred_rows else [])}
+                    common_cols = set(gold_cols_lower) & set(pred_cols_lower)
+                    for col_lower in sorted(common_cols):
+                        gold_col = gold_cols_lower[col_lower]
+                        pred_col = pred_cols_lower[col_lower]
+                        gold_vals = [str(r.get(gold_col)) for r in gold_rows]
+                        pred_vals = [str(r.get(pred_col)) for r in pred_rows]
+                        if any(gv != pv for gv, pv in zip(gold_vals, pred_vals)):
+                            col_diffs.append((col_lower, gold_vals, pred_vals))
+                    if col_diffs:
+                        value_mismatches.append((tab, col_diffs))
+                if value_mismatches:
+                    log(f"Value mismatches detected in {[t for t, _ in value_mismatches]}")
+                    model_columns = _extract_model_columns(work_dir)
+                    val_fix_parts: list[str] = []
+                    for tab, col_diffs in value_mismatches:
+                        mismatched_col_list = ", ".join(col for col, _, _ in col_diffs)
+                        col_lines = "\n".join(
+                            f"    {col}: gold={gv}  yours={pv}"
+                            for col, gv, pv in col_diffs
+                        )
+                        col_spec_line = (
+                            f"\n  REQUIRED COLUMNS (in order): {', '.join(model_columns[tab])}"
+                            if tab in model_columns else ""
+                        )
+                        val_fix_parts.append(
+                            f"TABLE: {tab}\n"
+                            f"  MISMATCHED COLUMNS (gold vs your output):\n"
+                            f"{col_lines}"
+                            f"{col_spec_line}\n"
+                            f"\nSTEPS:\n"
+                            f"1. Read the SQL file for {tab}\n"
+                            f"2. Query your output: SELECT {mismatched_col_list} FROM {tab} LIMIT 5\n"
+                            f"3. Identify the formula/join/transformation error\n"
+                            f"4. Fix the SQL and run: dbt run --select {tab}\n"
+                            f"5. Verify values match the expected pattern"
+                        )
+                    val_fix_prompt = (
+                        f"Fix value mismatches in {work_dir}.\n\n"
+                        f"TASK: {instruction}\n\n"
+                        "Row counts are correct but column values are wrong in these tables:\n\n"
+                        + "\n\n---\n\n".join(val_fix_parts)
+                        + "\n\nDuckDB only. Do NOT modify .yml files."
+                    )
+                    log("Running value-fix agent (10 turns)...")
+                    val_fix_cmd = [
+                        "claude",
+                        "--model", model,
+                        "--permission-mode", "bypassPermissions",
+                        "--max-turns", "10",
+                        "--mcp-config", str(MCP_CONFIG),
+                        "-p", val_fix_prompt,
+                    ]
+                    val_fix_result = subprocess.run(
+                        val_fix_cmd, cwd=str(work_dir),
+                        capture_output=True, text=True, timeout=240,
+                    )
+                    if val_fix_result.returncode == 0:
+                        log("Value-fix agent completed")
+                    else:
+                        log("Value-fix agent failed")
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     t0 = time.monotonic()

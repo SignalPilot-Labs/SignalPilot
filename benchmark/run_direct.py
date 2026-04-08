@@ -650,7 +650,8 @@ RULES:
 - FAN-OUT CHECK: After any JOIN, compare COUNT(*) of model to COUNT(DISTINCT pk) of source. If count(model) > count(DISTINCT pk), there is fan-out — fix before finishing the model.
 - COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
 - COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
-- DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges."""
+- DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges.
+- ROUNDING: Do NOT use ROUND() on numeric columns unless the task description or YML explicitly requires rounding. The evaluator uses abs_tol=0.01 — keeping full precision is safer than rounding. Unnecessary rounding introduces value mismatches."""
 
     prompt += """
 

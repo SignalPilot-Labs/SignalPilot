@@ -288,26 +288,14 @@ def _create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> lis
             continue
         try:
             columns = column_map.get(model_name, [])
-            if columns:
-                col_lines = "\n".join(f"    {col} as {col}," for col in columns)
-                # Strip trailing comma from last line
-                col_lines = col_lines.rstrip(",")
-                template = (
-                    "{{ config(materialized='table') }}\n\n"
-                    "-- TODO: Complete this model\n"
-                    "select\n"
-                    "    -- Column stubs from schema.yml:\n"
-                    f"{col_lines}\n"
-                    "-- FROM: replace this comment with the actual source table or ref()\n"
-                )
-            else:
-                template = (
-                    "{{ config(materialized='table') }}\n\n"
-                    "-- TODO: Complete this model\n"
-                    "select\n"
-                    "    *  -- TODO: add columns here\n"
-                    "-- FROM: replace this comment with the actual source table or ref()\n"
-                )
+            col_comment = ", ".join(columns) if columns else "(check schema.yml)"
+            template = (
+                "{{ config(materialized='table') }}\n\n"
+                f"-- REQUIRED OUTPUT COLUMNS: {col_comment}\n"
+                "-- TODO: Write the complete SQL query for this model.\n"
+                "-- Explore source tables with SignalPilot tools before writing.\n"
+                "select 1 as _placeholder -- replace this entire SELECT\n"
+            )
             sql_path = target_dir / f"{model_name}.sql"
             sql_path.write_text(template)
             created.append(model_name)

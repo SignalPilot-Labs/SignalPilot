@@ -631,6 +631,7 @@ DO THIS IN ORDER:
 3. Run mcp__signalpilot__explore_table on at most 2 source tables. STOP after step 3 — begin writing SQL immediately.
 4. Read the YAML files that define the missing models to understand column requirements
 4b. Re-read the TASK instruction above and scan for model names mentioned there that do not appear in any YML file. These must also have .sql files — the YML list is not always complete.
+4c. Open every `.md` file in the models/ directory — these files contain `{{% docs %}}` blocks that specify exact category label strings. These OVERRIDE any defaults. Copy strings character-for-character from these docs into your CASE WHEN statements.
 5. Read existing SQL files carefully — copy their join patterns, column naming, and macro usage exactly
 6. Write each missing .sql file (DuckDB SQL, use ref() and source() macros) — start with PRIORITY models
 7. Run: {priority_run_cmd}
@@ -1122,6 +1123,64 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     return all_match, "\n".join(details)
 
 
+def _build_value_verify_prompt(
+    work_dir: Path,
+    instance_id: str,
+    eval_critical_models: set[str],
+    instruction: str,
+    model_columns: dict[str, list[str]],
+) -> str:
+    """Build the prompt for the post-success value-verification agent."""
+    sorted_models = sorted(eval_critical_models)
+    model_names_str = ", ".join(sorted_models)
+
+    col_spec_lines: list[str] = []
+    for model_name in sorted_models:
+        if model_name in model_columns:
+            col_spec_lines.append(f"  {model_name}: {', '.join(model_columns[model_name])}")
+    col_spec_str = "\n".join(col_spec_lines) if col_spec_lines else "  (read YML files for column specs)"
+
+    return f"""SELF-VERIFICATION TASK for {instance_id}
+
+dbt build is complete. Audit each priority model for silent failures.
+Use ONLY: task's own .md files, YML specs, and your own output tables.
+Do NOT look for gold data or expected row counts from external sources.
+
+TASK: {instruction}
+
+EVAL-CRITICAL MODELS: {model_names_str}
+
+For each model, run these checks:
+
+CHECK 1 — TABLE EXISTS:
+  SHOW TABLES — confirm {model_names_str} appear.
+  If missing: create SELECT * FROM ref(closest_existing_model) and run dbt run --select <name>.
+
+CHECK 2 — COLUMN COMPLETENESS:
+  SELECT * FROM <model> LIMIT 0  (lists all columns)
+  Compare against YML spec:
+{col_spec_str}
+  Any YML column missing from output: add it to the SQL and re-run dbt.
+
+CHECK 3 — CATEGORICAL VALUE AUDIT:
+  For string columns that look like status/category/type/territory:
+    SELECT DISTINCT <col> FROM <model>
+  Then run: find . -name "*.md" -not -path "*/dbt_packages/*" | xargs grep -l "docs"
+  Read each .md file. Find {{% docs %}} blocks that list expected values for this column.
+  If output values differ from doc-specified values: fix CASE WHEN and re-run dbt.
+
+CHECK 4 — ZERO ROW GUARD:
+  SELECT COUNT(*) FROM <model>
+  If 0: model is empty. Debug JOIN/WHERE before proceeding.
+
+CHECK 5 — NUMERIC SAMPLE:
+  SELECT * FROM <model> LIMIT 5
+  Flag: any numeric column that is 0 or NULL for ALL 5 rows (aggregation is likely wrong).
+  Flag: any column identical across all 5 rows when it should vary (wrong CASE WHEN literal).
+
+Fix any issues. Re-run dbt after fixes. Stop."""
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1335,16 +1394,30 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                 "\n- If count seems wrong, check your JOIN conditions for fan-out"
             )
 
-            log("Running quick-fix agent (10 turns)...")
+            table_counts = _get_table_row_counts(work_dir)
+            if table_counts:
+                counts_lines = [f"  {name}: {count:,} rows" for name, count in sorted(table_counts.items())]
+                fix_prompt += "\n\nSOURCE TABLE CARDINALITIES (input sizes, not gold targets):\n"
+                fix_prompt += "\n".join(counts_lines)
+                fix_prompt += (
+                    "\n- Use these to detect fan-out: if your output row count > largest plausible source slice, JOIN is duplicating rows."
+                    "\n- If output << any source table that should feed into it: check for over-filtering or wrong JOIN type."
+                    "\nROW COUNT AUDIT:\n"
+                    "1. SELECT COUNT(*) FROM <model>; SELECT COUNT(DISTINCT <pk>) FROM <source>\n"
+                    "2. If model > source distinct pk: fan-out — find the JOIN causing duplication\n"
+                    "3. If model << source: check WHERE and JOIN types for over-filtering"
+                )
+
+            log("Running quick-fix agent (20 turns)...")
             fix_cmd = [
                 "claude",
                 "--model", model,
                 "--permission-mode", "bypassPermissions",
-                "--max-turns", "10",
+                "--max-turns", "20",
                 "--mcp-config", str(MCP_CONFIG),
                 "-p", fix_prompt,
             ]
-            fix_result = _run_claude_with_retry(fix_cmd, str(work_dir), timeout=300, label="quick-fix")
+            fix_result = _run_claude_with_retry(fix_cmd, str(work_dir), timeout=480, label="quick-fix")
             if fix_result.returncode == 0:
                 log("Fix agent completed")
             else:
@@ -1364,6 +1437,30 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
             cwd=str(work_dir),
             capture_output=True, text=True, timeout=300,
         )
+
+        # NEW: post-success value verification agent (triggers always when eval-critical tables may exist)
+        result_db_candidates = list(work_dir.glob("*.duckdb"))
+        if eval_critical_models and result_db_candidates:
+            verify_prompt = _build_value_verify_prompt(
+                work_dir, instance_id, eval_critical_models, instruction,
+                _extract_model_columns(work_dir)
+            )
+            verify_cmd = [
+                "claude", "--model", model,
+                "--permission-mode", "bypassPermissions",
+                "--max-turns", "12",
+                "--mcp-config", str(MCP_CONFIG),
+                "-p", verify_prompt,
+            ]
+            log("Running value-verification agent (12 turns)...")
+            verify_result = _run_claude_with_retry(verify_cmd, str(work_dir), timeout=360, label="value-verify")
+            if verify_result.returncode == 0:
+                log("Value-verify agent completed")
+            # Re-run dbt to materialize any fixes
+            subprocess.run(
+                ["/home/agentuser/.local/bin/dbt", "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
+                cwd=str(work_dir), capture_output=True, text=True, timeout=180,
+            )
 
         # Post-agent check: are all eval-critical tables in the result DB?
         if eval_critical_models:

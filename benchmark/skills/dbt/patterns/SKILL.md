@@ -22,7 +22,7 @@ Rule: "original/first_X" → order ASC by `valid_from`. "Current" → `valid_to 
 
 ## MRR Change Category
 
-Use these exact lowercase strings — evaluation checks them literally.
+The logic structure is correct. The string literals in the CASE WHEN are EXAMPLES — they vary by project. Always read the project's `.md` documentation files for the actual required strings. Look for `{% docs change_category %}` blocks; they contain a table showing exactly which strings to use.
 
 ```sql
 WITH mrr AS (
@@ -34,16 +34,14 @@ SELECT customer_id, month, mrr,
     CASE
         WHEN prev_mrr IS NULL AND mrr > 0            THEN 'new'
         WHEN prev_mrr = 0    AND mrr > 0             THEN 'reactivation'
-        WHEN mrr > prev_mrr  AND prev_mrr IS NOT NULL THEN 'expansion'
-        WHEN mrr < prev_mrr  AND mrr > 0             THEN 'contraction'
+        WHEN mrr > prev_mrr  AND prev_mrr IS NOT NULL THEN '<check project .md docs>'
+        WHEN mrr < prev_mrr  AND mrr > 0             THEN '<check project .md docs>'
         WHEN mrr = 0         AND prev_mrr > 0        THEN 'churn'
         WHEN mrr = prev_mrr                          THEN 'no_change'
         ELSE 'other'
     END AS change_category
 FROM mrr
 ```
-
-Exact strings: `new`, `expansion`, `contraction`, `churn`, `reactivation`, `no_change`. Never guess.
 
 ## Customer Status Bucketing (tpch001 pattern)
 

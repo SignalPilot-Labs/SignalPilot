@@ -42,6 +42,31 @@ If model B refs model A and model A has no .sql file, write A first.
 - Column names in the YAML are EXACT — your SQL output columns must match them precisely
 - The `description` field often hints at the transformation logic (joins, filters, aggregations)
 
+### YML Description as Semantic Contract
+
+Before writing any SQL, read the `description:` field of each priority model and extract its cardinality contract:
+
+- **Entity + qualifier pattern** — "revenue lost due to returned items" or "customers with at least one order":
+  Only entities meeting the criterion appear in output. Use INNER JOIN or a qualifying subquery — not all entities.
+
+- **"top N" / "ranks the top N"** — a QUALIFY or WHERE rank filter is mandatory:
+  ```sql
+  QUALIFY DENSE_RANK() OVER (ORDER BY metric DESC) <= N
+  ```
+  Without this clause, all rows are returned regardless of DENSE_RANK logic above.
+
+- **"rolling window" + `unique_key` on date×entity** — point-in-time, not time-series:
+  The model should produce ONE output date (the latest/current), not a row for every historical date.
+  If your model produces thousands of dates, the rolling window was misimplemented.
+  Fix: add `WHERE <date_col> = (SELECT MAX(<date_col>) FROM <source>)`.
+
+After inferring the expected output shape, add a comment at the top of the SQL:
+```sql
+-- EXPECTED SHAPE: <e.g., 20 rows — one per top-ranked driver>
+-- REASON: <quote from description, e.g., "ranks the top 20 drivers">
+```
+Then verify `SELECT COUNT(*) FROM <model>` matches after `dbt run`.
+
 ## Column Verification Checklist (run mentally before writing each model)
 1. Open the YAML for this model
 2. Copy out every name under `columns:` — this is your SELECT output list

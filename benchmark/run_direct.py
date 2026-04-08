@@ -406,6 +406,29 @@ def _extract_model_columns(work_dir: Path) -> dict[str, list[str]]:
     return result
 
 
+def _extract_model_descriptions(work_dir: Path) -> dict[str, str]:
+    """Extract model description text from YML files. Returns {model_name: description}."""
+    import yaml
+
+    result: dict[str, str] = {}
+    for ext in ("*.yml", "*.yaml"):
+        for yml_file in work_dir.rglob(ext):
+            if any(skip in str(yml_file) for skip in (".claude", "dbt_packages", "target")):
+                continue
+            try:
+                data = yaml.safe_load(yml_file.read_text())
+                if data and "models" in data:
+                    for model in data["models"]:
+                        name = model.get("name")
+                        desc = model.get("description", "").strip()
+                        if name and desc:
+                            # Truncate to first 200 chars to avoid prompt bloat
+                            result[name] = desc[:200].replace("\n", " ")
+            except Exception:
+                pass
+    return result
+
+
 def _scan_macros(work_dir: Path) -> dict[str, str]:
     """Find macro names in macros/ dir by parsing {% macro name(...) %} patterns.
 
@@ -558,10 +581,13 @@ def build_agent_prompt(
 
     # Extract column names from YML for priority models
     model_columns = _extract_model_columns(work_dir)
+    model_descriptions = _extract_model_descriptions(work_dir)
     col_spec_lines = []
     for model_name in sorted(missing_priority | (stub_models & eval_critical_models)):
+        desc = model_descriptions.get(model_name, "")
+        desc_str = f" | DESC: {desc}" if desc else ""
         if model_name in model_columns:
-            col_spec_lines.append(f"  {model_name}: {', '.join(model_columns[model_name])}")
+            col_spec_lines.append(f"  {model_name}: {', '.join(model_columns[model_name])}{desc_str}")
     col_spec_str = "\n".join(col_spec_lines) if col_spec_lines else "  (read YML files for column specs)"
 
     # Build the selective dbt run command for priority models
@@ -625,6 +651,29 @@ The evaluator checks that each expected column exists in your output (matched by
 Every column below must appear in your SELECT with correct values. Missing or wrong-valued columns = failure.
 {col_spec_str}
 
+OUTPUT SHAPE INFERENCE — Do this BEFORE writing SQL for any priority model:
+
+1. Read the model YML description carefully. Extract:
+   - ENTITY: "for each customer/driver/order" → one output row per qualifying entity
+   - QUALIFIER: "due to returned items" / "with at least one order" → filter, not all rows
+   - RANK CONSTRAINT: "top N" / "ranks the top N" → SQL must have QUALIFY rank <= N or WHERE rank <= N
+   - TEMPORAL SCOPE: "rolling 30-day window" + surrogate_key on date×entity → one output date (latest), not all dates
+
+2. Write a comment at the top of the SQL body:
+   -- EXPECTED SHAPE: <inferred row count or cardinality formula>
+   -- REASON: <quote the description phrase that drove this inference>
+
+3. After dbt run, compare actual row count to inference:
+   SELECT COUNT(*) FROM <model>
+   If count >> inferred: you are over-producing rows (time-series instead of point-in-time, missing cutoff)
+   If count << inferred: check for over-filtering or wrong JOIN type
+
+CRITICAL PATTERNS:
+- "rolling window" + unique_key = date×entity → output has ONE date (the current/latest), not all historical dates
+- "top N" or "ranks the top N" → QUALIFY DENSE_RANK() OVER (...) <= N is mandatory
+- "for each customer/entity" + "with/due to <criterion>" → INNER JOIN or subquery, not all entities
+- "MoM"/"WoW" comparison → if result has thousands of dates, the rolling window was misimplemented
+
 DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. Run mcp__signalpilot__list_tables with connection_name="{instance_id}" (shows row counts, PKs, FKs)
@@ -676,6 +725,14 @@ RULES:
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}
 - JOIN TYPE: Use INNER JOIN only when non-matching rows must be excluded. LEFT JOIN is required when left table is the spine (all customers, all products, all orders). A LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern.
 - FAN-OUT CHECK: After any JOIN, compare COUNT(*) of model to COUNT(DISTINCT pk) of source. If count(model) > count(DISTINCT pk), there is fan-out — fix before finishing the model.
+- PRE-JOIN CARDINALITY CHECK: Before writing any JOIN, run this query on the right-side table:
+    SELECT COUNT(*), COUNT(DISTINCT <join_key>) FROM <right_table> [WHERE <your_filter>]
+  If COUNT(*) > COUNT(DISTINCT join_key): right side has duplicates. You MUST pre-aggregate or deduplicate
+  BEFORE joining, or your model will fan-out silently. Do not skip this for UNION-based models either:
+  for each source table in a UNION ALL, verify it contributes the expected number of rows:
+    SELECT COUNT(*) FROM <source_table> [WHERE <domain_filter>]
+  Compare to related tables — if drug_exposure has 663 rows and procedures has 144, the UNION total
+  should be exactly 807. Count each branch before writing the UNION.
 - COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
 - COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
 - DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges.
@@ -1177,6 +1234,29 @@ CHECK 5 — NUMERIC SAMPLE:
   SELECT * FROM <model> LIMIT 5
   Flag: any numeric column that is 0 or NULL for ALL 5 rows (aggregation is likely wrong).
   Flag: any column identical across all 5 rows when it should vary (wrong CASE WHEN literal).
+
+CHECK 6 — CARDINALITY SANITY (catches silent wrong-scale errors):
+
+  a) Read the YML description for each priority model. If it says "top N" or "ranks the top N":
+       SELECT COUNT(*) FROM <model>
+     If count > N: a QUALIFY/WHERE rank <= N filter is missing. Add it, re-run dbt.
+
+  b) If the description says "rolling window" or "MoM/WoW comparison" and the model has a
+     surrogate_key on date×entity:
+       SELECT COUNT(DISTINCT <date_col>) FROM <model>
+     If distinct dates > 2: the model is building a full time-series.
+     Rolling-window models with unique_key=date×entity produce ONE date per run (the latest).
+     Fix: add WHERE <date_col> = (SELECT MAX(<date_col>) FROM <source>)
+
+  c) If the model aggregates per entity (customer, driver, product):
+       SELECT COUNT(*) AS model_rows FROM <model>
+       SELECT COUNT(DISTINCT <entity_id>) AS entities FROM <source> [WHERE <qualifier>]
+     If model_rows >> entities: JOIN fan-out — find and fix before finishing.
+
+  d) For UNION-based models: count each branch independently:
+       SELECT COUNT(*) FROM <branch_1_source> [WHERE <filter>]
+       SELECT COUNT(*) FROM <branch_2_source> [WHERE <filter>]
+     Sum must equal model row count. If any branch is 0 and should not be, the domain filter is wrong.
 
 Fix any issues. Re-run dbt after fixes. Stop."""
 

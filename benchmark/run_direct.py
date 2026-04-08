@@ -459,6 +459,35 @@ def _detect_precomputed_tables(work_dir: Path) -> list[str]:
         return []
 
 
+def _get_table_row_counts(work_dir: Path) -> dict[str, int]:
+    """Return a mapping of table name -> row count from the task's DuckDB file.
+
+    Returns empty dict if DB is missing, locked, or duckdb is unavailable.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        return {}
+
+    db_candidates = list(work_dir.glob("*.duckdb"))
+    if not db_candidates:
+        return {}
+
+    db_path = str(db_candidates[0])
+    try:
+        con = duckdb.connect(database=db_path, read_only=True)
+        tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+        counts: dict[str, int] = {}
+        for table in tables:
+            row = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            if row is not None:
+                counts[table] = int(row[0])
+        con.close()
+        return counts
+    except Exception:
+        return {}
+
+
 def _check_package_availability(work_dir: Path) -> list[str]:
     """Check if any SQL files reference macros from packages not in dbt_packages/."""
     warnings = []
@@ -708,6 +737,18 @@ NEVER finish a priority model without running this 5-step audit."""
     if precomputed:
         prompt += f"\n\nPRE-COMPUTED TABLES ALREADY IN DATABASE: {', '.join(precomputed)}"
         prompt += "\n- These tables already have data from pre-run simulations. Your summary models should SELECT from these tables, not re-run the simulation logic."
+
+    table_counts = _get_table_row_counts(work_dir)
+    if table_counts:
+        counts_lines = [f"  {name}: {count:,} rows" for name, count in sorted(table_counts.items())]
+        prompt += "\n\nSOURCE TABLE CARDINALITIES (row counts of tables already in the DuckDB file):\n"
+        prompt += "\n".join(counts_lines)
+        prompt += (
+            "\n- These are INPUT table sizes, not expected output sizes."
+            "\n- Use them to sanity-check your model's row count BEFORE running the 5-step audit."
+            "\n- A JOIN producing far more rows than the largest source table indicates fan-out."
+            "\n- A model with far fewer rows than any plausible source slice indicates over-filtering or a wrong JOIN type."
+        )
 
     checkpoint_turn = min(6, max_turns // 3)
     exploration_end = min(4, max_turns // 4)

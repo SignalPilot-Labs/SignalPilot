@@ -1,5 +1,5 @@
 ---
-description: "SQL query building strategies — schema exploration, multi-table joins, CTEs, subqueries, and result validation."
+description: "SQL query building: schema exploration order, CTE patterns, pre-join cardinality checks (detect duplicates on right-side before joining), JOIN fan-out self-check, result validation, and common pitfalls."
 ---
 
 # SQL Query Building

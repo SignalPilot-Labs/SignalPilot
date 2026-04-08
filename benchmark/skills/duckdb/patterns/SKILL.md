@@ -1,5 +1,5 @@
 ---
-description: "DuckDB core SQL patterns — string functions, aggregation, window functions, type casting, and common gotchas."
+description: "DuckDB-specific SQL rules for dbt models: INTEGER division pitfall, DATE_TRUNC returns TIMESTAMP, INTERVAL quoted syntax, DENSE_RANK vs ROW_NUMBER for ranking, ID column type preservation (VARCHAR vs INTEGER), ROUNDING policy, SELECT DISTINCT ban on fact tables, and NULL propagation in aggregates."
 ---
 
 # DuckDB SQL Patterns
@@ -95,3 +95,41 @@ SELECT d.date, t.team_id FROM date_spine d CROSS JOIN teams t
 - Column names are case-insensitive but **alias names preserve case**: use `LOWER()` column aliases to match YML specs
 - Use `COLUMNS(*)` to select all columns; `EXCLUDE` to drop: `SELECT * EXCLUDE (col1, col2) FROM t`
 - `COALESCE(col, 0)` for NULL-to-zero. AVOID `COALESCE(col, '')` for NULL-to-empty-string in dbt models — the evaluator treats NULL and '' as different values. Keep NULLs as NULL unless the task explicitly requires a default. Only use COALESCE(col, '') if the output column spec says empty string is the correct representation of missing data.
+
+## INTEGER DIVISION (critical)
+In DuckDB, integer / integer = integer: 5/2 = 2, not 2.5.
+For any ratio or average, cast the numerator: CAST(numerator AS DOUBLE) / denominator.
+Never rely on implicit promotion.
+
+## DATE_TRUNC Returns TIMESTAMP
+DATE_TRUNC('month', col) returns TIMESTAMP, not DATE.
+When the YML column type is DATE, wrap: CAST(DATE_TRUNC('month', col) AS DATE).
+
+## INTERVAL Syntax
+DuckDB requires quoted intervals: INTERVAL '1' DAY, INTERVAL '7' DAY.
+INTERVAL 1 DAY (unquoted) is a syntax error.
+
+## DENSE_RANK for Tied Rankings
+When a model ranks rows by a metric, use DENSE_RANK() not ROW_NUMBER().
+DENSE_RANK assigns the same rank to equal-valued rows. ROW_NUMBER() breaks ties arbitrarily.
+Use ROW_NUMBER() only when you explicitly need no ties.
+
+## SELECT DISTINCT Ban on Fact Tables
+Do NOT use SELECT DISTINCT on any fact or intermediate model that joins multiple foreign keys.
+DISTINCT silently drops legitimate rows when two join paths produce the same primary key with
+different secondary key values. Use ROW_NUMBER() OVER (PARTITION BY pk ORDER BY sk) = 1 instead.
+
+## NULL Propagation in Numeric Aggregates
+Do NOT use COALESCE(numeric_col, 0) inside SUM() or COUNT() unless the YML description
+explicitly says "treat nulls as zero". Write SUM(col), not SUM(COALESCE(col, 0)).
+NULL propagation is intentional — rows with no matching data should produce NULL, not 0.
+
+## ROUNDING Policy
+Do NOT use ROUND() on numeric columns unless the task description or YML explicitly requires
+rounding. The evaluator uses abs_tol=0.01 — full precision is safer than rounding.
+
+## ID Column Type Preservation
+If a source column named *_id or *_key contains numeric-looking values (e.g., '100063')
+but is stored as VARCHAR in the source, do NOT cast to INTEGER. Check the source column
+type with explore_table first. If VARCHAR, keep it VARCHAR: CAST(col AS VARCHAR).
+The evaluator compares value vectors element-by-element; '100063' and 100063 are different.

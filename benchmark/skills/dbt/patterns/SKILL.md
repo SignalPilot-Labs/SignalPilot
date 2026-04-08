@@ -1,8 +1,51 @@
 ---
-description: "DuckDB-specific SQL patterns for SCD Type 2 window functions, MRR change_category categorization, customer status bucketing, and date spine generation."
+description: "DuckDB dbt patterns: date spines (CURRENT_DATE forbidden, use MAX source date), materialization rules (always table, never incremental), NULL/COALESCE handling, SELECT DISTINCT anti-patterns on fact tables, MRR change_category, SCD Type 2, customer status bucketing."
 ---
 
 # dbt SQL Patterns
+
+## Materialization Rules
+
+Every model file MUST begin with:
+  {{ config(materialized='table') }}
+
+Rules:
+- NEVER use materialized='incremental' or is_incremental() blocks. Incremental models return
+  all rows on first run instead of just the latest period — wrong row counts guaranteed.
+- NEVER use materialized='ephemeral' for any model that needs direct query verification.
+  Ephemeral models cannot be queried with SELECT COUNT(*) FROM model_name.
+- If you see an existing model with incremental config, rewrite it as a table.
+
+## Date Spine — CURRENT_DATE Is Forbidden
+
+When generating date series, query MIN/MAX dates from source data:
+  UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))
+
+NEVER hardcode date ranges or use CURRENT_DATE, now(), or current_timestamp as the
+spine endpoint. A spine extending to today produces hundreds of extra rows at eval time.
+
+The spine endpoint MUST be the maximum date across ALL source tables that feed the pipeline:
+  SELECT GREATEST(
+    (SELECT MAX(created_date) FROM source1),
+    (SELECT MAX(close_date) FROM source2)
+  ) AS max_date
+
+After writing any date spine model, verify:
+  SELECT MIN(date_col), MAX(date_col), COUNT(*) FROM <spine_model>
+The max date must match the latest date in your source data, NOT today.
+
+For package-provided spine models (e.g. int_salesforce__date_spine, xero__calendar_spine),
+create an override model in models/ with the same name that replaces current_date with
+the data-derived max date. After building, run:
+  grep -r "current_date\|CURRENT_DATE\|now()" models/
+If any hits remain, fix them.
+
+## NULL Handling — Preserve NULLs in String Columns
+
+Do NOT use COALESCE(col, '') to replace NULLs with empty strings.
+The evaluator treats NULL and '' as different values. Keep NULLs as NULL unless the
+task requires a specific default. Only use COALESCE(col, '') if the output column spec
+explicitly says empty string is the correct representation of missing data.
 
 ## SCD Type 2 — Window Function Patterns
 

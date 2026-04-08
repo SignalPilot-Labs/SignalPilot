@@ -1,12 +1,70 @@
 ---
 name: dbt_expert
-description: "Core dbt knowledge for Spider2-DBT benchmark tasks — project structure, YAML-to-SQL workflow, common patterns, and DuckDB-specific syntax."
+description: "Advanced dbt patterns: output shape inference from YML descriptions (entity+qualifier, top-N rank cutoffs, rolling window vs point-in-time), pre-build cardinality analysis before JOINs, JOIN type selection, boundary filter verification, date format detection (European DD/MM/YYYY)."
 type: skill
 applicable_dbs: ["duckdb"]
 priority: 10
 ---
 
 # dbt Expert Skill
+
+## Output Shape Inference — Do This BEFORE Writing SQL
+
+Read the model YML description carefully and extract:
+- ENTITY: "for each customer/driver/order" → one output row per qualifying entity
+- QUALIFIER: "due to returned items" / "with at least one order" → filter, not all rows
+  (Use INNER JOIN or qualifying subquery — not all entities)
+- RANK CONSTRAINT: "top N" / "ranks the top N" → QUALIFY DENSE_RANK() OVER (...) <= N is mandatory
+  Without this clause, all rows are returned regardless of DENSE_RANK logic.
+- TEMPORAL SCOPE: "rolling 30-day window" + surrogate_key on date×entity → point-in-time output
+  The model should produce ONE output date (the latest), not a row for every historical date.
+  Fix: add WHERE <date_col> = (SELECT MAX(<date_col>) FROM <source>)
+
+Write a comment at the top of the SQL body:
+  -- EXPECTED SHAPE: <inferred row count or cardinality formula>
+  -- REASON: <quote the description phrase that drove this inference>
+
+After dbt run, compare actual row count to inference:
+  SELECT COUNT(*) FROM <model>
+  If count >> inferred: over-producing (time-series instead of point-in-time, missing cutoff)
+  If count << inferred: check for over-filtering or wrong JOIN type
+
+Critical signals:
+- "rolling window" + unique_key = date×entity → output has ONE date, not all historical dates
+- "top N" or "ranks the top N" → QUALIFY DENSE_RANK() OVER (...) <= N is mandatory
+- "for each X" + "with/due to <criterion>" → INNER JOIN or subquery, not all entities
+- "MoM"/"WoW" comparison → if result has thousands of dates, rolling window was misimplemented
+
+## Pre-Join Cardinality Check — Run Before Every JOIN
+
+Before writing any JOIN, run this query on the right-side table:
+  SELECT COUNT(*), COUNT(DISTINCT <join_key>) FROM <right_table> [WHERE <your_filter>]
+
+If COUNT(*) > COUNT(DISTINCT join_key): right side has duplicates. Pre-aggregate or
+deduplicate BEFORE joining, or your model will fan-out silently.
+
+For UNION-based models: verify each source branch contributes the expected rows:
+  SELECT COUNT(*) FROM <source_table> [WHERE <domain_filter>]
+Compare to related tables — if drug_exposure has 663 rows and procedures has 144,
+the UNION total should be exactly 807. Count each branch before writing the UNION.
+
+## JOIN Type Selection
+
+- INNER JOIN: only when non-matching rows must be excluded
+- LEFT JOIN: required when left table is the spine (all customers, all products, all orders)
+- LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern
+
+## Boundary Filter Verification
+
+For any WHERE clause on a date or integer range, verify the inclusive/exclusive boundary:
+  SELECT COUNT(*) FROM source WHERE <filter>
+Confirm the row count matches your model's expected output before finishing.
+
+## Date Format Detection
+
+When a source column contains dates, ALWAYS check sample values with explore_table first.
+European dates (DD/MM/YYYY) must use STRPTIME(col, '%d/%m/%Y').
+Never assume MM/DD/YYYY — check the data. If day > 12 in any row, it is DD/MM format.
 
 ## Task Pattern
 Spider2-DBT tasks give you an **unfinished dbt project**. Your job:

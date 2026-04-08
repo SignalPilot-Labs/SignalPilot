@@ -637,6 +637,7 @@ You have a budget of {max_turns} turns (tool calls). Plan accordingly — do not
 TASK: {instruction}
 
 DATABASE: SignalPilot connection '{instance_id}' (DuckDB). Use mcp__signalpilot__* tools.
+SKILLS: Before writing SQL, read .claude/skills/ and load any skill whose description matches your task.
 
 MISSING SQL MODELS — PRIORITY (evaluated, must complete): {priority_str}
 MISSING SQL MODELS — OTHER (write if time permits): {other_missing_str}
@@ -651,33 +652,13 @@ The evaluator checks that each expected column exists in your output (matched by
 Every column below must appear in your SELECT with correct values. Missing or wrong-valued columns = failure.
 {col_spec_str}
 
-OUTPUT SHAPE INFERENCE — Do this BEFORE writing SQL for any priority model:
-
-1. Read the model YML description carefully. Extract:
-   - ENTITY: "for each customer/driver/order" → one output row per qualifying entity
-   - QUALIFIER: "due to returned items" / "with at least one order" → filter, not all rows
-   - RANK CONSTRAINT: "top N" / "ranks the top N" → SQL must have QUALIFY rank <= N or WHERE rank <= N
-   - TEMPORAL SCOPE: "rolling 30-day window" + surrogate_key on date×entity → one output date (latest), not all dates
-
-2. Write a comment at the top of the SQL body:
-   -- EXPECTED SHAPE: <inferred row count or cardinality formula>
-   -- REASON: <quote the description phrase that drove this inference>
-
-3. After dbt run, compare actual row count to inference:
-   SELECT COUNT(*) FROM <model>
-   If count >> inferred: you are over-producing rows (time-series instead of point-in-time, missing cutoff)
-   If count << inferred: check for over-filtering or wrong JOIN type
-
-CRITICAL PATTERNS:
-- "rolling window" + unique_key = date×entity → output has ONE date (the current/latest), not all historical dates
-- "top N" or "ranks the top N" → QUALIFY DENSE_RANK() OVER (...) <= N is mandatory
-- "for each customer/entity" + "with/due to <criterion>" → INNER JOIN or subquery, not all entities
-- "MoM"/"WoW" comparison → if result has thousands of dates, the rolling window was misimplemented
-
 DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. Run mcp__signalpilot__list_tables with connection_name="{instance_id}" (shows row counts, PKs, FKs)
 3. Run mcp__signalpilot__explore_table on at most 2 source tables. STOP after step 3 — begin writing SQL immediately.
+3b. Load skills: read .claude/skills/ — load dbt/patterns, dbt/expert, and duckdb/patterns skills now.
+    Do this once before writing any SQL. Skills contain DuckDB syntax rules, date spine patterns,
+    output shape inference, and cardinality checks.
 4. Read the YAML files that define the missing models to understand column requirements
 4b. Re-read the TASK instruction above and scan for model names mentioned there that do not appear in any YML file. These must also have .sql files — the YML list is not always complete.
 4c. Open every `.md` file in the models/ directory — these files contain `{{% docs %}}` blocks that specify exact category label strings. These OVERRIDE any defaults. Copy strings character-for-character from these docs into your CASE WHEN statements.
@@ -693,10 +674,6 @@ DO THIS IN ORDER:
 
 RULES:
 - DuckDB SQL only (not PostgreSQL/MySQL)
-- INTEGER DIVISION: In DuckDB, 5/2 = 2 (integer). For any ratio or average, cast the numerator: CAST(numerator AS DOUBLE) / denominator. Never rely on implicit promotion.
-- DATE_TRUNC RETURNS TIMESTAMP: DATE_TRUNC('month', col) returns TIMESTAMP, not DATE. When the YML column is typed DATE, wrap: CAST(DATE_TRUNC('month', col) AS DATE).
-- MATERIALIZATION: Every model file must begin with {{ config(materialized='table') }}. Ephemeral models cannot be queried directly during verification.
-- INTERVAL SYNTAX: DuckDB requires quoted intervals: INTERVAL '1' DAY, INTERVAL '7' DAY. INTERVAL 1 DAY (unquoted) is a syntax error.
 - NEVER modify .yml or .yaml files — only create/edit .sql files
 - CORRECT VALUES MATTER: The evaluator searches for matching columns by value, not position.
   Focus on getting correct computation logic (joins, aggregations, filters) rather than column order.
@@ -719,30 +696,11 @@ RULES:
   4. Use SUM(CASE WHEN status = 'Retired' THEN 1 ELSE 0 END) AS retired
   5. Any value not matching a named column goes into the catch-all column (e.g., p21plus, not_classified)
 - If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
-- PRESERVE NULLs: Do NOT use COALESCE(col, '') to replace NULLs with empty strings. The evaluator treats NULL and '' as different values. Keep NULLs as NULL unless the task requires a specific default.
-- DATE FORMAT: When a source column contains dates, ALWAYS check sample values with explore_table first. European dates (DD/MM/YYYY) must use STRPTIME(col, '%d/%m/%Y'). Never assume MM/DD/YYYY — check the data first. If day > 12 in any row, it's DD/MM format.
 - COLUMN COUNT CHECK: Before finalizing any model, verify your SELECT produces all columns listed in the YAML. Missing columns = failure. Extra columns are OK (evaluator ignores them).
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}
-- JOIN TYPE: Use INNER JOIN only when non-matching rows must be excluded. LEFT JOIN is required when left table is the spine (all customers, all products, all orders). A LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern.
-- FAN-OUT CHECK: After any JOIN, compare COUNT(*) of model to COUNT(DISTINCT pk) of source. If count(model) > count(DISTINCT pk), there is fan-out — fix before finishing the model.
-- PRE-JOIN CARDINALITY CHECK: Before writing any JOIN, run this query on the right-side table:
-    SELECT COUNT(*), COUNT(DISTINCT <join_key>) FROM <right_table> [WHERE <your_filter>]
-  If COUNT(*) > COUNT(DISTINCT join_key): right side has duplicates. You MUST pre-aggregate or deduplicate
-  BEFORE joining, or your model will fan-out silently. Do not skip this for UNION-based models either:
-  for each source table in a UNION ALL, verify it contributes the expected number of rows:
-    SELECT COUNT(*) FROM <source_table> [WHERE <domain_filter>]
-  Compare to related tables — if drug_exposure has 663 rows and procedures has 144, the UNION total
-  should be exactly 807. Count each branch before writing the UNION.
 - COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
 - COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
-- DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges.
-- DATE SPINE — CURRENT_DATE IS FORBIDDEN AS END DATE: If any model (yours or from a package) uses `current_date`, `CURRENT_DATE`, `now()`, or `current_timestamp` as the end of a date series, OVERRIDE IT immediately. The spine endpoint MUST be the maximum date across ALL source tables that feed into the pipeline — not just one table. Use: GREATEST(MAX(date1) FROM source1, MAX(date2) FROM source2, ...) across every date column from every source table (created_date, close_date, activity_date, etc.). A spine extending to today's date will produce hundreds of extra rows and FAIL. After writing any date spine model, run: SELECT MIN(date_col), MAX(date_col), COUNT(*) FROM <spine_model> — verify the max date matches the latest date in your source data, NOT today. For package-provided spine models (e.g. int_salesforce__date_spine, xero__calendar_spine), you MUST create an override model in models/ with the same name that replaces current_date with the data-derived max date. grep -r "current_date\|CURRENT_DATE\|now()" models/ after building — if any hits remain, fix them.
-- NULL IN NUMERIC AGGREGATES: Do NOT use COALESCE(numeric_col, 0) inside SUM() or COUNT() unless the YML description explicitly says "treat nulls as zero". Write SUM(col), not SUM(COALESCE(col, 0)). NULL propagation in numeric aggregates is intentional — rows with no matching data should produce NULL, not 0.
-- NO SELECT DISTINCT ON FACT TABLES: Do not use SELECT DISTINCT on any fact or intermediate model that joins multiple foreign keys. DISTINCT silently drops legitimate rows when two different join paths produce the same primary key with different secondary key values. Use ROW_NUMBER() OVER (PARTITION BY primary_key ORDER BY secondary_key) = 1 instead.
-- ROUNDING: Do NOT use ROUND() on numeric columns unless the task description or YML explicitly requires rounding. The evaluator uses abs_tol=0.01 — keeping full precision is safer than rounding. Unnecessary rounding introduces value mismatches.
-- NEVER USE INCREMENTAL MATERIALIZATION: Do not use materialized='incremental' or the is_incremental() Jinja block. Always use materialized='table'. Incremental models produce wrong row counts on first run — they return all data instead of just the latest period. If you see an existing model with incremental config, rewrite it as a table with the appropriate WHERE/LIMIT to return only the expected rows.
-- DENSE_RANK FOR TIES: When a model ranks rows by a metric (wins, points, fastest laps, count), use DENSE_RANK() not ROW_NUMBER(). DENSE_RANK assigns the same rank to equal-valued rows and skips no ranks. Example: DENSE_RANK() OVER (ORDER BY wins DESC) AS rank. Use ROW_NUMBER() only when you explicitly need no ties.
-- ID COLUMN TYPE PRESERVATION: If a source column named *_id or *_key contains numeric-looking values (e.g., '100063') but is stored as VARCHAR in the source, do NOT cast to INTEGER. Check the source column type with explore_table or schema_ddl first. If the source is VARCHAR, keep it VARCHAR in your output: CAST(col AS VARCHAR). The evaluator compares value vectors element-by-element; '100063' and 100063 are different values."""
+- DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges."""
 
     # Add output table name requirement section before ROW COUNT VERIFICATION
     if eval_critical_models:

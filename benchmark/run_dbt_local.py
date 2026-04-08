@@ -29,6 +29,8 @@ import stat
 import subprocess
 import time
 import traceback
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -49,6 +51,7 @@ TEST_ENV = BENCHMARK_DIR / "test-env"
 SKILLS_SRC = BENCHMARK_DIR / "skills"
 GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
 GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
+DBT_BIN = shutil.which("dbt") or str(Path.home() / ".local" / "bin" / "dbt")
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -113,9 +116,6 @@ def prepare_test_env(instance_id: str) -> Path:
 
 def setup_signalpilot(instance_id: str, project_dir: Path):
     """Clear all SignalPilot connections, register only this task's DuckDB."""
-    import urllib.request
-    import urllib.error
-
     log(f"Setting up SignalPilot ({GATEWAY_URL})")
 
     # Check if gateway is running
@@ -167,7 +167,51 @@ def setup_signalpilot(instance_id: str, project_dir: Path):
         return False
 
 
+def fetch_schema_ddl(instance_id: str, project_dir: Path) -> str:
+    """Generate compact DDL locally from the task's DuckDB file."""
+    import duckdb as _duckdb
+
+    DDL_SIZE_LIMIT = 15000
+    duckdb_files = list(project_dir.glob("*.duckdb"))
+    if not duckdb_files:
+        log("No DuckDB file found for DDL generation", "WARN")
+        return ""
+
+    try:
+        con = _duckdb.connect(str(duckdb_files[0]), read_only=True)
+        tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+        parts = []
+        for table in sorted(tables):
+            cols = con.execute(f"PRAGMA table_info('{table}')").fetchall()
+            count = con.execute(f"SELECT COUNT(*) FROM \"{table}\"").fetchone()[0]
+            col_defs = ", ".join(f"{c[1]} {c[2]}" for c in cols)
+            parts.append(f"-- {table} ({count} rows)\nCREATE TABLE {table} ({col_defs});")
+        con.close()
+        ddl = "\n".join(parts)
+        if len(ddl) > DDL_SIZE_LIMIT:
+            log(f"Schema DDL too large ({len(ddl)} chars) — skipping injection", "WARN")
+            return ""
+        log(f"Generated DDL locally: {len(tables)} tables, {len(ddl)} chars")
+        return ddl
+    except Exception as e:
+        log(f"fetch_schema_ddl failed: {e}", "WARN")
+        return ""
+
+
 # ── Agent ────────────────────────────────────────────────────
+ALLOWED_TOOLS = [
+    # File operations
+    "Read", "Write", "Edit", "Glob", "Grep", "Bash",
+    # MCP — schema discovery
+    "mcp__signalpilot__query_database",
+    "mcp__signalpilot__describe_table",
+    "mcp__signalpilot__explore_table",
+    # MCP — useful but lower priority
+    "mcp__signalpilot__find_join_path",
+    "mcp__signalpilot__get_relationships",
+]
+
+
 def collect_project_context(project_dir: Path) -> str:
     parts = []
     for fpath in sorted(project_dir.rglob("*")):
@@ -186,49 +230,128 @@ def collect_project_context(project_dir: Path) -> str:
     return "\n\n".join(parts)
 
 
-def build_system_prompt(instruction: str, project_context: str, instance_id: str) -> str:
-    return f"""You are a data scientist proficient in database, SQL and DBT Project.
-You are working in {TEST_ENV / instance_id}, which contains a DuckDB-based dbt project.
+def build_system_prompt(instruction: str, project_context: str, instance_id: str, schema_ddl: str, dbt_bin: str) -> str:
+    work_dir = TEST_ENV / instance_id
+
+    if schema_ddl:
+        schema_section = f"""## Source Database Schema (DDL)
+Connection: '{instance_id}'
+{schema_ddl}"""
+    else:
+        schema_section = f"""## Source Database
+Connection: '{instance_id}' — use mcp__signalpilot__query_database to explore schema."""
+
+    return f"""You are a dbt + DuckDB data engineer working in {work_dir}.
 
 ## Task
 {instruction}
 
-## Database Access
-You have access to SignalPilot MCP tools for database exploration and queries.
-The DuckDB database is registered as connection '{instance_id}'.
+{schema_section}
 
-Use these tools to explore the database:
-- `mcp__signalpilot__list_tables` — list all tables
-- `mcp__signalpilot__describe_table` — get column details
-- `mcp__signalpilot__explore_table` — deep-dive with sample values
-- `mcp__signalpilot__query_database` — run SQL queries (read-only)
-- `mcp__signalpilot__schema_overview` — quick DB overview
-- `mcp__signalpilot__find_join_path` — find join path between tables
-
-You also have file tools (Read, Write, Glob, Grep) and Bash for running dbt commands.
-
-## DBT Project Hints
-1. Read the dbt project files. Your task is to write SQL queries for data transformation.
-2. Use SignalPilot tools to explore the DuckDB database (schema, sample data, relationships).
-3. Review YAML files to understand task requirements and identify incomplete model SQLs.
-4. The project is unfinished — identify models defined in .yml but missing .sql files.
-5. Do NOT modify .yml files — write correct SQL based on existing YAML definitions.
-6. After writing all required SQL, run `dbt deps && dbt run` via Bash.
-7. Verify new data models using SignalPilot query_database.
-8. Use DuckDB-compatible SQL syntax (not PostgreSQL, not MySQL).
-9. Use dbt ref() and source() macros correctly.
-
-## Current Project Files
+## Project Files
 {project_context}
 
-## Instructions
-1. Explore the database schema using SignalPilot tools
-2. Identify which .yml files don't have corresponding .sql files
-3. Read existing SQL files to understand naming conventions
-4. Write each missing .sql file
-5. Run `dbt deps && dbt run` via Bash to validate
-6. If dbt run fails, read the error, fix the SQL, and re-run
-7. Verify the models using SignalPilot query_database"""
+## Important — all project files are already included above
+Do NOT re-read or re-explore files that are shown in "Project Files" above.
+Go directly to Step 0. You already have all the information you need.
+
+## Workflow — follow exactly in order
+
+### Step 0 — Run dbt immediately to detect existing errors
+Run: `{dbt_bin} deps && {dbt_bin} run`
+Do NOT write any SQL yet. Read the output carefully:
+- If it exits 0: note which models already work — do not break them
+- If it fails: record the exact error messages — these tell you what is missing or broken
+This diagnostic run is mandatory. It reveals the real state of the project before you touch anything.
+
+### Step 1 — Map ALL missing models (two phases)
+
+**Phase A — YAML scan:**
+For every `.yml` file under `models/`, find each model in a `models:` block.
+Check whether a `.sql` file with that exact name exists.
+Build list of (model_name, yaml_path) pairs for all missing SQL files.
+Also scan existing `.sql` files for truncation (trailing comma, unclosed CTE) and fix before writing new ones.
+
+**Phase B — Instruction-driven scan:**
+Re-read the Task instruction above. Extract every table or model name mentioned as a
+deliverable or output (e.g., "create a model called X", "build a table for each Y category").
+For each name: if no .sql file exists, add it to your build list — even if no .yml entry exists.
+Use the task description and Source Database Schema as your spec for that model's columns and logic.
+
+Do not proceed to Step 2 until your list covers BOTH phases.
+
+### Step 2 — Understand dependencies
+For each missing model, read its YAML `refs:` list. Determine build order:
+write upstream models before downstream ones.
+
+### Step 3 — Write SQL
+For each missing model (in dependency order):
+- Column aliases must EXACTLY match the YAML `columns:` names — case-sensitive
+- Use `{{{{ ref('model_name') }}}}` for other models, `{{{{ source('schema', 'table') }}}}` for raw tables
+- Use DuckDB syntax (no DATEADD, no ::date on non-ISO strings, INTERVAL '1' DAY not +1)
+- Add `{{{{ config(materialized='table') }}}}` at the top
+
+### Step 4 — Run and fix
+Run: `{dbt_bin} deps && {dbt_bin} run`
+If errors: read the ERROR lines, fix the specific model, re-run.
+Use `dbt run --select model_name` to test a single model when debugging.
+
+### Step 5 — Verify (REQUIRED before stopping)
+For each model you created, run a SQL query via `mcp__signalpilot__query_database`
+to confirm it produced rows: `SELECT COUNT(*) FROM model_name`
+If a model has 0 rows and it should have data, something is wrong — debug it.
+
+Also check for too-many-rows:
+- A summary model (one row per driver, year, category) should return COUNT(*) equal to
+  COUNT(DISTINCT group_key). If it returns more, your JOIN is fanning out or GROUP BY is missing a column.
+- A detail model should return <= source row count unless the JOIN intentionally expands rows.
+- If counts are unexpectedly high: add a missing WHERE clause, switch LEFT JOIN to INNER JOIN,
+  or pre-aggregate the right side of a JOIN before joining.
+
+### STOP only when: dbt run exits 0 AND all your new models have row counts > 0.
+
+## Rules
+- Do NOT modify `.yml` files unless fixing a missing `schema:` in a source definition
+- Do NOT use PostgreSQL/MySQL syntax
+- Do NOT guess column names — use the YAML `columns:` list as the source of truth
+
+## Critical Warning — do NOT create passthrough models for raw tables
+
+If dbt reports "source not found" or staging models use {{{{ source('schema', 'table') }}}},
+DO NOT create new .sql files named after the raw tables (e.g. circuits.sql, results.sql).
+Materializing a model with the same name as a raw table DESTROYS the source data by replacing
+it with a view. The database cannot recover from this within the current run.
+
+Instead: check the source definition YAML and ensure the `schema:` in the source block
+matches where raw tables live in DuckDB (usually `main`). If the schema is missing, add
+`schema: main` to the source definition in the YAML. This is the ONE case where editing
+a .yml file is acceptable.
+
+## Fixing ref() errors — missing model files
+
+If dbt reports `Compilation Error: ... not found` for a ref() call and the referenced .sql
+file does not exist, first check whether the name is a raw table in the DuckDB source:
+
+    SELECT table_name FROM information_schema.tables WHERE table_name = 'name'
+
+**Preferred fix — ephemeral stub:**
+If the table exists in DuckDB, create models/<name>.sql:
+
+    {{{{ config(materialized='ephemeral') }}}}
+    select * from main.<name>
+
+Ephemeral models are inlined as CTEs. They create NO database object and will NOT shadow
+or overwrite source data. This is safe. Use this when existing staging models you did not
+write use ref('name') and you do not want to rewrite those models.
+
+**Fallback fix — rewrite the ref() call:**
+If ephemeral inlining causes nested CTE issues, replace {{{{ ref('name') }}}} with main.name
+directly in the calling model.
+
+If existing staging models use {{{{ ref('raw_table') }}}} to reference raw tables instead of
+{{{{ source('source_name', 'raw_table') }}}}, the ephemeral stub is the correct fix — do not
+add a schema: main override to the YAML unless the error is specifically "source not found"
+(a different error from "node not found")."""
 
 
 async def run_agent(instance_id: str, instruction: str, project_dir: Path,
@@ -241,10 +364,13 @@ async def run_agent(instance_id: str, instruction: str, project_dir: Path,
     )
 
     project_context = collect_project_context(project_dir)
-    system_prompt = build_system_prompt(instruction, project_context, instance_id)
+    schema_ddl = fetch_schema_ddl(instance_id, project_dir)
+    system_prompt = build_system_prompt(instruction, project_context, instance_id, schema_ddl, dbt_bin=DBT_BIN)
     user_prompt = (
         f"Complete this dbt project. The task is: {instruction}\n\n"
-        f"Identify which models have .yml definitions but no .sql files, and write the SQL for each one. "
+        f"Identify ALL models that need to be created: (1) models in .yml files with no .sql, "
+        f"(2) any model or table named in the task instruction that has no .sql file yet. "
+        f"Write the SQL for each one. "
         f"Then run `dbt deps && dbt run` to validate."
     )
 
@@ -272,7 +398,7 @@ async def run_agent(instance_id: str, instruction: str, project_dir: Path,
         max_budget_usd=budget,
         permission_mode="bypassPermissions",
         cwd=str(project_dir),
-        # No tool restrictions — real-world test
+        allowed_tools=ALLOWED_TOOLS,
         **({"mcp_servers": mcp_config} if mcp_config else {}),
     )
 
@@ -290,6 +416,9 @@ async def run_agent(instance_id: str, instruction: str, project_dir: Path,
             if isinstance(message, AssistantMessage):
                 turn_count += 1
                 log(f"--- Turn {turn_count} ({elapsed:.1f}s) ---")
+                if turn_count >= max_turns:
+                    log(f"Max turns ({max_turns}) reached — stopping agent early", "WARN")
+                    break
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         for line in block.text.split("\n"):
@@ -322,8 +451,12 @@ def run_dbt(project_dir: Path) -> tuple[bool, str]:
     """Run dbt deps + dbt run as final validation."""
     log("Running dbt deps + dbt run (final validation)...")
 
+    if not Path(DBT_BIN).exists():
+        log(f"dbt binary not found at {DBT_BIN}", "WARN")
+        return False, f"dbt binary not found at {DBT_BIN}"
+
     deps = subprocess.run(
-        [sys.executable, "-m", "dbt", "deps"],
+        [DBT_BIN, "deps"],
         cwd=str(project_dir), capture_output=True, text=True, timeout=120,
     )
     for line in (deps.stdout + deps.stderr).strip().split("\n"):
@@ -331,7 +464,7 @@ def run_dbt(project_dir: Path) -> tuple[bool, str]:
             log(f"  dbt deps: {line.strip()}")
 
     result = subprocess.run(
-        [sys.executable, "-m", "dbt", "run"],
+        [DBT_BIN, "run"],
         cwd=str(project_dir), capture_output=True, text=True, timeout=120,
     )
     output = result.stdout + "\n" + result.stderr
@@ -340,6 +473,18 @@ def run_dbt(project_dir: Path) -> tuple[bool, str]:
             log(f"  dbt run: {line.strip()}")
 
     log(f"dbt run exit code: {result.returncode}")
+
+    # Flush DuckDB WAL so subsequent reads (eval) see all materialized data
+    try:
+        import duckdb as _duckdb
+        for db_file in project_dir.glob("*.duckdb"):
+            con = _duckdb.connect(str(db_file))
+            con.execute("CHECKPOINT")
+            con.close()
+            log(f"DuckDB CHECKPOINT: {db_file.name}")
+    except Exception as e:
+        log(f"DuckDB CHECKPOINT failed (non-fatal): {e}", "WARN")
+
     return result.returncode == 0, output
 
 
@@ -347,6 +492,7 @@ def run_dbt(project_dir: Path) -> tuple[bool, str]:
 def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     """Evaluate result against gold standard."""
     import duckdb
+    import pandas as pd
 
     eval_config = load_eval_config(instance_id)
     if not eval_config:
@@ -424,6 +570,9 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             all_match = False
             continue
 
+        # Align column names: cols are selected by index, so positional match is correct
+        pred_sub.columns = gold_sub.columns
+
         if gold_sub.shape != pred_sub.shape:
             details.append(f"  {tab}: FAIL - shape mismatch gold={gold_sub.shape} pred={pred_sub.shape}")
             log(f"  FAIL - shape mismatch")
@@ -431,8 +580,16 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             continue
 
         if ignore_orders[i]:
-            gold_sub = gold_sub.sort_values(by=list(gold_sub.columns)).reset_index(drop=True)
-            pred_sub = pred_sub.sort_values(by=list(pred_sub.columns)).reset_index(drop=True)
+            try:
+                gold_sub = gold_sub.sort_values(by=list(gold_sub.columns)).reset_index(drop=True)
+                pred_sub = pred_sub.sort_values(by=list(pred_sub.columns)).reset_index(drop=True)
+            except (TypeError, ValueError):
+                # Mixed/nullable types can't sort directly — sort by string representation
+                sort_cols = list(gold_sub.columns)
+                gold_order = gold_sub.apply(lambda c: c.astype(str)).sort_values(by=sort_cols).index
+                pred_order = pred_sub.apply(lambda c: c.astype(str)).sort_values(by=sort_cols).index
+                gold_sub = gold_sub.loc[gold_order].reset_index(drop=True)
+                pred_sub = pred_sub.loc[pred_order].reset_index(drop=True)
 
         try:
             match = True
@@ -440,13 +597,27 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             for col in gold_sub.columns:
                 g = gold_sub[col]
                 p = pred_sub[col]
-                if g.dtype in ("float64", "float32", "int64", "int32"):
-                    if not all(abs(a - b) < 0.01 for a, b in zip(g.fillna(0), p.fillna(0))):
-                        match = False
-                        mismatch_col = col
-                        break
+                is_numeric = pd.api.types.is_numeric_dtype(g) or pd.api.types.is_numeric_dtype(p)
+                if is_numeric:
+                    try:
+                        gn = pd.to_numeric(g, errors="coerce").fillna(0)
+                        pn = pd.to_numeric(p, errors="coerce").fillna(0)
+                        if not all(abs(a - b) < 0.01 for a, b in zip(gn, pn)):
+                            match = False
+                            mismatch_col = col
+                            break
+                    except Exception:
+                        # Fall through to string comparison
+                        gs = g.astype(str).replace({"<NA>": "", "nan": "", "None": ""})
+                        ps = p.astype(str).replace({"<NA>": "", "nan": "", "None": ""})
+                        if not all(str(a).strip().lower() == str(b).strip().lower() for a, b in zip(gs, ps)):
+                            match = False
+                            mismatch_col = col
+                            break
                 else:
-                    if not all(str(a).strip().lower() == str(b).strip().lower() for a, b in zip(g.fillna(""), p.fillna(""))):
+                    gs = g.astype(str).replace({"<NA>": "", "nan": "", "None": ""})
+                    ps = p.astype(str).replace({"<NA>": "", "nan": "", "None": ""})
+                    if not all(str(a).strip().lower() == str(b).strip().lower() for a, b in zip(gs, ps)):
                         match = False
                         mismatch_col = col
                         break
@@ -470,7 +641,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run a Spider2-DBT benchmark task locally (no Docker)")
     parser.add_argument("instance_id", default="chinook001", nargs="?")
     parser.add_argument("--model", default="claude-opus-4-6")
-    parser.add_argument("--max-turns", type=int, default=30)
+    parser.add_argument("--max-turns", type=int, default=45)
     parser.add_argument("--budget", type=float, default=5.0)
     parser.add_argument("--skip-agent", action="store_true", help="Skip agent, just eval existing results")
     parser.add_argument("--no-mcp", action="store_true", help="Disable SignalPilot MCP")

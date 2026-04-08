@@ -972,6 +972,25 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             """
             tolerance = 1e-2
 
+            def _normalize_for_compare(a, b):
+                """Handle type mismatches between str↔Timestamp and str↔numeric."""
+                # str vs Timestamp: compare as normalized strings
+                from datetime import datetime, date
+                a_is_dt = isinstance(a, (datetime, date, pd.Timestamp))
+                b_is_dt = isinstance(b, (datetime, date, pd.Timestamp))
+                if a_is_dt or b_is_dt:
+                    try:
+                        sa = str(a).rstrip('0').rstrip('.') if a_is_dt else str(a).rstrip('0').rstrip('.')
+                        sb = str(b).rstrip('0').rstrip('.') if b_is_dt else str(b).rstrip('0').rstrip('.')
+                        # Strip trailing .000000 type suffixes
+                        for suffix in [' 00:00:00', '.0', 'T00:00:00']:
+                            sa = sa.removesuffix(suffix)
+                            sb = sb.removesuffix(suffix)
+                        return sa == sb
+                    except Exception:
+                        pass
+                return None  # not handled
+
             def vectors_match(v1, v2):
                 try:
                     if ignore_order:
@@ -986,7 +1005,10 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                             if not math.isclose(float(a), float(b), abs_tol=tolerance):
                                 return False
                         elif a != b:
-                            return False
+                            # Try datetime/type normalization before failing
+                            normalized = _normalize_for_compare(a, b)
+                            if normalized is not True:
+                                return False
                     return True
                 except Exception:
                     return False

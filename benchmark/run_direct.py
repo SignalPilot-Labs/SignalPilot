@@ -1337,7 +1337,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                         "--mcp-config", str(MCP_CONFIG),
                         "-p", rc_fix_prompt,
                     ]
-                    rc_fix_result = _run_claude_with_retry(rc_fix_cmd, str(work_dir), timeout=360, label="row-count-fix")
+                    rc_fix_result = _run_claude_with_retry(rc_fix_cmd, str(work_dir), timeout=480, label="row-count-fix")
                     if rc_fix_result.returncode == 0:
                         log("Row-count fix agent completed")
                     else:
@@ -1418,7 +1418,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                         "--mcp-config", str(MCP_CONFIG),
                         "-p", val_fix_prompt,
                     ]
-                    val_fix_result = _run_claude_with_retry(val_fix_cmd, str(work_dir), timeout=240, label="value-fix")
+                    val_fix_result = _run_claude_with_retry(val_fix_cmd, str(work_dir), timeout=480, label="value-fix")
                     if val_fix_result.returncode == 0:
                         log("Value-fix agent completed")
                     else:

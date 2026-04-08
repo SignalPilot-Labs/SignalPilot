@@ -496,7 +496,9 @@ EXISTING SQL MODELS: {existing_str}
 MODEL DEPENDENCIES (build order — write dependencies first):
 {deps_str}
 
-REQUIRED COLUMNS FOR PRIORITY MODELS (your SELECT must produce these columns IN THIS ORDER):
+REQUIRED COLUMNS FOR PRIORITY MODELS — COLUMN ORDER IS EVALUATION CRITICAL:
+The competition evaluator matches columns by POSITIONAL INDEX, not by name.
+Column 0 in your output must be column 0 from the list below. Wrong order = wrong answer.
 {col_spec_str}
 
 DO THIS IN ORDER:
@@ -510,11 +512,21 @@ DO THIS IN ORDER:
    Then run: dbt run (to build all models)
 8. If errors, fix and re-run.
 9. After success, verify: run mcp__signalpilot__query_database to check row counts and sample values of your output tables match expectations.
+10. COLUMN ORDER CHECK — after every successful dbt run on a priority model:
+    a. Run: SELECT * FROM <model_name> LIMIT 0 (or DESCRIBE <model_name>)
+       Note the column names in the order DuckDB returns them.
+    b. Compare position-by-position to the REQUIRED COLUMNS list above.
+    c. If order differs, rewrite the SELECT clause moving column expressions (not just aliases)
+       to match the YAML top-to-bottom order. Then re-run dbt and re-check.
 
 RULES:
 - DuckDB SQL only (not PostgreSQL/MySQL)
 - NEVER modify .yml or .yaml files — only create/edit .sql files
-- Your SQL must produce ALL columns listed in the YML definition for each model, in the exact order specified in the YML
+- COLUMN ORDER IS MANDATORY: The competition evaluator uses positional indices. Column N
+  in your SELECT must map to column N in the YAML spec. A model with correct values but
+  wrong column order scores zero — same as a missing model.
+- After writing any priority model, verify order with DESCRIBE before moving on.
+  Do not rely on column names matching; check positions.
 - Use ref('model_name') for upstream models, source('schema', 'table') for raw tables
 - Check existing SQL files for naming conventions before writing new ones
 - YML model definitions may contain a `refs:` key listing upstream model dependencies — use these as the primary guide for writing SQL
@@ -836,7 +848,7 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                     break
             if matched_pred_cols:
                 pred_sub = pred_df[matched_pred_cols]
-                log(f"  Used column-name matching (positional indices out of bounds)")
+                log(f"  WARNING: column-name fallback activated for {tab} — agent output has fewer columns than gold positional indices require. Agent column order likely wrong.")
             else:
                 msg = f"  {tab}: FAIL — column index error: pred has {len(pred_df.columns)} cols, need indices {cols}"
                 details.append(msg)
@@ -857,7 +869,7 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                 pred_sub_by_name = pred_df[matched_pred_cols]
                 if gold_sub.shape == pred_sub_by_name.shape:
                     pred_sub = pred_sub_by_name
-                    log(f"  Used column-name matching (positional shapes differed)")
+                    log(f"  WARNING: column-name fallback activated for {tab} — positional shapes differed. Agent column order likely wrong; this passes our eval but FAILS the competition.")
 
         if gold_sub.shape != pred_sub.shape:
             msg = (
@@ -980,7 +992,7 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                         match2, mismatch2 = _compare_dfs(gold_sub, pred_by_name, sort_rows)
                         if match2:
                             match, mismatch_col = True, None
-                            log(f"  Column-name matching rescued positional mismatch")
+                            log(f"  WARNING: column-name fallback RESCUED {tab} — values matched by name but not by position. This passes our internal eval but FAILS the Spider2-DBT competition evaluator.")
 
             if match:
                 msg = f"  {tab}: PASS ({gold_sub.shape[0]} rows, {len(cols)} cols)"

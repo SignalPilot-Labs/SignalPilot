@@ -105,6 +105,12 @@ def prepare_workdir(instance_id: str) -> Path:
     shutil.copytree(src, dst)
     log(f"Copied task files: {src} -> {dst}")
 
+    # Copy .mcp.json so Claude Code discovers SignalPilot MCP tools
+    mcp_json_src = Path(__file__).parent.parent / ".mcp.json"
+    if mcp_json_src.exists():
+        shutil.copy2(mcp_json_src, dst / ".mcp.json")
+        log("Copied .mcp.json for MCP tool discovery")
+
     # Copy skills into .claude/skills/ so Claude Code loads them natively
     skills_dst = dst / ".claude" / "skills"
     if SKILLS_SRC.exists():

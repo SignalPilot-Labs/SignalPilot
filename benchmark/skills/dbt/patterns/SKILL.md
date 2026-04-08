@@ -90,3 +90,15 @@ LEFT JOIN {{ ref('stg_mrr') }} m ON m.month = d.month AND m.customer_id = c.cust
 -- Normalize to month start:
 DATE_TRUNC('month', date_col) AS month
 ```
+
+## CRITICAL: Never use current_date as spine endpoint
+
+```sql
+-- BAD — extends to today, produces hundreds of extra rows at eval time:
+end_date = current_date
+
+-- GOOD — anchored to the actual data:
+end_date = (SELECT MAX(activity_date) FROM stg_activities)
+```
+
+If a dbt package intermediate model (e.g. `int_salesforce__date_spine`) uses `current_date` internally, write a replacement `.sql` file in your `models/` directory that overrides it with `MAX(source_date)` from the source table.

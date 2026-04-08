@@ -736,6 +736,9 @@ RULES:
 - COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
 - COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
 - DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges.
+- DATE SPINE — CURRENT_DATE IS FORBIDDEN AS END DATE: If any model (yours or from a package) uses `current_date`, `CURRENT_DATE`, or `current_timestamp` as the end of a date series, OVERRIDE IT immediately. Replace with: (SELECT MAX(<date_col>) FROM <source_table>) using the latest date found in your actual source data. A spine extending to today's date will produce hundreds of extra rows and fail evaluation. Check EVERY model you write for this. For package-provided intermediate models (e.g. int_salesforce__date_spine), write a replacement in models/ that uses MAX(source_date) as the endpoint.
+- NULL IN NUMERIC AGGREGATES: Do NOT use COALESCE(numeric_col, 0) inside SUM() or COUNT() unless the YML description explicitly says "treat nulls as zero". Write SUM(col), not SUM(COALESCE(col, 0)). NULL propagation in numeric aggregates is intentional — rows with no matching data should produce NULL, not 0.
+- NO SELECT DISTINCT ON FACT TABLES: Do not use SELECT DISTINCT on any fact or intermediate model that joins multiple foreign keys. DISTINCT silently drops legitimate rows when two different join paths produce the same primary key with different secondary key values. Use ROW_NUMBER() OVER (PARTITION BY primary_key ORDER BY secondary_key) = 1 instead.
 - ROUNDING: Do NOT use ROUND() on numeric columns unless the task description or YML explicitly requires rounding. The evaluator uses abs_tol=0.01 — keeping full precision is safer than rounding. Unnecessary rounding introduces value mismatches.
 - NEVER USE INCREMENTAL MATERIALIZATION: Do not use materialized='incremental' or the is_incremental() Jinja block. Always use materialized='table'. Incremental models produce wrong row counts on first run — they return all data instead of just the latest period. If you see an existing model with incremental config, rewrite it as a table with the appropriate WHERE/LIMIT to return only the expected rows.
 - DENSE_RANK FOR TIES: When a model ranks rows by a metric (wins, points, fastest laps, count), use DENSE_RANK() not ROW_NUMBER(). DENSE_RANK assigns the same rank to equal-valued rows and skips no ranks. Example: DENSE_RANK() OVER (ORDER BY wins DESC) AS rank. Use ROW_NUMBER() only when you explicitly need no ties.
@@ -1214,10 +1217,14 @@ CHECK 1 — TABLE EXISTS:
   If missing: create SELECT * FROM ref(closest_existing_model) and run dbt run --select <name>.
 
 CHECK 2 — COLUMN COMPLETENESS:
-  SELECT * FROM <model> LIMIT 0  (lists all columns)
-  Compare against YML spec:
+  Run: SELECT * FROM <model> LIMIT 0
+  This returns zero rows but shows all column names in order.
+  The EXACT required columns (from YML) are:
 {col_spec_str}
-  Any YML column missing from output: add it to the SQL and re-run dbt.
+  Character-by-character comparison:
+  - Any column in the YML list but NOT in your output: ADD IT to the SQL, re-run dbt.
+  - Any column name that differs even by case or underscore: RENAME it to match exactly.
+  - Do not accept "close enough" — column names must match the YML list precisely.
 
 CHECK 3 — CATEGORICAL VALUE AUDIT:
   For string columns that look like status/category/type/territory:

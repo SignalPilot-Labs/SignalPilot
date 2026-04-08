@@ -783,9 +783,22 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             for ci in range(len(ncols)):
                 g_s = gc.iloc[:, ci]
                 p_s = pc.iloc[:, ci]
-                is_num = pd.api.types.is_numeric_dtype(g_s) and pd.api.types.is_numeric_dtype(p_s)
+                is_bool = pd.api.types.is_bool_dtype(g_s) or pd.api.types.is_bool_dtype(p_s)
+                is_num = pd.api.types.is_numeric_dtype(g_s) and pd.api.types.is_numeric_dtype(p_s) and not is_bool
                 is_dt = pd.api.types.is_datetime64_any_dtype(g_s) or pd.api.types.is_datetime64_any_dtype(p_s)
-                if is_num:
+                if is_bool:
+                    # Compare booleans by converting to int first
+                    try:
+                        gb = g_s.astype(int).fillna(0)
+                        pb = p_s.astype(int).fillna(0)
+                        if not all(a == b for a, b in zip(gb, pb)):
+                            return False, g_cols[ci] if ci < len(g_cols) else str(ci)
+                    except (ValueError, TypeError):
+                        gs = g_s.astype(str).fillna("")
+                        ps = p_s.astype(str).fillna("")
+                        if not all(a.strip().lower() == b.strip().lower() for a, b in zip(gs, ps)):
+                            return False, g_cols[ci] if ci < len(g_cols) else str(ci)
+                elif is_num:
                     gn = pd.to_numeric(g_s, errors="coerce").fillna(0)
                     pn = pd.to_numeric(p_s, errors="coerce").fillna(0)
                     if not all(

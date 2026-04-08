@@ -532,6 +532,7 @@ RULES:
   5. Any value not matching a named column goes into the catch-all column (e.g., p21plus, not_classified)
 - If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
 - String columns: always use COALESCE(col, '') to avoid NULL comparison issues
+- DATE FORMAT: When a source column contains dates, ALWAYS check sample values with explore_table first. European dates (DD/MM/YYYY) must use STRPTIME(col, '%d/%m/%Y'). Never assume MM/DD/YYYY — check the data first. If day > 12 in any row, it's DD/MM format.
 - COLUMN COUNT CHECK: Before finalizing any model, count the columns in your SELECT list and compare to the count in the YAML. If the YAML has N columns, your SELECT must produce exactly N columns (no more, no fewer) in the same order.
 - Run: SELECT * FROM <model> LIMIT 1 after dbt run and count the columns
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}"""

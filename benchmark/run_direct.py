@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -872,10 +873,10 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
 
         log(f"  Gold shape: {gold_df.shape}, Result shape: {pred_df.shape}")
 
-        cols = effective_cols[i] if effective_cols[i] else list(range(len(gold_df.columns)))
+        cols = effective_cols[i] if effective_cols[i] else []
 
         try:
-            gold_sub = gold_df.iloc[:, cols]
+            gold_sub = gold_df.iloc[:, cols] if cols else gold_df
         except IndexError as e:
             msg = f"  {tab}: FAIL — gold column index error: {e}"
             details.append(msg)
@@ -883,181 +884,73 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             all_match = False
             continue
 
-        # Try positional match first; if indices are out of bounds for pred,
-        # fall back to column-name matching (case-insensitive).
-        try:
-            pred_sub = pred_df.iloc[:, cols]
-        except IndexError:
-            # Column indices don't exist in pred — try matching by column name
-            gold_col_names = [c.lower() for c in gold_sub.columns]
-            pred_col_map = {c.lower(): c for c in pred_df.columns}
-            matched_pred_cols = []
-            for gc in gold_col_names:
-                if gc in pred_col_map:
-                    matched_pred_cols.append(pred_col_map[gc])
-                else:
-                    matched_pred_cols = []
-                    break
-            if matched_pred_cols:
-                pred_sub = pred_df[matched_pred_cols]
-                log(f"  WARNING: column-name fallback activated for {tab} — agent output has fewer columns than gold positional indices require. Agent column order likely wrong.")
-            else:
-                msg = f"  {tab}: FAIL — column index error: pred has {len(pred_df.columns)} cols, need indices {cols}"
-                details.append(msg)
-                log(msg)
-                log(f"  Gold cols: {list(gold_sub.columns)}, Pred cols: {list(pred_df.columns)}")
-                all_match = False
-                continue
-
-        if gold_sub.shape != pred_sub.shape:
-            # Before failing, try column-name matching if shapes differ
-            gold_col_names_lower = [c.lower() for c in gold_sub.columns]
-            pred_col_map = {c.lower(): c for c in pred_df.columns}
-            matched_pred_cols = []
-            for gc in gold_col_names_lower:
-                if gc in pred_col_map:
-                    matched_pred_cols.append(pred_col_map[gc])
-            if len(matched_pred_cols) == len(gold_sub.columns):
-                pred_sub_by_name = pred_df[matched_pred_cols]
-                if gold_sub.shape == pred_sub_by_name.shape:
-                    pred_sub = pred_sub_by_name
-                    log(f"  WARNING: column-name fallback activated for {tab} — positional shapes differed. Agent column order likely wrong; this passes our eval but FAILS the competition.")
-
-        if gold_sub.shape != pred_sub.shape:
-            msg = (
-                f"  {tab}: FAIL — shape mismatch "
-                f"gold={gold_sub.shape} pred={pred_sub.shape}"
-            )
+        if len(gold_sub) != len(pred_df):
+            msg = f"  {tab}: FAIL — row count mismatch gold={len(gold_sub)} pred={len(pred_df)}"
             details.append(msg)
             log(msg)
-            log(f"  Gold cols: {list(gold_sub.columns)}")
-            log(f"  Pred cols: {list(pred_sub.columns)}")
-            log(f"  Gold head:\n{gold_sub.head(3)}")
-            log(f"  Pred head:\n{pred_sub.head(3)}")
             all_match = False
             continue
 
-        # --- Comparison helper ---
-        def _compare_dfs(g_df, p_df, sort_rows: bool) -> tuple[bool, str | None]:
-            """Compare two DataFrames column-by-column. Returns (match, mismatch_col_name)."""
-            g_cols = list(g_df.columns)
-            ncols = list(range(len(g_cols)))
-            gc = g_df.copy()
-            pc = p_df.copy()
-            gc.columns = ncols
-            pc.columns = ncols
-            if sort_rows:
-                # Convert all columns to string for sorting to avoid mixed-type errors
-                gc_sort_key = gc.astype(str)
-                pc_sort_key = pc.astype(str)
-                gc = gc.iloc[gc_sort_key.sort_values(by=ncols).index].reset_index(drop=True)
-                pc = pc.iloc[pc_sort_key.sort_values(by=ncols).index].reset_index(drop=True)
-            for ci in range(len(ncols)):
-                g_s = gc.iloc[:, ci]
-                p_s = pc.iloc[:, ci]
-                is_bool = pd.api.types.is_bool_dtype(g_s) or pd.api.types.is_bool_dtype(p_s)
-                is_num = pd.api.types.is_numeric_dtype(g_s) and pd.api.types.is_numeric_dtype(p_s) and not is_bool
-                is_dt = pd.api.types.is_datetime64_any_dtype(g_s) or pd.api.types.is_datetime64_any_dtype(p_s)
-                if is_bool:
-                    # Compare booleans by converting to int first
-                    try:
-                        gb = g_s.astype(int).fillna(0)
-                        pb = p_s.astype(int).fillna(0)
-                        if not all(a == b for a, b in zip(gb, pb)):
-                            return False, g_cols[ci] if ci < len(g_cols) else str(ci)
-                    except (ValueError, TypeError):
-                        gs = g_s.astype(str).fillna("")
-                        ps = p_s.astype(str).fillna("")
-                        if not all(a.strip().lower() == b.strip().lower() for a, b in zip(gs, ps)):
-                            return False, g_cols[ci] if ci < len(g_cols) else str(ci)
-                elif is_num:
-                    gn = pd.to_numeric(g_s, errors="coerce").fillna(0)
-                    pn = pd.to_numeric(p_s, errors="coerce").fillna(0)
-                    if not all(
-                        abs(a - b) < 0.01 or (abs(b) > 1e-9 and abs(a - b) / abs(b) < 0.02)
-                        for a, b in zip(gn, pn)
-                    ):
-                        return False, g_cols[ci] if ci < len(g_cols) else str(ci)
-                elif is_dt:
-                    # Compare as timestamps — handles format differences like .000 suffix
-                    try:
-                        gt = pd.to_datetime(g_s, errors="coerce", format="mixed")
-                        pt = pd.to_datetime(p_s, errors="coerce", format="mixed")
-                        # Both NaT = match, one NaT = mismatch
-                        ts_match = all(
-                            (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and a == b)
-                            for a, b in zip(gt, pt)
-                        )
-                        if not ts_match:
-                            # Fallback: compare date portions only (timestamp vs date-only)
-                            try:
-                                gd = gt.dt.date
-                                pred_dates = pt.dt.date
-                                date_match = all(
-                                    (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and str(a) == str(b))
-                                    for a, b in zip(gd, pred_dates)
-                                )
-                                if not date_match:
-                                    return False, g_cols[ci] if ci < len(g_cols) else str(ci)
-                            except Exception:
-                                return False, g_cols[ci] if ci < len(g_cols) else str(ci)
-                    except Exception:
-                        # Fall back to string comparison
-                        gs = g_s.astype(str).fillna("")
-                        ps = p_s.astype(str).fillna("")
-                        if not all(a.strip().lower() == b.strip().lower() for a, b in zip(gs, ps)):
-                            # If strings look like dates, compare date portions
-                            try:
-                                gs_dt = pd.to_datetime(gs, errors="coerce", format="mixed")
-                                ps_dt = pd.to_datetime(ps, errors="coerce", format="mixed")
-                                if not gs_dt.isna().all() and not ps_dt.isna().all():
-                                    if all(
-                                        (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and a.date() == b.date())
-                                        for a, b in zip(gs_dt, ps_dt)
-                                    ):
-                                        continue  # date portions match even if string formats differ
-                            except Exception:
-                                pass
-                            return False, g_cols[ci] if ci < len(g_cols) else str(ci)
-                else:
-                    gs = g_s.astype(str).fillna("")
-                    ps = p_s.astype(str).fillna("")
-                    if not all(a.strip().lower() == b.strip().lower() for a, b in zip(gs, ps)):
-                        return False, g_cols[ci] if ci < len(g_cols) else str(ci)
+        def _official_compare(pred_df, gold_df, cols, ignore_order):
+            """
+            Replicates compare_pandas_table() from the official Spider2-DBT eval_utils.py.
+            For each gold column (selected by positional index via cols), checks if ANY
+            column in pred_df has a matching value vector. Row count must match.
+            Returns (match: bool, failed_gold_col_name: str | None).
+            """
+            tolerance = 1e-2
+
+            def vectors_match(v1, v2):
+                try:
+                    if ignore_order:
+                        v1 = sorted(v1, key=lambda x: (x is None, str(x), isinstance(x, (int, float))))
+                        v2 = sorted(v2, key=lambda x: (x is None, str(x), isinstance(x, (int, float))))
+                    if len(v1) != len(v2):
+                        return False
+                    for a, b in zip(v1, v2):
+                        if pd.isna(a) and pd.isna(b):
+                            continue
+                        elif isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                            if not math.isclose(float(a), float(b), abs_tol=tolerance):
+                                return False
+                        elif a != b:
+                            return False
+                    return True
+                except Exception:
+                    return False
+
+            # Select gold columns by positional index (empty cols = all gold columns)
+            if cols:
+                try:
+                    gold_sub = gold_df.iloc[:, cols]
+                except IndexError as e:
+                    return False, f"gold column index error: {e}"
+            else:
+                gold_sub = gold_df
+
+            t_gold_list = gold_sub.transpose().values.tolist()
+            t_pred_list = pred_df.transpose().values.tolist()
+
+            for idx, gold_vec in enumerate(t_gold_list):
+                if not any(vectors_match(gold_vec, pred_vec) for pred_vec in t_pred_list):
+                    col_name = gold_sub.columns[idx] if idx < len(gold_sub.columns) else str(idx)
+                    return False, col_name
             return True, None
 
-        orig_gold_cols = list(gold_sub.columns)
-        sort_rows = effective_orders[i]
-
         try:
-            # Attempt 1: positional comparison
-            match, mismatch_col = _compare_dfs(gold_sub, pred_sub, sort_rows)
-
-            # Attempt 2: if positional failed, try column-name matching
-            if not match:
-                gold_col_lower = [c.lower() for c in gold_sub.columns]
-                pred_col_map = {c.lower(): c for c in pred_df.columns}
-                matched = [pred_col_map[gc] for gc in gold_col_lower if gc in pred_col_map]
-                if len(matched) == len(gold_sub.columns):
-                    pred_by_name = pred_df[matched]
-                    if gold_sub.shape == pred_by_name.shape:
-                        match2, mismatch2 = _compare_dfs(gold_sub, pred_by_name, sort_rows)
-                        if match2:
-                            match, mismatch_col = True, None
-                            log(f"  WARNING: column-name fallback RESCUED {tab} — values matched by name but not by position. This passes our internal eval but FAILS the Spider2-DBT competition evaluator.")
-
+            match, failed_col = _official_compare(pred_df, gold_df, cols, ignore_order=effective_orders[i])
             if match:
-                msg = f"  {tab}: PASS ({gold_sub.shape[0]} rows, {len(cols)} cols)"
+                msg = f"  {tab}: PASS"
                 details.append(msg)
                 log(msg)
             else:
-                msg = f"  {tab}: FAIL — values don't match (column: {mismatch_col})"
+                msg = f"  {tab}: FAIL — no pred column matched gold column '{failed_col}'"
                 details.append(msg)
                 log(msg)
-                if mismatch_col is not None:
-                    mismatch_idx = orig_gold_cols.index(mismatch_col) if mismatch_col in orig_gold_cols else 0
-                    log(f"  Gold values: {list(gold_sub.iloc[:5, mismatch_idx])}")
-                    log(f"  Pred values: {list(pred_sub.iloc[:5, mismatch_idx])}")
+                if isinstance(failed_col, str) and failed_col in gold_df.columns:
+                    log(f"  Gold column '{failed_col}' values: {list(gold_df[failed_col].head(5))}")
+                    log(f"  Pred columns: {list(pred_df.columns)}")
+                    log(f"  Pred head:\n{pred_df.head(3)}")
                 all_match = False
         except Exception as e:
             msg = f"  {tab}: FAIL — comparison error: {e}"

@@ -94,4 +94,4 @@ SELECT d.date, t.team_id FROM date_spine d CROSS JOIN teams t
 - No `ILIKE` with `_` wildcard quirks — `_` matches any single char
 - Column names are case-insensitive but **alias names preserve case**: use `LOWER()` column aliases to match YML specs
 - Use `COLUMNS(*)` to select all columns; `EXCLUDE` to drop: `SELECT * EXCLUDE (col1, col2) FROM t`
-- `COALESCE(col, 0)` for NULL-to-zero, `COALESCE(col, '')` for NULL-to-empty-string
+- `COALESCE(col, 0)` for NULL-to-zero. AVOID `COALESCE(col, '')` for NULL-to-empty-string in dbt models — the evaluator treats NULL and '' as different values. Keep NULLs as NULL unless the task explicitly requires a default. Only use COALESCE(col, '') if the output column spec says empty string is the correct representation of missing data.

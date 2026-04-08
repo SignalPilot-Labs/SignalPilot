@@ -150,16 +150,8 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__debug_cte_query` — test CTE steps independently
 - `mcp__signalpilot__explain_query` — get execution plan
 
-## Instructions
-1. {'Run `dbt deps` once at the start.' if (work_dir / 'packages.yml').exists() else 'Do NOT run `dbt deps` — this project has no packages.yml and packages are pre-installed.'}
-2. Use `list_tables` (shows row counts, PKs, FKs) then `explore_table` on key source tables (shows sample data).
-3. Read existing YAML files to find model definitions that are missing .sql files.
-4. Write each missing .sql file using DuckDB-compatible SQL with dbt ref()/source() macros.
-5. Do NOT modify .yml files.
-6. Run `dbt run --select model_name` to validate each model as you write it.
-7. Use `validate_sql` to check syntax before writing, `dbt compile` to verify before `dbt run`.
-8. If dbt run fails, read the error, fix the SQL, and re-run.
-9. Use DuckDB SQL syntax (not PostgreSQL, not MySQL).
+## Workflow
+Follow the step-by-step instructions provided in the agent prompt. Do NOT modify .yml or .yaml files.
 """
     (work_dir / "CLAUDE.md").write_text(content)
     log(f"Wrote CLAUDE.md to {work_dir}")
@@ -609,6 +601,7 @@ DO THIS IN ORDER:
 2. Run mcp__signalpilot__list_tables with connection_name="{instance_id}" (shows row counts, PKs, FKs)
 3. Run mcp__signalpilot__explore_table on at most 2 source tables. STOP after step 3 — begin writing SQL immediately.
 4. Read the YAML files that define the missing models to understand column requirements
+4b. Re-read the TASK instruction above and scan for model names mentioned there that do not appear in any YML file. These must also have .sql files — the YML list is not always complete.
 5. Read existing SQL files carefully — copy their join patterns, column naming, and macro usage exactly
 6. Write each missing .sql file (DuckDB SQL, use ref() and source() macros) — start with PRIORITY models
 7. Run: {priority_run_cmd}
@@ -621,6 +614,10 @@ DO THIS IN ORDER:
 
 RULES:
 - DuckDB SQL only (not PostgreSQL/MySQL)
+- INTEGER DIVISION: In DuckDB, 5/2 = 2 (integer). For any ratio or average, cast the numerator: CAST(numerator AS DOUBLE) / denominator. Never rely on implicit promotion.
+- DATE_TRUNC RETURNS TIMESTAMP: DATE_TRUNC('month', col) returns TIMESTAMP, not DATE. When the YML column is typed DATE, wrap: CAST(DATE_TRUNC('month', col) AS DATE).
+- MATERIALIZATION: Every model file must begin with {{ config(materialized='table') }}. Ephemeral models cannot be queried directly during verification.
+- INTERVAL SYNTAX: DuckDB requires quoted intervals: INTERVAL '1' DAY, INTERVAL '7' DAY. INTERVAL 1 DAY (unquoted) is a syntax error.
 - NEVER modify .yml or .yaml files — only create/edit .sql files
 - CORRECT VALUES MATTER: The evaluator searches for matching columns by value, not position.
   Focus on getting correct computation logic (joins, aggregations, filters) rather than column order.
@@ -713,7 +710,7 @@ NEVER finish a priority model without running this 5-step audit."""
         prompt += "\n- These tables already have data from pre-run simulations. Your summary models should SELECT from these tables, not re-run the simulation logic."
 
     checkpoint_turn = min(6, max_turns // 3)
-    exploration_end = 2
+    exploration_end = min(4, max_turns // 4)
     priority_deadline = max(4, max_turns - 8)
 
     prompt += f"""
@@ -735,7 +732,14 @@ If you reach turn {checkpoint_turn} and any priority model is still missing:
     prompt += """
 
 SAMPLE VALUE CHECK — MANDATORY before finishing any priority model:
-After the 5-step row count audit passes, run one additional query:
+After the 5-step row count audit passes, run these queries in order:
+
+STEP 0 — ZERO ROW GUARD:
+  SELECT COUNT(*) FROM <model_name>
+  If this returns 0: the model built but is empty. This is always wrong for a priority model.
+  Do NOT proceed — debug the JOIN/WHERE logic before continuing.
+
+STEP 1 — SAMPLE INSPECTION:
   SELECT * FROM <model_name> LIMIT 5
 
 Look for these silent failure patterns in the output:

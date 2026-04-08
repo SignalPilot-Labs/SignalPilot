@@ -609,9 +609,9 @@ EXISTING SQL MODELS: {existing_str}
 MODEL DEPENDENCIES (build order — write dependencies first):
 {deps_str}
 
-REQUIRED COLUMNS FOR PRIORITY MODELS — COLUMN ORDER IS EVALUATION CRITICAL:
-The competition evaluator matches columns by POSITIONAL INDEX, not by name.
-Column 0 in your output must be column 0 from the list below. Wrong order = wrong answer.
+REQUIRED COLUMNS FOR PRIORITY MODELS:
+The evaluator checks that each expected column exists in your output (matched by VALUES, not position).
+Every column below must appear in your SELECT with correct values. Missing or wrong-valued columns = failure.
 {col_spec_str}
 
 DO THIS IN ORDER:
@@ -625,21 +625,15 @@ DO THIS IN ORDER:
    Then run: dbt run (to build all models)
 8. If errors, fix and re-run.
 9. After success, verify: run mcp__signalpilot__query_database to check row counts and sample values of your output tables match expectations.
-10. COLUMN ORDER CHECK — after every successful dbt run on a priority model:
-    a. Run: SELECT * FROM <model_name> LIMIT 0 (or DESCRIBE <model_name>)
-       Note the column names in the order DuckDB returns them.
-    b. Compare position-by-position to the REQUIRED COLUMNS list above.
-    c. If order differs, rewrite the SELECT clause moving column expressions (not just aliases)
-       to match the YAML top-to-bottom order. Then re-run dbt and re-check.
+10. COLUMN CHECK — after every successful dbt run on a priority model:
+    Run: SELECT * FROM <model_name> LIMIT 3
+    Verify: all expected columns are present with reasonable values (not all NULL/0).
 
 RULES:
 - DuckDB SQL only (not PostgreSQL/MySQL)
 - NEVER modify .yml or .yaml files — only create/edit .sql files
-- COLUMN ORDER IS MANDATORY: The competition evaluator uses positional indices. Column N
-  in your SELECT must map to column N in the YAML spec. A model with correct values but
-  wrong column order scores zero — same as a missing model.
-- After writing any priority model, verify order with DESCRIBE before moving on.
-  Do not rely on column names matching; check positions.
+- CORRECT VALUES MATTER: The evaluator searches for matching columns by value, not position.
+  Focus on getting correct computation logic (joins, aggregations, filters) rather than column order.
 - Use ref('model_name') for upstream models, source('schema', 'table') for raw tables
 - Check existing SQL files for naming conventions before writing new ones
 - YML model definitions may contain a `refs:` key listing upstream model dependencies — use these as the primary guide for writing SQL
@@ -648,7 +642,6 @@ RULES:
 - ROW ORDER: The evaluator ignores row ordering. Do NOT waste time on ORDER BY in model SQL — it has no effect on scoring.
 - SPEED: Don't over-explore. Read 1-2 source tables, read the YML, write the SQL. Iterate on errors.
 - VERIFY: After dbt run succeeds, query result tables to check row counts match expected data size. If a report table has far fewer rows than the source table, your WHERE/JOIN may be too restrictive.
-- When writing SQL, produce columns in the EXACT order they appear in the YAML model definition (top to bottom)
 - Use COUNT(*) not COUNT(DISTINCT col) unless the column spec explicitly says "distinct" or "unique"
 - For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the gold data looks like by querying source tables first
 - If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
@@ -661,8 +654,7 @@ RULES:
 - If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
 - String columns: always use COALESCE(col, '') to avoid NULL comparison issues
 - DATE FORMAT: When a source column contains dates, ALWAYS check sample values with explore_table first. European dates (DD/MM/YYYY) must use STRPTIME(col, '%d/%m/%Y'). Never assume MM/DD/YYYY — check the data first. If day > 12 in any row, it's DD/MM format.
-- COLUMN COUNT CHECK: Before finalizing any model, count the columns in your SELECT list and compare to the count in the YAML. If the YAML has N columns, your SELECT must produce exactly N columns (no more, no fewer) in the same order.
-- Run: SELECT * FROM <model> LIMIT 1 after dbt run and count the columns
+- COLUMN COUNT CHECK: Before finalizing any model, verify your SELECT produces all columns listed in the YAML. Missing columns = failure. Extra columns are OK (evaluator ignores them).
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}
 - JOIN TYPE: Use INNER JOIN only when non-matching rows must be excluded. LEFT JOIN is required when left table is the spine (all customers, all products, all orders). A LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern.
 - FAN-OUT CHECK: After any JOIN, compare COUNT(*) of model to COUNT(DISTINCT pk) of source. If count(model) > count(DISTINCT pk), there is fan-out — fix before finishing the model.

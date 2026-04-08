@@ -19,3 +19,4 @@ self-improve/monitor/static/
 
 # Docker volumes / runtime
 *.log
+signalpilot/web/node_modules/

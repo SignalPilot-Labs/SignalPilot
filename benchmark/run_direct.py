@@ -772,19 +772,23 @@ def _run_claude_with_retry(
     label: str = "agent",
 ) -> subprocess.CompletedProcess:
     """Run claude CLI with retry on 529/overloaded errors."""
+    result: subprocess.CompletedProcess | None = None
     for attempt in range(1, max_retries + 1):
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
         output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode != 0 and ("529" in output or "Overloaded" in output or "overloaded" in output):
+        is_overloaded = result.returncode != 0 and ("API Error: 529" in output or "Overloaded" in output)
+        if is_overloaded:
+            log(f"API overloaded ({label}, attempt {attempt}/{max_retries}): {output[:200]}", "WARN")
             if attempt < max_retries:
                 wait = 30 * attempt
-                log(f"API overloaded ({label}) — retry {attempt}/{max_retries} in {wait}s...")
+                log(f"Retrying in {wait}s...")
                 time.sleep(wait)
                 continue
             else:
                 log(f"API overloaded after {max_retries} retries ({label}) — giving up", "ERROR")
         return result
-    return result  # type: ignore[possibly-undefined]
+    assert result is not None
+    return result
 
 
 def run_agent(

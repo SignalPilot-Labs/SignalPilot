@@ -643,7 +643,7 @@ RULES:
   4. Use SUM(CASE WHEN status = 'Retired' THEN 1 ELSE 0 END) AS retired
   5. Any value not matching a named column goes into the catch-all column (e.g., p21plus, not_classified)
 - If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
-- String columns: always use COALESCE(col, '') to avoid NULL comparison issues
+- PRESERVE NULLs: Do NOT use COALESCE(col, '') to replace NULLs with empty strings. The evaluator treats NULL and '' as different values. Keep NULLs as NULL unless the task requires a specific default.
 - DATE FORMAT: When a source column contains dates, ALWAYS check sample values with explore_table first. European dates (DD/MM/YYYY) must use STRPTIME(col, '%d/%m/%Y'). Never assume MM/DD/YYYY — check the data first. If day > 12 in any row, it's DD/MM format.
 - COLUMN COUNT CHECK: Before finalizing any model, verify your SELECT produces all columns listed in the YAML. Missing columns = failure. Extra columns are OK (evaluator ignores them).
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}

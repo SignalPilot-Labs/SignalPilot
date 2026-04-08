@@ -863,10 +863,10 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                             # Fallback: compare date portions only (timestamp vs date-only)
                             try:
                                 gd = gt.dt.date
-                                pd_ = pt.dt.date
+                                pred_dates = pt.dt.date
                                 date_match = all(
                                     (pd.isna(a) and pd.isna(b)) or (not pd.isna(a) and not pd.isna(b) and str(a) == str(b))
-                                    for a, b in zip(gd, pd_)
+                                    for a, b in zip(gd, pred_dates)
                                 )
                                 if not date_match:
                                     return False, g_cols[ci] if ci < len(g_cols) else str(ci)

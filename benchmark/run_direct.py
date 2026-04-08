@@ -763,6 +763,30 @@ DBT COMPILE FAILURE PROTOCOL — follow this order when dbt run fails:
 
 # ── Agent runner ───────────────────────────────────────────────────────────────
 
+
+def _run_claude_with_retry(
+    cmd: list[str],
+    cwd: str,
+    timeout: int = 900,
+    max_retries: int = 3,
+    label: str = "agent",
+) -> subprocess.CompletedProcess:
+    """Run claude CLI with retry on 529/overloaded errors."""
+    for attempt in range(1, max_retries + 1):
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0 and ("529" in output or "Overloaded" in output or "overloaded" in output):
+            if attempt < max_retries:
+                wait = 30 * attempt
+                log(f"API overloaded ({label}) — retry {attempt}/{max_retries} in {wait}s...")
+                time.sleep(wait)
+                continue
+            else:
+                log(f"API overloaded after {max_retries} retries ({label}) — giving up", "ERROR")
+        return result
+    return result  # type: ignore[possibly-undefined]
+
+
 def run_agent(
     instance_id: str,
     instruction: str,
@@ -789,43 +813,20 @@ def run_agent(
     log(f"Running: claude --model {model} --max-turns {max_turns} --mcp-config ... -p <prompt>")
     log(f"Work dir: {work_dir}")
 
-    # Retry on API overload (529) — up to 3 attempts with backoff
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
-        start = time.monotonic()
-        result = subprocess.run(
-            claude_cmd,
-            cwd=str(work_dir),
-            capture_output=True,
-            text=True,
-            timeout=900,  # 15 min — some tasks need many turns
-        )
-        elapsed = time.monotonic() - start
+    start = time.monotonic()
+    result = _run_claude_with_retry(claude_cmd, str(work_dir), timeout=900, label="main-agent")
+    elapsed = time.monotonic() - start
 
-        # Stream output to console
-        if result.stdout:
-            for line in result.stdout.splitlines():
-                log(f"  [claude] {line}")
-        if result.stderr:
-            for line in result.stderr.splitlines():
-                log(f"  [claude:err] {line}", "WARN")
+    # Stream output to console
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            log(f"  [claude] {line}")
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            log(f"  [claude:err] {line}", "WARN")
 
-        log(f"Claude CLI exit code: {result.returncode} ({elapsed:.1f}s)")
-
-        # Check for API overload (529) — retry with backoff
-        output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode != 0 and ("529" in output or "Overloaded" in output or "overloaded" in output):
-            if attempt < max_retries:
-                wait = 30 * attempt
-                log(f"API overloaded — retry {attempt}/{max_retries} in {wait}s...")
-                time.sleep(wait)
-                continue
-            else:
-                log(f"API overloaded after {max_retries} retries — giving up", "ERROR")
-
-        return result.returncode == 0
-
-    return False
+    log(f"Claude CLI exit code: {result.returncode} ({elapsed:.1f}s)")
+    return result.returncode == 0
 
 
 # ── Evaluation ─────────────────────────────────────────────────────────────────
@@ -1233,10 +1234,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                 "--mcp-config", str(MCP_CONFIG),
                 "-p", fix_prompt,
             ]
-            fix_result = subprocess.run(
-                fix_cmd, cwd=str(work_dir),
-                capture_output=True, text=True, timeout=300,
-            )
+            fix_result = _run_claude_with_retry(fix_cmd, str(work_dir), timeout=300, label="quick-fix")
             if fix_result.returncode == 0:
                 log("Fix agent completed")
             else:
@@ -1323,10 +1321,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                         "--mcp-config", str(MCP_CONFIG),
                         "-p", rc_fix_prompt,
                     ]
-                    rc_fix_result = subprocess.run(
-                        rc_fix_cmd, cwd=str(work_dir),
-                        capture_output=True, text=True, timeout=360,
-                    )
+                    rc_fix_result = _run_claude_with_retry(rc_fix_cmd, str(work_dir), timeout=360, label="row-count-fix")
                     if rc_fix_result.returncode == 0:
                         log("Row-count fix agent completed")
                     else:
@@ -1407,10 +1402,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                         "--mcp-config", str(MCP_CONFIG),
                         "-p", val_fix_prompt,
                     ]
-                    val_fix_result = subprocess.run(
-                        val_fix_cmd, cwd=str(work_dir),
-                        capture_output=True, text=True, timeout=240,
-                    )
+                    val_fix_result = _run_claude_with_retry(val_fix_cmd, str(work_dir), timeout=240, label="value-fix")
                     if val_fix_result.returncode == 0:
                         log("Value-fix agent completed")
                     else:

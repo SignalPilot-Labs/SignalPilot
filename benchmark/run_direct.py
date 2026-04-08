@@ -267,6 +267,57 @@ def _classify_sql_models(work_dir: Path) -> tuple[set[str], set[str]]:
     return complete, stubs
 
 
+def _create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> list[str]:
+    """Pre-populate starter SQL files for eval-critical models with no existing SQL file.
+
+    Only creates files for models with no SQL file at all — does not overwrite
+    stubs or complete models. Returns a list of model names for which templates
+    were created.
+    """
+    complete_sql_models, stub_sql_models = _classify_sql_models(work_dir)
+    column_map = _extract_model_columns(work_dir)
+    already_have_sql = complete_sql_models | stub_sql_models
+
+    models_dir = work_dir / "models"
+    target_dir = models_dir if models_dir.exists() else work_dir
+
+    created: list[str] = []
+    for model_name in eval_critical_models:
+        if model_name in already_have_sql:
+            continue
+        try:
+            columns = column_map.get(model_name, [])
+            if columns:
+                col_lines = "\n".join(f"    {col} as {col}," for col in columns)
+                # Strip trailing comma from last line
+                col_lines = col_lines.rstrip(",")
+                template = (
+                    "{{ config(materialized='table') }}\n\n"
+                    "-- TODO: Complete this model\n"
+                    "select\n"
+                    "    -- Column stubs from schema.yml:\n"
+                    f"{col_lines}\n"
+                    "from {{ ref('...') }}  -- TODO: replace with actual source/ref\n"
+                )
+            else:
+                template = (
+                    "{{ config(materialized='table') }}\n\n"
+                    "-- TODO: Complete this model\n"
+                    "select\n"
+                    "    *  -- TODO: add columns here\n"
+                    "from {{ ref('...') }}  -- TODO: replace with actual source/ref\n"
+                )
+            sql_path = target_dir / f"{model_name}.sql"
+            sql_path.write_text(template)
+            created.append(model_name)
+        except Exception as exc:
+            log(f"Warning: could not create SQL template for {model_name!r}: {exc}", "WARN")
+
+    if created:
+        log(f"Created {len(created)} SQL template(s): {sorted(created)}")
+    return created
+
+
 def _extract_model_deps(work_dir: Path) -> dict[str, list[str]]:
     """Extract model dependency info (refs) from YML files."""
     import yaml
@@ -1116,6 +1167,11 @@ def main() -> None:
         pkg_warnings = _check_package_availability(work_dir)
         for w in pkg_warnings:
             log(w, "WARN")
+
+        # -- Pre-populate SQL templates for missing priority models
+        created_templates = _create_sql_templates(work_dir, eval_critical_models)
+        if created_templates:
+            log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
 
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()

@@ -298,7 +298,7 @@ def _create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> lis
                     "select\n"
                     "    -- Column stubs from schema.yml:\n"
                     f"{col_lines}\n"
-                    "from {{ ref('...') }}  -- TODO: replace with actual source/ref\n"
+                    "-- FROM: replace this comment with the actual source table or ref()\n"
                 )
             else:
                 template = (
@@ -306,7 +306,7 @@ def _create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> lis
                     "-- TODO: Complete this model\n"
                     "select\n"
                     "    *  -- TODO: add columns here\n"
-                    "from {{ ref('...') }}  -- TODO: replace with actual source/ref\n"
+                    "-- FROM: replace this comment with the actual source table or ref()\n"
                 )
             sql_path = target_dir / f"{model_name}.sql"
             sql_path.write_text(template)

@@ -583,6 +583,7 @@ RULES:
 - YML model definitions may contain a `refs:` key listing upstream model dependencies — use these as the primary guide for writing SQL
 - Read YML column specs carefully: every column listed must appear in your SELECT
 - FOCUS: Complete all PRIORITY models first. Only work on OTHER models if PRIORITY models are done and working.
+- ROW ORDER: The evaluator ignores row ordering. Do NOT waste time on ORDER BY in model SQL — it has no effect on scoring.
 - SPEED: Don't over-explore. Read 1-2 source tables, read the YML, write the SQL. Iterate on errors.
 - VERIFY: After dbt run succeeds, query result tables to check row counts match expected data size. If a report table has far fewer rows than the source table, your WHERE/JOIN may be too restrictive.
 - When writing SQL, produce columns in the EXACT order they appear in the YAML model definition (top to bottom)

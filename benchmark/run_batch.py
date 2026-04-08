@@ -46,16 +46,20 @@ def get_evaluable_tasks() -> list[str]:
     return tasks
 
 
-def run_task(instance_id: str, model: str, max_turns: int, timeout: int) -> tuple[bool, float]:
+def run_task(instance_id: str, model: str, max_turns: int, timeout: int, no_reset: bool = False) -> tuple[bool, float]:
     """Run a single task. Returns (passed, elapsed_seconds)."""
     env = os.environ.copy()
     env["SPIDER2_DBT_DIR"] = str(SPIDER2_DBT_DIR)
 
+    cmd = [sys.executable, "-m", "benchmark.run_direct", instance_id,
+           "--model", model, "--max-turns", str(max_turns)]
+    if no_reset:
+        cmd.append("--no-reset")
+
     start = time.monotonic()
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "benchmark.run_direct", instance_id,
-             "--model", model, "--max-turns", str(max_turns)],
+            cmd,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
@@ -84,6 +88,7 @@ def main():
     parser.add_argument("--skip", nargs="*", default=[], help="Task IDs to skip")
     parser.add_argument("--eval-only", action="store_true", help="Only evaluate existing results")
     parser.add_argument("--results-file", default="/tmp/benchmark_results.json")
+    parser.add_argument("--no-reset", action="store_true", help="Don't reset workdir between runs")
     args = parser.parse_args()
 
     if args.tasks:
@@ -113,7 +118,7 @@ def main():
             passed = result.returncode == 0
             elapsed = 0.0
         else:
-            passed, elapsed = run_task(task_id, args.model, args.max_turns, args.timeout)
+            passed, elapsed = run_task(task_id, args.model, args.max_turns, args.timeout, no_reset=args.no_reset)
 
         status = "PASS" if passed else "FAIL"
         print(f"{status} ({elapsed:.0f}s)")

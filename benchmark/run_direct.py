@@ -1043,6 +1043,11 @@ def main() -> None:
         action="store_true",
         help="Skip agent run, only evaluate existing results",
     )
+    parser.add_argument(
+        "--no-reset",
+        action="store_true",
+        help="Don't reset workdir — continue from previous run's output",
+    )
     args = parser.parse_args()
 
     instance_id: str = args.instance_id
@@ -1085,7 +1090,10 @@ def main() -> None:
         # ── Prepare workdir ────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 1: Prepare workdir")
-        work_dir = prepare_workdir(instance_id)
+        if args.no_reset and work_dir.exists():
+            log(f"Reusing existing workdir (--no-reset): {work_dir}")
+        else:
+            work_dir = prepare_workdir(instance_id)
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
         # ── Write CLAUDE.md ────────────────────────────────────────────────────

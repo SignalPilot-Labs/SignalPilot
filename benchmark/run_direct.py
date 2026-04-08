@@ -289,12 +289,14 @@ def _create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> lis
         try:
             columns = column_map.get(model_name, [])
             col_comment = ", ".join(columns) if columns else "(check schema.yml)"
+            # Template must NOT compile — forces agent to rewrite the entire file
             template = (
                 "{{ config(materialized='table') }}\n\n"
                 f"-- REQUIRED OUTPUT COLUMNS: {col_comment}\n"
                 "-- TODO: Write the complete SQL query for this model.\n"
                 "-- Explore source tables with SignalPilot tools before writing.\n"
-                "select 1 as _placeholder -- replace this entire SELECT\n"
+                "-- This file intentionally fails compilation until you replace it.\n"
+                "SELECT_REPLACE_THIS_ENTIRE_FILE\n"
             )
             sql_path = target_dir / f"{model_name}.sql"
             sql_path.write_text(template)

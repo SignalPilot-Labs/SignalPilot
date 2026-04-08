@@ -150,7 +150,7 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__explain_query` — get execution plan
 
 ## Instructions
-1. Run `dbt deps` once at the start.
+1. {'Run `dbt deps` once at the start.' if (work_dir / 'packages.yml').exists() else 'Do NOT run `dbt deps` — this project has no packages.yml and packages are pre-installed.'}
 2. Use `list_tables` (shows row counts, PKs, FKs) then `explore_table` on key source tables (shows sample data).
 3. Read existing YAML files to find model definitions that are missing .sql files.
 4. Write each missing .sql file using DuckDB-compatible SQL with dbt ref()/source() macros.

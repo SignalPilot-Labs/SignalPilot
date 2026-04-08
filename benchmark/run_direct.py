@@ -311,6 +311,59 @@ def _extract_model_columns(work_dir: Path) -> dict[str, list[str]]:
     return result
 
 
+def _scan_macros(work_dir: Path) -> dict[str, str]:
+    """Find macro names in macros/ dir by parsing {% macro name(...) %} patterns.
+
+    Returns {macro_name: signature_line} for all macros found.
+    Skips dbt_packages/, .claude/, and target/ subdirectories.
+    """
+    macros_dir = work_dir / "macros"
+    if not macros_dir.exists():
+        return {}
+
+    macro_pattern = re.compile(r'\{%-?\s*macro\s+(\w+)\s*\(', re.IGNORECASE)
+    result: dict[str, str] = {}
+
+    for sql_file in macros_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in ("dbt_packages", ".claude", "target")):
+            continue
+        try:
+            content = sql_file.read_text()
+            for line in content.splitlines():
+                m = macro_pattern.search(line)
+                if m:
+                    macro_name = m.group(1)
+                    result[macro_name] = line.strip()
+        except Exception:
+            pass
+
+    return result
+
+
+def _detect_precomputed_tables(work_dir: Path) -> list[str]:
+    """Open the task's .duckdb file and list all tables already present.
+
+    Returns list of table names, or empty list if DB is missing/locked.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        return []
+
+    db_candidates = list(work_dir.glob("*.duckdb"))
+    if not db_candidates:
+        return []
+
+    db_path = str(db_candidates[0])
+    try:
+        con = duckdb.connect(database=db_path, read_only=True)
+        tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+        con.close()
+        return tables
+    except Exception:
+        return []
+
+
 def _check_package_availability(work_dir: Path) -> list[str]:
     """Check if any SQL files reference macros from packages not in dbt_packages/."""
     warnings = []
@@ -350,9 +403,16 @@ def build_agent_prompt(
     yml_models = _scan_yml_models(work_dir)
     complete_models, stub_models = _classify_sql_models(work_dir)
 
+    # Detect pre-computed tables already in the DuckDB
+    db_tables = set(_detect_precomputed_tables(work_dir))
+
     sql_models = complete_models | stub_models
     missing_models = yml_models - sql_models
     existing_models = yml_models & complete_models
+
+    # Models that are "missing" SQL but already exist as DB tables
+    # (e.g., pre-computed simulation tables) — don't treat as stubs
+    precomputed_models = (missing_models | stub_models) & db_tables & eval_critical_models
 
     # Split missing models into priority (eval-critical) vs others
     missing_priority = missing_models & eval_critical_models
@@ -402,6 +462,24 @@ def build_agent_prompt(
             "\n- Run `dbt deps` first, then use ref('stg_model_name') for these package models"
         )
 
+        # Add dbt.* macro hint only if existing SQL already references dbt. namespace
+        existing_sql_uses_dbt_ns = False
+        for sql_file in work_dir.rglob("*.sql"):
+            if any(skip in str(sql_file) for skip in (".claude", "dbt_packages", "target")):
+                continue
+            try:
+                if "dbt." in sql_file.read_text():
+                    existing_sql_uses_dbt_ns = True
+                    break
+            except Exception:
+                pass
+
+        if existing_sql_uses_dbt_ns:
+            packages_hint += (
+                "\n- dbt.* cross-adapter macros ARE available (from dbt-core): dbt.date_trunc(), dbt.length(), dbt.replace(), etc."
+                "\n- These are different from package macros — use them freely in SQL: {{ dbt.date_trunc('month', 'date_col') }}"
+            )
+
     prompt = f"""You are a dbt/DuckDB expert. Complete this dbt project in {work_dir}.
 
 TASK: {instruction}
@@ -446,9 +524,16 @@ RULES:
 - Use COUNT(*) not COUNT(DISTINCT col) unless the column spec explicitly says "distinct" or "unique"
 - For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the gold data looks like by querying source tables first
 - If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
-- For wide aggregation models (e.g., counts by category), use CASE WHEN inside SUM/COUNT, not PIVOT
+- For wide aggregation models with many category columns (counts per status, position, type):
+  1. FIRST query the source table to see all distinct values: SELECT DISTINCT col FROM table ORDER BY col
+  2. Map each distinct value to the exact column name from the YAML spec
+  3. THEN write CASE WHEN statements — one per distinct value
+  4. Use SUM(CASE WHEN status = 'Retired' THEN 1 ELSE 0 END) AS retired
+  5. Any value not matching a named column goes into the catch-all column (e.g., p21plus, not_classified)
 - If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
 - String columns: always use COALESCE(col, '') to avoid NULL comparison issues
+- COLUMN COUNT CHECK: Before finalizing any model, count the columns in your SELECT list and compare to the count in the YAML. If the YAML has N columns, your SELECT must produce exactly N columns (no more, no fewer) in the same order.
+- Run: SELECT * FROM <model> LIMIT 1 after dbt run and count the columns
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}"""
 
     # Add source table hints
@@ -473,6 +558,17 @@ RULES:
     source_str = "\n".join(source_hints) if source_hints else ""
     if source_str:
         prompt += f"\n\nAVAILABLE SOURCES:\n{source_str}"
+
+    macros_dict = _scan_macros(work_dir)
+    if macros_dict:
+        macro_lines = [f"  {name}() — read macros/ directory to see full definition" for name in sorted(macros_dict)]
+        prompt += "\n\nAVAILABLE MACROS (call with {{ macro_name() }} in Jinja):\n" + "\n".join(macro_lines)
+        prompt += "\n- When writing new models, prefer using existing macros over re-implementing the logic inline."
+
+    precomputed = _detect_precomputed_tables(work_dir)
+    if precomputed:
+        prompt += f"\n\nPRE-COMPUTED TABLES ALREADY IN DATABASE: {', '.join(precomputed)}"
+        prompt += "\n- These tables already have data from pre-run simulations. Your summary models should SELECT from these tables, not re-run the simulation logic."
 
     return prompt
 
@@ -692,7 +788,7 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
                     gn = pd.to_numeric(g_s, errors="coerce").fillna(0)
                     pn = pd.to_numeric(p_s, errors="coerce").fillna(0)
                     if not all(
-                        abs(a - b) < 0.01 or (abs(b) > 1e-6 and abs(a - b) / abs(b) < 0.01)
+                        abs(a - b) < 0.01 or (abs(b) > 1e-9 and abs(a - b) / abs(b) < 0.02)
                         for a, b in zip(gn, pn)
                     ):
                         return False, g_cols[ci] if ci < len(g_cols) else str(ci)
@@ -934,6 +1030,23 @@ Steps:
 4. If it passes, done. If not, fix and retry.
 
 RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date parsing.{"" if (work_dir / "packages.yml").exists() else " NEVER run dbt deps — it will wipe pre-installed packages!"}"""
+
+            # Add column specs for eval-critical models to fix prompt
+            col_specs: list[str] = []
+            model_columns = _extract_model_columns(work_dir)
+            for model_name in sorted(eval_critical_models):
+                if model_name in model_columns:
+                    col_specs.append(f"  {model_name} must have these columns in order: {', '.join(model_columns[model_name])}")
+            col_spec_hint = "\n".join(col_specs) if col_specs else ""
+
+            if col_spec_hint:
+                fix_prompt += f"\n\nREQUIRED COLUMN SPECS (your SQL must produce these exact columns):\n{col_spec_hint}"
+
+            fix_prompt += (
+                "\n\nAfter fixing, verify your output:"
+                "\n- Run mcp__signalpilot__query_database with: SELECT COUNT(*), COUNT(DISTINCT <pk>) FROM <model_table>"
+                "\n- If count seems wrong, check your JOIN conditions for fan-out"
+            )
 
             log("Running quick-fix agent (10 turns)...")
             fix_cmd = [

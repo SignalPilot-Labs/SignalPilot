@@ -22,6 +22,7 @@ Not all required models are listed in `.yml` files. Before writing SQL, run two 
 2. **Instruction scan** — re-read the task instruction and extract every table or model name
    mentioned as a deliverable. If it has no .sql file, build it — even without a .yml entry.
    Use the task description and source schema DDL as your spec for columns and logic.
+3. **Macro scan** — before writing any model, list the files in `macros/` directory. Any `{% macro name(...) %}` defined there can be called from SQL models as `{{ name(...) }}`. Read the macro files to understand what they do — don't reinvent logic that's already in a macro.
 
 Tasks like `activity001` (19 `dataset__*` tables) and `f1001` (most_wins, most_retirements, etc.)
 fail specifically because the agent stops at pass 1. Always complete both passes.
@@ -151,6 +152,14 @@ or overwrite source data. Safe to use even when the name matches an existing Duc
 
 ## Wide Aggregation Pattern
 For models with many columns counting categories (e.g., counts by position, status, type):
+
+**Step 1 — Enumerate distinct values first:**
+```sql
+-- Before writing CASE WHEN, find out what values actually exist:
+SELECT DISTINCT position_desc FROM stg_results ORDER BY position_desc
+```
+
+**Step 2 — Map each distinct value to the YAML column name, then write CASE WHEN:**
 ```sql
 {{ config(materialized='table') }}
 SELECT
@@ -162,7 +171,12 @@ SELECT
 FROM {{ ref('stg_results') }}
 GROUP BY driver_id
 ```
-Use CASE WHEN inside SUM(), not PIVOT. Match column names exactly to YML.
+
+Rules:
+- Use CASE WHEN inside SUM(), not PIVOT. Match column names exactly to YML.
+- For status/category columns: enumerate distinct values from source FIRST, then write one CASE WHEN per value.
+- Any value not matching a named column goes into the catch-all column (e.g., p21plus, not_classified).
+- Do NOT guess category strings — query the source table to get exact casing and spelling.
 
 ## JOIN and Filter Correctness
 

@@ -789,26 +789,43 @@ def run_agent(
     log(f"Running: claude --model {model} --max-turns {max_turns} --mcp-config ... -p <prompt>")
     log(f"Work dir: {work_dir}")
 
-    start = time.monotonic()
-    result = subprocess.run(
-        claude_cmd,
-        cwd=str(work_dir),
-        capture_output=True,
-        text=True,
-        timeout=900,  # 15 min — some tasks need many turns
-    )
-    elapsed = time.monotonic() - start
+    # Retry on API overload (529) — up to 3 attempts with backoff
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        start = time.monotonic()
+        result = subprocess.run(
+            claude_cmd,
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            timeout=900,  # 15 min — some tasks need many turns
+        )
+        elapsed = time.monotonic() - start
 
-    # Stream output to console
-    if result.stdout:
-        for line in result.stdout.splitlines():
-            log(f"  [claude] {line}")
-    if result.stderr:
-        for line in result.stderr.splitlines():
-            log(f"  [claude:err] {line}", "WARN")
+        # Stream output to console
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                log(f"  [claude] {line}")
+        if result.stderr:
+            for line in result.stderr.splitlines():
+                log(f"  [claude:err] {line}", "WARN")
 
-    log(f"Claude CLI exit code: {result.returncode} ({elapsed:.1f}s)")
-    return result.returncode == 0
+        log(f"Claude CLI exit code: {result.returncode} ({elapsed:.1f}s)")
+
+        # Check for API overload (529) — retry with backoff
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0 and ("529" in output or "Overloaded" in output or "overloaded" in output):
+            if attempt < max_retries:
+                wait = 30 * attempt
+                log(f"API overloaded — retry {attempt}/{max_retries} in {wait}s...")
+                time.sleep(wait)
+                continue
+            else:
+                log(f"API overloaded after {max_retries} retries — giving up", "ERROR")
+
+        return result.returncode == 0
+
+    return False
 
 
 # ── Evaluation ─────────────────────────────────────────────────────────────────

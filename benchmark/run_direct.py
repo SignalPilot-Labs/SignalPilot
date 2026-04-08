@@ -655,6 +655,7 @@ Every column below must appear in your SELECT with correct values. Missing or wr
 DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. Run mcp__signalpilot__list_tables with connection_name="{instance_id}" (shows row counts, PKs, FKs)
+2b. Run mcp__signalpilot__get_date_boundaries with connection_name="{instance_id}". Note the GLOBAL MAX DATE — you MUST use this date (not current_date) as the endpoint for any date spine or GENERATE_SERIES.
 3. Run mcp__signalpilot__explore_table on at most 2 source tables. STOP after step 3 — begin writing SQL immediately.
 3b. Load skills: read .claude/skills/ — load dbt/patterns, dbt/expert, and duckdb/patterns skills now.
     Do this once before writing any SQL. Skills contain DuckDB syntax rules, date spine patterns,

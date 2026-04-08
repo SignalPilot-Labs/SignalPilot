@@ -607,7 +607,7 @@ Every column below must appear in your SELECT with correct values. Missing or wr
 DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. Run mcp__signalpilot__list_tables with connection_name="{instance_id}" (shows row counts, PKs, FKs)
-3. Run mcp__signalpilot__explore_table on 2-3 key source tables (shows sample values — critical for writing correct SQL)
+3. Run mcp__signalpilot__explore_table on at most 2 source tables. STOP after step 3 — begin writing SQL immediately.
 4. Read the YAML files that define the missing models to understand column requirements
 5. Read existing SQL files carefully — copy their join patterns, column naming, and macro usage exactly
 6. Write each missing .sql file (DuckDB SQL, use ref() and source() macros) — start with PRIORITY models
@@ -627,11 +627,12 @@ RULES:
 - Use ref('model_name') for upstream models, source('schema', 'table') for raw tables
 - Check existing SQL files for naming conventions before writing new ones
 - YML model definitions may contain a `refs:` key listing upstream model dependencies — use these as the primary guide for writing SQL
-- Read YML column specs carefully: every column listed must appear in your SELECT
+- COLUMN SPEC IS LAW: Before writing any .sql file, open the model's YML and copy the exact column names into your SELECT. Do not infer names — the YML is authoritative. A model missing one YML column scores zero for that column.
 - FOCUS: Complete all PRIORITY models first. Only work on OTHER models if PRIORITY models are done and working.
 - ROW ORDER: The evaluator ignores row ordering. Do NOT waste time on ORDER BY in model SQL — it has no effect on scoring.
 - SPEED: Don't over-explore. Read 1-2 source tables, read the YML, write the SQL. Iterate on errors.
 - VERIFY: After dbt run succeeds, query result tables to check row counts match expected data size. If a report table has far fewer rows than the source table, your WHERE/JOIN may be too restrictive.
+- BOUNDARY FILTERS: For any WHERE clause on a date or integer range, verify the inclusive/exclusive boundary. Run: SELECT COUNT(*) FROM source WHERE <filter> and confirm the row count matches your model before finishing.
 - Use COUNT(*) not COUNT(DISTINCT col) unless the column spec explicitly says "distinct" or "unique"
 - For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the gold data looks like by querying source tables first
 - If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
@@ -711,8 +712,8 @@ NEVER finish a priority model without running this 5-step audit."""
         prompt += f"\n\nPRE-COMPUTED TABLES ALREADY IN DATABASE: {', '.join(precomputed)}"
         prompt += "\n- These tables already have data from pre-run simulations. Your summary models should SELECT from these tables, not re-run the simulation logic."
 
-    checkpoint_turn = min(10, max_turns // 2)
-    exploration_end = 3
+    checkpoint_turn = min(6, max_turns // 3)
+    exploration_end = 2
     priority_deadline = max(4, max_turns - 8)
 
     prompt += f"""
@@ -728,7 +729,8 @@ If you reach turn {checkpoint_turn} and any priority model is still missing:
   - STOP all exploration and non-priority work immediately.
   - Write a minimal but syntactically correct SQL for each missing priority model right now.
   - A wrong-but-present model is evaluated and can be fixed; a missing model scores zero.
-  - Do NOT write more than 2 tool calls on any non-priority model until ALL priority models exist."""
+  - Do NOT write more than 2 tool calls on any non-priority model until ALL priority models exist.
+  - CRITICAL: Over-exploration is the #1 cause of missing models. list_tables counts as 1 of your 2 exploration turns."""
 
     prompt += """
 
@@ -741,6 +743,7 @@ Look for these silent failure patterns in the output:
 - A date column showing 1970 or far-future dates: date format mismatch (use STRPTIME).
 - A string column that echoes the join key instead of a label: wrong column in SELECT.
 - Any column that is identical for all 5 rows when it should vary: CASE WHEN literal typo.
+- SPOT CHECK: If the task description or YML references a specific entity (a name, year, or total), query SELECT <col> FROM <model> WHERE <known_condition> and verify it is present. A JOIN on the wrong key produces plausible but value-shifted output that passes row count checks.
 
 Fix any of the above before finishing. This costs 1 tool call and catches the most common
 silent-wrong-answer failures that pass row count checks but fail value evaluation."""

@@ -700,7 +700,7 @@ RULES:
 - {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}
 - COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
 - COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
-- DATE SPINES: When generating date series, query MIN/MAX dates from source data. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day')). Never hardcode date ranges."""
+- DATE SPINES: Call mcp__signalpilot__get_date_boundaries(connection_name="{instance_id}") to get the MAX source date. Use the returned GLOBAL MAX DATE as your spine endpoint — never use current_date, now(), or hardcoded ranges. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))."""
 
     # Add output table name requirement section before ROW COUNT VERIFICATION
     if eval_critical_models:
@@ -1617,6 +1617,14 @@ RULES:
     log(f"Evaluation finished in {time.monotonic()-t0:.2f}s")
     print(details)
     log_separator(f"RESULT: {'PASS' if passed else 'FAIL'}")
+
+    # Clean up connection to prevent cross-task leakage
+    try:
+        from gateway.store import delete_connection
+        delete_connection(instance_id)
+        log(f"Cleaned up connection '{instance_id}'")
+    except Exception:
+        pass
 
     sys.exit(0 if passed else 1)
 

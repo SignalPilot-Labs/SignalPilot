@@ -18,25 +18,24 @@ Rules:
 
 ## Date Spine — CURRENT_DATE Is Forbidden
 
-When generating date series, query MIN/MAX dates from source data:
+Before writing any date spine, call:
+  mcp__signalpilot__get_date_boundaries(connection_name="<your_connection>")
+
+This returns the MIN and MAX dates across ALL date/timestamp columns. The output includes
+a "GLOBAL MAX DATE" line — use that literal date as your spine endpoint.
+
+NEVER use CURRENT_DATE, now(), or current_timestamp as the spine endpoint. A spine
+extending to today produces hundreds of extra rows at eval time.
+
   UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))
-
-NEVER hardcode date ranges or use CURRENT_DATE, now(), or current_timestamp as the
-spine endpoint. A spine extending to today produces hundreds of extra rows at eval time.
-
-The spine endpoint MUST be the maximum date across ALL source tables that feed the pipeline:
-  SELECT GREATEST(
-    (SELECT MAX(created_date) FROM source1),
-    (SELECT MAX(close_date) FROM source2)
-  ) AS max_date
 
 After writing any date spine model, verify:
   SELECT MIN(date_col), MAX(date_col), COUNT(*) FROM <spine_model>
-The max date must match the latest date in your source data, NOT today.
+The max date must match the GLOBAL MAX DATE from get_date_boundaries, NOT today.
 
 For package-provided spine models (e.g. int_salesforce__date_spine, xero__calendar_spine),
 create an override model in models/ with the same name that replaces current_date with
-the data-derived max date. After building, run:
+the GLOBAL MAX DATE returned by get_date_boundaries. After building, run:
   grep -r "current_date\|CURRENT_DATE\|now()" models/
 If any hits remain, fix them.
 
@@ -136,12 +135,14 @@ DATE_TRUNC('month', date_col) AS month
 
 ## CRITICAL: Never use current_date as spine endpoint
 
-```sql
+Call mcp__signalpilot__get_date_boundaries first. Use the GLOBAL MAX DATE it returns.
+
 -- BAD — extends to today, produces hundreds of extra rows at eval time:
 end_date = current_date
 
--- GOOD — anchored to the actual data:
-end_date = (SELECT MAX(activity_date) FROM stg_activities)
-```
+-- GOOD — use the date returned by get_date_boundaries:
+end_date = DATE '2024-11-30'  -- copy the GLOBAL MAX DATE literally
 
-If a dbt package intermediate model (e.g. `int_salesforce__date_spine`) uses `current_date` internally, write a replacement `.sql` file in your `models/` directory that overrides it with `MAX(source_date)` from the source table.
+If a dbt package intermediate model (e.g. `int_salesforce__date_spine`) uses `current_date`
+internally, write a replacement `.sql` file in your `models/` directory that overrides it
+with the GLOBAL MAX DATE from get_date_boundaries.

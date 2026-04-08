@@ -319,6 +319,67 @@ def _create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> lis
     return created
 
 
+def _create_ephemeral_stubs(work_dir: Path) -> list[str]:
+    """Auto-create ephemeral stub SQL files for ref() targets that are raw DuckDB tables.
+
+    Scans all .sql files under models/ for {{ ref('...') }} calls, then for any
+    ref target that has no corresponding .sql file but does exist as a raw DuckDB
+    table, writes a minimal ephemeral stub so dbt compilation succeeds without
+    wasting agent turns on avoidable errors.
+
+    Returns list of model names for which stubs were created.
+    """
+    skip_dirs = (".claude", "dbt_packages", "target", "macros")
+
+    # Step 1: Collect all existing .sql file stems (the already-resolved models).
+    existing_sql_stems: set[str] = set()
+    for sql_file in work_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in skip_dirs):
+            continue
+        existing_sql_stems.add(sql_file.stem)
+
+    # Step 2: Scan models/ for {{ ref('name') }} and {{ ref("name") }} patterns.
+    ref_pattern = re.compile(r'\{\{\s*ref\(\s*[\'\"]([\w]+)[\'\"]\s*\)\s*\}\}')
+    ref_targets: set[str] = set()
+    models_dir = work_dir / "models"
+    scan_root = models_dir if models_dir.exists() else work_dir
+    for sql_file in scan_root.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in skip_dirs):
+            continue
+        try:
+            content = sql_file.read_text()
+            ref_targets.update(ref_pattern.findall(content))
+        except Exception:
+            pass
+
+    # Step 3: Compute unresolved ref targets.
+    unresolved = ref_targets - existing_sql_stems
+
+    if not unresolved:
+        return []
+
+    # Step 5: Get raw DuckDB table names for O(1) lookup.
+    duckdb_tables: set[str] = set(_detect_precomputed_tables(work_dir))
+
+    # Step 6: Write ephemeral stubs for unresolved refs that exist as DuckDB tables.
+    target_dir = models_dir if models_dir.exists() else work_dir
+    created: list[str] = []
+    for name in unresolved:
+        if name not in duckdb_tables:
+            continue
+        target_path = target_dir / f"{name}.sql"
+        if target_path.exists():
+            continue
+        stub_content = "{{ config(materialized='ephemeral') }}\n" + f"select * from main.{name}\n"
+        try:
+            target_path.write_text(stub_content)
+            created.append(name)
+        except Exception as exc:
+            log(f"Warning: could not create ephemeral stub for {name!r}: {exc}", "WARN")
+
+    return created
+
+
 def _extract_model_deps(work_dir: Path) -> dict[str, list[str]]:
     """Extract model dependency info (refs) from YML files."""
     import yaml
@@ -1066,6 +1127,11 @@ def main() -> None:
         created_templates = _create_sql_templates(work_dir, eval_critical_models)
         if created_templates:
             log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
+
+        # -- Auto-create ephemeral stubs for ref() targets that are raw DuckDB tables
+        created_stubs = _create_ephemeral_stubs(work_dir)
+        if created_stubs:
+            log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
 
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()

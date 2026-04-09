@@ -1,5 +1,5 @@
 ---
-description: "SQL query building strategies — schema exploration, multi-table joins, CTEs, subqueries, and result validation."
+description: "SQL query building: schema exploration order, CTE patterns, pre-join cardinality checks (detect duplicates on right-side before joining), JOIN fan-out self-check, result validation, and common pitfalls."
 ---
 
 # SQL Query Building
@@ -48,6 +48,14 @@ After getting query results:
 3. Are numeric results in the right order of magnitude?
 4. Check edge cases: empty results, NULL values, duplicate rows
 5. If counting, verify against a simpler `COUNT(*)` query
+
+## JOIN Fan-Out Self-Check
+
+Before finishing any model with JOINs:
+1. `SELECT COUNT(*) FROM model` — your output count
+2. `SELECT COUNT(DISTINCT <grain_key>) FROM <primary_source>` — expected count
+3. If (1) > (2): fan-out. Run: `SELECT join_key, COUNT(*) FROM model GROUP BY 1 HAVING COUNT(*) > 1`
+4. Fix: pre-aggregate the right-join table before joining, or use `SELECT DISTINCT`.
 
 ## Common Pitfalls
 - Forgetting GROUP BY for non-aggregated columns

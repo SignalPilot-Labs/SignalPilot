@@ -62,7 +62,33 @@ curl http://localhost:3300/api/connections  # should return []
 
 ## Running Benchmarks
 
-### Local runner (recommended)
+### Direct runner (recommended for benchmarking)
+
+The fastest runner. Uses Claude CLI directly with SignalPilot MCP. Works in `benchmark/_dbt_workdir/<instance_id>`.
+
+```bash
+# Run a single task
+CLAUDE_CODE_OAUTH_TOKEN=<token> python benchmark/run_direct.py chinook001
+
+# Options
+python benchmark/run_direct.py chinook001 --model claude-sonnet-4-6  # default model
+python benchmark/run_direct.py chinook001 --model claude-opus-4-6    # for harder tasks
+python benchmark/run_direct.py chinook001 --max-turns 30             # more turns
+python benchmark/run_direct.py chinook001 --skip-agent               # just eval existing results
+python benchmark/run_direct.py chinook001 --no-reset                 # keep previous workdir
+```
+
+**How it works:**
+1. Copies task dbt project + skills + `.mcp.json` to workdir
+2. Registers DuckDB with SignalPilot gateway
+3. Runs main agent (Claude CLI with MCP tools)
+4. Runs quick-fix agent if dbt build fails
+5. Runs value-verification agent
+6. Runs name-fix agent if eval-critical tables are missing
+7. Evaluates against gold standard
+8. Cleans up SignalPilot connection
+
+### Local runner
 
 No Docker required. Runs the agent directly on the host in `benchmark/test-env/<instance_id>`. Each run gets a clean workspace.
 

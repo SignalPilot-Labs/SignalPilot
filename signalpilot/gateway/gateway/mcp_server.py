@@ -481,7 +481,7 @@ async def list_tables(connection_name: str) -> str:
     if schema is None:
         from .connectors.pool_manager import pool_manager
         try:
-            extras = get_credential_extras(connection_name)
+            extras = {}
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
@@ -518,6 +518,123 @@ async def list_tables(connection_name: str) -> str:
             col_parts.append(name)
 
         lines.append(f"{key}{row_str}: {', '.join(col_parts)}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_date_boundaries(connection_name: str) -> str:
+    """
+    Get the MIN and MAX dates across all DATE and TIMESTAMP columns in a connection.
+
+    Queries every table to find date column boundaries. Use the returned
+    GLOBAL MAX DATE as your date spine endpoint — never use current_date,
+    now(), or current_timestamp as a spine endpoint.
+
+    Args:
+        connection_name: Name of a configured database connection
+
+    Returns:
+        Formatted string with per-table MIN/MAX dates and the global MAX date.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
+    from .connectors.schema_cache import schema_cache
+    from .connectors.pool_manager import pool_manager
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    schema = schema_cache.get(connection_name)
+    if schema is None:
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                schema = await connector.get_schema()
+        except Exception as e:
+            return f"Error: {e}"
+        schema_cache.put(connection_name, schema)
+
+    DATE_TYPE_KEYWORDS = ("date", "timestamp", "datetime")
+
+    lines = [f"Date boundaries for: {connection_name} ({conn_info.db_type})", ""]
+    global_max: str | None = None
+    found_any = False
+
+    for key in sorted(schema.keys()):
+        table = schema[key]
+        table_schema = table.get("schema", "")
+        table_name = table.get("name", key)
+        full_name = f"{table_schema}.{table_name}" if table_schema else table_name
+
+        date_cols = [
+            col for col in table.get("columns", [])
+            if any(kw in col.get("type", "").lower() for kw in DATE_TYPE_KEYWORDS)
+        ]
+
+        if not date_cols:
+            continue
+
+        found_any = True
+
+        select_parts = []
+        for col in date_cols:
+            col_name = col["name"]
+            quoted = f'"{col_name}"'
+            select_parts.append(f'MIN({quoted}) AS "min_{col_name}", MAX({quoted}) AS "max_{col_name}"')
+
+        quoted_table = f'"{table_schema}"."{table_name}"' if table_schema else f'"{table_name}"'
+        sql = f'SELECT {", ".join(select_parts)} FROM {quoted_table}'
+
+        col_results: dict[str, tuple[str | None, str | None]] = {}
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                rows = await connector.execute(sql)
+            if rows:
+                row = rows[0]
+                for col in date_cols:
+                    col_name = col["name"]
+                    min_val = row.get(f"min_{col_name}")
+                    max_val = row.get(f"max_{col_name}")
+                    col_results[col_name] = (
+                        str(min_val).split(" ")[0] if min_val is not None else None,
+                        str(max_val).split(" ")[0] if max_val is not None else None,
+                    )
+                    if max_val is not None:
+                        max_str = str(max_val).split(" ")[0]
+                        if global_max is None or max_str > global_max:
+                            global_max = max_str
+        except Exception:
+            for col in date_cols:
+                col_results[col["name"]] = (None, None)
+
+        lines.append(f"Table: {full_name}")
+        for col in date_cols:
+            col_name = col["name"]
+            col_type = col.get("type", "")
+            min_val, max_val = col_results.get(col_name, (None, None))
+            if col_name not in col_results:
+                lines.append(f"  {col_name} ({col_type}): (query failed)")
+            elif min_val is None and max_val is None:
+                lines.append(f"  {col_name} ({col_type}): (no data)")
+            else:
+                lines.append(f"  {col_name} ({col_type}): {min_val} → {max_val}")
+        lines.append("")
+
+    if not found_any:
+        return f"Date boundaries for: {connection_name} ({conn_info.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
+
+    if global_max:
+        lines.append(f"GLOBAL MAX DATE: {global_max}")
+        lines.append(f"Use DATE '{global_max}' as your date spine endpoint — NOT current_date")
+    else:
+        lines.append("GLOBAL MAX DATE: (no non-null date values found)")
 
     return "\n".join(lines)
 
@@ -624,7 +741,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/join-paths",
             params={"from_table": from_table, "to_table": to_table, "max_hops": max_hops, "include_implicit": "true"},
@@ -664,7 +781,7 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/relationships",
             params={"format": format},
@@ -706,7 +823,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/explore-table",
             params={"table": table_name, "include_samples": True},
@@ -780,7 +897,7 @@ async def schema_overview(connection_name: str) -> str:
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
-    async with httpx.AsyncClient(base_url=GATEWAY_URL, timeout=30) as client:
+    async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(f"/api/connections/{connection_name}/schema/overview")
         if resp.status_code != 200:
             return f"Error: {resp.text}"
@@ -1447,62 +1564,6 @@ async def explore_column(
 
     except Exception as e:
         return f"Error: {e}"
-
-
-@mcp.tool()
-async def find_join_path(connection_name: str, from_table: str, to_table: str, max_hops: int = 4) -> str:
-    """
-    Find join paths between two tables — critical for multi-table queries.
-
-    Uses BFS over the FK graph plus inferred joins from column naming
-    conventions (e.g., customer_id → customers.id). Works even on databases
-    without FK declarations (data lakes, Databricks, ClickHouse, etc.).
-
-    Example output: orders → order_items.order_id = orders.id → products.id = order_items.product_id
-
-    Args:
-        connection_name: Database connection to search.
-        from_table: Source table (e.g., 'public.orders' or just 'orders').
-        to_table: Target table (e.g., 'public.products' or just 'products').
-        max_hops: Maximum FK hops to search (1-6, default 4).
-    """
-    err = _validate_connection_name(connection_name)
-    if err:
-        return err
-
-    gw = _gateway_url()
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{gw}/api/connections/{connection_name}/schema/join-paths",
-                params={
-                    "from_table": from_table,
-                    "to_table": to_table,
-                    "max_hops": min(max_hops, 6),
-                    "include_implicit": "true",
-                },
-            )
-            if resp.status_code != 200:
-                return f"Error: {resp.text}"
-            data = resp.json()
-
-        paths = data.get("paths", [])
-        if not paths:
-            return f"No join path found between '{from_table}' and '{to_table}' within {max_hops} hops.\nTry checking the schema/relationships endpoint to see available FK connections."
-
-        lines = [f"Found {len(paths)} join path(s) from {from_table} → {to_table}:", ""]
-        for i, path in enumerate(paths):
-            lines.append(f"Path {i + 1} ({path['hops']} hop{'s' if path['hops'] != 1 else ''}):")
-            lines.append(f"  Tables: {' → '.join(path['tables'])}")
-            for join in path.get("joins", []):
-                lines.append(f"  JOIN ON {join['from']} = {join['to']}")
-            if path.get("sql_hint"):
-                lines.append(f"  SQL: {path['sql_hint']}")
-            lines.append("")
-
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Error finding join paths: {e}"
 
 
 @mcp.tool()

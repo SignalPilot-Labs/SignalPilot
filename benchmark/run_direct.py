@@ -391,7 +391,7 @@ def _scan_current_date_models(work_dir: Path) -> list[tuple[str, int, str]]:
         try:
             content = sql_file.read_text()
             for i, line in enumerate(content.splitlines(), 1):
-                if re.search(r'\bcurrent_date\b|\bCURRENT_DATE\b|\bnow\(\)', line):
+                if re.search(r'\bcurrent_date\b|\bCURRENT_DATE\b|\bnow\(\)|\bcurrent_timestamp\b|\bCURRENT_TIMESTAMP\b|\bcurrent_timestamp_backcompat\b|\bgetdate\(\)', line, re.IGNORECASE):
                     rel_path = str(sql_file.relative_to(work_dir))
                     matches.append((rel_path, i, line.strip()))
         except Exception:

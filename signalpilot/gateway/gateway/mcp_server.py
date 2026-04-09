@@ -2142,6 +2142,183 @@ async def validate_model_output(
     return "\n".join(lines)
 
 
+@mcp.tool()
+async def audit_model_sources(
+    connection_name: str,
+    model_name: str,
+    source_tables: str,
+    sample_nulls: bool = True,
+) -> str:
+    """
+    Single-call cardinality audit for a materialized dbt model and its sources.
+
+    Queries all upstream source tables and the model itself, computes row count
+    ratios (fan-out / over-filter detection), and optionally scans every output
+    column for NULL fraction and constant-value patterns.
+
+    Args:
+        connection_name: Name of a configured database connection
+        model_name: Name of the materialized dbt model to audit
+        source_tables: Comma-separated list of upstream source/staging tables (1-10)
+        sample_nulls: If True, run NULL-fraction and constant-value scan on output columns
+
+    Returns:
+        Formatted diagnostic report, or an error message.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if not model_name or not _MODEL_NAME_RE.match(model_name):
+        return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
+    if not source_tables or not source_tables.strip():
+        return "Error: source_tables cannot be empty. Provide at least one upstream table name."
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    from .connectors.pool_manager import pool_manager
+
+    # Step 1: Get model row count.
+    try:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
+    except Exception as e:
+        return f"Error: could not query model '{model_name}': {e}"
+
+    model_rows: int = model_result[0].get("row_count", 0) if model_result else 0
+
+    # Step 2: Parse and validate source table names.
+    raw_sources = [s.strip() for s in source_tables.split(",") if s.strip()]
+    if len(raw_sources) > 10:
+        raw_sources = raw_sources[:10]
+
+    # Step 3: Query each source table, compute ratio, classify.
+    source_lines: list[str] = []
+    diagnosis_lines: list[str] = []
+
+    for src in raw_sources:
+        if not _MODEL_NAME_RE.match(src):
+            source_lines.append(f"  {src}:  ERROR: invalid table name (skipped)")
+            continue
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{src}"')
+            src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
+        except Exception as e:
+            source_lines.append(f"  {src}:  ERROR: {e}")
+            continue
+
+        if src_rows == 0:
+            ratio_str = "N/A"
+            classification = "WARNING: source has 0 rows"
+            diagnosis_lines.append(f"  - {src} has 0 rows: source table may be empty or not yet built")
+        else:
+            ratio = model_rows / src_rows
+            ratio_str = f"{ratio:.2f}x"
+            if ratio < 0.5:
+                classification = "WARNING: OVER-FILTER — fewer model rows than source (check LEFT vs INNER JOIN or WHERE clause)"
+                diagnosis_lines.append(
+                    f"  - {src} ratio {ratio_str}: check if INNER JOIN should be LEFT JOIN, or remove over-restrictive WHERE"
+                )
+            elif ratio > 2.0:
+                classification = "WARNING: FAN-OUT — model has more rows than source (check for missing pre-aggregation or cross-join)"
+                diagnosis_lines.append(
+                    f"  - {src} ratio {ratio_str}: pre-aggregate or deduplicate {src} before joining; check join key uniqueness"
+                )
+            else:
+                classification = "OK"
+
+        label = src.ljust(20)
+        source_lines.append(f"  {label} {src_rows:>10,} rows  → ratio {ratio_str:<8} {classification}")
+
+    # Step 4: NULL-fraction and constant-value scan on output columns.
+    col_scan_lines: list[str] = []
+    col_scan_header = ""
+
+    if sample_nulls and model_rows > 0:
+        _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                pragma_rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
+            all_cols = [r.get("name", "") for r in pragma_rows if r.get("name")]
+            total_col_count = len(all_cols)
+            cols = all_cols[:20]
+
+            if total_col_count > 20:
+                col_scan_header = f"Column scan (showing first 20 of {total_col_count} cols):"
+            else:
+                col_scan_header = f"Column scan ({len(cols)} cols):"
+
+            for col in cols:
+                if not _SAFE_COL_RE.match(col):
+                    col_scan_lines.append(f"  [--] {col}: skipped (unsafe column name)")
+                    continue
+                try:
+                    async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                        col_result = await connector.execute(
+                            f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
+                            f'COUNT(DISTINCT "{col}") as dist '
+                            f'FROM "{model_name}"'
+                        )
+                    null_count: int = col_result[0].get("nulls", 0) if col_result else 0
+                    dist_count: int = col_result[0].get("dist", 0) if col_result else 0
+                    null_frac = null_count / model_rows if model_rows > 0 else 0.0
+
+                    col_label = col.ljust(24)
+                    if dist_count == 1:
+                        col_scan_lines.append(
+                            f"  [!!] {col_label}  {dist_count:>8,} distinct — CONSTANT: all rows same value (check CASE WHEN literal or SELECT alias)"
+                        )
+                        diagnosis_lines.append(
+                            f"  - {col} CONSTANT: verify CASE WHEN literals match source values (run SELECT DISTINCT on source col)"
+                        )
+                    elif null_frac > 0.5:
+                        pct = null_frac * 100
+                        col_scan_lines.append(
+                            f"  [!!] {col_label}  {null_count:>8,} nulls ({pct:.1f}%) — LEFT JOIN may be dropping values; use COALESCE or fix join key"
+                        )
+                        diagnosis_lines.append(
+                            f"  - {col} {pct:.0f}% null: verify join key is correct; consider COALESCE({col}, 0) if nulls are valid zeros"
+                        )
+                    else:
+                        col_scan_lines.append(
+                            f"  [OK]  {col_label}  {dist_count:>8,} distinct, {null_count:,} nulls"
+                        )
+                except Exception as e:
+                    col_scan_lines.append(f"  [--] {col}: error ({e})")
+
+        except Exception:
+            col_scan_header = "Column scan: unavailable (PRAGMA table_info failed)"
+
+    elif sample_nulls and model_rows == 0:
+        col_scan_header = "Column scan: skipped (model has 0 rows)"
+
+    # Step 5: Assemble report.
+    report_lines: list[str] = [
+        f"Source audit for model '{model_name}' ({model_rows:,} rows):",
+        "",
+        "Sources:",
+    ]
+    report_lines.extend(source_lines)
+
+    if col_scan_header:
+        report_lines.append("")
+        report_lines.append(col_scan_header)
+        report_lines.extend(col_scan_lines)
+
+    if diagnosis_lines:
+        report_lines.append("")
+        report_lines.append("Diagnosis:")
+        report_lines.extend(diagnosis_lines)
+
+    return "\n".join(report_lines)
+
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main():

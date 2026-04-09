@@ -163,6 +163,7 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__check_model_schema` — compare materialized columns vs YML expected columns
 - `mcp__signalpilot__validate_model_output` — row count + fan-out detection post-build
 - `mcp__signalpilot__analyze_grain` — check cardinality / unique keys
+- `mcp__signalpilot__audit_model_sources` — single-call cardinality audit: row counts for all upstream sources + model output, fan-out/over-filter ratios, NULL fraction and constant-value scan on all output columns
 - `mcp__signalpilot__dbt_error_parser` — parse dbt error text into fix suggestions
 - `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
 
@@ -703,6 +704,11 @@ DO THIS IN ORDER:
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
    d. Run: mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
       → 0 rows = fix JOIN/WHERE and go back to step c. Fan-out = pre-aggregate or ROW_NUMBER() dedup.
+   d2. Run: mcp__signalpilot__audit_model_sources connection_name="{instance_id}" model_name="<model>" source_tables="<comma-separated upstream tables>"
+       → FAN-OUT ratio > 2x = pre-aggregate the source or deduplicate with ROW_NUMBER() before joining
+       → OVER-FILTER ratio < 0.5 = check if INNER JOIN should be LEFT JOIN or if WHERE is too restrictive
+       → CONSTANT column = CASE WHEN literal mismatch or wrong SELECT alias — run SELECT DISTINCT on source col
+       → 50%+ NULL column = LEFT JOIN dropping values — verify join key; COALESCE if nulls are valid
    e. Run: mcp__signalpilot__check_model_schema connection_name="{instance_id}" model_name="<model>" yml_columns="<exact comma-separated cols from YML>"
       → MISSING columns = add to SQL, go back to step c. Do NOT proceed until all columns match.
    MODEL IS COMPLETE only when c + d + e all pass. Then move to the next model.

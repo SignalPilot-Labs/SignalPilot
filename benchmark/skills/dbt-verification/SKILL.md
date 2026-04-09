@@ -33,6 +33,23 @@ If MISSING columns reported: add them to SQL, re-run dbt. Do NOT finish until al
 
 `validate_model_output` also detects fan-out. If fan-out detected: pre-aggregate the right-side table before joining, or use `ROW_NUMBER()` dedup.
 
+### Step 3b — Full Source Cardinality Audit (replaces manual fan-out checks)
+
+Run this ONCE after every successful build, passing ALL tables you joined:
+```
+mcp__signalpilot__audit_model_sources(
+  connection_name="<id>",
+  model_name="<model>",
+  source_tables="table_a, table_b, table_c"
+)
+```
+
+Interpreting results:
+- **FAN-OUT (ratio > 2x)**: The model output is larger than a source. Pre-aggregate that source before joining, or add a deduplication step with ROW_NUMBER().
+- **OVER-FILTER (ratio < 0.5)**: The model output is less than half of a source. Change INNER JOIN to LEFT JOIN, or identify and remove the over-restrictive WHERE clause.
+- **CONSTANT column**: Every output row has the same value. Run `SELECT DISTINCT <col> FROM <source_table>` — your CASE WHEN literal likely doesn't match any source value.
+- **50%+ NULL column**: A LEFT JOIN is silently dropping most values. Verify the join key column name is correct on both sides.
+
 ### Step 4 — Grain / Cardinality Check
 
 ```

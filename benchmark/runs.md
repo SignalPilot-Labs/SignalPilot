@@ -1,8 +1,8 @@
 # Spider2-DBT Benchmark Runs
 
-## Score: 27/65 evaluable = 41.5%
+## Score: 29/65 evaluable = 44.6%
 
-## Passing Tasks (25)
+## Passing Tasks (29)
 
 | Task | Tables Checked | Notes |
 |------|---------------|-------|
@@ -33,8 +33,10 @@
 | workday002 | workday__* models | Clean pass |
 | intercom001 | admin, company models | **NEW FLIP** — LEFT JOIN guidance preserved all admins |
 | hive001 | covid_cases, stg_covid__cases | **NEW FLIP** — Agent got 558 rows matching gold on retry |
+| quickbooks003 | quickbooks__* models | **NEW FLIP** — Date spine capped by get_date_boundaries |
+| f1003 | stg_f1_dataset__drivers | **NEW FLIP** — current_date in age calc replaced with get_date_boundaries max |
 
-## Failing Tasks (38 evaluable failures)
+## Failing Tasks (36 evaluable failures)
 
 | Task | Result | Category | Root Cause | How to Fix |
 |------|--------|----------|------------|------------|
@@ -48,7 +50,6 @@
 | divvy001 | Both FAIL | D - Logic | r_id hash uses `ride_id \|\| '-' \|\| started_at::varchar` but timestamp varchar format varies | Use explicit strftime format in hash concatenation |
 | f1001 | All 4 tables FAIL | D - Logic | Statistics computed incorrectly (podiums, poles, fastest_laps) — wrong status codes or window functions | Requires careful F1 domain logic for each stat table |
 | f1002 | Tables built but values wrong (finishes_by_constructor, driver_championships) | D - Logic | Values consistently wrong across runs | Requires deeper investigation into F1 logic for these tables |
-| f1003 | stg_f1_dataset__drivers driver_current_age values wrong | D - Logic | Uses current_date for age calculation instead of a fixed reference date | Replace current_date with a fixed reference date matching gold |
 | flicks001 | Both FAIL (56754→44729, 60983→57546) | B - JOIN | INNER JOIN between credits and movies drops actors not in movies | Include shows or use LEFT JOIN; check if credits span movies+shows |
 | hive001 | **PASS** | — | **FLIPPED** — Agent got 558 rows matching gold on retry | — |
 | intercom001 | **PASS** | — | **FLIPPED** — LEFT JOIN guidance worked, agent preserved all 4 admins | — |
@@ -59,7 +60,6 @@
 | playbook002 | attribution PASS, cpa FAIL (5 vs 2) | B - JOIN | INNER JOIN between attribution and spend drops sources with no spend | Change to LEFT JOIN or FULL OUTER JOIN |
 | provider001 | provider PASS, specialty FAIL (874 vs 460) | B - JOIN | Agent joins only codes WITH Medicare crosswalk entries | LEFT JOIN from nucc_taxonomy to crosswalk, keeping all 874 codes |
 | quickbooks001 | FAIL - unique_id values wrong | D - Logic | Surrogate key uses different field list than gold's canonical definition | Match exact surrogate_key field list from reference implementation |
-| quickbooks003 | Both FAIL (276→352, 759→968) | A - Date spine | General ledger date spine uses current_date, extending beyond source data | Cap spine end at max(transaction_date) |
 | recharge001 | FAIL - amount values wrong | D - Logic | Decimal precision or sort order for charge_row_num differs from gold | Align amount precision and row numbering sort order |
 | recharge002 | customer_daily_rollup 124-134 vs 122 rows consistently | C - Row count | Row count consistently high by 2-12 rows across runs | Investigate date spine or join logic adding extra rows |
 | reddit001 | posts FAIL (30970 vs 30971), comments FAIL (column missing) | F+C | Off by 1 row + missing hour_comment_created_at column | Add missing column; investigate 1-row discrepancy |
@@ -72,7 +72,7 @@
 | tpch001 | client_purchase_status fan-out (76777-150000 vs 75007) | C - Row count | Fan-out in join produces consistently wrong row counts | Investigate join keys causing fan-out in client_purchase_status |
 | tpch002 | Both tables MISSING | E - Build | Agent left placeholder stubs, never wrote actual SQL | Implement TPC-H Query 2 variants for EUR and UK suppliers |
 | twilio001 | number PASS, account FAIL | D - Logic | total_messages_spend sums all messages; gold may only count outbound | Verify which message types contribute to spend total |
-| xero001 | FAIL (1194 vs 1170, 24 off) | A - Date spine | Calendar spine uses current_date + 1 month; improved from 1574→1194 rows (gold=1170) | Cap at max(journal_date) |
+| xero001 | FAIL (1174 vs 1170, 4 off) | A - Date spine | Calendar spine uses current_date + 1 month; improved from 1574→1194→1174 rows (gold=1170) | Cap at max(journal_date) |
 | xero_new001 | FAIL (column + row mismatch) | A+F | Same CURRENT_DATE spine + column schema differences | Fix spine + align column list |
 | xero_new002 | FAIL (1194 vs 1170, 24 off) | A - Date spine | Same as xero001; improved from 1574→1194 rows (gold=1170) | Cap at max(journal_date) |
 | zuora001 | daily PASS, overview FAIL | A - Date | account_active_months uses CURRENT_DATE → datediff differs from gold | Replace CURRENT_DATE with max source date in active_months calc |
@@ -102,7 +102,7 @@
 | Task | Symptom | Likely Cause |
 |------|---------|--------------|
 | f1002 | finishes_by_constructor, driver_championships values wrong | F1 domain logic error introduced or exposed |
-| f1003 | driver_current_age values wrong | Uses current_date for age calc instead of fixed reference date |
+| f1003 | **RECOVERED** — passed after get_date_boundaries fix | current_date replaced with get_date_boundaries max |
 | hive001 | **RECOVERED** — passed on retry | Was non-deterministic, not a true regression |
 | recharge002 | customer_daily_rollup 124-134 vs 122 rows consistently | Date spine or join producing extra rows |
 | tpch001 | client_purchase_status fan-out (76777-150000 vs 75007) | Join fan-out on client_purchase_status |

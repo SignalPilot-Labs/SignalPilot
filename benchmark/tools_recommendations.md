@@ -1,6 +1,6 @@
 # Tool Recommendations for Spider2-DBT Benchmark
 
-## Current Score: 27/65 = 41.5% (Databao: 30/68 = 44.11%)
+## Current Score: 29/65 = 44.6% (Databao: 30/68 = 44.11%)
 
 ## Round 2 Test Results (with consolidated skills + auto-discovery)
 
@@ -15,6 +15,32 @@
 
 ### Key Finding: Agent NOT consistently invoking /dbt-verification
 Skills are discoverable (confirmed via testing) but agent skips step 5. Strengthened prompt language.
+
+## Round 3 Results (per-model verification loop + expanded current_date scan)
+
+**Key Change**: Restructured prompt from "build all models then verify" to "per-model loop: build → verify → fix → next". Also expanded `current_date` scanner to catch `current_timestamp`, `current_timestamp_backcompat`, `getdate()`.
+
+**New Flips**:
+| Task | Before | After | Root Cause Fixed |
+|------|--------|-------|-----------------|
+| quickbooks003 | FAIL (1536/4224 rows) | PASS | Date spine capped by get_date_boundaries |
+| f1003 | FAIL (wrong ages) | PASS | current_date in age calc replaced with get_date_boundaries max |
+
+**Improvements Without Flipping**:
+| Task | Before | After | Gold | Notes |
+|------|--------|-------|------|-------|
+| xero001 | 1194 rows | 1174 rows | 1170 | Down from 24 off to 4 off |
+
+**Verification Tool Usage** (per-model loop):
+- ~60% of tasks now call validate_model_output and check_model_schema
+- Previously: 0% called any verification tools
+- Tasks that use verification: playbook002, reddit001, provider001, netflix001, xero001, zuora001, pendo001, recharge002
+- Tasks that skip verification: flicks001, quickbooks003, synthea001, twilio001
+
+**No Regressions**: airport001, retail001, tickit001 all still PASS
+
+### Key Finding: Skills don't work in -p mode
+Slash commands like `/dbt-verification` are never invoked in non-interactive `-p` mode. Fixed by inlining verification MCP tool calls directly into the per-model build loop. The structural change (verification as a sub-step of building) is more effective than prompt warnings ("DO NOT STOP").
 
 ### Key Finding: xero001 reclassified
 Previously Category A (date spine). Actual: Category D (logic error). Calendar spine matches gold (69 rows). Extra account included for 24 months.
@@ -75,11 +101,11 @@ The agent must learn to use the MCP verification tools on its own. We enforce th
 
 | # | Action | Tasks it could flip | Effort |
 |---|--------|-------------------|--------|
-| 1 | Get agent to reliably invoke /dbt-verification | All failing with schema/count issues | Prompt tuning |
-| 2 | Per-table date boundary MCP tool | shopify001, pendo001, quickbooks003 | Low |
-| 3 | Deterministic surrogate key macro | superstore001 | Low |
-| 4 | Better JOIN guidance in workflow skill | playbook002, flicks001 | Skill update |
-| 5 | Increase max_turns for complex tasks | f1001, tpch002 | Config change |
+| 1 | Improve current_date replacement guidance | zuora001, recharge002, f1003-related | Low — scan works, agent needs stronger replacement guidance |
+| 2 | Ensure agent replaces ALL current_timestamp variants | xero_new001, xero_new002, shopify001 | Medium — agent partially fixes but misses some files |
+| 3 | Better column discovery (agent reads incomplete YML) | reddit001, social_media001, nba001, scd001 | Medium — need tool to compare against actual table columns |
+| 4 | Per-table date boundary (not just global max) | shopify001, pendo001 | Medium — new MCP tool |
+| 5 | Increase max_turns for complex tasks | f1001, tpch002, social_media001, jira001 | Config change |
 
 ## Competitor Analysis (Databao - #1 at 44.11%)
 
@@ -93,7 +119,7 @@ From their approach:
 
 | Task | Category | Root Cause | Fix Strategy |
 |------|----------|-----------|-------------|
-| xero001 | D (was A) | Extra account in BSR. Calendar spine correct. | Filter accounts in balance_sheet_report |
+| xero001 | A | 1174 rows vs gold 1170 (down from 1194). Calendar spine still slightly over-extends. | Cap spine tighter at max(journal_date) |
 | shopify001 | A | Calendar uses global max (Sep 12) not order max (Sep 7) | Per-table date boundary tool |
 | playbook002 | B | INNER JOIN in cpa_and_roas drops sources without spend | LEFT JOIN or FULL OUTER JOIN |
 | reddit001 | F+C | Missing hour_comment_created_at + prod_tables_joined | Agent must read YML more carefully |

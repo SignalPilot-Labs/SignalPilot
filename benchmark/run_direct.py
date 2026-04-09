@@ -694,7 +694,7 @@ RULES:
 - VERIFY: After dbt run succeeds, query result tables to check row counts match expected data size. If a report table has far fewer rows than the source table, your WHERE/JOIN may be too restrictive.
 - BOUNDARY FILTERS: For any WHERE clause on a date or integer range, verify the inclusive/exclusive boundary. Run: SELECT COUNT(*) FROM source WHERE <filter> and confirm the row count matches your model before finishing.
 - Use COUNT(*) not COUNT(DISTINCT col) unless the column spec explicitly says "distinct" or "unique"
-- For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the gold data looks like by querying source tables first
+- For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the target output pattern looks like by querying source tables first
 - If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
 - For wide aggregation models with many category columns (counts per status, position, type):
   1. FIRST query the source table to see all distinct values: SELECT DISTINCT col FROM table ORDER BY col

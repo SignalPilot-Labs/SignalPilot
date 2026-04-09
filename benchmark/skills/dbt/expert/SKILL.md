@@ -82,8 +82,7 @@ Not all required models are listed in `.yml` files. Before writing SQL, run two 
    Use the task description and source schema DDL as your spec for columns and logic.
 3. **Macro scan** — before writing any model, list the files in `macros/` directory. Any `{% macro name(...) %}` defined there can be called from SQL models as `{{ name(...) }}`. Read the macro files to understand what they do — don't reinvent logic that's already in a macro.
 
-Tasks like `activity001` (19 `dataset__*` tables) and `f1001` (most_wins, most_retirements, etc.)
-fail specifically because the agent stops at pass 1. Always complete both passes.
+Tasks that require building many dataset models or multiple aggregation tables fail when the agent stops at YAML discovery alone. Always complete both passes.
 
 ## Build the Dependency Graph Before Writing Any SQL
 Before writing a single model:

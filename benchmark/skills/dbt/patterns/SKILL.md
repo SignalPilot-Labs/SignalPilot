@@ -85,7 +85,7 @@ SELECT customer_id, month, mrr,
 FROM mrr
 ```
 
-## Customer Status Bucketing (tpch001 pattern)
+## Customer Status Bucketing
 
 Aggregate first in a CTE, classify in the outer SELECT. Highest threshold goes first.
 

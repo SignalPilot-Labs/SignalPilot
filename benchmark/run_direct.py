@@ -1655,6 +1655,18 @@ RULES:
         # Row-count and value-fix agents removed — they leaked gold data
         # (gold row counts and sample values were passed directly to fix agents)
 
+    # ── Clean up MCP connection pool before evaluation ──────────────────────
+    # The SDK's MCP server subprocess may still hold DuckDB connections open.
+    # Delete the connection entry to force release, then sleep briefly for
+    # any WAL flush to complete.
+    try:
+        from gateway.store import delete_connection as _del_conn
+        _del_conn(instance_id)
+        log(f"Released MCP connection '{instance_id}' before evaluation")
+    except Exception:
+        pass
+    time.sleep(1)  # Allow DuckDB WAL flush
+
     # ── Evaluate ───────────────────────────────────────────────────────────────
     t0 = time.monotonic()
     log_separator("Step 5: Evaluate against gold standard")

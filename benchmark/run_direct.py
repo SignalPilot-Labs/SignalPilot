@@ -125,6 +125,9 @@ def prepare_workdir(instance_id: str) -> Path:
     else:
         log(f"Skills directory not found: {SKILLS_SRC}", "WARN")
 
+    # Initialize a git repo so Claude Code discovers skills in .claude/skills/
+    subprocess.run(["git", "init"], cwd=str(dst), capture_output=True)
+
     return dst
 
 
@@ -155,14 +158,20 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__validate_sql` — check SQL syntax without executing
 - `mcp__signalpilot__debug_cte_query` — test CTE steps independently
 - `mcp__signalpilot__explain_query` — get execution plan
-- `mcp__signalpilot__check_model_schema` — compare materialized table columns vs expected YML columns
-- `mcp__signalpilot__analyze_grain` — analyze table cardinality and grain (unique keys, fan-out)
-- `mcp__signalpilot__validate_model_output` — post-build row count validation with fan-out detection
-- `mcp__signalpilot__generate_sql_skeleton` — generate SQL template from column list
-- `mcp__signalpilot__dbt_error_parser` — parse dbt errors into actionable fix suggestions
 
-## Workflow
-Follow the step-by-step instructions provided in the agent prompt. Do NOT modify .yml or .yaml files.
+## Verification & Analysis Tools (use after dbt build)
+- `mcp__signalpilot__check_model_schema` — compare materialized columns vs YML expected columns
+- `mcp__signalpilot__validate_model_output` — row count + fan-out detection post-build
+- `mcp__signalpilot__analyze_grain` — check cardinality / unique keys
+- `mcp__signalpilot__dbt_error_parser` — parse dbt error text into fix suggestions
+- `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
+
+## Skills (invoke with /skill-name)
+You have 4 skills available. Use them at the right time:
+- `/dbt-workflow` — BEFORE writing any SQL model. Covers JOIN selection, output shape, column contracts.
+- `/duckdb-sql` — WHEN writing DuckDB SQL. Covers syntax gotchas, date functions, type casting.
+- `/dbt-verification` — AFTER dbt build succeeds. MANDATORY for each priority model. Contains exact tool calls.
+- `/dbt-debugging` — WHEN dbt fails or output looks wrong. Error parsing, fan-out/over-filter diagnosis.
 """
     (work_dir / "CLAUDE.md").write_text(content)
     log(f"Wrote CLAUDE.md to {work_dir}")
@@ -663,82 +672,37 @@ def build_agent_prompt(
             )
 
     prompt = f"""You are a dbt/DuckDB expert. Complete this dbt project in {work_dir}.
-You have a budget of {max_turns} turns (tool calls). Plan accordingly — do not exhaust turns on exploration.
+You have a budget of {max_turns} turns. Plan accordingly — do not exhaust turns on exploration.
 
 TASK: {instruction}
 
 DATABASE: SignalPilot connection '{instance_id}' (DuckDB). Use mcp__signalpilot__* tools.
-SKILLS: Before writing SQL, read .claude/skills/ and load any skill whose description matches your task.
 
 MISSING SQL MODELS — PRIORITY (evaluated, must complete): {priority_str}
 MISSING SQL MODELS — OTHER (write if time permits): {other_missing_str}
 INCOMPLETE SQL (stubs — must rewrite): {stubs_str}
 EXISTING SQL MODELS: {existing_str}
 
-MODEL DEPENDENCIES (build order — write dependencies first):
+MODEL DEPENDENCIES (write dependencies first):
 {deps_str}
 
 REQUIRED COLUMNS FOR PRIORITY MODELS:
-The evaluator checks that each expected column exists in your output (matched by VALUES, not position).
-Every column below must appear in your SELECT with correct values. Missing or wrong-valued columns = failure.
 {col_spec_str}
 
 DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
-2. Run mcp__signalpilot__list_tables with connection_name="{instance_id}" (shows row counts, PKs, FKs)
-2b. Run mcp__signalpilot__get_date_boundaries with connection_name="{instance_id}". Note the GLOBAL MAX DATE — you MUST use this date (not current_date) as the endpoint for any date spine or GENERATE_SERIES.
-3. Run mcp__signalpilot__explore_table on at most 2 source tables. STOP after step 3 — begin writing SQL immediately.
-3b. Load skills: read .claude/skills/ — load dbt/patterns, dbt/expert, and duckdb/patterns skills now.
-    Do this once before writing any SQL. Skills contain DuckDB syntax rules, date spine patterns,
-    output shape inference, and cardinality checks.
-4. Read the YAML files that define the missing models to understand column requirements
-4b. Re-read the TASK instruction above and scan for model names mentioned there that do not appear in any YML file. These must also have .sql files — the YML list is not always complete.
-4c. Open every `.md` file in the models/ directory — these files contain `{{% docs %}}` blocks that specify exact category label strings. These OVERRIDE any defaults. Copy strings character-for-character from these docs into your CASE WHEN statements.
-5. Read existing SQL files carefully — copy their join patterns, column naming, and macro usage exactly
-6. Write each missing .sql file (DuckDB SQL, use ref() and source() macros) — start with PRIORITY models
-7. Run: {priority_run_cmd}
-   Then run: dbt run (to build all models)
-8. If errors, fix and re-run.
-9. MANDATORY VERIFICATION — do NOT skip this step. For EACH priority model, run ALL of these:
-   a. mcp__signalpilot__check_model_schema(connection_name="{instance_id}", model_name="<model>", yml_columns="<paste the exact comma-separated column names from the YML>")
-      If it reports MISSING columns: add them to your SQL and re-run dbt. DO NOT FINISH until all columns match.
-   b. mcp__signalpilot__validate_model_output(connection_name="{instance_id}", model_name="<model>")
-      If 0 rows: debug immediately. If fan-out detected: fix your JOINs.
-   c. mcp__signalpilot__query_database(connection_name="{instance_id}", sql="SELECT * FROM <model> LIMIT 5")
-      Verify values look reasonable (not all NULL/0).
-   FAILURE TO RUN THESE CHECKS = GUARANTEED SCORE OF ZERO.
-10. If dbt errors are unclear, pass the error text to mcp__signalpilot__dbt_error_parser for a suggested fix.
-11. Use mcp__signalpilot__analyze_grain to check if your model has unexpected duplicates before finishing.
-
-RULES:
-- DuckDB SQL only (not PostgreSQL/MySQL)
-- NEVER modify .yml or .yaml files — only create/edit .sql files
-- CORRECT VALUES MATTER: The evaluator searches for matching columns by value, not position.
-  Focus on getting correct computation logic (joins, aggregations, filters) rather than column order.
-- Use ref('model_name') for upstream models, source('schema', 'table') for raw tables
-- Check existing SQL files for naming conventions before writing new ones
-- YML model definitions may contain a `refs:` key listing upstream model dependencies — use these as the primary guide for writing SQL
-- COLUMN SPEC IS LAW: Before writing any .sql file, open the model's YML and copy the exact column names into your SELECT. Do not infer names — the YML is authoritative. A model missing one YML column scores zero for that column.
-- FOCUS: Complete all PRIORITY models first. Only work on OTHER models if PRIORITY models are done and working.
-- ROW ORDER: The evaluator ignores row ordering. Do NOT waste time on ORDER BY in model SQL — it has no effect on scoring.
-- SPEED: Don't over-explore. Read 1-2 source tables, read the YML, write the SQL. Iterate on errors.
-- VERIFY: After dbt run succeeds, query result tables to check row counts match expected data size. If a report table has far fewer rows than the source table, your WHERE/JOIN may be too restrictive.
-- BOUNDARY FILTERS: For any WHERE clause on a date or integer range, verify the inclusive/exclusive boundary. Run: SELECT COUNT(*) FROM source WHERE <filter> and confirm the row count matches your model before finishing.
-- Use COUNT(*) not COUNT(DISTINCT col) unless the column spec explicitly says "distinct" or "unique"
-- For aggregation columns named "total_X", use COUNT(*) or SUM(col) as appropriate — check what the target output pattern looks like by querying source tables first
-- If a column needs to be computed (SUM, COUNT, CASE WHEN), check the source table schema first with explore_table
-- For wide aggregation models with many category columns (counts per status, position, type):
-  1. FIRST query the source table to see all distinct values: SELECT DISTINCT col FROM table ORDER BY col
-  2. Map each distinct value to the exact column name from the YAML spec
-  3. THEN write CASE WHEN statements — one per distinct value
-  4. Use SUM(CASE WHEN status = 'Retired' THEN 1 ELSE 0 END) AS retired
-  5. Any value not matching a named column goes into the catch-all column (e.g., p21plus, not_classified)
-- If dbt run errors with 'No such file or directory' for a macro, the package may not be installed — write the logic inline instead
-- COLUMN COUNT CHECK: Before finalizing any model, verify your SELECT produces all columns listed in the YAML. Missing columns = failure. Extra columns are OK (evaluator ignores them).
-- {'NEVER run dbt deps — it will wipe the pre-installed packages!' if not has_packages_yml else 'Run dbt deps once at start to install packages'}{packages_hint}
-- COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
-- COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
-- DATE SPINES: Call mcp__signalpilot__get_date_boundaries(connection_name="{instance_id}") to get the MAX source date. Use the returned GLOBAL MAX DATE as your spine endpoint — never use current_date, now(), or hardcoded ranges. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))."""
+2. mcp__signalpilot__list_tables connection_name="{instance_id}"
+2b. mcp__signalpilot__get_date_boundaries connection_name="{instance_id}"
+    Note the GLOBAL MAX DATE — use it (not current_date) as endpoint for any date spine or GENERATE_SERIES.
+3. Explore at most 2 source tables with explore_table. Stop exploring — begin writing SQL.
+4. Read YML files for missing models. Write each missing .sql file, dependencies first.
+   - NEVER modify .yml or .yaml files — only create/edit .sql files
+   - Column names in YML are exact — alias SELECT output to match them character-for-character
+   - Use ref() for upstream models, source() for raw tables
+   Run: {priority_run_cmd}
+5. After dbt build succeeds: invoke /dbt-verification for each priority model.
+   If dbt fails: invoke /dbt-debugging.
+{'- ' + packages_hint.lstrip() if packages_hint else ''}"""
 
     # Scan for current_date in existing models and warn the agent
     current_date_hits = _scan_current_date_models(work_dir)
@@ -750,7 +714,7 @@ RULES:
         warning_lines.append("Do NOT skip this — it is the #1 cause of row count mismatches.")
         prompt += "\n".join(warning_lines)
 
-    # Add output table name requirement section before ROW COUNT VERIFICATION
+    # Add output table name requirement section if there are eval-critical models
     if eval_critical_models:
         crit_names = ", ".join(sorted(eval_critical_models))
         crit_select = " ".join(sorted(eval_critical_models))
@@ -768,30 +732,6 @@ Every name above MUST appear in the output. If any are missing:
 3. If you built the logic under a different name (e.g., 'monthly_activity' instead of 'dataset__monthly_activity'), create a new .sql file with the correct name: SELECT * FROM {{{{ ref('your_existing_model') }}}}
 4. Run: dbt run --select {crit_select}
 DO NOT alias eval-critical models. DO NOT add schema prefixes. The evaluator does an exact string match."""
-
-    prompt += """
-
-ROW COUNT VERIFICATION — Do this for every priority model after dbt run succeeds:
-
-Step A: Baseline cardinality from primary source table:
-  SELECT COUNT(*) AS source_rows, COUNT(DISTINCT <pk>) AS unique_pks FROM <source>
-
-Step B: Count your output:
-  SELECT COUNT(*) AS output_rows FROM <model>
-
-Step C: Decide if count is correct:
-  - Aggregation model (one row per group): output_rows == COUNT(DISTINCT group_key)
-  - Pass-through/filter model: output_rows <= source_rows; verify against task description
-
-Step D: If output_rows > expected → FAN-OUT:
-  SELECT <join_key>, COUNT(*) FROM <model> GROUP BY 1 HAVING COUNT(*) > 1
-  Fix: pre-aggregate the right-join table, or add DISTINCT, or use ROW_NUMBER() dedup.
-
-Step E: If output_rows < expected → OVER-FILTER:
-  Remove one WHERE/JOIN condition at a time, counting rows each time.
-  Check if INNER JOIN should be LEFT JOIN (rows with no match are being silently dropped).
-
-NEVER finish a priority model without running this 5-step audit."""
 
     # Add source table hints
     import yaml
@@ -834,7 +774,7 @@ NEVER finish a priority model without running this 5-step audit."""
         prompt += "\n".join(counts_lines)
         prompt += (
             "\n- These are INPUT table sizes, not expected output sizes."
-            "\n- Use them to sanity-check your model's row count BEFORE running the 5-step audit."
+            "\n- Use them to sanity-check your model's row count before verification."
             "\n- A JOIN producing far more rows than the largest source table indicates fan-out."
             "\n- A model with far fewer rows than any plausible source slice indicates over-filtering or a wrong JOIN type."
         )
@@ -858,43 +798,6 @@ If you reach turn {checkpoint_turn} and any priority model is still missing:
   - A wrong-but-present model is evaluated and can be fixed; a missing model scores zero.
   - Do NOT write more than 2 tool calls on any non-priority model until ALL priority models exist.
   - CRITICAL: Over-exploration is the #1 cause of missing models. list_tables counts as 1 of your 2 exploration turns."""
-
-    prompt += """
-
-SAMPLE VALUE CHECK — MANDATORY before finishing any priority model:
-After the 5-step row count audit passes, run these queries in order:
-
-STEP 0 — ZERO ROW GUARD:
-  SELECT COUNT(*) FROM <model_name>
-  If this returns 0: the model built but is empty. This is always wrong for a priority model.
-  Do NOT proceed — debug the JOIN/WHERE logic before continuing.
-
-STEP 1 — SAMPLE INSPECTION:
-  SELECT * FROM <model_name> LIMIT 5
-
-Look for these silent failure patterns in the output:
-- A numeric column that is 0 or NULL for every row: aggregation or JOIN condition is wrong.
-- A date column showing 1970 or far-future dates: date format mismatch (use STRPTIME).
-- A string column that echoes the join key instead of a label: wrong column in SELECT.
-- Any column that is identical for all 5 rows when it should vary: CASE WHEN literal typo.
-- SPOT CHECK: If the task description or YML references a specific entity (a name, year, or total), query SELECT <col> FROM <model> WHERE <known_condition> and verify it is present. A JOIN on the wrong key produces plausible but value-shifted output that passes row count checks.
-
-Fix any of the above before finishing. This costs 1 tool call and catches the most common
-silent-wrong-answer failures that pass row count checks but fail value evaluation."""
-
-    prompt += """
-
-DBT COMPILE FAILURE PROTOCOL — follow this order when dbt run fails:
-1. Find the failing model name in the error output (look for lines with ERROR or "in model").
-2. Run `dbt run --select <failing_model>` to isolate — do not re-run all models each attempt.
-3. Compilation error (ref not found, jinja error):
-   - Confirm the .sql filename exactly matches the ref() call: ref('stg_orders') needs stg_orders.sql
-   - If a ref() target is a raw DuckDB table, create an ephemeral stub (ephemeral rule above)
-4. Database error (column not found, type mismatch):
-   - Run explore_table on the source to confirm exact column names and types
-   - DuckDB type coercion is strict — add CAST() for any mixed-type expression
-5. After fixing, run `dbt run --select <model>+` to rebuild the model and all its dependents.
-6. Never run `dbt deps` unless this project has a packages.yml — it breaks pre-installed packages."""
 
     return prompt
 

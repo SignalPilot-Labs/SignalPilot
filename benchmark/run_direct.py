@@ -700,8 +700,12 @@ DO THIS IN ORDER:
    - Column names in YML are exact — alias SELECT output to match them character-for-character
    - Use ref() for upstream models, source() for raw tables
    Run: {priority_run_cmd}
-5. After dbt build succeeds: invoke /dbt-verification for each priority model.
-   If dbt fails: invoke /dbt-debugging.
+   If dbt fails: invoke /dbt-debugging for error diagnosis and fix.
+5. MANDATORY VERIFICATION — your work is NOT complete until you do this:
+   Run: /dbt-verification
+   This loads a checklist of MCP tool calls you MUST execute for each priority model.
+   If any check fails (missing columns, wrong row counts), fix and re-run dbt.
+   DO NOT STOP before completing verification. Unverified work scores ZERO.
 {'- ' + packages_hint.lstrip() if packages_hint else ''}"""
 
     # Scan for current_date in existing models and warn the agent
@@ -852,6 +856,7 @@ def run_agent(
         "--permission-mode", "bypassPermissions",
         "--max-turns", str(max_turns),
         "--mcp-config", str(MCP_CONFIG),
+        "--output-format", "json",
         "-p", prompt,
     ]
 
@@ -862,10 +867,33 @@ def run_agent(
     result = _run_claude_with_retry(claude_cmd, str(work_dir), timeout=900, label="main-agent")
     elapsed = time.monotonic() - start
 
+    # Save full agent output for analysis
+    transcript_path = work_dir / "agent_output.json"
+    if result.stdout:
+        transcript_path.write_text(result.stdout)
+        log(f"Saved agent output to {transcript_path}")
+
+    # Check for skill usage in output
+    output_text = result.stdout or ""
+    for skill_name in ["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql"]:
+        if skill_name in output_text:
+            log(f"  [skill] Agent used /{skill_name}")
+
     # Stream output to console
     if result.stdout:
-        for line in result.stdout.splitlines():
-            log(f"  [claude] {line}")
+        # With JSON output, just log a summary
+        try:
+            import json as _json
+            data = _json.loads(result.stdout)
+            if isinstance(data, dict) and "result" in data:
+                log(f"  [claude] {data['result'][:500]}")
+            elif isinstance(data, list):
+                for item in data[-3:]:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        log(f"  [claude] {item.get('text', '')[:200]}")
+        except Exception:
+            for line in result.stdout.splitlines()[-10:]:
+                log(f"  [claude] {line[:200]}")
     if result.stderr:
         for line in result.stderr.splitlines():
             log(f"  [claude:err] {line}", "WARN")
@@ -1176,6 +1204,121 @@ CHECK 6 — CARDINALITY SANITY (catches silent wrong-scale errors):
 Fix any issues. Re-run dbt after fixes. Stop."""
 
 
+def _programmatic_verification(
+    work_dir: Path,
+    eval_critical_models: set[str],
+    model_columns: dict[str, list[str]],
+) -> list[str]:
+    """Query DuckDB directly and return a list of human-readable finding strings.
+
+    Returns an empty list when no issues are found or on any exception.
+    Never raises.
+    """
+    import duckdb as _ddb
+
+    findings: list[str] = []
+    try:
+        db_candidates = list(work_dir.glob("*.duckdb"))
+        if not db_candidates:
+            return []
+
+        db_path = db_candidates[0]
+        con = _ddb.connect(str(db_path), read_only=True)
+        try:
+            existing_tables: set[str] = set(r[0] for r in con.execute("SHOW TABLES").fetchall())
+
+            for model in sorted(eval_critical_models):
+                # TABLE EXISTS check
+                if model not in existing_tables:
+                    findings.append(f"MISSING TABLE: {model} — table does not exist in database")
+                    continue
+
+                # COLUMN check (only if YML columns are defined for this model)
+                expected_cols = model_columns.get(model, [])
+                if expected_cols:
+                    pragma_rows = con.execute(f"PRAGMA table_info('{model}')").fetchall()
+                    # Column name is in position 1 of the PRAGMA result tuple
+                    actual_cols: list[str] = [row[1] for row in pragma_rows if row[1]]
+
+                    actual_lower = {c.lower(): c for c in actual_cols}
+
+                    missing_cols = [c for c in expected_cols if c not in actual_cols]
+                    for col in missing_cols:
+                        col_lower = col.lower()
+                        if col_lower in actual_lower:
+                            # Lowercase key exists in both — this is a case mismatch, not a missing column
+                            findings.append(
+                                f"CASE MISMATCH: {model}.{col} — YML says '{col}', table has '{actual_lower[col_lower]}'"
+                            )
+                        else:
+                            findings.append(
+                                f"MISSING COLUMN: {model}.{col} — expected by YML but not in table"
+                            )
+
+                # ROW COUNT check
+                count_result = con.execute(f'SELECT COUNT(*) FROM "{model}"').fetchone()
+                row_count: int = count_result[0] if count_result else 0
+                if row_count == 0:
+                    findings.append(f"EMPTY TABLE: {model} — 0 rows, model returned no data")
+        finally:
+            con.close()
+
+    except Exception as exc:
+        log(f"_programmatic_verification failed (non-fatal): {exc}", "WARN")
+        return []
+
+    return findings
+
+
+def _build_programmatic_fix_prompt(
+    work_dir: Path,
+    instance_id: str,
+    eval_critical_models: set[str],
+    model_columns: dict[str, list[str]],
+    findings: list[str],
+    instruction: str,
+) -> str:
+    """Build a focused fix prompt based on deterministic verification findings."""
+    sorted_models = sorted(eval_critical_models)
+
+    col_spec_lines: list[str] = []
+    for model_name in sorted_models:
+        if model_name in model_columns:
+            col_spec_lines.append(f"  {model_name}: {', '.join(model_columns[model_name])}")
+    col_spec_str = "\n".join(col_spec_lines) if col_spec_lines else "  (read YML files for column specs)"
+
+    findings_str = "\n".join(f"  - {f}" for f in findings)
+
+    return f"""PROGRAMMATIC FIX TASK for {instance_id}
+
+Deterministic checks found the following issues in the materialized dbt models.
+Fix ONLY the issues listed below. Do not change anything else.
+
+TASK: {instruction}
+
+ISSUES FOUND:
+{findings_str}
+
+REQUIRED COLUMNS (from YML — use these to fix MISSING COLUMN and CASE MISMATCH issues):
+{col_spec_str}
+
+STEPS:
+1. For each MISSING TABLE: create a new .sql model with that exact name and run dbt.
+2. For each MISSING COLUMN: add the column to the SQL and re-run dbt.
+3. For each CASE MISMATCH: rename the column alias to match the YML exactly and re-run dbt.
+4. For each EMPTY TABLE: debug the SQL (check JOINs, WHERE filters, CTEs) and re-run dbt.
+
+Re-materialize after all fixes with:
+  dbt run --select {" ".join(f"+{m}" for m in sorted_models)}
+
+RULES:
+- DuckDB SQL only
+- Use materialized='table' in config
+- Do NOT modify .yml files
+- Do NOT run dbt deps
+- Fix only the issues listed above"""
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1433,29 +1576,35 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
             capture_output=True, text=True, timeout=300,
         )
 
-        # NEW: post-success value verification agent (triggers always when eval-critical tables may exist)
+        # Programmatic verification (replaces 12-turn value-verify LLM agent)
         result_db_candidates = list(work_dir.glob("*.duckdb"))
         if eval_critical_models and result_db_candidates:
-            verify_prompt = _build_value_verify_prompt(
-                work_dir, instance_id, eval_critical_models, instruction,
-                _extract_model_columns(work_dir)
-            )
-            verify_cmd = [
-                "claude", "--model", model,
-                "--permission-mode", "bypassPermissions",
-                "--max-turns", "12",
-                "--mcp-config", str(MCP_CONFIG),
-                "-p", verify_prompt,
-            ]
-            log("Running value-verification agent (12 turns)...")
-            verify_result = _run_claude_with_retry(verify_cmd, str(work_dir), timeout=360, label="value-verify")
-            if verify_result.returncode == 0:
-                log("Value-verify agent completed")
-            # Re-run dbt to materialize any fixes
-            subprocess.run(
-                ["/home/agentuser/.local/bin/dbt", "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
-                cwd=str(work_dir), capture_output=True, text=True, timeout=180,
-            )
+            model_columns = _extract_model_columns(work_dir)
+            findings = _programmatic_verification(work_dir, eval_critical_models, model_columns)
+            if findings:
+                log(f"Programmatic verification found {len(findings)} issue(s): {findings}")
+                fix_prompt = _build_programmatic_fix_prompt(
+                    work_dir, instance_id, eval_critical_models, model_columns, findings, instruction
+                )
+                fix_cmd = [
+                    "claude", "--model", model,
+                    "--permission-mode", "bypassPermissions",
+                    "--max-turns", "8",
+                    "--mcp-config", str(MCP_CONFIG),
+                    "-p", fix_prompt,
+                ]
+                log("Running programmatic-fix agent (8 turns)...")
+                fix_result = _run_claude_with_retry(fix_cmd, str(work_dir), timeout=240, label="prog-fix")
+                if fix_result.returncode == 0:
+                    log("Programmatic-fix agent completed")
+                # Re-run dbt to materialize any fixes
+                subprocess.run(
+                    ["/home/agentuser/.local/bin/dbt", "run", "--select"]
+                    + [f"+{m}" for m in sorted(eval_critical_models)],
+                    cwd=str(work_dir), capture_output=True, text=True, timeout=180,
+                )
+            else:
+                log("Programmatic verification: no issues found")
 
         # Post-agent check: are all eval-critical tables in the result DB?
         if eval_critical_models:

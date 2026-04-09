@@ -1198,7 +1198,6 @@ def _build_value_verify_prompt(
 
 dbt build is complete. Audit each priority model for silent failures.
 Use ONLY: task's own .md files, YML specs, and your own output tables.
-Do NOT look for gold data or expected row counts from external sources.
 
 TASK: {instruction}
 

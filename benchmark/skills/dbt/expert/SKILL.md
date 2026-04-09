@@ -59,6 +59,42 @@ DEFAULT TO LEFT JOIN for reporting and aggregation models that need to preserve 
 - LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern
 - When output row count < expected: first check if INNER JOIN should be LEFT JOIN
 
+### JOIN Direction — Which Table Goes on the LEFT?
+
+Before writing any two-table JOIN, count BOTH tables:
+```sql
+SELECT COUNT(*) FROM table_a;  -- e.g., 874
+SELECT COUNT(*) FROM table_b;  -- e.g., 461
+```
+The table that defines ALL instances of the output entity (broader domain coverage) MUST be the LEFT/driving table. A crosswalk, mapping, or enrichment table that only covers a subset should always be on the RIGHT.
+
+Example: If model description says "one row per taxonomy code" and `nucc_taxonomy` has 874 codes but `medicare_crosswalk` only covers 460 of them:
+```sql
+-- CORRECT: drive from the complete table
+FROM nucc_taxonomy LEFT JOIN medicare_crosswalk ON ...
+-- WRONG: drives from partial-coverage table, silently drops 414 codes
+FROM medicare_crosswalk LEFT JOIN nucc_taxonomy ON ...
+```
+
+When the right-side table has duplicates per join key (one-to-many), deduplicate BEFORE joining or use a window function to pick one match per key.
+
+## Column Value Mapping — Preserve Source Values
+
+When joining a fact table to a lookup/mapping table to get descriptive names:
+- If the source already has the value you need (e.g., territory name), use the SOURCE value directly
+- Only use the lookup table for enrichment columns that don't exist in the source
+- Common mistake: replacing a source column with a remapped value from a lookup table when the gold expects the original
+
+Example: If source has `territory = 'Turkey'` and a country_codes table maps it to `'Türkiye'`:
+```sql
+-- CORRECT: keep raw source value for territory_long, use lookup only for new columns
+SELECT src.territory AS territory_long, cc.country_code, cc.region, cc.sub_region
+-- WRONG: replace source value with lookup value
+SELECT cc.alternative_country_name AS territory_long
+```
+
+When in doubt, verify by checking a few sample values after dbt run.
+
 ## Boundary Filter Verification
 
 For any WHERE clause on a date or integer range, verify the inclusive/exclusive boundary:

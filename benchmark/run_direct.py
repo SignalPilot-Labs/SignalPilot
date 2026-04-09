@@ -713,11 +713,14 @@ DO THIS IN ORDER:
     # Scan for current_date in existing models and warn the agent
     current_date_hits = _scan_current_date_models(work_dir)
     if current_date_hits:
-        warning_lines = ["", "⚠ CRITICAL: These existing .sql files use current_date/now() and MUST be edited:"]
+        warning_lines = ["", "⚠ CRITICAL: These existing .sql files use current_date/current_timestamp/now() and MUST be edited:"]
         for rel_path, line_no, line_text in current_date_hits:
             warning_lines.append(f"  {rel_path}:{line_no}: {line_text}")
-        warning_lines.append("After calling get_date_boundaries in step 2b, IMMEDIATELY edit these files to replace current_date with the GLOBAL MAX DATE.")
-        warning_lines.append("Do NOT skip this — it is the #1 cause of row count mismatches.")
+        warning_lines.append("After calling get_date_boundaries in step 2b, IMMEDIATELY edit ALL these files:")
+        warning_lines.append("  Replace current_date, CURRENT_DATE, current_timestamp, current_timestamp_backcompat(), now(), getdate() → CAST('<MAX_DATE>' AS DATE) or CAST('<MAX_DATE>' AS TIMESTAMP)")
+        warning_lines.append("  where <MAX_DATE> is the GLOBAL MAX DATE from get_date_boundaries.")
+        warning_lines.append("  For dbt macros like dbt.current_timestamp_backcompat(): replace the entire macro call with the cast.")
+        warning_lines.append("Do NOT skip this — it is the #1 cause of row count and value mismatches.")
         prompt += "\n".join(warning_lines)
 
     # Add eval-critical table names

@@ -1035,20 +1035,19 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     if not Path(gold_db_path).exists():
         return False, f"Gold DB not found: {gold_db_path}"
 
-    def get_tables(db_path: str) -> list[str]:
-        con = duckdb.connect(database=db_path, read_only=True)
-        tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
-        con.close()
-        return tables
+    # Use persistent connections to avoid DuckDB WAL visibility issues
+    # when opening multiple short-lived read-only connections
+    gold_con = duckdb.connect(database=gold_db_path, read_only=True)
+    result_con = duckdb.connect(database=result_db_path, read_only=True)
 
-    def get_table_df(db_path: str, table_name: str):
-        con = duckdb.connect(database=db_path, read_only=True)
-        df = con.execute(f"SELECT * FROM {table_name}").fetchdf()
-        con.close()
-        return df
+    def get_tables(con) -> list[str]:
+        return [r[0] for r in con.execute("SHOW TABLES").fetchall()]
 
-    result_tables = get_tables(result_db_path)
-    gold_tables = get_tables(gold_db_path)
+    def get_table_df(con, table_name: str):
+        return con.execute(f"SELECT * FROM {table_name}").fetchdf()
+
+    result_tables = get_tables(result_con)
+    gold_tables = get_tables(gold_con)
     log(f"Gold tables:   {gold_tables}")
     log(f"Result tables: {result_tables}")
 
@@ -1070,8 +1069,8 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             continue
 
         try:
-            gold_df = get_table_df(gold_db_path, tab)
-            pred_df = get_table_df(result_db_path, tab)
+            gold_df = get_table_df(gold_con, tab)
+            pred_df = get_table_df(result_con, tab)
         except Exception as e:
             msg = f"  {tab}: ERROR reading table — {e}"
             details.append(msg)
@@ -1188,6 +1187,8 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
             log(msg, "ERROR")
             all_match = False
 
+    gold_con.close()
+    result_con.close()
     return all_match, "\n".join(details)
 
 

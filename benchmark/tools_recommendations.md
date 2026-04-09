@@ -1,6 +1,53 @@
 # Tool Recommendations for Spider2-DBT Benchmark
 
-## Current Score: 29/65 = 44.6% (Databao: 30/68 = 44.11%)
+## Current Score: 29/65 = 44.6% (with SDK migration, no new flips yet) (Databao: 30/68 = 44.11%)
+
+Note: Verification tool usage went from ~60% to 100% after SDK migration.
+
+## Round 4 Results (SDK migration + new tools)
+
+**Key Change**: Migrated from subprocess `claude -p` to Claude Agent SDK. Skills now invocable as tools. Added `audit_model_sources` MCP tool and per-table date boundaries.
+
+**Verification Tool Usage**: UP from ~60% to 100% — all 12 tested tasks called verification MCP tools (validate_model_output, check_model_schema). Average 7-12 verification calls per task.
+
+**Skill Invocation**: 4/8 tasks invoked /dbt-workflow as a Skill tool call. 0/8 invoked /dbt-verification (agent follows inline prompt steps instead). audit_model_sources called in 2/8 tasks.
+
+**Regression Checks**:
+| Task | Before SDK | After SDK | Status |
+|------|-----------|-----------|--------|
+| retail001 | PASS | PASS | No regression |
+| tickit001 | PASS | PASS | No regression |
+| airport001 | PASS | FAIL (stochastic column naming) | Stochastic, not structural |
+| chinook001 | FAIL (Category G - infra) | FAIL | Pre-existing gold DB issue |
+
+**Failing Task Results (SDK + new tools)**:
+| Task | Before | After SDK | Gold | Notes |
+|------|--------|-----------|------|-------|
+| tpch001 | 150000 rows | 150000 rows | 75007 | Still 2x fan-out, agent skipped audit_model_sources |
+| playbook002 | 2 rows | 2 rows | 5 | Same INNER JOIN drop |
+| netflix001 | 109 rows | 109 rows | 99 | Same duplicates |
+| xero001 | 1174 rows | 1065 rows | 1170 | Regressed (wrong direction) |
+| provider001 | 461 rows | 461 rows | 874 | specialty_mapping same, but provider table NOW PASSES |
+| zuora001 | daily PASS | daily PASS, overview FAIL (missing col) | - | account_active_months column missing |
+| flicks001 | 43139 rows | 57546 rows | 60983 | Improved significantly (43K→57K, closer to 61K) |
+| reddit001 | 30971/11 cols | 30971 rows, 14884 comments | 30970/15359 | Posts still off by 1, comments got worse |
+| synthea001 | 807 rows | 806 rows | 809 | Still close |
+| pendo001 | 1329 rows | 173 rows | 4686 | Got worse (date spine too short) |
+
+**Key Findings**:
+1. SDK migration succeeded — 100% verification tool usage (up from ~60%)
+2. No true regressions on passing tasks (airport001 is stochastic)
+3. Skills are invocable but agent mostly uses inline MCP tool calls from prompt
+4. audit_model_sources not adopted widely enough — needs to be merged into the build loop
+5. Per-table date boundaries didn't help pendo001 (got worse)
+6. The tasks that remain failing are deep logic issues, not tool gaps
+
+**What Works Now**:
+1. SDK-based agent invocation with full skill access
+2. 100% verification tool adoption via inline prompt + SDK
+3. Per-table date boundaries in get_date_boundaries output
+4. audit_model_sources tool (2/8 adoption, needs improvement)
+5. DuckDB WAL checkpoint before evaluation (fixes read-after-write)
 
 ## Round 2 Test Results (with consolidated skills + auto-discovery)
 

@@ -21,13 +21,20 @@ type: skill
 
 Before writing any date spine:
 1. Call `mcp__signalpilot__get_date_boundaries(connection_name="<id>")` first.
-2. Use the GLOBAL MAX DATE as endpoint:
+2. Choose the spine endpoint:
+   - If the spine is built from a **specific fact/event table** (orders, sessions,
+     transactions, etc.), use that table's max date from the `TABLE MAX DATES`
+     summary in the get_date_boundaries output.
+   - Otherwise use the **GLOBAL MAX DATE** as the fallback endpoint.
+   - Dimension, mapping, and reference tables do NOT determine the spine endpoint.
+3. Use the chosen date as endpoint:
    ```sql
    UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))
    ```
-3. Verify: `SELECT MIN(date_col), MAX(date_col), COUNT(*) FROM spine_model` — max must match GLOBAL MAX DATE.
-4. If spine row count is still wrong: query the specific source table for its own `MAX(date_col)` and use that instead.
-5. Scan existing models for `current_date`/`now()`: after calling get_date_boundaries, grep and edit any hits directly.
+4. Verify: `SELECT MIN(date_col), MAX(date_col), COUNT(*) FROM spine_model` —
+   max must match the endpoint you selected.
+5. Scan existing models for `current_date`/`now()`: after calling get_date_boundaries,
+   grep and edit any hits directly.
 
 Never use `CURRENT_DATE`, `now()`, or hardcoded date ranges as spine endpoints.
 

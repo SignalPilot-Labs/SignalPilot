@@ -566,6 +566,7 @@ async def get_date_boundaries(connection_name: str) -> str:
 
     lines = [f"Date boundaries for: {connection_name} ({conn_info.db_type})", ""]
     global_max: str | None = None
+    table_max: dict[str, str] = {}
     found_any = False
 
     for key in sorted(schema.keys()):
@@ -611,6 +612,8 @@ async def get_date_boundaries(connection_name: str) -> str:
                         max_str = str(max_val).split(" ")[0]
                         if global_max is None or max_str > global_max:
                             global_max = max_str
+                        if max_str > table_max.get(full_name, ""):
+                            table_max[full_name] = max_str
         except Exception:
             for col in date_cols:
                 col_results[col["name"]] = (None, None)
@@ -630,6 +633,12 @@ async def get_date_boundaries(connection_name: str) -> str:
 
     if not found_any:
         return f"Date boundaries for: {connection_name} ({conn_info.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
+
+    if table_max:
+        lines.append("TABLE MAX DATES:")
+        for tbl, tbl_max in table_max.items():
+            lines.append(f"  {tbl} → {tbl_max}")
+        lines.append("")
 
     if global_max:
         lines.append(f"GLOBAL MAX DATE: {global_max}")

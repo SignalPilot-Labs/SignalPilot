@@ -692,7 +692,13 @@ DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. mcp__signalpilot__list_tables connection_name="{instance_id}"
 2b. mcp__signalpilot__get_date_boundaries connection_name="{instance_id}"
-    Note the GLOBAL MAX DATE — use it (not current_date) as endpoint for any date spine or GENERATE_SERIES.
+    - Note the GLOBAL MAX DATE and the TABLE MAX DATES summary.
+    - Default spine endpoint: GLOBAL MAX DATE.
+    - EXCEPTION: when the date spine is driven by a specific fact/event table
+      (e.g. orders, sessions, transactions), use THAT TABLE's max date from
+      TABLE MAX DATES — not the global max. Dimension and reference tables
+      do NOT set the spine endpoint.
+    - Never use current_date, now(), or current_timestamp.
 3. Explore at most 2 source tables with explore_table. Stop exploring — begin writing SQL.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
    a. Read its YML file
@@ -724,7 +730,7 @@ DO THIS IN ORDER:
             warning_lines.append(f"  {rel_path}:{line_no}: {line_text}")
         warning_lines.append("After calling get_date_boundaries in step 2b, IMMEDIATELY edit ALL these files:")
         warning_lines.append("  Replace current_date, CURRENT_DATE, current_timestamp, current_timestamp_backcompat(), now(), getdate() → CAST('<MAX_DATE>' AS DATE) or CAST('<MAX_DATE>' AS TIMESTAMP)")
-        warning_lines.append("  where <MAX_DATE> is the GLOBAL MAX DATE from get_date_boundaries.")
+        warning_lines.append("  where <MAX_DATE> is the GLOBAL MAX DATE, or the specific source table's max date if this model's spine is driven by a single fact table.")
         warning_lines.append("  For dbt macros like dbt.current_timestamp_backcompat(): replace the entire macro call with the cast.")
         warning_lines.append("Do NOT skip this — it is the #1 cause of row count and value mismatches.")
         prompt += "\n".join(warning_lines)

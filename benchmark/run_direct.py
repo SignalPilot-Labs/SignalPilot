@@ -868,6 +868,9 @@ async def _run_sdk_agent(
                             tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count})
                             if block.name in SKILL_TOOL_NAMES:
                                 log(f"[skill] Agent invoked /{block.name}")
+                            elif block.name == "Skill" and isinstance(block.input, dict):
+                                skill_name = block.input.get("skill", "unknown")
+                                log(f"[skill] Agent invoked /{skill_name}")
                         elif isinstance(block, ToolResultBlock):
                             result_str = str(block.content) if hasattr(block, "content") else str(block)
                             truncated = result_str[:1000] + "..." if len(result_str) > 1000 else result_str
@@ -918,6 +921,23 @@ async def _run_sdk_agent(
                     return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
             else:
                 log(f"Agent ClaudeSDKError ({label}): {e}", "ERROR")
+                return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
+
+        except Exception as e:
+            err_str = str(e)
+            is_overloaded = "529" in err_str or "overloaded" in err_str.lower()
+            if is_overloaded and attempt < max_retries:
+                log(f"API overloaded ({label}, attempt {attempt}/{max_retries}): {err_str[:200]}", "WARN")
+                wait = 30 * attempt
+                log(f"Retrying in {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            # If the agent had already finished (success=True from ResultMessage),
+            # treat the exit error as non-fatal — work was completed.
+            if success:
+                log(f"Agent completed but SDK raised on exit ({label}): {err_str[:200]}", "WARN")
+            else:
+                log(f"Agent error ({label}): {e}", "ERROR")
                 return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
 
         elapsed = time.monotonic() - start_time
@@ -1410,14 +1430,18 @@ def main() -> None:
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 4: Run Claude agent")
-        agent_ok = asyncio.run(run_agent(
-            instance_id=instance_id,
-            instruction=instruction,
-            work_dir=work_dir,
-            model=model,
-            max_turns=max_turns,
-            eval_critical_models=eval_critical_models,
-        ))
+        try:
+            agent_ok = asyncio.run(run_agent(
+                instance_id=instance_id,
+                instruction=instruction,
+                work_dir=work_dir,
+                model=model,
+                max_turns=max_turns,
+                eval_critical_models=eval_critical_models,
+            ))
+        except Exception as e:
+            log(f"Agent SDK error: {e}", "ERROR")
+            agent_ok = False
         elapsed = time.monotonic() - t0
         log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
 
@@ -1515,7 +1539,10 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                     "3. If model << source: check WHERE and JOIN types for over-filtering"
                 )
 
-            asyncio.run(_run_quick_fix_agent(fix_prompt, work_dir, model))
+            try:
+                asyncio.run(_run_quick_fix_agent(fix_prompt, work_dir, model))
+            except Exception as e:
+                log(f"Quick-fix agent failed: {e}", "WARN")
 
         # Then try full run (best effort — don't fail on this)
         # Run eval-critical first, then full run for remaining models
@@ -1539,7 +1566,10 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                 work_dir, instance_id, eval_critical_models, instruction,
                 _extract_model_columns(work_dir)
             )
-            asyncio.run(_run_value_verify_agent(verify_prompt, work_dir, model))
+            try:
+                asyncio.run(_run_value_verify_agent(verify_prompt, work_dir, model))
+            except Exception as e:
+                log(f"Value-verify agent failed: {e}", "WARN")
             # Re-run dbt to materialize any fixes
             subprocess.run(
                 ["/home/agentuser/.local/bin/dbt", "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
@@ -1607,7 +1637,11 @@ RULES:
                         if col_specs:
                             name_fix_prompt += "\n\nREQUIRED COLUMNS:\n" + "\n".join(col_specs)
 
-                        name_fix_ok = asyncio.run(_run_name_fix_agent(name_fix_prompt, work_dir, model))
+                        try:
+                            name_fix_ok = asyncio.run(_run_name_fix_agent(name_fix_prompt, work_dir, model))
+                        except Exception as e:
+                            log(f"Name-fix agent failed: {e}", "WARN")
+                            name_fix_ok = False
                         if name_fix_ok:
                             # Run dbt one more time to materialize fixed models
                             subprocess.run(

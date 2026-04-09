@@ -24,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 
 # Input validation patterns
 _CONN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9_.]{1,256}$")
 _MAX_SQL_LENGTH = 100_000
 _MAX_CODE_LENGTH = 1_000_000
 
@@ -1745,6 +1746,398 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
             lines.append(f"ERROR ✗: {resp.text[:300]}")
     except Exception as e:
         lines.append(f"ERROR: {e}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def check_model_schema(connection_name: str, model_name: str, yml_columns: str) -> str:
+    """
+    Compare actual DuckDB table columns against an expected YML column list.
+
+    Identifies missing columns, extra columns, and case mismatches between
+    the materialized table and the schema defined in your dbt YML file.
+
+    Args:
+        connection_name: Name of a configured database connection
+        model_name: Name of the dbt model / table to inspect
+        yml_columns: Comma-separated list of column names from the YML schema
+
+    Returns:
+        Formatted schema comparison report, or an error message.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if not model_name or not re.match(r"^[a-zA-Z0-9_]{1,128}$", model_name):
+        return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores (1-128 chars)."
+    if not yml_columns or not yml_columns.strip():
+        return "Error: yml_columns cannot be empty."
+
+    expected: list[str] = [c.strip() for c in yml_columns.split(",") if c.strip()]
+    if not expected:
+        return "Error: No column names found in yml_columns."
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    from .connectors.pool_manager import pool_manager
+
+    try:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
+    except Exception as e:
+        return f"Error: {e}"
+
+    if not rows:
+        return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
+
+    actual: list[str] = [row.get("name", "") for row in rows if row.get("name")]
+
+    expected_lower = {c.lower(): c for c in expected}
+    actual_lower = {c.lower(): c for c in actual}
+
+    matching = [c for c in expected if c in actual]
+    missing = [c for c in expected if c not in actual]
+    extra = [c for c in actual if c not in expected]
+    case_mismatches = [
+        f"{expected_lower[k]} (expected) vs {actual_lower[k]} (actual)"
+        for k in expected_lower
+        if k in actual_lower and expected_lower[k] != actual_lower[k]
+    ]
+
+    def _fmt(items: list[str]) -> str:
+        return ", ".join(items) if items else "(none)"
+
+    lines = [
+        f"Schema check for '{model_name}':",
+        f"  Expected: {len(expected)} columns | Actual: {len(actual)} columns",
+        f"  [OK] Matching: {_fmt(matching)}",
+        f"  [X] Missing: {_fmt(missing)}",
+        f"  [X] Extra: {_fmt(extra)}",
+        f"  [!] Case mismatch: {_fmt(case_mismatches)}",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def dbt_error_parser(error_output: str) -> str:
+    """
+    Parse raw dbt stderr/stdout and extract structured, actionable error info.
+
+    No LLM involved — pure regex and string pattern matching against common
+    dbt error formats. Provides a suggested fix for known error categories.
+
+    Args:
+        error_output: Raw dbt command output (stderr or combined stdout/stderr)
+
+    Returns:
+        Structured error summary with model name, type, location, message, and suggested fix.
+    """
+    if not error_output or not error_output.strip():
+        return "Error: error_output cannot be empty."
+
+    model_match = (
+        re.search(r'model\s+"[^.]+\.[^.]+\.([^"]+)"', error_output)
+        or re.search(r'(?:Compilation|Database|Runtime|Test)\s+Error\s+in\s+model\s+(\S+)', error_output)
+    )
+    model_name = model_match.group(1) if model_match else "(not detected)"
+
+    type_match = re.search(r'(Compilation Error|Database Error|Runtime Error|Test Error|dbt\.exceptions\.\w+)', error_output)
+    error_type = type_match.group(1) if type_match else "(not detected)"
+
+    location_match = (
+        re.search(r'at \[(\d+):(\d+)\]', error_output)
+        or re.search(r'[Ll]ine\s+(\d+)', error_output)
+    )
+    if location_match:
+        location = f"line {location_match.group(1)}" if len(location_match.groups()) == 1 else f"line {location_match.group(1)}, col {location_match.group(2)}"
+    else:
+        location = "(not detected)"
+
+    msg_match = re.search(r'(?:ERROR|error):\s+(.+)', error_output)
+    core_message = msg_match.group(1).strip() if msg_match else "(not detected)"
+
+    error_lower = error_output.lower()
+    col_missing = re.search(r'column "?([^"\s]+)"? does not exist', error_output, re.IGNORECASE)
+    table_missing = re.search(r'(?:table|relation)\s+"?([^"\s]+)"?\s+does not exist', error_output, re.IGNORECASE)
+
+    if col_missing:
+        col = col_missing.group(1)
+        suggested_fix = f"Check column name {col} in your SELECT. Use check_model_schema to compare actual vs expected columns."
+    elif table_missing:
+        tbl = table_missing.group(1)
+        suggested_fix = f"Model {tbl} has not been materialized. Run `dbt run --select {tbl}` first."
+    elif "syntax error" in error_lower:
+        suggested_fix = "Review the SQL at the indicated line number."
+    elif "ambiguous column" in error_lower:
+        suggested_fix = "Qualify the column with a table alias."
+    elif "divide by zero" in error_lower or "division by zero" in error_lower:
+        suggested_fix = "Wrap denominator in NULLIF(denominator, 0)."
+    elif "unique constraint" in error_lower:
+        suggested_fix = "Deduplicate source data or add a ROW_NUMBER() window to resolve duplicates."
+    else:
+        suggested_fix = "Review the error message above."
+
+    lines = [
+        "dbt Error Summary:",
+        f"  Model: {model_name}",
+        f"  Type: {error_type}",
+        f"  Location: {location}",
+        f"  Message: {core_message}",
+        f"  Suggested fix: {suggested_fix}",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def generate_sql_skeleton(model_name: str, yml_columns: str, ref_tables: str = "") -> str:
+    """
+    Generate a dbt SQL template from a YML column spec.
+
+    Produces a properly structured Jinja SQL file with config block, source
+    CTEs using {{ ref() }}, and a final CTE listing all expected output columns
+    as null placeholders. Helps agents start from the correct shape.
+
+    Args:
+        model_name: Name of the dbt model being scaffolded
+        yml_columns: Comma-separated list of expected output column names
+        ref_tables: Optional comma-separated list of upstream ref() table names
+
+    Returns:
+        A dbt-compatible SQL skeleton string.
+    """
+    if not model_name or not _MODEL_NAME_RE.match(model_name):
+        return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
+    if not yml_columns or not yml_columns.strip():
+        return "Error: yml_columns cannot be empty."
+
+    columns: list[str] = [c.strip() for c in yml_columns.split(",") if c.strip()]
+    if not columns:
+        return "Error: No column names found in yml_columns."
+
+    refs: list[str] = [t.strip() for t in ref_tables.split(",") if t.strip()] if ref_tables else []
+
+    col_lines = "\n".join(f"        null as {col}," for col in columns)
+    # Remove trailing comma from last column line
+    col_lines = col_lines.rstrip(",")
+
+    config_block = "{{\n    config(\n        materialized='table'\n    )\n}}"
+
+    if refs:
+        cte_blocks = []
+        for ref_table in refs:
+            cte_blocks.append(
+                f"{ref_table} as (\n\n    select * from {{{{ ref('{ref_table}') }}}}\n\n)"
+            )
+        source_ctes = ",\n\n".join(cte_blocks)
+        from_clause = refs[0]
+    else:
+        source_ctes = "source as (\n\n    -- TODO: replace SOURCE_TABLE\n    select * from {{{{ ref('SOURCE_TABLE') }}}}\n\n)"
+        from_clause = "source"
+
+    sql = (
+        f"{config_block}\n\n"
+        f"with\n\n"
+        f"{source_ctes},\n\n"
+        f"final as (\n\n"
+        f"    select\n\n"
+        f"        -- TODO: fill in transformations\n"
+        f"{col_lines}\n\n"
+        f"    from {from_clause}\n\n"
+        f")\n\n"
+        f"select * from final"
+    )
+    return sql
+
+
+@mcp.tool()
+async def analyze_grain(connection_name: str, table_name: str, candidate_keys: str = "") -> str:
+    """
+    Analyze the cardinality and grain of a table.
+
+    Helps agents understand if a model is fan-outing or has duplicates by
+    checking row counts and distinctness of candidate key columns.
+
+    Args:
+        connection_name: Name of a configured database connection
+        table_name: Name of the table to analyze
+        candidate_keys: Optional comma-separated column names to test as grain keys
+
+    Returns:
+        Formatted grain analysis report, or an error message.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if not table_name or not _MODEL_NAME_RE.match(table_name):
+        return f"Error: Invalid table name '{table_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    from .connectors.pool_manager import pool_manager
+
+    try:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM "{table_name}"')
+    except Exception as e:
+        return f"Error: {e}"
+
+    total_rows: int = count_rows[0].get("total_rows", 0) if count_rows else 0
+
+    _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
+    if candidate_keys:
+        keys: list[str] = [k.strip() for k in candidate_keys.split(",") if k.strip()]
+        invalid_keys = [k for k in keys if not _SAFE_COL_RE.match(k)]
+        if invalid_keys:
+            return f"Error: Invalid candidate key name(s): {', '.join(invalid_keys)}"
+    else:
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                pragma_rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
+        except Exception as e:
+            return f"Error fetching schema: {e}"
+        id_cols = [
+            r.get("name", "")
+            for r in pragma_rows
+            if r.get("name", "").lower() == "id" or r.get("name", "").lower().endswith("_id")
+        ]
+        keys = id_cols[:5]
+
+    lines = [
+        f"Grain analysis for '{table_name}':",
+        f"  Total rows: {total_rows:,}",
+        "  Candidate key check:",
+    ]
+
+    unique_keys: list[str] = []
+    if keys:
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                for key in keys:
+                    try:
+                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM "{table_name}"')
+                        distinct_count: int = dist_rows[0].get("distinct_count", 0) if dist_rows else 0
+                        if distinct_count == total_rows:
+                            lines.append(f"    {key}: {distinct_count:,} distinct (UNIQUE - this is likely the grain)")
+                            unique_keys.append(key)
+                        else:
+                            fan_out = total_rows / distinct_count if distinct_count > 0 else 0
+                            lines.append(f"    {key}: {distinct_count:,} distinct (NOT unique - fan-out factor ~{fan_out:.1f}x)")
+                    except Exception as e:
+                        lines.append(f"    {key}: error checking distinctness ({e})")
+        except Exception as e:
+            lines.append(f"    error opening connection: {e}")
+
+    if not keys:
+        lines.append("    (no candidate keys found or provided)")
+
+    if unique_keys:
+        lines.append(f"  Recommendation: {unique_keys[0]} appears to be the grain key.")
+    else:
+        lines.append("  Recommendation: No unique key found among candidates. Consider adding a surrogate key.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def validate_model_output(
+    connection_name: str,
+    model_name: str,
+    source_table: str = "",
+    expected_row_count: int = 0,
+) -> str:
+    """
+    Post-build row count validation for a dbt model.
+
+    Detects fan-outs, empty models, and optional row count mismatches
+    by comparing the model's row count against a source table or an
+    expected value.
+
+    Args:
+        connection_name: Name of a configured database connection
+        model_name: Name of the materialized dbt model to validate
+        source_table: Optional upstream source table to compare row counts against
+        expected_row_count: Optional expected row count (0 means skip check)
+
+    Returns:
+        Formatted validation report, or an error message.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if not model_name or not _MODEL_NAME_RE.match(model_name):
+        return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    from .connectors.pool_manager import pool_manager
+
+    try:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
+    except Exception as e:
+        return f"Error: {e}"
+
+    model_rows: int = model_rows_result[0].get("row_count", 0) if model_rows_result else 0
+
+    source_rows: int | None = None
+    source_error: str | None = None
+    if source_table:
+        if not _MODEL_NAME_RE.match(source_table):
+            return f"Error: Invalid source_table name '{source_table}'."
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{source_table}"')
+            source_rows = src_result[0].get("row_count", 0) if src_result else 0
+        except Exception as e:
+            source_error = str(e)
+
+    lines = [
+        f"Model output validation: '{model_name}'",
+        f"  Row count: {model_rows:,}",
+    ]
+
+    if model_rows == 0:
+        lines.append("  WARNING: Model returned 0 rows.")
+
+    if source_table:
+        if source_error:
+            lines.append(f"  Source '{source_table}': error fetching row count ({source_error})")
+        elif source_rows is not None:
+            lines.append(f"  Source '{source_table}': {source_rows:,} rows")
+            if source_rows > 0:
+                ratio = model_rows / source_rows
+                if ratio < 0.5:
+                    warning = "WARNING: Model has significantly fewer rows than source -- possible data loss or over-filtering."
+                elif ratio > 2.0:
+                    warning = "WARNING: Fan-out detected -- model has more rows than source. Check for unintended cross-joins."
+                else:
+                    warning = "OK - no fan-out detected"
+                lines.append(f"  Fan-out ratio: {ratio:.2f}x ({warning})")
+            else:
+                lines.append("  Fan-out ratio: N/A (source has 0 rows)")
+
+    if expected_row_count > 0:
+        match_label = "MATCH" if model_rows == expected_row_count else "MISMATCH"
+        lines.append(f"  Expected row count: {expected_row_count:,} - {match_label}")
 
     return "\n".join(lines)
 

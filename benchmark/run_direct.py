@@ -155,6 +155,11 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__validate_sql` — check SQL syntax without executing
 - `mcp__signalpilot__debug_cte_query` — test CTE steps independently
 - `mcp__signalpilot__explain_query` — get execution plan
+- `mcp__signalpilot__check_model_schema` — compare materialized table columns vs expected YML columns
+- `mcp__signalpilot__analyze_grain` — analyze table cardinality and grain (unique keys, fan-out)
+- `mcp__signalpilot__validate_model_output` — post-build row count validation with fan-out detection
+- `mcp__signalpilot__generate_sql_skeleton` — generate SQL template from column list
+- `mcp__signalpilot__dbt_error_parser` — parse dbt errors into actionable fix suggestions
 
 ## Workflow
 Follow the step-by-step instructions provided in the agent prompt. Do NOT modify .yml or .yaml files.
@@ -385,6 +390,7 @@ def _scan_current_date_models(work_dir: Path) -> list[tuple[str, int, str]]:
         except Exception:
             pass
     return matches
+
 
 
 def _extract_model_deps(work_dir: Path) -> dict[str, list[str]]:
@@ -693,10 +699,16 @@ DO THIS IN ORDER:
 7. Run: {priority_run_cmd}
    Then run: dbt run (to build all models)
 8. If errors, fix and re-run.
-9. After success, verify: run mcp__signalpilot__query_database to check row counts and sample values of your output tables match expectations.
-10. COLUMN CHECK — after every successful dbt run on a priority model:
-    Run: SELECT * FROM <model_name> LIMIT 3
-    Verify: all expected columns are present with reasonable values (not all NULL/0).
+9. MANDATORY VERIFICATION — do NOT skip this step. For EACH priority model, run ALL of these:
+   a. mcp__signalpilot__check_model_schema(connection_name="{instance_id}", model_name="<model>", yml_columns="<paste the exact comma-separated column names from the YML>")
+      If it reports MISSING columns: add them to your SQL and re-run dbt. DO NOT FINISH until all columns match.
+   b. mcp__signalpilot__validate_model_output(connection_name="{instance_id}", model_name="<model>")
+      If 0 rows: debug immediately. If fan-out detected: fix your JOINs.
+   c. mcp__signalpilot__query_database(connection_name="{instance_id}", sql="SELECT * FROM <model> LIMIT 5")
+      Verify values look reasonable (not all NULL/0).
+   FAILURE TO RUN THESE CHECKS = GUARANTEED SCORE OF ZERO.
+10. If dbt errors are unclear, pass the error text to mcp__signalpilot__dbt_error_parser for a suggested fix.
+11. Use mcp__signalpilot__analyze_grain to check if your model has unexpected duplicates before finishing.
 
 RULES:
 - DuckDB SQL only (not PostgreSQL/MySQL)
@@ -1209,14 +1221,13 @@ CHECK 1 — TABLE EXISTS:
   SHOW TABLES — confirm {model_names_str} appear.
   If missing: create SELECT * FROM ref(closest_existing_model) and run dbt run --select <name>.
 
-CHECK 2 — COLUMN COMPLETENESS:
-  Run: SELECT * FROM <model> LIMIT 0
-  This returns zero rows but shows all column names in order.
+CHECK 2 — COLUMN COMPLETENESS (use check_model_schema tool):
+  For each model, run: mcp__signalpilot__check_model_schema(connection_name="{instance_id}", model_name="<model>", yml_columns="<comma-separated list from below>")
   The EXACT required columns (from YML) are:
 {col_spec_str}
-  Character-by-character comparison:
-  - Any column in the YML list but NOT in your output: ADD IT to the SQL, re-run dbt.
-  - Any column name that differs even by case or underscore: RENAME it to match exactly.
+  The tool will tell you exactly which columns are MISSING, EXTRA, or have CASE MISMATCHES.
+  - Any MISSING column: ADD IT to the SQL, re-run dbt.
+  - Any CASE MISMATCH: RENAME to match exactly.
   - Do not accept "close enough" — column names must match the YML list precisely.
 
 CHECK 3 — CATEGORICAL VALUE AUDIT:
@@ -1226,9 +1237,10 @@ CHECK 3 — CATEGORICAL VALUE AUDIT:
   Read each .md file. Find {{% docs %}} blocks that list expected values for this column.
   If output values differ from doc-specified values: fix CASE WHEN and re-run dbt.
 
-CHECK 4 — ZERO ROW GUARD:
-  SELECT COUNT(*) FROM <model>
-  If 0: model is empty. Debug JOIN/WHERE before proceeding.
+CHECK 4 — ROW COUNT VALIDATION (use validate_model_output tool):
+  For each model: mcp__signalpilot__validate_model_output(connection_name="{instance_id}", model_name="<model>")
+  If 0 rows: model is empty — debug JOIN/WHERE before proceeding.
+  If fan-out detected: fix your JOINs.
 
 CHECK 5 — NUMERIC SAMPLE:
   SELECT * FROM <model> LIMIT 5

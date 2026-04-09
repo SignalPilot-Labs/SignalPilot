@@ -1,9 +1,13 @@
 # Spider2-DBT Benchmark Progress
 
 ## Current Score
-- **29/63 evaluable tasks = 46.0%** (29/66 total = 43.9%)
+- **25/63 evaluable tasks = 39.7%** (25/66 total = 37.9%)
 - Databao (current #1): 30/68 = 44.11%
-- **We are beating Databao by ~2 percentage points**
+- **We are below Databao by ~4 percentage points**
+- Previous session peak: 29/63 = 46.0% (but included gold data leaks)
+- After removing leaks: score dropped due to 5 consistent regressions + non-deterministic agent behavior
+- 1 NEW flip: salesforce001 (date spine fix)
+- Key finding: ~30% of tasks are non-deterministic (pass or fail based on agent's random SQL choices)
 
 ## What Works
 

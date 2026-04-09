@@ -718,24 +718,10 @@ DO THIS IN ORDER:
         warning_lines.append("Do NOT skip this — it is the #1 cause of row count mismatches.")
         prompt += "\n".join(warning_lines)
 
-    # Add output table name requirement section if there are eval-critical models
+    # Add eval-critical table names
     if eval_critical_models:
         crit_names = ", ".join(sorted(eval_critical_models))
-        crit_select = " ".join(sorted(eval_critical_models))
-        prompt += f"""
-
-OUTPUT TABLE NAME VERIFICATION (mandatory before finishing):
-The evaluator checks for these EXACT table names in your result DuckDB:
-  {crit_names}
-
-After every successful dbt run, verify with:
-  Run mcp__signalpilot__query_database: SHOW TABLES
-Every name above MUST appear in the output. If any are missing:
-1. Check your .sql filename — it must exactly match the model name character-for-character
-2. Check dbt_project.yml for alias or schema overrides that rename the output table
-3. If you built the logic under a different name (e.g., 'monthly_activity' instead of 'dataset__monthly_activity'), create a new .sql file with the correct name: SELECT * FROM {{{{ ref('your_existing_model') }}}}
-4. Run: dbt run --select {crit_select}
-DO NOT alias eval-critical models. DO NOT add schema prefixes. The evaluator does an exact string match."""
+        prompt += f"\n\nEVAL-CRITICAL TABLES (must exist with these exact names): {crit_names}"
 
     # Add source table hints
     import yaml
@@ -776,32 +762,13 @@ DO NOT alias eval-critical models. DO NOT add schema prefixes. The evaluator doe
         counts_lines = [f"  {name}: {count:,} rows" for name, count in sorted(table_counts.items())]
         prompt += "\n\nSOURCE TABLE CARDINALITIES (row counts of tables already in the DuckDB file):\n"
         prompt += "\n".join(counts_lines)
-        prompt += (
-            "\n- These are INPUT table sizes, not expected output sizes."
-            "\n- Use them to sanity-check your model's row count before verification."
-            "\n- A JOIN producing far more rows than the largest source table indicates fan-out."
-            "\n- A model with far fewer rows than any plausible source slice indicates over-filtering or a wrong JOIN type."
-        )
+        prompt += "\n- These are INPUT table sizes, not expected output sizes."
 
     checkpoint_turn = min(6, max_turns // 3)
     exploration_end = min(4, max_turns // 4)
     priority_deadline = max(4, max_turns - 8)
 
-    prompt += f"""
-
-TURN BUDGET PLAN — follow this allocation strictly:
-- Turns 1-{exploration_end}: Discovery only (list_tables, explore 2-3 source tables, read YML)
-- Turns {exploration_end + 1}-{priority_deadline}: Write and run ALL priority models
-- Turns {priority_deadline + 1}+: Write other models, fix errors, verify
-
-PRIORITY MODEL HARD CHECKPOINT:
-By turn {checkpoint_turn}, every priority model must have a .sql file on disk.
-If you reach turn {checkpoint_turn} and any priority model is still missing:
-  - STOP all exploration and non-priority work immediately.
-  - Write a minimal but syntactically correct SQL for each missing priority model right now.
-  - A wrong-but-present model is evaluated and can be fixed; a missing model scores zero.
-  - Do NOT write more than 2 tool calls on any non-priority model until ALL priority models exist.
-  - CRITICAL: Over-exploration is the #1 cause of missing models. list_tables counts as 1 of your 2 exploration turns."""
+    prompt += f"\n\nBudget: explore in turns 1-{exploration_end}, write priority models by turn {priority_deadline}, verify after."
 
     return prompt
 

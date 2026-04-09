@@ -112,3 +112,12 @@ SELECT * FROM {{ source('raw', 'orders') }} -- reference a raw source table
 Naming conventions: `stg_*` staging, `dim_*` dimension, `fct_*` fact, `obt_*` one-big-table.
 
 Use `dbt.*` macros (e.g., `{{ dbt.date_trunc('month', 'date_col') }}`) only if existing SQL already uses the `dbt.` namespace.
+
+## 12. Turn Budget Management
+
+Over-exploration is the #1 cause of missing models. Follow this discipline:
+- **First 25% of turns**: Explore (list_tables, explore 2 source tables, read YMLs). STOP exploring.
+- **Middle 50% of turns**: Write ALL priority model .sql files and run `dbt run`. A wrong-but-present model can be fixed; a missing model scores zero.
+- **Last 25% of turns**: Fix errors, write non-priority models, run /dbt-verification.
+
+If halfway through your budget any priority model lacks a .sql file, STOP everything else and write it immediately — even a minimal version.

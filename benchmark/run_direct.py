@@ -1278,8 +1278,10 @@ CHECK 6 — CARDINALITY SANITY (catches silent wrong-scale errors):
 CHECK 7 — NULL / JUNK ROW FILTER:
   For UNION-based models or models sourced from scraped data (Google Sheets, CSV):
     SELECT COUNT(*) FROM <model> WHERE <primary_identifying_col> IS NULL
-  If count > 0 and the task doesn't explicitly require NULL rows: these are junk placeholder rows.
-  Add WHERE <col> IS NOT NULL to the source CTE or staging model. Re-run dbt.
+  If count > 0: inspect those rows. Rows where ALL columns are NULL are junk — filter them.
+  But rows where only the title/name is NULL but other columns have data (genre, date, etc.)
+  are likely valid data — keep those. Filter: WHERE NOT (col1 IS NULL AND col2 IS NULL AND col3 IS NULL)
+  instead of WHERE title IS NOT NULL.
 
 CHECK 8 — JOIN TYPE VERIFICATION (use compare_join_types tool):
   For each JOIN in the model SQL, call:

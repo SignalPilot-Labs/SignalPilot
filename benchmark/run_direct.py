@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -25,6 +26,16 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    query,
+)
+from claude_agent_sdk._errors import ProcessError, ClaudeSDKError
 
 # Load .env from project root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +70,20 @@ def log_separator(title: str = "") -> None:
     if title:
         print(f"  {title}", flush=True)
         print(f"{'='*60}", flush=True)
+
+
+# ── MCP config loader ──────────────────────────────────────────────────────────
+
+def _load_mcp_servers() -> dict:
+    """Load MCP server configs from MCP_CONFIG, stripping unsupported 'cwd' key."""
+    with open(MCP_CONFIG) as f:
+        raw = json.load(f)
+    servers = raw.get("mcpServers", {})
+    result: dict = {}
+    for name, config in servers.items():
+        entry = {k: v for k, v in config.items() if k != "cwd"}
+        result[name] = entry
+    return result
 
 
 # ── Task loading ───────────────────────────────────────────────────────────────
@@ -792,35 +817,117 @@ DO THIS IN ORDER:
 
 # ── Agent runner ───────────────────────────────────────────────────────────────
 
+SKILL_TOOL_NAMES = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
 
-def _run_claude_with_retry(
-    cmd: list[str],
-    cwd: str,
-    timeout: int = 900,
-    max_retries: int = 3,
+
+async def _run_sdk_agent(
+    prompt: str,
+    work_dir: Path,
+    model: str,
+    max_turns: int,
+    timeout: int,
     label: str = "agent",
-) -> subprocess.CompletedProcess:
-    """Run claude CLI with retry on 529/overloaded errors."""
-    result: subprocess.CompletedProcess | None = None
+    max_retries: int = 3,
+) -> dict:
+    """Run the Claude Agent SDK with retry on 529/overload errors."""
+    options = ClaudeAgentOptions(
+        model=model,
+        max_turns=max_turns,
+        permission_mode="bypassPermissions",
+        cwd=str(work_dir),
+        mcp_servers=_load_mcp_servers(),
+        debug_stderr=True,
+    )
+
+    log_separator(f"AGENT model={model}  max_turns={max_turns}  timeout={timeout}s  label={label}")
+
     for attempt in range(1, max_retries + 1):
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-        output = (result.stdout or "") + (result.stderr or "")
-        is_overloaded = result.returncode != 0 and ("API Error: 529" in output or "Overloaded" in output)
-        if is_overloaded:
-            log(f"API overloaded ({label}, attempt {attempt}/{max_retries}): {output[:200]}", "WARN")
-            if attempt < max_retries:
-                wait = 30 * attempt
-                log(f"Retrying in {wait}s...")
-                time.sleep(wait)
-                continue
+        messages: list[str] = []
+        tool_calls: list[dict] = []
+        turn_count = 0
+        start_time = time.monotonic()
+        success = False
+
+        try:
+            async for message in query(prompt=prompt, options=options):
+                elapsed = time.monotonic() - start_time
+
+                if isinstance(message, AssistantMessage):
+                    turn_count += 1
+                    log(f"─── Turn {turn_count} ({elapsed:.1f}s) ───")
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            for line in block.text.split("\n"):
+                                log(f"[agent] {line}")
+                            messages.append(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            tool_input_str = json.dumps(block.input, ensure_ascii=False)
+                            truncated = tool_input_str[:500] + "..." if len(tool_input_str) > 500 else tool_input_str
+                            log(f"[tool_use] {block.name}")
+                            log(f"  input: {truncated}")
+                            tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count})
+                            if block.name in SKILL_TOOL_NAMES:
+                                log(f"[skill] Agent invoked /{block.name}")
+                        elif isinstance(block, ToolResultBlock):
+                            result_str = str(block.content) if hasattr(block, "content") else str(block)
+                            truncated = result_str[:1000] + "..." if len(result_str) > 1000 else result_str
+                            log(f"[tool_result] {truncated}")
+
+                elif isinstance(message, ResultMessage):
+                    elapsed = time.monotonic() - start_time
+                    log(f"AGENT FINISHED after {turn_count} turns, {elapsed:.1f}s")
+                    if hasattr(message, "cost_usd"):
+                        log(f"  Cost: ${getattr(message, 'cost_usd', 'N/A')}")
+                    if hasattr(message, "usage"):
+                        log(f"  Usage: {getattr(message, 'usage', 'N/A')}")
+                    success = True
+
+        except ProcessError as e:
+            err_str = str(e)
+            stderr_str = getattr(e, "stderr", "") or ""
+            is_overloaded = (
+                "529" in err_str or "overloaded" in err_str.lower()
+                or "529" in stderr_str or "overloaded" in stderr_str.lower()
+            )
+            if is_overloaded:
+                log(f"API overloaded ({label}, attempt {attempt}/{max_retries}): {err_str[:200]}", "WARN")
+                if attempt < max_retries:
+                    wait = 30 * attempt
+                    log(f"Retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                else:
+                    log(f"API overloaded after {max_retries} retries ({label}) — giving up", "ERROR")
+                    return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
             else:
-                log(f"API overloaded after {max_retries} retries ({label}) — giving up", "ERROR")
-        return result
-    assert result is not None
-    return result
+                log(f"Agent ProcessError ({label}): {e}", "ERROR")
+                return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
+
+        except ClaudeSDKError as e:
+            err_str = str(e)
+            is_overloaded = "529" in err_str or "overloaded" in err_str.lower()
+            if is_overloaded:
+                log(f"API overloaded ({label}, attempt {attempt}/{max_retries}): {err_str[:200]}", "WARN")
+                if attempt < max_retries:
+                    wait = 30 * attempt
+                    log(f"Retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                else:
+                    log(f"API overloaded after {max_retries} retries ({label}) — giving up", "ERROR")
+                    return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
+            else:
+                log(f"Agent ClaudeSDKError ({label}): {e}", "ERROR")
+                return {"success": False, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": time.monotonic() - start_time}
+
+        elapsed = time.monotonic() - start_time
+        return {"success": success, "messages": messages, "tool_calls": tool_calls, "turns": turn_count, "elapsed": elapsed}
+
+    # Should not reach here, but guard for type checker
+    return {"success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0}
 
 
-def run_agent(
+async def run_agent(
     instance_id: str,
     instruction: str,
     work_dir: Path,
@@ -828,60 +935,22 @@ def run_agent(
     max_turns: int,
     eval_critical_models: set[str],
 ) -> bool:
-    """Run the Claude CLI agent in the work directory."""
+    """Run the Claude Agent SDK in the work directory."""
     log_separator(f"AGENT  model={model}  max_turns={max_turns}  instance={instance_id}")
 
     prompt = build_agent_prompt(instance_id, instruction, work_dir, eval_critical_models, max_turns=max_turns)
     log(f"Prompt length: {len(prompt)} chars")
 
-    claude_cmd = [
-        "claude",
-        "--model", model,
-        "--permission-mode", "bypassPermissions",
-        "--max-turns", str(max_turns),
-        "--mcp-config", str(MCP_CONFIG),
-        "--output-format", "json",
-        "-p", prompt,
-    ]
+    result = await _run_sdk_agent(prompt, work_dir, model, max_turns, timeout=900, label="main-agent")
 
-    log(f"Running: claude --model {model} --max-turns {max_turns} --mcp-config ... -p <prompt>")
-    log(f"Work dir: {work_dir}")
-
-    start = time.monotonic()
-    result = _run_claude_with_retry(claude_cmd, str(work_dir), timeout=900, label="main-agent")
-    elapsed = time.monotonic() - start
-
-    # Save full agent output for skill/tool usage analysis
     transcript_path = work_dir / "agent_output.json"
-    if result.stdout:
-        transcript_path.write_text(result.stdout)
+    transcript_path.write_text(json.dumps({
+        "tool_calls": result["tool_calls"],
+        "messages": result["messages"],
+        "turns": result["turns"],
+    }))
 
-    # Check for skill usage in output
-    output_text = result.stdout or ""
-    for skill_name in ["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql"]:
-        if skill_name in output_text:
-            log(f"  [skill] Agent used /{skill_name}")
-
-    # Stream output to console
-    if result.stdout:
-        try:
-            import json as _json
-            data = _json.loads(result.stdout)
-            if isinstance(data, dict) and "result" in data:
-                log(f"  [claude] {data['result'][:500]}")
-            elif isinstance(data, list):
-                for item in data[-3:]:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        log(f"  [claude] {item.get('text', '')[:200]}")
-        except Exception:
-            for line in result.stdout.splitlines()[-10:]:
-                log(f"  [claude] {line[:200]}")
-    if result.stderr:
-        for line in result.stderr.splitlines():
-            log(f"  [claude:err] {line}", "WARN")
-
-    log(f"Claude CLI exit code: {result.returncode} ({elapsed:.1f}s)")
-    return result.returncode == 0
+    return result["success"]
 
 
 # ── Evaluation ─────────────────────────────────────────────────────────────────
@@ -1186,6 +1255,39 @@ CHECK 6 — CARDINALITY SANITY (catches silent wrong-scale errors):
 Fix any issues. Re-run dbt after fixes. Stop."""
 
 
+# ── Inline async agent helpers ────────────────────────────────────────────────
+
+
+async def _run_quick_fix_agent(fix_prompt: str, work_dir: Path, model: str) -> bool:
+    """Run a short fix agent after a failed dbt run."""
+    log("Running quick-fix agent (20 turns)...")
+    result = await _run_sdk_agent(fix_prompt, work_dir, model, max_turns=20, timeout=480, label="quick-fix")
+    if result["success"]:
+        log("Fix agent completed")
+    else:
+        log("Fix agent failed")
+    return result["success"]
+
+
+async def _run_value_verify_agent(verify_prompt: str, work_dir: Path, model: str) -> bool:
+    """Run a value-verification agent to check output correctness."""
+    log("Running value-verification agent (12 turns)...")
+    result = await _run_sdk_agent(verify_prompt, work_dir, model, max_turns=12, timeout=360, label="value-verify")
+    log("Value-verify agent completed")
+    return result["success"]
+
+
+async def _run_name_fix_agent(name_fix_prompt: str, work_dir: Path, model: str) -> bool:
+    """Run a short agent to fix missing table names."""
+    log("Running table-name fix agent (8 turns)...")
+    result = await _run_sdk_agent(name_fix_prompt, work_dir, model, max_turns=8, timeout=240, label="name-fix")
+    if result["success"]:
+        log("Name-fix agent completed")
+    else:
+        log("Name-fix agent failed")
+    return result["success"]
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1308,14 +1410,14 @@ def main() -> None:
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 4: Run Claude agent")
-        agent_ok = run_agent(
+        agent_ok = asyncio.run(run_agent(
             instance_id=instance_id,
             instruction=instruction,
             work_dir=work_dir,
             model=model,
             max_turns=max_turns,
             eval_critical_models=eval_critical_models,
-        )
+        ))
         elapsed = time.monotonic() - t0
         log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
 
@@ -1413,20 +1515,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                     "3. If model << source: check WHERE and JOIN types for over-filtering"
                 )
 
-            log("Running quick-fix agent (20 turns)...")
-            fix_cmd = [
-                "claude",
-                "--model", model,
-                "--permission-mode", "bypassPermissions",
-                "--max-turns", "20",
-                "--mcp-config", str(MCP_CONFIG),
-                "-p", fix_prompt,
-            ]
-            fix_result = _run_claude_with_retry(fix_cmd, str(work_dir), timeout=480, label="quick-fix")
-            if fix_result.returncode == 0:
-                log("Fix agent completed")
-            else:
-                log("Fix agent failed")
+            asyncio.run(_run_quick_fix_agent(fix_prompt, work_dir, model))
 
         # Then try full run (best effort — don't fail on this)
         # Run eval-critical first, then full run for remaining models
@@ -1450,17 +1539,7 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                 work_dir, instance_id, eval_critical_models, instruction,
                 _extract_model_columns(work_dir)
             )
-            verify_cmd = [
-                "claude", "--model", model,
-                "--permission-mode", "bypassPermissions",
-                "--max-turns", "12",
-                "--mcp-config", str(MCP_CONFIG),
-                "-p", verify_prompt,
-            ]
-            log("Running value-verification agent (12 turns)...")
-            verify_result = _run_claude_with_retry(verify_cmd, str(work_dir), timeout=360, label="value-verify")
-            if verify_result.returncode == 0:
-                log("Value-verify agent completed")
+            asyncio.run(_run_value_verify_agent(verify_prompt, work_dir, model))
             # Re-run dbt to materialize any fixes
             subprocess.run(
                 ["/home/agentuser/.local/bin/dbt", "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
@@ -1528,28 +1607,14 @@ RULES:
                         if col_specs:
                             name_fix_prompt += "\n\nREQUIRED COLUMNS:\n" + "\n".join(col_specs)
 
-                        log("Running table-name fix agent (8 turns)...")
-                        name_fix_cmd = [
-                            "claude",
-                            "--model", model,
-                            "--permission-mode", "bypassPermissions",
-                            "--max-turns", "8",
-                            "--mcp-config", str(MCP_CONFIG),
-                            "-p", name_fix_prompt,
-                        ]
-                        name_fix_result = _run_claude_with_retry(
-                            name_fix_cmd, str(work_dir), timeout=240, label="name-fix"
-                        )
-                        if name_fix_result.returncode == 0:
-                            log("Name-fix agent completed")
+                        name_fix_ok = asyncio.run(_run_name_fix_agent(name_fix_prompt, work_dir, model))
+                        if name_fix_ok:
                             # Run dbt one more time to materialize fixed models
                             subprocess.run(
                                 ["/home/agentuser/.local/bin/dbt", "run", "--select"]
                                 + list(sorted(missing_eval_tables)),
                                 cwd=str(work_dir), capture_output=True, text=True, timeout=180,
                             )
-                        else:
-                            log("Name-fix agent failed")
                 except Exception as e:
                     log(f"Post-eval table check failed: {e}", "WARN")
 

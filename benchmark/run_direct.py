@@ -732,7 +732,13 @@ DO THIS IN ORDER:
       - NEVER modify .yml or .yaml files — only create/edit .sql files
       - Column names in YML are exact — alias SELECT output to match them character-for-character
       - Use ref() for upstream models, source() for raw tables
+      - If a ref('model_name') fails because no .sql file exists BUT the table already exists in the database,
+        create an ephemeral wrapper: {{ config(materialized='ephemeral') }} SELECT * FROM model_name
+        This bridges pre-existing tables to dbt's ref() system without altering the database.
       - Before committing to a JOIN type, call mcp__signalpilot__compare_join_types to see row impact of INNER vs LEFT vs RIGHT JOIN
+      - When combining similar source tables (e.g., comedies + dramas + docuseries), prefer UNION (dedup) over UNION ALL if sources may contain duplicate/overlapping rows. UNION ALL keeps all rows including duplicates; UNION deduplicates. Check source data for identical rows before deciding.
+      - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). Use ROUND(SUM(ABS(price)), 2) for spend/cost totals in reporting models.
+      - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
    d. Run: mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
@@ -1287,6 +1293,31 @@ CHECK 8 — JOIN TYPE VERIFICATION (use compare_join_types tool):
   For each JOIN in the model SQL, call:
     mcp__signalpilot__compare_join_types(connection_name="{instance_id}", left_table="<left>", right_table="<right>", join_keys="a.<key> = b.<key>")
   If INNER JOIN drops rows that LEFT JOIN would keep, and the task doesn't explicitly exclude unmatched entities: switch to LEFT JOIN. Re-run dbt.
+
+CHECK 9 — DUPLICATE ROW DETECTION:
+  For UNION-based models, check for exact duplicate rows:
+    SELECT COUNT(*) AS total, COUNT(*) - COUNT(DISTINCT <all_columns_hash>) AS duplicates
+    FROM <model>
+  If duplicates > 0: the UNION ALL is keeping duplicate rows. Check if the source tables have
+  overlapping or identical rows. If so, consider using UNION (dedup) instead of UNION ALL.
+  Also check: SELECT *, COUNT(*) as cnt FROM <model> GROUP BY ALL HAVING cnt > 1 LIMIT 5
+  to see the actual duplicated rows and decide if they are real data or artifacts.
+
+CHECK 10 — MONETARY VALUE SIGN CHECK:
+  For columns with names containing 'spend', 'cost', 'price', 'amount', 'revenue', 'total':
+    SELECT column_name, MIN(value), MAX(value) FROM <model>
+  If a "spend" or "cost" column has all-negative values, the source likely stores charges as
+  negative (accounting convention). Wrap in ABS() and ROUND to 2 decimal places:
+    ROUND(SUM(ABS(price)), 2) AS total_spend
+  Spend/cost/amount columns should almost always be positive in reporting models.
+
+CHECK 11 — COALESCE AUDIT:
+  Read the model SQL. If it uses COALESCE(col, 0) or COALESCE(col, '') on LEFT JOIN results:
+    Query: SELECT COUNT(*) FROM <model> WHERE <coalesced_col> = 0
+    If most rows are 0, the COALESCE is filling NULL join results with 0.
+    This is WRONG unless the task explicitly says "treat nulls as zero".
+    Fix: Remove the COALESCE — let NULLs remain. The evaluator distinguishes NULL from 0.
+    Example: `coalesce(lc.leads_created, 0) as leads_created` → `lc.leads_created`
 
 Fix any issues. Re-run dbt after fixes. Stop."""
 

@@ -368,6 +368,25 @@ def _create_ephemeral_stubs(work_dir: Path) -> list[str]:
     return created
 
 
+def _scan_current_date_models(work_dir: Path) -> list[tuple[str, int, str]]:
+    """Scan models/ for .sql files that reference current_date/now() and return matches."""
+    import re
+    matches = []
+    models_dir = work_dir / "models"
+    if not models_dir.exists():
+        return matches
+    for sql_file in models_dir.rglob("*.sql"):
+        try:
+            content = sql_file.read_text()
+            for i, line in enumerate(content.splitlines(), 1):
+                if re.search(r'\bcurrent_date\b|\bCURRENT_DATE\b|\bnow\(\)', line):
+                    rel_path = str(sql_file.relative_to(work_dir))
+                    matches.append((rel_path, i, line.strip()))
+        except Exception:
+            pass
+    return matches
+
+
 def _extract_model_deps(work_dir: Path) -> dict[str, list[str]]:
     """Extract model dependency info (refs) from YML files."""
     import yaml
@@ -708,6 +727,16 @@ RULES:
 - COLUMN NAMING: Always check the schema.yml for exact column names. Do NOT invent prefixes (e.g. 'attribution_') unless the YML explicitly defines them. Match names character-for-character.
 - COMPLETENESS: Before finishing, verify ALL models in schema.yml have .sql files. Missing model = automatic zero score. Run: ls models/*.sql and compare to YML model list.
 - DATE SPINES: Call mcp__signalpilot__get_date_boundaries(connection_name="{instance_id}") to get the MAX source date. Use the returned GLOBAL MAX DATE as your spine endpoint — never use current_date, now(), or hardcoded ranges. Use UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))."""
+
+    # Scan for current_date in existing models and warn the agent
+    current_date_hits = _scan_current_date_models(work_dir)
+    if current_date_hits:
+        warning_lines = ["", "⚠ CRITICAL: These existing .sql files use current_date/now() and MUST be edited:"]
+        for rel_path, line_no, line_text in current_date_hits:
+            warning_lines.append(f"  {rel_path}:{line_no}: {line_text}")
+        warning_lines.append("After calling get_date_boundaries in step 2b, IMMEDIATELY edit these files to replace current_date with the GLOBAL MAX DATE.")
+        warning_lines.append("Do NOT skip this — it is the #1 cause of row count mismatches.")
+        prompt += "\n".join(warning_lines)
 
     # Add output table name requirement section before ROW COUNT VERIFICATION
     if eval_critical_models:

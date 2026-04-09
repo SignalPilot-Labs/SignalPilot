@@ -33,11 +33,16 @@ After writing any date spine model, verify:
   SELECT MIN(date_col), MAX(date_col), COUNT(*) FROM <spine_model>
 The max date must match the GLOBAL MAX DATE from get_date_boundaries, NOT today.
 
-For package-provided spine models (e.g. int_salesforce__date_spine, xero__calendar_spine),
-create an override model in models/ with the same name that replaces current_date with
-the GLOBAL MAX DATE returned by get_date_boundaries. After building, run:
-  grep -r "current_date\|CURRENT_DATE\|now()" models/
-If any hits remain, fix them.
+MANDATORY STEP — Scan and fix existing models that use current_date:
+After calling get_date_boundaries, immediately run:
+  grep -rn "current_date\|CURRENT_DATE\|now()" models/ --include="*.sql"
+If ANY hits are found, EDIT those files to replace current_date/now() with the GLOBAL MAX DATE.
+These files are already in your models/ directory — do NOT create new files, edit the existing ones.
+Common patterns to fix:
+  end_date="current_date"  →  end_date="cast('YYYY-MM-DD' as date)"
+  greatest(..., cast(current_date as date))  →  cast('YYYY-MM-DD' as date)
+  dbt.dateadd(..., "current_date")  →  "cast('YYYY-MM-DD' as date)"
+After fixing, re-run the grep to confirm zero hits remain.
 
 ## NULL Handling — Preserve NULLs in String Columns
 
@@ -143,6 +148,6 @@ end_date = current_date
 -- GOOD — use the date returned by get_date_boundaries:
 end_date = DATE '2024-11-30'  -- copy the GLOBAL MAX DATE literally
 
-If a dbt package intermediate model (e.g. `int_salesforce__date_spine`) uses `current_date`
-internally, write a replacement `.sql` file in your `models/` directory that overrides it
-with the GLOBAL MAX DATE from get_date_boundaries.
+If ANY existing .sql file in models/ uses current_date or now(), EDIT that file directly —
+replace the current_date reference with the GLOBAL MAX DATE from get_date_boundaries.
+Do NOT create a new file — the file already exists in models/ and must be edited in place.

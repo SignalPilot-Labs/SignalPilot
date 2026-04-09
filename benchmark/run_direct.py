@@ -1275,6 +1275,17 @@ CHECK 6 — CARDINALITY SANITY (catches silent wrong-scale errors):
        SELECT COUNT(*) FROM <branch_2_source> [WHERE <filter>]
      Sum must equal model row count. If any branch is 0 and should not be, the domain filter is wrong.
 
+CHECK 7 — NULL / JUNK ROW FILTER:
+  For UNION-based models or models sourced from scraped data (Google Sheets, CSV):
+    SELECT COUNT(*) FROM <model> WHERE <primary_identifying_col> IS NULL
+  If count > 0 and the task doesn't explicitly require NULL rows: these are junk placeholder rows.
+  Add WHERE <col> IS NOT NULL to the source CTE or staging model. Re-run dbt.
+
+CHECK 8 — JOIN TYPE VERIFICATION (use compare_join_types tool):
+  For each JOIN in the model SQL, call:
+    mcp__signalpilot__compare_join_types(connection_name="{instance_id}", left_table="<left>", right_table="<right>", join_keys="a.<key> = b.<key>")
+  If INNER JOIN drops rows that LEFT JOIN would keep, and the task doesn't explicitly exclude unmatched entities: switch to LEFT JOIN. Re-run dbt.
+
 Fix any issues. Re-run dbt after fixes. Stop."""
 
 

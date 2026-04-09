@@ -634,15 +634,19 @@ async def get_date_boundaries(connection_name: str) -> str:
     if not found_any:
         return f"Date boundaries for: {connection_name} ({conn_info.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
 
-    if table_max:
-        lines.append("TABLE MAX DATES:")
-        for tbl, tbl_max in table_max.items():
-            lines.append(f"  {tbl} → {tbl_max}")
-        lines.append("")
-
     if global_max:
         lines.append(f"GLOBAL MAX DATE: {global_max}")
-        lines.append(f"Use DATE '{global_max}' as your date spine endpoint — NOT current_date")
+        lines.append("")
+
+    if table_max:
+        lines.append("TABLE MAX DATES (use these for date spine endpoints):")
+        for tbl, tbl_max in sorted(table_max.items()):
+            marker = " ← USE THIS for spine if this is your fact/event table" if tbl_max != global_max else ""
+            lines.append(f"  {tbl} → {tbl_max}{marker}")
+        lines.append("")
+        lines.append("RULE: Use the max date of your PRIMARY FACT TABLE (orders, events, transactions)")
+        lines.append("      as the date spine endpoint. Do NOT use the global max if it comes from a")
+        lines.append("      dimension or reference table with a later date.")
     else:
         lines.append("GLOBAL MAX DATE: (no non-null date values found)")
 

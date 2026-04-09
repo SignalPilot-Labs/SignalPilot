@@ -50,9 +50,14 @@ the UNION total should be exactly 807. Count each branch before writing the UNIO
 
 ## JOIN Type Selection
 
-- INNER JOIN: only when non-matching rows must be excluded
-- LEFT JOIN: required when left table is the spine (all customers, all products, all orders)
+DEFAULT TO LEFT JOIN for reporting and aggregation models that need to preserve all entities.
+- LEFT JOIN: required when left table is the spine (all customers, all products, all admins, all dates)
+  Example: admin metrics must show ALL admins, even those with zero conversations.
+  Start FROM the dimension table (all entities) and LEFT JOIN to the fact/event table.
+- INNER JOIN: only when the task description explicitly excludes non-matching entities
+  (e.g., "customers WITH orders" — only customers who have orders)
 - LEFT JOIN + WHERE right.col IS NOT NULL silently becomes INNER JOIN — avoid this pattern
+- When output row count < expected: first check if INNER JOIN should be LEFT JOIN
 
 ## Boundary Filter Verification
 

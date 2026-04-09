@@ -44,6 +44,12 @@ Common patterns to fix:
   dbt.dateadd(..., "current_date")  →  "cast('YYYY-MM-DD' as date)"
 After fixing, re-run the grep to confirm zero hits remain.
 
+SPINE ENDPOINT PRECISION: The GLOBAL MAX DATE is an upper bound across ALL tables. For better
+precision, identify which source table feeds the spine model and query its specific max date:
+  SELECT MAX(date_column) FROM <source_table_feeding_the_spine>
+Use that date as the spine endpoint. If the spine row count is still wrong after using the
+GLOBAL MAX DATE, try the source-specific max date instead.
+
 ## NULL Handling — Preserve NULLs in String Columns
 
 Do NOT use COALESCE(col, '') to replace NULLs with empty strings.

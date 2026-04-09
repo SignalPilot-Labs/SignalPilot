@@ -1656,17 +1656,27 @@ RULES:
         # Row-count and value-fix agents removed — they leaked gold data
         # (gold row counts and sample values were passed directly to fix agents)
 
-    # ── Clean up MCP connection pool before evaluation ──────────────────────
-    # The SDK's MCP server subprocess may still hold DuckDB connections open.
-    # Delete the connection entry to force release, then sleep briefly for
-    # any WAL flush to complete.
+    # ── Flush DuckDB WAL before evaluation ──────────────────────────────────
+    # The SDK's MCP server subprocess may still hold write connections.
+    # Open a write connection briefly to force a WAL checkpoint, then close.
+    result_db_candidates = list(work_dir.glob("*.duckdb"))
+    if result_db_candidates:
+        try:
+            import duckdb as _ddb
+            _flush_con = _ddb.connect(database=str(result_db_candidates[0]))
+            _flush_con.execute("CHECKPOINT")
+            _flush_con.close()
+            log("Flushed DuckDB WAL via CHECKPOINT")
+        except Exception as e:
+            log(f"WAL flush failed (non-fatal): {e}", "WARN")
+    # Also delete the MCP connection registration
     try:
         from gateway.store import delete_connection as _del_conn
         _del_conn(instance_id)
         log(f"Released MCP connection '{instance_id}' before evaluation")
     except Exception:
         pass
-    time.sleep(1)  # Allow DuckDB WAL flush
+    time.sleep(2)  # Extra time for cleanup
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     t0 = time.monotonic()

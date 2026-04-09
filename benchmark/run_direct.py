@@ -166,12 +166,10 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__dbt_error_parser` — parse dbt error text into fix suggestions
 - `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
 
-## Skills (invoke with /skill-name)
-You have 4 skills available. Use them at the right time:
-- `/dbt-workflow` — BEFORE writing any SQL model. Covers JOIN selection, output shape, column contracts.
-- `/duckdb-sql` — WHEN writing DuckDB SQL. Covers syntax gotchas, date functions, type casting.
-- `/dbt-verification` — AFTER dbt build succeeds. MANDATORY for each priority model. Contains exact tool calls.
-- `/dbt-debugging` — WHEN dbt fails or output looks wrong. Error parsing, fan-out/over-filter diagnosis.
+## Key Rules
+- Always use `{{ config(materialized='table') }}` at the top of every model
+- Column names in YML are exact — copy them into SELECT aliases character-for-character
+- LEFT JOIN is the default; use INNER JOIN only when the task says "with" or "due to" (entities explicitly excluded)
 """
     (work_dir / "CLAUDE.md").write_text(content)
     log(f"Wrote CLAUDE.md to {work_dir}")
@@ -695,17 +693,21 @@ DO THIS IN ORDER:
 2b. mcp__signalpilot__get_date_boundaries connection_name="{instance_id}"
     Note the GLOBAL MAX DATE — use it (not current_date) as endpoint for any date spine or GENERATE_SERIES.
 3. Explore at most 2 source tables with explore_table. Stop exploring — begin writing SQL.
-4. Read YML files for missing models. Write each missing .sql file, dependencies first.
-   - NEVER modify .yml or .yaml files — only create/edit .sql files
-   - Column names in YML are exact — alias SELECT output to match them character-for-character
-   - Use ref() for upstream models, source() for raw tables
-   Run: {priority_run_cmd}
-5. MANDATORY VERIFICATION — your work is NOT complete until you do this:
-   Run: /dbt-verification
-   This loads a checklist of MCP tool calls you MUST execute for each priority model.
-   If any check fails (missing columns, wrong row counts), fix and re-run dbt.
-   If dbt fails: invoke /dbt-debugging for error diagnosis.
-   DO NOT STOP before completing verification. Unverified work scores ZERO.
+4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
+   a. Read its YML file
+   b. Write the .sql file
+      - NEVER modify .yml or .yaml files — only create/edit .sql files
+      - Column names in YML are exact — alias SELECT output to match them character-for-character
+      - Use ref() for upstream models, source() for raw tables
+   c. Run: dbt run --select <model>
+      If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
+   d. Run: mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
+      → 0 rows = fix JOIN/WHERE and go back to step c. Fan-out = pre-aggregate or ROW_NUMBER() dedup.
+   e. Run: mcp__signalpilot__check_model_schema connection_name="{instance_id}" model_name="<model>" yml_columns="<exact comma-separated cols from YML>"
+      → MISSING columns = add to SQL, go back to step c. Do NOT proceed until all columns match.
+   MODEL IS COMPLETE only when c + d + e all pass. Then move to the next model.
+5. mcp__signalpilot__query_database connection_name="{instance_id}" sql="SHOW TABLES"
+   → every eval-critical model name must appear exactly as written
 {'- ' + packages_hint.lstrip() if packages_hint else ''}"""
 
     # Scan for current_date in existing models and warn the agent

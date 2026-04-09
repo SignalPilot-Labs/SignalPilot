@@ -189,6 +189,7 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__validate_model_output` — row count + fan-out detection post-build
 - `mcp__signalpilot__analyze_grain` — check cardinality / unique keys
 - `mcp__signalpilot__audit_model_sources` — single-call cardinality audit: row counts for all upstream sources + model output, fan-out/over-filter ratios, NULL fraction and constant-value scan on all output columns
+- `mcp__signalpilot__compare_join_types` — compare row counts for INNER/LEFT/RIGHT/FULL OUTER JOIN between two tables to pick the right JOIN type
 - `mcp__signalpilot__dbt_error_parser` — parse dbt error text into fix suggestions
 - `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
 
@@ -731,6 +732,7 @@ DO THIS IN ORDER:
       - NEVER modify .yml or .yaml files — only create/edit .sql files
       - Column names in YML are exact — alias SELECT output to match them character-for-character
       - Use ref() for upstream models, source() for raw tables
+      - Before committing to a JOIN type, call mcp__signalpilot__compare_join_types to see row impact of INNER vs LEFT vs RIGHT JOIN
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
    d. Run: mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
@@ -1292,8 +1294,8 @@ async def _run_quick_fix_agent(fix_prompt: str, work_dir: Path, model: str) -> b
 
 async def _run_value_verify_agent(verify_prompt: str, work_dir: Path, model: str) -> bool:
     """Run a value-verification agent to check output correctness."""
-    log("Running value-verification agent (12 turns)...")
-    result = await _run_sdk_agent(verify_prompt, work_dir, model, max_turns=12, timeout=360, label="value-verify")
+    log("Running value-verification agent (25 turns)...")
+    result = await _run_sdk_agent(verify_prompt, work_dir, model, max_turns=25, timeout=600, label="value-verify")
     log("Value-verify agent completed")
     return result["success"]
 

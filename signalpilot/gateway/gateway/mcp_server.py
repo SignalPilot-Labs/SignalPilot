@@ -2328,6 +2328,162 @@ async def audit_model_sources(
     return "\n".join(report_lines)
 
 
+@mcp.tool()
+async def compare_join_types(
+    connection_name: str,
+    left_table: str,
+    right_table: str,
+    join_keys: str,
+    where_clause: str = "",
+) -> str:
+    """
+    Compare row counts across different JOIN types between two tables.
+
+    Shows what INNER JOIN, LEFT JOIN, RIGHT JOIN, and FULL OUTER JOIN would produce,
+    helping you choose the correct JOIN type for your model. Also shows how many
+    rows from each side have no match in the other table.
+
+    Args:
+        connection_name: Name of a configured database connection
+        left_table: Left table name (can be schema.table or just table)
+        right_table: Right table name (can be schema.table or just table)
+        join_keys: Comma-separated join key pairs, e.g. "a.id = b.id, a.date = b.date"
+        where_clause: Optional WHERE clause (without the WHERE keyword)
+
+    Returns:
+        Formatted report showing row counts for each JOIN type and match analysis.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if not left_table or not _MODEL_NAME_RE.match(left_table):
+        return f"Error: Invalid left_table name '{left_table}'. Use only letters, numbers, underscores, dots (1-256 chars)."
+    if not right_table or not _MODEL_NAME_RE.match(right_table):
+        return f"Error: Invalid right_table name '{right_table}'. Use only letters, numbers, underscores, dots (1-256 chars)."
+    if not join_keys or not join_keys.strip():
+        return "Error: join_keys cannot be empty. Provide at least one join key pair, e.g. \"a.id = b.id\"."
+    if err := _validate_sql(join_keys):
+        return f"Error: {err}"
+    if where_clause and where_clause.strip():
+        if err := _validate_sql(where_clause):
+            return f"Error: {err}"
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return "Error: No credentials stored for this connection"
+
+    from .connectors.pool_manager import pool_manager
+
+    # Extract left and right columns from the first join key for NULL detection.
+    # join_keys like "a.id = b.id" — extract "a.id" and "b.id"
+    first_key = join_keys.split(",")[0].strip()
+    parts = first_key.split("=")
+    if len(parts) != 2:
+        return "Error: join_keys must be in format 'a.col = b.col'. Could not parse left/right columns."
+    left_col = parts[0].strip()
+    right_col = parts[1].strip()
+
+    where_part = f"WHERE {where_clause}" if where_clause and where_clause.strip() else ""
+
+    sql = f"""
+WITH
+left_count AS (SELECT COUNT(*) AS cnt FROM "{left_table}"),
+right_count AS (SELECT COUNT(*) AS cnt FROM "{right_table}"),
+inner_join AS (
+    SELECT COUNT(*) AS cnt
+    FROM "{left_table}" a
+    INNER JOIN "{right_table}" b ON {join_keys}
+    {where_part}
+),
+left_join AS (
+    SELECT COUNT(*) AS cnt,
+           COUNT({right_col}) AS matched,
+           COUNT(*) - COUNT({right_col}) AS unmatched
+    FROM "{left_table}" a
+    LEFT JOIN "{right_table}" b ON {join_keys}
+    {where_part}
+),
+right_join AS (
+    SELECT COUNT(*) AS cnt,
+           COUNT({left_col}) AS matched,
+           COUNT(*) - COUNT({left_col}) AS unmatched
+    FROM "{left_table}" a
+    RIGHT JOIN "{right_table}" b ON {join_keys}
+    {where_part}
+),
+full_join AS (
+    SELECT COUNT(*) AS cnt
+    FROM "{left_table}" a
+    FULL OUTER JOIN "{right_table}" b ON {join_keys}
+    {where_part}
+)
+SELECT
+    (SELECT cnt FROM left_count) AS left_rows,
+    (SELECT cnt FROM right_count) AS right_rows,
+    (SELECT cnt FROM inner_join) AS inner_rows,
+    (SELECT cnt FROM left_join) AS left_join_rows,
+    (SELECT matched FROM left_join) AS left_matched,
+    (SELECT unmatched FROM left_join) AS left_unmatched,
+    (SELECT cnt FROM right_join) AS right_join_rows,
+    (SELECT matched FROM right_join) AS right_matched,
+    (SELECT unmatched FROM right_join) AS right_unmatched,
+    (SELECT cnt FROM full_join) AS full_join_rows
+"""
+
+    try:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            result = await connector.execute(sql)
+    except Exception as e:
+        return f"Error: {e}"
+
+    if not result:
+        return "Error: Query returned no results."
+
+    row = result[0]
+    left_rows: int = row.get("left_rows", 0)
+    right_rows: int = row.get("right_rows", 0)
+    inner_rows: int = row.get("inner_rows", 0)
+    left_join_rows: int = row.get("left_join_rows", 0)
+    left_unmatched: int = row.get("left_unmatched", 0)
+    right_join_rows: int = row.get("right_join_rows", 0)
+    right_unmatched: int = row.get("right_unmatched", 0)
+    full_join_rows: int = row.get("full_join_rows", 0)
+
+    lines = [
+        f"JOIN Impact Analysis: {left_table} × {right_table}",
+        f"  ON {join_keys}",
+        "",
+        "Source Tables:",
+        f"  {left_table}: {left_rows:,} rows",
+        f"  {right_table}: {right_rows:,} rows",
+        "",
+        "JOIN Results:",
+        f"  INNER JOIN:      {inner_rows:,} rows",
+        f"  LEFT JOIN:       {left_join_rows:,} rows  ({left_unmatched:,} left rows have no match)",
+        f"  RIGHT JOIN:      {right_join_rows:,} rows  ({right_unmatched:,} right rows have no match)",
+        f"  FULL OUTER JOIN: {full_join_rows:,} rows",
+    ]
+
+    if inner_rows < left_join_rows:
+        lines.append("")
+        lines.append(f"⚠ INNER JOIN drops {left_join_rows - inner_rows:,} rows from {left_table} that have no match in {right_table}.")
+        lines.append(f"  Use LEFT JOIN to preserve all {left_table} rows.")
+
+    if inner_rows > left_rows or inner_rows > right_rows:
+        lines.append("")
+        lines.append(f"⚠ FAN-OUT detected: INNER JOIN ({inner_rows:,}) > source rows. Join keys are not unique — duplicates in one table multiply rows in the other.")
+
+    if left_join_rows == inner_rows:
+        lines.append("")
+        lines.append(f"✓ All {left_table} rows match — LEFT JOIN and INNER JOIN produce the same result.")
+
+    return "\n".join(lines)
+
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main():

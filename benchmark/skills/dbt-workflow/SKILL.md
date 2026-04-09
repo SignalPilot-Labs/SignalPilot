@@ -49,12 +49,11 @@ Scan `macros/` directory before writing any model. Call macros with `{{ macro_na
 - **INNER JOIN**: only when task explicitly excludes non-matching entities (e.g., "customers WITH orders").
 - `LEFT JOIN + WHERE right.col IS NOT NULL` silently becomes INNER JOIN — avoid.
 
-Before writing any two-table JOIN, count both tables:
-```sql
-SELECT COUNT(*) FROM table_a;  -- e.g., 874
-SELECT COUNT(*) FROM table_b;  -- e.g., 461
+Before writing any two-table JOIN, use `compare_join_types` to see how each JOIN type affects row count:
 ```
-The table defining ALL instances of the output entity (broader domain coverage) MUST be the LEFT/driving table. A crosswalk or mapping table covering only a subset goes on the RIGHT.
+mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
+```
+This shows INNER/LEFT/RIGHT/FULL OUTER row counts plus unmatched rows. The table defining ALL instances of the output entity (broader domain coverage) MUST be the LEFT/driving table. A crosswalk or mapping table covering only a subset goes on the RIGHT.
 
 ## 5. Pre-JOIN Cardinality Check
 

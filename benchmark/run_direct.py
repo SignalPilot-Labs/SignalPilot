@@ -700,8 +700,12 @@ DO THIS IN ORDER:
    - Column names in YML are exact — alias SELECT output to match them character-for-character
    - Use ref() for upstream models, source() for raw tables
    Run: {priority_run_cmd}
-5. After dbt build succeeds: invoke /dbt-verification for each priority model.
-   If dbt fails: invoke /dbt-debugging.
+5. MANDATORY VERIFICATION — your work is NOT complete until you do this:
+   Run: /dbt-verification
+   This loads a checklist of MCP tool calls you MUST execute for each priority model.
+   If any check fails (missing columns, wrong row counts), fix and re-run dbt.
+   If dbt fails: invoke /dbt-debugging for error diagnosis.
+   DO NOT STOP before completing verification. Unverified work scores ZERO.
 {'- ' + packages_hint.lstrip() if packages_hint else ''}"""
 
     # Scan for current_date in existing models and warn the agent
@@ -852,6 +856,7 @@ def run_agent(
         "--permission-mode", "bypassPermissions",
         "--max-turns", str(max_turns),
         "--mcp-config", str(MCP_CONFIG),
+        "--output-format", "json",
         "-p", prompt,
     ]
 
@@ -862,10 +867,31 @@ def run_agent(
     result = _run_claude_with_retry(claude_cmd, str(work_dir), timeout=900, label="main-agent")
     elapsed = time.monotonic() - start
 
+    # Save full agent output for skill/tool usage analysis
+    transcript_path = work_dir / "agent_output.json"
+    if result.stdout:
+        transcript_path.write_text(result.stdout)
+
+    # Check for skill usage in output
+    output_text = result.stdout or ""
+    for skill_name in ["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql"]:
+        if skill_name in output_text:
+            log(f"  [skill] Agent used /{skill_name}")
+
     # Stream output to console
     if result.stdout:
-        for line in result.stdout.splitlines():
-            log(f"  [claude] {line}")
+        try:
+            import json as _json
+            data = _json.loads(result.stdout)
+            if isinstance(data, dict) and "result" in data:
+                log(f"  [claude] {data['result'][:500]}")
+            elif isinstance(data, list):
+                for item in data[-3:]:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        log(f"  [claude] {item.get('text', '')[:200]}")
+        except Exception:
+            for line in result.stdout.splitlines()[-10:]:
+                log(f"  [claude] {line[:200]}")
     if result.stderr:
         for line in result.stderr.splitlines():
             log(f"  [claude:err] {line}", "WARN")

@@ -1,6 +1,6 @@
 # Tool Recommendations for Spider2-DBT Benchmark
 
-## Current Score: 29/65 = 44.6% (with SDK migration, no new flips yet) (Databao: 30/68 = 44.11%)
+## Current Score: 29/65 = 44.6% (Round 5: no new full flips, airport001 PASS stochastic) (Databao: 30/68 = 44.11%)
 
 Note: Verification tool usage went from ~60% to 100% after SDK migration.
 
@@ -48,6 +48,49 @@ Note: Verification tool usage went from ~60% to 100% after SDK migration.
 3. Per-table date boundaries in get_date_boundaries output
 4. audit_model_sources tool (2/8 adoption, needs improvement)
 5. DuckDB WAL checkpoint before evaluation (fixes read-after-write)
+
+## Round 5 Results
+
+**Key Changes**: 
+1. New MCP tool: `compare_join_types` — shows row counts for INNER/LEFT/RIGHT/FULL JOIN between two tables
+2. Value-verify agent budget increased from 12 to 25 turns
+3. New verify checks: CHECK 7 (NULL/junk row filter), CHECK 8 (JOIN type verification)
+4. Improved date boundary output: TABLE MAX DATES more prominent, RULE text added
+
+**Results**:
+| Task | Round 4 | Round 5 | Gold | Change | Notes |
+|------|---------|---------|------|--------|-------|
+| retail001 | PASS | PASS | - | No regression | |
+| airport001 | FAIL (stochastic) | PASS | - | Stochastic pass | Column naming resolved this run |
+| synthea001 | 806 rows | 806 rows | 809 | Same | Verify found int__cost_condition=0 rows but couldn't fix intermediate models |
+| netflix001 | 109 rows | 98 rows | 99 | IMPROVED -11 | CHECK 7 (NULL filter) worked! Filtered 11 NULL drama rows. Over-filtered by 1 — gold keeps 1 NULL-title row |
+| playbook002 | attribution FAIL, cpa 2 rows | attribution PASS, cpa 2 rows | 5 | Partial FLIP | attribution_touches now passes! cpa_and_roas still INNER JOIN |
+| tpch001 | 150000 rows | 150000 rows | 75007 | Same | 2x fan-out persists |
+| zuora001 | daily PASS, overview FAIL | daily PASS, overview FAIL | - | Same | account_active_months still missing |
+| divvy001 | (untested) | hash mismatch, 418926 vs 413689 | - | FAIL | r_id hash function produces different values |
+| recharge001 | (untested) | 8 rows, amounts differ | 8 | FAIL | Amount precision/calculation differs |
+| asset001 | (untested) | bar_quotes PASS, book_value FAIL | - | FAIL | Value uses minute-level price, gold uses daily avg |
+| inzight001 | (untested) | peak value mismatch | - | FAIL | Non-deterministic ROW_NUMBER tie-breaking |
+| superstore001 | (untested) | dim_regional_managers PASS, fct_sales 10277 vs 9994 | - | Partial | Regional managers table passes |
+
+**Tool Adoption**:
+- compare_join_types: 0% — agent did NOT call it despite being in prompt step 4b
+- CHECK 7 (NULL filter): Effective — caused netflix001 improvement
+- CHECK 8 (JOIN type verify): Called in playbook002, but agent concluded INNER JOIN was "intentional" despite it dropping 3 rows. Reasoning error, not tool gap.
+- validate_model_output + check_model_schema: 100% adoption (maintained)
+- 25-turn verify budget: Agent used all turns for deeper analysis but no additional fixes
+
+**Key Finding**: The agent has all tools it needs but makes WRONG JUDGMENT CALLS about when to use them. Specifically:
+1. `compare_join_types` exists but agent doesn't call it (0% adoption)
+2. Even when CHECK 8 shows INNER JOIN drops rows, agent reasons it's "intentional" 
+3. The remaining failures are REASONING errors (wrong JOIN choice, wrong aggregation logic) not tool gaps
+4. DataBao's approach ("reliability beats cleverness") is correct — fewer tools + stricter enforcement > more tools
+
+**Competitor Analysis Update (DataBao)**:
+- They CHECKPOINT DuckDB after EVERY dbt run (we only do it before eval)
+- They protect pre-existing files from modification
+- They have a `submit_answer` tool that forces commitment
+- They have 8 tools total (we have 15+). Less is more.
 
 ## Round 2 Test Results (with consolidated skills + auto-discovery)
 

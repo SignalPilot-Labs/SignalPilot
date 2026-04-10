@@ -187,11 +187,17 @@ DO THIS IN ORDER:
             warning_lines.append(f"  {rel_path}:{line_no}: {line_text}")
             model_name = Path(rel_path).stem
             is_spine_model = any(kw in model_name.lower() for kw in ("calendar", "spine", "date_spine"))
-            if model_name in db_tables and not is_spine_model:
+            if model_name in db_tables:
                 warning_lines.append(f"  NOTE: {model_name} already has pre-computed data in the database.")
                 warning_lines.append(f"  Query its max date with: SELECT MAX(<date_col>) FROM {model_name}")
                 warning_lines.append("  Use that value as the replacement for current_date in this file — NOT the fact table max from get_date_boundaries.")
                 warning_lines.append("  (Replace <date_col> with the actual date column name you see in the model's SELECT list.)")
+                if is_spine_model:
+                    warning_lines.append(
+                        "  SPINE CRITICAL: This model defines the entire output date range. "
+                        "Using the pre-computed spine max is MANDATORY — capping at transaction max "
+                        "will truncate most rows and fail the benchmark."
+                    )
         warning_lines.append("⚡ THIS IS YOUR FIRST TASK after step 2b (get_date_boundaries). Edit EVERY file listed above.")
         warning_lines.append("  Get the max date from get_date_boundaries (use the '← USE THIS' table's max date).")
         warning_lines.append("  Then open each file and apply the appropriate replacement pattern:")

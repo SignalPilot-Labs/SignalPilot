@@ -163,7 +163,7 @@ DO THIS IN ORDER:
       - For "top N" or ranking queries: use RANK() not DENSE_RANK(). RANK() gives ties the same rank and skips the next (1,2,2,4); DENSE_RANK() never skips (1,2,2,3). Standard "top 20" lists expect RANK().
       - Do NOT cast ID columns to different types. If the source column is INTEGER, keep it INTEGER in the output — do not CAST to VARCHAR.
       - ROW_NUMBER() must always have a fully deterministic ORDER BY. Add enough columns to break all ties (e.g., ORDER BY person_id, start_date, source_value). Non-deterministic ordering causes different IDs across runs.
-      - Do NOT add WHERE/HAVING filters unless the task description or YML explicitly requires excluding rows. Common mistakes: filtering by role/type/status based on table names (e.g., WHERE role='ACTOR' because the table is named 'actor_rating'), filtering NULLs from UNIONs when only some columns are NULL, adding HAVING to exclude NULLs. A row with some NULL columns is real data — keep it.
+      - Do NOT add WHERE/HAVING filters unless the task description or YML explicitly requires excluding rows. Common mistakes: filtering by role/type/status based on table names (e.g., WHERE role='ACTOR' because the table is named 'actor_rating'), filtering NULLs from UNIONs when only some columns are NULL, adding HAVING to exclude NULLs, deduplicating with ROW_NUMBER() WHERE rn=1 when the source is a legitimate many-to-many mapping. A row with some NULL columns is real data — keep it. A crosswalk/mapping table with multiple rows per key is intentional — do NOT deduplicate unless YML explicitly says "unique per X".
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
    d. Run BOTH of these after every dbt run (mandatory):
@@ -199,7 +199,7 @@ DO THIS IN ORDER:
         warning_lines.append("  • {{ dbt.current_timestamp_backcompat() }}  →  cast('<MAX_DATE>' as date)")
         warning_lines.append("  • dbt.dateadd(..., \"current_date\")  →  dbt.dateadd(..., \"cast('<MAX_DATE>' as date)\")")
         warning_lines.append("  • WHERE ... <= current_date  →  WHERE ... <= cast('<MAX_DATE>' as date)")
-        warning_lines.append("  EXCEPTION: If current_date is used to compute 'current_age', 'age', or 'days_since_X' (real-time calculations), KEEP current_date.")
+        warning_lines.append("  Replace ALL current_date references — including age, days_since, active_months calculations. The data has a fixed time horizon; current_date gives the wrong values.")
         warning_lines.append("This is the #1 cause of row count and value mismatches — fixing these files FIRST prevents wasted turns.")
         prompt += "\n".join(warning_lines)
 

@@ -2254,6 +2254,11 @@ async def audit_model_sources(
                 diagnosis_lines.append(
                     f"  - {src} ratio {ratio_str}: check if INNER JOIN should be LEFT JOIN, or remove over-restrictive WHERE"
                 )
+            elif ratio < 0.95:
+                classification = "INFO: ROW REDUCTION — model has fewer rows than source. If model uses JOINs, call compare_join_types to verify LEFT vs INNER JOIN is correct."
+                diagnosis_lines.append(
+                    f"  - {src} ratio {ratio_str}: {src_rows - model_rows} rows lost. Verify JOIN type is intentional with compare_join_types."
+                )
             elif ratio > 2.0:
                 classification = "WARNING: FAN-OUT — model has more rows than source (check for missing pre-aggregation or cross-join)"
                 diagnosis_lines.append(

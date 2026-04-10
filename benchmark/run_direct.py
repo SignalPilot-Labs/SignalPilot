@@ -1535,9 +1535,15 @@ CHECK 2 — COLUMN COMPLETENESS (use check_model_schema tool):
   The EXACT required columns (from YML) are:
 {col_spec_str}
   The tool will tell you exactly which columns are MISSING, EXTRA, or have CASE MISMATCHES.
-  - Any MISSING column: ADD IT to the SQL, re-run dbt.
+  - Any MISSING column — DO NOT SKIP THIS, find and add it:
+    1. Search source tables: mcp__signalpilot__query_database(connection_name="{instance_id}", sql="SELECT table_name, column_name FROM information_schema.columns WHERE column_name = '<missing_col>'")
+    2. If found in a source: add it to the model SQL SELECT from that source table.
+    3. If NOT found: derive it. Common patterns: hour_X → EXTRACT(HOUR FROM X), month_X → EXTRACT(MONTH FROM X), X_months → DATEDIFF('month', start, end), X_days → DATEDIFF('day', start, end).
+    4. For _fivetran_synced: always comes from the primary source table.
+    Re-run dbt after adding each missing column.
   - Any CASE MISMATCH: RENAME to match exactly.
   - Do not accept "close enough" — column names must match the YML list precisely.
+  - CRITICAL: Do NOT proceed to CHECK 3 until ALL columns match. Missing columns = guaranteed FAIL.
 
 CHECK 3 — CATEGORICAL VALUE AUDIT:
   For string columns that look like status/category/type/territory:

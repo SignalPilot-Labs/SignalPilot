@@ -2,6 +2,8 @@
 
 ## Score: 29/65 evaluable = 44.6%
 
+> **(ND) flag**: tasks marked with `(**ND**)` in the Category column are blocked by **non-determinism in pre-shipped scaffold SQL** (usually `ROW_NUMBER() OVER (ORDER BY non-unique)`). Full investigation in [`non-determinism-investigation.md`](non-determinism-investigation.md). Currently affects: synthea001, superstore001, analytics_engineering001, recharge001, recharge002, inzight001, danish_democracy_data001 (7 tasks). These are **not gold-rewrite problems**; the agent needs to proactively rewrite the offending files.
+
 ## Passing Tasks (29)
 
 | Task | Tables Checked | Notes |
@@ -41,34 +43,34 @@
 | Task | Result | Category | Root Cause | How to Fix |
 |------|--------|----------|------------|------------|
 | airbnb001 | dim PASS, mom_agg FAIL (3 vs 11135) | C - Aggregation | Agent built daily rolling window; gold expects monthly MoM aggregation (3 month×sentiment combos) | Agent needs to read description more carefully — "month-over-month" means monthly granularity, not daily rolling |
-| analytics_engineering001 | Both FAIL (103 vs 55) | C+F | ROW_NUMBER dedup loses rows in join; insertion_timestamp is non-deterministic | Investigate which join step drops 48 rows; remove insertion_timestamp |
+| analytics_engineering001 | Both FAIL (103 vs 55) | C+F (**ND**) | ROW_NUMBER dedup loses rows in join; insertion_timestamp is non-deterministic | Investigate which join step drops 48 rows; remove insertion_timestamp. **See non-determinism-investigation.md** |
 | apple_store001 | Both FAIL (9→29, 17→37) | B - JOIN | INNER JOIN between usage/crashes/sales sources drops records | Switch to LEFT JOIN in reporting grain models |
 | asset001 | bar_quotes PASS, book_value FAIL (3185 vs 3485) | D - Logic | Uses AVG(price) globally instead of point-in-time price per position date | Match price to position timestamp, not global average |
 | atp_tour001 | dim_player MISSING, dim_tournament values wrong | E+D | Date strings "18890000" (month=00) cause parse errors | Use TRY_STRPTIME or guard for invalid dates before casting |
 | chinook001 | Tables exist but ERROR on query | G - Infra | Gold DB only has raw tables, not dbt-generated ones. Materialization as views also causes issues | Gold DB needs rebuild; agent should use materialized='table' |
-| danish_democracy_data001 | dim_votes PASS, dim_meetings FAIL | F - Schema | Surrogate key uses wrong column composition; meeting_period_id values mismatch | Align SK generation with gold's column selection |
+| danish_democracy_data001 | dim_votes PASS, dim_meetings FAIL | F - Schema (**ND**) | Surrogate key uses wrong column composition; meeting_period_id values mismatch | Align SK generation with gold's column selection. **See non-determinism-investigation.md** |
 | divvy001 | Both FAIL | D - Logic | r_id hash uses `ride_id \|\| '-' \|\| started_at::varchar` but timestamp varchar format varies | Use explicit strftime format in hash concatenation |
 | f1001 | All 4 tables FAIL | D - Logic | Statistics computed incorrectly (podiums, poles, fastest_laps) — wrong status codes or window functions | Requires careful F1 domain logic for each stat table |
 | f1002 | Tables built but values wrong (finishes_by_constructor, driver_championships) | D - Logic | Values consistently wrong across runs | Requires deeper investigation into F1 logic for these tables |
 | flicks001 | Both FAIL (56754→44729, 60983→57546) | B - JOIN | INNER JOIN between credits and movies drops actors not in movies | Include shows or use LEFT JOIN; check if credits span movies+shows |
 | hive001 | **PASS** | — | **FLIPPED** — Agent got 558 rows matching gold on retry | — |
 | intercom001 | **PASS** | — | **FLIPPED** — LEFT JOIN guidance worked, agent preserved all 4 admins | — |
-| inzight001 | FAIL - column value mismatch | D - Logic | Peak value tie-breaking is non-deterministic when multiple records share monthly peak | Add deterministic tie-breaking for peak records |
+| inzight001 | FAIL - column value mismatch | D - Logic (**ND**) | Peak value tie-breaking is non-deterministic when multiple records share monthly peak | Add deterministic tie-breaking for peak records. **See non-determinism-investigation.md** |
 | jira001 | jira__project_enhanced MISSING | E - Build | DuckDB type conflict (VARCHAR vs DATE) in pivot operation | Cast field_id consistently as VARCHAR before pivot |
 | netflix001 | FAIL (99 vs 109) | C - Dedup | UNION ALL includes duplicates; gold uses UNION or filters some rows | Switch UNION ALL to UNION, or add dedup/filter logic |
 | pendo001 | page_daily_metrics PASS, guide_daily_metrics FAIL (4686 vs 1311) | A - Date spine | Calendar spine uses `current_date + 1 week` as end; page now fixed, guide still wrong | Cap guide spine end at max source event date |
 | playbook002 | attribution PASS, cpa FAIL (5 vs 2) | B - JOIN | INNER JOIN between attribution and spend drops sources with no spend | Change to LEFT JOIN or FULL OUTER JOIN |
 | provider001 | provider PASS, specialty FAIL (874 vs 460) | B - JOIN | Agent joins only codes WITH Medicare crosswalk entries | LEFT JOIN from nucc_taxonomy to crosswalk, keeping all 874 codes |
 | quickbooks001 | FAIL - unique_id values wrong | D - Logic | Surrogate key uses different field list than gold's canonical definition | Match exact surrogate_key field list from reference implementation |
-| recharge001 | FAIL - amount values wrong | D - Logic | Decimal precision or sort order for charge_row_num differs from gold | Align amount precision and row numbering sort order |
-| recharge002 | customer_daily_rollup 124-134 vs 122 rows consistently | C - Row count | Row count consistently high by 2-12 rows across runs | Investigate date spine or join logic adding extra rows |
+| recharge001 | FAIL - amount values wrong | D - Logic (**ND**) | Decimal precision or sort order for charge_row_num differs from gold | Align amount precision and row numbering sort order. **See non-determinism-investigation.md** |
+| recharge002 | customer_daily_rollup 124-134 vs 122 rows consistently | C - Row count (**ND**) | Row count consistently high by 2-12 rows across runs | Investigate date spine or join logic adding extra rows. **See non-determinism-investigation.md** |
 | reddit001 | posts FAIL (30970 vs 30971), comments FAIL (column missing) | F+C | Off by 1 row + missing hour_comment_created_at column | Add missing column; investigate 1-row discrepancy |
 | sap001 | Both FAIL (0 rows) | E+G | UNPIVOT produces empty results — likely source data issue or DuckDB UNPIVOT compatibility | Verify source data loaded; check DuckDB UNPIVOT syntax |
 | scd001 | fct PASS, rpt FAIL (values wrong) | D - Logic | arg_min/arg_max tiebreakers for first_user_id differ from gold | Reverse-engineer gold's tiebreaker logic |
 | shopify001 | products PASS, daily_shop FAIL (2082 vs 2077, only 5 off) | A - Date spine | Calendar uses current_date; improved from 2654→2082 rows (gold=2077) | Cap spine at max(order_date) from source |
 | social_media001 | twitter PASS, instagram FAIL, rollup FAIL | F - Schema | Instagram impressions formula differs; column names mismatch | Align impressions formula and column names with gold |
-| superstore001 | Both FAIL (id values wrong) | G - Non-deterministic | ROW_NUMBER() OVER (ORDER BY NULL) produces non-deterministic IDs | Add deterministic ORDER BY to ROW_NUMBER in dimension tables |
-| synthea001 | FAIL (808 vs 809, 1 off) | C - Off by 1 | 1 row missing; improved from 807→808 vs gold 809 | Identify which cost source drops the final row |
+| superstore001 | Both FAIL (id values wrong) | G - Non-deterministic (**ND**) | ROW_NUMBER() OVER (ORDER BY NULL) produces non-deterministic IDs | Add deterministic ORDER BY to ROW_NUMBER in dimension tables. **See non-determinism-investigation.md** |
+| synthea001 | FAIL (808 vs 809, 1 off) | C - Off by 1 (**ND**) | 1 row traced: `int__cost_procedure` drops 1 row because `int__final_visit_ids` collides on 5 vo_ids vs gold's 2. Cascades from `int__all_visits.sql:3` non-deterministic `ROW_NUMBER() OVER (ORDER BY patient_id)`. Upstream OHDSI/ETL-Synthea has identical bug. 15-version DuckDB sweep found no match. | **See non-determinism-investigation.md.** Agent would need to proactively rewrite `int__all_visits.sql` / `int__final_visit_ids.sql` with a deterministic tiebreaker as part of the task. Not a gold-rewrite problem. |
 | tpch001 | client_purchase_status fan-out (76777-150000 vs 75007) | C - Row count | Fan-out in join produces consistently wrong row counts | Investigate join keys causing fan-out in client_purchase_status |
 | tpch002 | Both tables MISSING | E - Build | Agent left placeholder stubs, never wrote actual SQL | Implement TPC-H Query 2 variants for EUR and UK suppliers |
 | twilio001 | number PASS, account FAIL | D - Logic | total_messages_spend sums all messages; gold may only count outbound | Verify which message types contribute to spend total |

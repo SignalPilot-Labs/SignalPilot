@@ -62,9 +62,17 @@ The #1 failure category. Tasks: salesforce001, shopify001, xero001, xero_new001,
 Tasks: apple_store001, flicks001, playbook002, provider001.
 Agent defaults to INNER JOIN when LEFT JOIN is needed. Existing skills cover this but the agent doesn't apply the guidance consistently.
 
-### Non-Deterministic Ordering (2 tasks)
-Tasks: superstore001, chinook001.
-`ROW_NUMBER() OVER (ORDER BY NULL)` produces different IDs per run. chinook001 also has an infra issue (gold DB not properly built).
+### Non-Deterministic Ordering (~6–7 tasks, deeper than initially thought)
+Tasks with documented non-determinism as the primary blocker: **superstore001, synthea001, analytics_engineering001, recharge001, recharge002, inzight001, danish_democracy_data001**. chinook001 also has an infra issue (gold DB not properly built) on top of this.
+
+A full static scan found **30 of 68 tasks have at least one risky `ROW_NUMBER() OVER (ORDER BY ...)` pattern**, but only ~6–7 actually fail because of it — the eval's `ignore_order=True` + column-vector matching absorbs most surface drift, except when it cascades into row-count differences in eval-critical tables.
+
+**See [`non-determinism-investigation.md`](non-determinism-investigation.md) for the full deep-dive**, including:
+- synthea001 specifically: gold has 2 vo_id collisions, ours has 5 → cascades to 1 missing row in `cost`
+- DuckDB version sweep (15 versions × 2 thread counts) — no combination reproduces the gold
+- Proof that the SQL in the repo cannot reproduce the gold even when fed gold's own upstream
+- Confirmation that the non-determinism is **inherited from OHDSI/ETL-Synthea upstream** (line 113 of `AllVisitTable.sql` has the identical bug) and is not a Spider2-introduced issue
+- Recommendation: do not chase via version matching or gold regeneration. Add a non-determinism scan to `dbt_project_map` so the agent can proactively rewrite offending files as part of the task.
 
 ### Agent Doesn't Self-Correct on Value Mismatches
 The value-verify agent catches some issues but can't fix fundamental logic errors. Tasks like f1001, scd001, and quickbooks001 have correct row counts but wrong computed values.

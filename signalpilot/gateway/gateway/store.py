@@ -7,7 +7,6 @@ Credentials are encrypted at rest using Fernet (AES-128-CBC + HMAC-SHA256).
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import logging
@@ -20,6 +19,24 @@ from typing import Any
 from urllib.parse import quote as url_quote
 
 import aiofiles
+
+# fcntl is POSIX-only. On Windows we fall back to a no-op shim so the module
+# imports cleanly — single-process lock safety on Windows is handled elsewhere
+# (the gateway runs as one process and the JSON writes are short).
+try:
+    import fcntl  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - Windows path
+    class _FcntlShim:
+        LOCK_EX = 2
+        LOCK_SH = 1
+        LOCK_UN = 8
+        LOCK_NB = 4
+
+        @staticmethod
+        def flock(_fd: int, _op: int) -> None:
+            return None
+
+    fcntl = _FcntlShim()  # type: ignore[assignment]
 
 from .models import (
     AuditEntry,

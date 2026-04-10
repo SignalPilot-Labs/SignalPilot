@@ -192,14 +192,13 @@ def build_docker_image() -> bool:
 
 
 def run_container(instance_id: str, instruction: str, project_dir: Path,
-                  model: str, max_turns: int, budget: float) -> bool:
+                  model: str, max_turns: int) -> bool:
     """Start the benchmark agent container, copy files in/out (no volume mount for DuckDB compat)."""
     print(f"\n{'='*60}")
     print(f"Starting benchmark container: {CONTAINER_NAME}")
     print(f"  Instance: {instance_id}")
     print(f"  Model: {model}")
-    print(f"  Max turns: {max_turns}")
-    print(f"  Budget: ${budget}")
+    print(f"  Max turns: {max_turns} (safety cap only, no budget cap)")
     print(f"  Workspace: {project_dir}")
     print(f"{'='*60}")
 
@@ -230,7 +229,6 @@ def run_container(instance_id: str, instruction: str, project_dir: Path,
         "--instruction", instruction,
         "--model", model,
         "--max-turns", str(max_turns),
-        "--budget", str(budget),
     ]
     result = subprocess.run(create_cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -446,8 +444,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run a single Spider2-DBT benchmark task")
     parser.add_argument("instance_id", default="chinook001", nargs="?")
     parser.add_argument("--model", default="claude-opus-4-6")
-    parser.add_argument("--max-turns", type=int, default=30)
-    parser.add_argument("--budget", type=float, default=5.0)
+    parser.add_argument("--max-turns", type=int, default=200)
     parser.add_argument("--skip-agent", action="store_true", help="Skip agent, just run eval")
     parser.add_argument("--skip-build", action="store_true", help="Skip Docker build")
     args = parser.parse_args()
@@ -485,7 +482,6 @@ def main():
             project_dir=project_dir,
             model=args.model,
             max_turns=args.max_turns,
-            budget=args.budget,
         )
 
         # Read agent result

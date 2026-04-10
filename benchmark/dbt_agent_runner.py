@@ -157,7 +157,7 @@ def build_user_prompt(instruction: str) -> str:
     )
 
 
-async def run_agent(instance_id: str, instruction: str, model: str = "claude-opus-4-6", max_turns: int = 30, budget: float = 5.0) -> dict:
+async def run_agent(instance_id: str, instruction: str, model: str = "claude-opus-4-6", max_turns: int = 200) -> dict:
     """Run the Claude agent to complete the dbt task."""
 
     # Log skills in .claude/skills/ (Claude Code loads these natively)
@@ -242,15 +242,15 @@ async def run_agent(instance_id: str, instruction: str, model: str = "claude-opu
     else:
         log("SignalPilot MCP not available (gateway code not found at %s)" % mcp_cwd, "WARN")
 
+    # No max_budget_usd and no allowed_tools whitelist — the agent gets every
+    # built-in tool, every SignalPilot MCP tool, the Skill tool for loaded
+    # benchmark skills, and unbounded spend. The only ceiling is max_turns.
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         model=model,
         max_turns=max_turns,
-        max_budget_usd=budget,
         permission_mode="bypassPermissions",
         cwd=str(WORKSPACE),
-        # No tool restrictions — agent gets all built-in tools + SignalPilot MCP.
-        # This is a real-world test: SignalPilot is just a drop-in MCP + skillset.
         **({"mcp_servers": mcp_config} if mcp_config else {}),
         debug_stderr=True,
     )
@@ -260,7 +260,7 @@ async def run_agent(instance_id: str, instruction: str, model: str = "claude-opu
     turn_count = 0
     start_time = time.monotonic()
 
-    log_separator(f"AGENT STARTING  model={model}  max_turns={max_turns}  budget=${budget}")
+    log_separator(f"AGENT STARTING  model={model}  max_turns={max_turns} (safety cap only)")
 
     try:
         async for message in query(prompt=user_prompt, options=options):
@@ -357,14 +357,12 @@ async def main():
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--instruction", required=True)
     parser.add_argument("--model", default="claude-opus-4-6")
-    parser.add_argument("--max-turns", type=int, default=30)
-    parser.add_argument("--budget", type=float, default=5.0)
+    parser.add_argument("--max-turns", type=int, default=200)
     args = parser.parse_args()
 
     log_separator(f"Spider2-DBT Benchmark: {args.instance_id}")
     log(f"Model: {args.model}")
     log(f"Max turns: {args.max_turns}")
-    log(f"Budget: ${args.budget}")
     log(f"Workspace: {WORKSPACE}")
     log(f"Python: {sys.version}")
 
@@ -381,7 +379,6 @@ async def main():
         instruction=args.instruction,
         model=args.model,
         max_turns=args.max_turns,
-        budget=args.budget,
     )
 
     if "error" in result:

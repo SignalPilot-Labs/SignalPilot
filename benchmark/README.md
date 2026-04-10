@@ -95,7 +95,7 @@ No Docker required. Runs the agent directly on the host in `benchmark/test-env/<
 ```bash
 python -m benchmark.run_dbt_local chinook001
 python -m benchmark.run_dbt_local chinook001 --model claude-sonnet-4-6
-python -m benchmark.run_dbt_local chinook001 --max-turns 15 --budget 2.0
+python -m benchmark.run_dbt_local chinook001 --max-turns 100    # override the safety cap (default 200)
 python -m benchmark.run_dbt_local chinook001 --no-mcp        # disable SignalPilot MCP
 python -m benchmark.run_dbt_local chinook001 --skip-agent     # just eval existing results
 python -m benchmark.run_dbt_local chinook001 --adopt-gold     # adopt result as new gold DB
@@ -171,7 +171,7 @@ This is useful for bootstrapping gold data for tasks where the Spider2 zip is in
 
 ```
 Host
-  run_dbt_local.py  (or run_dbt_single.py for Docker)
+  run_dbt_local.py  (or run_dbt_single.py for Docker, run_direct.py for bare-metal)
     |
     +-- prepare_test_env()    copy task project + .claude/skills/ to test-env/
     +-- setup_signalpilot()   clear connections, register task DuckDB
@@ -193,6 +193,67 @@ Host
     +-- run_dbt()             final dbt deps + dbt run validation
     +-- evaluate()            compare result DB vs gold DB
 ```
+
+## Directory Layout
+
+```
+benchmark/
+├── README.md, requirements.txt
+├── Dockerfile.dbt-agent, dbt_agent_entrypoint.sh   # Docker image for run_dbt_single
+├── mcp_test_config.json                            # MCP server config consumed by runners
+├── dbt_agent_runner.py                             # agent entrypoint executed INSIDE Docker
+│
+├── run_direct.py          # thin shim → benchmark.runners.direct
+├── run_dbt_local.py       # local (no-Docker) runner; uses shared core/ helpers
+├── run_dbt_single.py      # Docker runner (one task at a time)
+├── run_batch.py           # spawns run_direct for every evaluable task
+├── setup_dbt.py           # dependency + gold-DB audit/build helper
+│
+├── core/                  # shared infrastructure for the dbt benchmark
+│   ├── paths.py           # resolved Spider2 paths, GATEWAY_URL, etc.
+│   ├── logging.py         # log() + log_separator()
+│   ├── tasks.py           # load_task, load_eval_config
+│   ├── workdir.py         # prepare_workdir, write_claude_md, force_rmtree
+│   └── mcp.py             # load_mcp_servers, register/delete_local_connection
+│
+├── dbt_tools/             # static analysis + deterministic SQL fix-ups
+│   ├── scanner.py         # scan YML/SQL for models, columns, refs, macros
+│   ├── templates.py       # create SQL starter templates + ephemeral stubs
+│   ├── fixes.py           # INNER→LEFT JOIN rewrite, speculative-filter stripping
+│   └── postprocess.py     # post-run dedup, add-missing-columns (derivation/join)
+│
+├── agent/                 # Claude Agent SDK glue
+│   ├── sdk_runner.py      # run_sdk_agent + quick-fix/verify/name-fix helpers
+│   └── prompts.py         # build_agent_prompt + build_value_verify_prompt
+│
+├── evaluation/            # gold-DB evaluation
+│   ├── db_utils.py        # find_result_db, row counts, samples
+│   ├── comparator.py      # Spider2-compatible any-column-matches comparator
+│   └── local_comparator.py# positional comparator (used by run_dbt_local)
+│
+├── runners/               # top-level orchestration (thin over the packages above)
+│   └── direct.py          # main() for run_direct / run_batch
+│
+├── legacy/                # pre-dbt Spider2-SQLite benchmark cluster (self-contained)
+│   ├── run.py, agent_runner.py, eval.py, skills.py, improve.py
+│   ├── config.py, setup_spider2.py
+│
+├── skills/                # Claude Code skills copied into .claude/skills/ per run
+├── prompts/                # prompt templates used by run_dbt_local
+├── docs/                   # supplementary notes (progress, runs, tool recommendations)
+└── scratch/                # ignored scratch files (verify logs, smoke tests)
+```
+
+Runtime-only directories (not tracked as source, recreated per run): `_dbt_workdir/`
+(used by `run_direct` / `run_batch`), `test-env/` (used by `run_dbt_local`).
+
+Nothing in `benchmark/legacy/` is imported by the active dbt benchmark — it is kept
+around for the older Spider2-SQLite flow and can be deleted without affecting the
+dbt runners.
+
+Guideline: no source file in this tree should exceed ~600 lines. When a runner
+grows beyond that, the work belongs in `core/`, `dbt_tools/`, `agent/`, or
+`evaluation/` rather than inline.
 
 ## Skills
 

@@ -82,7 +82,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="claude-sonnet-4-6")
-    parser.add_argument("--max-turns", type=int, default=20)
+    parser.add_argument("--max-turns", type=int, default=200)
     parser.add_argument("--timeout", type=int, default=900, help="Timeout per task in seconds")
     parser.add_argument("--tasks", nargs="*", help="Specific task IDs to run")
     parser.add_argument("--skip", nargs="*", default=[], help="Task IDs to skip")

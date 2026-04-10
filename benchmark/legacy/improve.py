@@ -114,11 +114,8 @@ async def analyze_run(run_id: str, save_skills: bool = True) -> dict:
     options = ClaudeAgentOptions(
         system_prompt="You are a benchmark analysis expert. Output only valid JSON.",
         model="claude-sonnet-4-6",
-        max_turns=5,
-        max_budget_usd=1.0,
+        max_turns=200,
         permission_mode="bypassPermissions",
-        allowed_tools=[],
-        disallowed_tools=["Write", "Edit", "Bash", "Agent"],
     )
 
     full_response = ""

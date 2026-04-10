@@ -11,6 +11,14 @@ benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json
 
+# Benchmark runtime + reference material (never committed)
+benchmark/test-env/
+benchmark/_dbt_workdir/
+benchmark/_parse_test/
+benchmark/scratch/
+benchmark/ref/spider/
+benchmark/ref/synthea-omop-etl/
+
 # Self-improve build artifacts
 self-improve/monitor-web/.next/
 self-improve/monitor-web/node_modules/

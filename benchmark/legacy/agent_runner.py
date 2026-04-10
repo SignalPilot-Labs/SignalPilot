@@ -221,16 +221,8 @@ async def run_task(
         system_prompt=system_prompt,
         model=config.model,
         max_turns=config.max_turns,
-        max_budget_usd=config.max_budget_usd,
         permission_mode="bypassPermissions",
         mcp_servers=mcp_config,
-        allowed_tools=[
-            "mcp__signalpilot__query_database",
-            "mcp__signalpilot__list_database_connections",
-            "mcp__signalpilot__execute_code",
-            "mcp__signalpilot__sandbox_status",
-        ],
-        disallowed_tools=["Write", "Edit", "Bash", "Agent"],
     )
 
     try:

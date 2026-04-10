@@ -55,6 +55,11 @@ from .store import (
     list_sandboxes,
     load_settings,
 )
+from .dbt import (
+    build_project_map as _build_project_map,
+    format_validation_result as _format_validation_result,
+    validate_project as _validate_project,
+)
 
 def _gateway_url() -> str:
     """Get the gateway API URL for internal MCP→REST calls."""
@@ -2497,6 +2502,107 @@ SELECT
         lines.append(f"✓ All {left_table} rows match — LEFT JOIN and INNER JOIN produce the same result.")
 
     return "\n".join(lines)
+
+
+# ─── dbt project discovery + validation ─────────────────────────────────────
+
+
+@mcp.tool()
+async def dbt_project_map(
+    project_dir: str,
+    focus: str = "all",
+    max_models_per_section: int = 40,
+    include_columns: bool = False,
+) -> str:
+    """
+    Yml-direct dbt project discovery — fast, comprehensive, broken-project safe.
+
+    Scans a dbt project directory and returns a compact, LLM-optimized markdown
+    view of every model (complete, stub, missing, or orphan), every source,
+    every macro, plus a topologically-sorted work order for actionable models.
+
+    Unlike `dbt parse`, this tool DOES NOT depend on dbt itself — it reads yml
+    files and sql files directly with PyYAML and regex. That means it works on
+    broken projects, projects with missing packages, projects with no profile,
+    and projects where dbt parse would refuse to run. Critically, it surfaces
+    missing-model yml entries that `dbt parse` silently drops as "orphan
+    patches" — the exact thing the agent needs to find.
+
+    Args:
+        project_dir: absolute path to the dbt project root (where dbt_project.yml lives)
+        focus: which view to render. One of:
+            - "all" (default): full project overview grouped by directory
+            - "work_order": just the actionable models in build order, with deps + columns
+            - "missing": only models defined in yml but with no .sql file
+            - "stubs": only sql files classified as incomplete/stubbed
+            - "sources": source namespaces with their tables
+            - "macros": available custom macros grouped by file
+            - "model:<name>": deep-dive on one model (columns, deps, tests, description)
+        max_models_per_section: per-section truncation threshold (default 40)
+        include_columns: include column lists inline for complete models (default off)
+
+    Returns:
+        markdown-formatted project map
+    """
+    import asyncio
+
+    if not project_dir or not project_dir.strip():
+        return "Error: project_dir is required"
+    # Offload the sync scan + render to a worker thread so the MCP event loop
+    # stays responsive on large projects.
+    return await asyncio.to_thread(
+        _build_project_map,
+        project_dir.strip(),
+        focus,
+        max_models_per_section,
+        include_columns,
+    )
+
+
+@mcp.tool()
+async def dbt_project_validate(
+    project_dir: str,
+    dbt_bin: str = "",
+    timeout: int = 60,
+) -> str:
+    """
+    Run `dbt parse` against a project and surface structural errors + warnings.
+
+    This is the pre-build validation step — does the project compile? Use it
+    when the agent suspects a problem (after editing yml files, after adding
+    new models, before running `dbt run`). Much cheaper than `dbt run` because
+    it does not execute any SQL, but catches the same class of Jinja / ref /
+    source / yml-syntax errors that would fail a run.
+
+    Output includes:
+      - success/failure + degradation mode (profile_missing, packages_missing,
+        parse_failed, dbt_not_installed, timeout, etc.)
+      - error list with context
+      - orphan-patch list (yml-defined models with no .sql file — the "missing
+        models" that `dbt_project_map` surfaces via the yml-direct path)
+      - non-orphan warnings
+
+    Args:
+        project_dir: absolute path to the dbt project root
+        dbt_bin: optional path to the dbt executable (default: search PATH)
+        timeout: subprocess timeout in seconds (default 60)
+
+    Returns:
+        markdown-formatted validation report
+    """
+    import asyncio
+
+    if not project_dir or not project_dir.strip():
+        return "Error: project_dir is required"
+    # _validate_project calls subprocess.run, which would block this handler's
+    # event loop and can stall MCP heartbeats on Windows. Offload to a thread.
+    result = await asyncio.to_thread(
+        _validate_project,
+        project_dir.strip(),
+        dbt_bin.strip() or None,
+        timeout,
+    )
+    return _format_validation_result(result)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

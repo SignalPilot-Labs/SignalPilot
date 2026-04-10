@@ -1,6 +1,6 @@
 ---
 name: duckdb-sql
-description: "Use this skill when writing DuckDB SQL. Covers syntax that differs from PostgreSQL/MySQL: INTEGER division truncates (cast numerator to DOUBLE), DATE_TRUNC returns TIMESTAMP not DATE, INTERVAL requires quoted syntax ('1' DAY not 1 DAY), DENSE_RANK vs ROW_NUMBER for ties, date parsing with STRPTIME for non-ISO formats (European DD/MM/YYYY), GENERATE_SERIES for date spines (CURRENT_DATE is forbidden — use get_date_boundaries to get the GLOBAL MAX DATE), string functions, type casting, UNPIVOT/PIVOT, and QUALIFY clause for window-function filters."
+description: "Use this skill when writing DuckDB SQL. Covers syntax that differs from PostgreSQL/MySQL: INTEGER division truncates (cast numerator to DOUBLE), DATE_TRUNC returns TIMESTAMP not DATE, INTERVAL requires quoted syntax ('1' DAY not 1 DAY), DENSE_RANK vs ROW_NUMBER for ties, date parsing with STRPTIME for non-ISO formats (European DD/MM/YYYY), GENERATE_SERIES for date spines (CURRENT_DATE is forbidden — use get_date_boundaries and always use the primary fact/event table's max date as the endpoint, never GLOBAL MAX DATE), string functions, type casting, UNPIVOT/PIVOT, and QUALIFY clause for window-function filters."
 type: skill
 ---
 
@@ -22,11 +22,13 @@ type: skill
 Before writing any date spine:
 1. Call `mcp__signalpilot__get_date_boundaries(connection_name="<id>")` first.
 2. Choose the spine endpoint:
-   - If the spine is built from a **specific fact/event table** (orders, sessions,
-     transactions, etc.), use that table's max date from the `TABLE MAX DATES`
-     summary in the get_date_boundaries output.
-   - Otherwise use the **GLOBAL MAX DATE** as the fallback endpoint.
-   - Dimension, mapping, and reference tables do NOT determine the spine endpoint.
+   - **Always** use the primary fact/event table's max date (orders, sessions,
+     transactions, events, activities, etc.) from the `TABLE MAX DATES` summary.
+     The tool marks the correct table with "← USE THIS".
+   - Identify the fact table as the one with the most rows, or the primary entity
+     the task instruction references.
+   - **Never** use GLOBAL MAX DATE — dimension, lookup, and reference tables often
+     have later dates and must NOT set the spine endpoint.
 3. Use the chosen date as endpoint:
    ```sql
    UNNEST(GENERATE_SERIES(min_date::DATE, max_date::DATE, INTERVAL '1 day'))

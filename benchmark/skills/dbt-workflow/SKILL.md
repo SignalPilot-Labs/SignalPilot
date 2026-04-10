@@ -45,15 +45,12 @@ Scan `macros/` directory before writing any model. Call macros with `{{ macro_na
 
 ## 4. JOIN Type Selection
 
-- **LEFT JOIN**: default for spine/reporting models that must preserve all entities (all customers, all dates, all admins). Start FROM the dimension table and LEFT JOIN to fact/event table.
-- **INNER JOIN**: only when task explicitly excludes non-matching entities (e.g., "customers WITH orders").
+- **DEFAULT: LEFT JOIN for all JOINs.** Start FROM the table that defines all output entities (all customers, all dates, all admins) and LEFT JOIN everything else to it. This is the correct choice for the vast majority of reporting models.
+- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "drivers who completed a trip"). When considering INNER JOIN, call `compare_join_types` first to confirm row counts match expectations:
+  ```
+  mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
+  ```
 - `LEFT JOIN + WHERE right.col IS NOT NULL` silently becomes INNER JOIN — avoid.
-
-Before writing any two-table JOIN, use `compare_join_types` to see how each JOIN type affects row count:
-```
-mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
-```
-This shows INNER/LEFT/RIGHT/FULL OUTER row counts plus unmatched rows. The table defining ALL instances of the output entity (broader domain coverage) MUST be the LEFT/driving table. A crosswalk or mapping table covering only a subset goes on the RIGHT.
 
 ## 5. Pre-JOIN Cardinality Check
 

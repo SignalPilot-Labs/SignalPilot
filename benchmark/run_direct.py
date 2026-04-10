@@ -718,12 +718,10 @@ DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. mcp__signalpilot__list_tables connection_name="{instance_id}"
 2b. mcp__signalpilot__get_date_boundaries connection_name="{instance_id}"
-    - Note the GLOBAL MAX DATE and the TABLE MAX DATES summary.
-    - Default spine endpoint: GLOBAL MAX DATE.
-    - EXCEPTION: when the date spine is driven by a specific fact/event table
-      (e.g. orders, sessions, transactions), use THAT TABLE's max date from
-      TABLE MAX DATES — not the global max. Dimension and reference tables
-      do NOT set the spine endpoint.
+    - The tool marks the correct table with "← USE THIS" — use that table's max date as the spine endpoint.
+    - The spine endpoint is ALWAYS the primary fact/event table's max date (orders, transactions, events, sessions, activities, etc.).
+    - Identify the fact table as: the table with the most rows, OR the primary entity the task references.
+    - NEVER use GLOBAL MAX DATE — dimension, lookup, and reference tables often have later dates and must NOT set the endpoint.
     - Never use current_date, now(), or current_timestamp.
 3. Explore at most 2 source tables with explore_table. Stop exploring — begin writing SQL.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
@@ -735,7 +733,7 @@ DO THIS IN ORDER:
       - If a ref('model_name') fails because no .sql file exists BUT the table already exists in the database,
         create an ephemeral wrapper: {{ config(materialized='ephemeral') }} SELECT * FROM model_name
         This bridges pre-existing tables to dbt's ref() system without altering the database.
-      - Before committing to a JOIN type, call mcp__signalpilot__compare_join_types to see row impact of INNER vs LEFT vs RIGHT JOIN
+      - DEFAULT to LEFT JOIN for all JOINs. Only use INNER JOIN if the task explicitly says to exclude non-matching rows AND you have called mcp__signalpilot__compare_join_types to confirm no rows are dropped relative to LEFT JOIN.
       - When combining similar source tables (e.g., comedies + dramas + docuseries), prefer UNION (dedup) over UNION ALL if sources may contain duplicate/overlapping rows. UNION ALL keeps all rows including duplicates; UNION deduplicates. Check source data for identical rows before deciding.
       - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). For account-level summary/overview models, use ROUND(SUM(ABS(price)), 2) for spend totals. For detail/per-entity models, keep the original sign from source.
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.

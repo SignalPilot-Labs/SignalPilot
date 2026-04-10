@@ -743,6 +743,7 @@ DO THIS IN ORDER:
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
       - ROLLING WINDOW / MoM / WoW models: If YML description says "rolling window", "MoM", "WoW", or "comparison" AND unique_key includes date×entity — the model outputs ONE date (the latest) per entity, NOT all dates. Add: WHERE date_col = (SELECT MAX(date_col) FROM source).
       - Do NOT cast ID columns to different types. If the source column is INTEGER, keep it INTEGER in the output — do not CAST to VARCHAR.
+      - ROW_NUMBER() must always have a fully deterministic ORDER BY. Add enough columns to break all ties (e.g., ORDER BY person_id, start_date, source_value). Non-deterministic ordering causes different IDs across runs.
       - Do NOT add WHERE/HAVING filters unless the task description or YML explicitly requires excluding rows. Common mistakes: filtering by role/type/status based on table names (e.g., WHERE role='ACTOR' because the table is named 'actor_rating'), filtering NULLs from UNIONs when only some columns are NULL, adding HAVING to exclude NULLs. A row with some NULL columns is real data — keep it.
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.

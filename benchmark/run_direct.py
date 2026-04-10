@@ -743,6 +743,7 @@ DO THIS IN ORDER:
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
       - ROLLING WINDOW / MoM / WoW models: If YML description says "rolling window", "MoM", "WoW", or "comparison" AND unique_key includes date×entity — the model outputs ONE date (the latest) per entity, NOT all dates. Add: WHERE date_col = (SELECT MAX(date_col) FROM source).
       - Do NOT cast ID columns to different types. If the source column is INTEGER, keep it INTEGER in the output — do not CAST to VARCHAR.
+      - Do NOT filter NULL rows from UNION results unless ALL columns are NULL. A row with a NULL title but valid data in other columns is real data — keep it.
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
    d. Run BOTH of these after every dbt run (mandatory):

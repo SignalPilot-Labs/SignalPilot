@@ -1240,11 +1240,12 @@ DO THIS IN ORDER:
                 warning_lines.append(f"  Query its max date with: SELECT MAX(<date_col>) FROM {model_name}")
                 warning_lines.append("  Use that value as the replacement for current_date in this file — NOT the fact table max from get_date_boundaries.")
                 warning_lines.append("  (Replace <date_col> with the actual date column name you see in the model's SELECT list.)")
-        warning_lines.append("After calling get_date_boundaries in step 2b, IMMEDIATELY edit ALL these files:")
-        warning_lines.append("  Replace current_date, CURRENT_DATE, current_timestamp, current_timestamp_backcompat(), now(), getdate() → CAST('<MAX_DATE>' AS DATE) or CAST('<MAX_DATE>' AS TIMESTAMP)")
+        warning_lines.append("After calling get_date_boundaries in step 2b, edit these files:")
+        warning_lines.append("  Replace current_date → CAST('<MAX_DATE>' AS DATE) in date spines, WHERE clauses, and date range boundaries.")
         warning_lines.append("  where <MAX_DATE> is the primary fact/event table's max date from get_date_boundaries (look for the '← USE THIS' marker).")
         warning_lines.append("  For dbt macros like dbt.current_timestamp_backcompat(): replace the entire macro call with the cast.")
-        warning_lines.append("Do NOT skip this — it is the #1 cause of row count and value mismatches.")
+        warning_lines.append("  EXCEPTION: If current_date is used to compute 'current_age', 'age', or 'days_since_X' (real-time calculations), KEEP current_date — do NOT replace.")
+        warning_lines.append("This is the #1 cause of row count and value mismatches.")
         prompt += "\n".join(warning_lines)
 
     # Add eval-critical table names

@@ -1024,6 +1024,26 @@ def _sample_table_values(db_path: str, table_name: str, n: int = 5) -> list[dict
         return None
 
 
+def _find_result_db(project_dir: Path, expected_name: str | None = None) -> Path | None:
+    """Return the best candidate result DuckDB file in project_dir.
+
+    Filters out locked/backup files, then prefers the file matching expected_name
+    (if given), otherwise returns the largest file by size.
+    """
+    _EXCLUDE_SUFFIXES = ("_locked", "_bak", "_backup")
+    candidates = [
+        p for p in project_dir.glob("*.duckdb")
+        if not any(s in p.name.lower() for s in _EXCLUDE_SUFFIXES)
+    ]
+    if not candidates:
+        return None
+    if expected_name is not None:
+        for p in candidates:
+            if p.name == expected_name:
+                return p
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+
 def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     """Evaluate the result against gold standard by comparing DuckDB table contents."""
     import duckdb
@@ -1037,8 +1057,8 @@ def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
     # The DB filename in eval config may not match the actual filename — find it
     gold_db_candidates = list((GOLD_DIR / instance_id).glob("*.duckdb"))
     gold_db_path = str(gold_db_candidates[0]) if gold_db_candidates else str(GOLD_DIR / instance_id / params["gold"])
-    result_db_candidates = list(project_dir.glob("*.duckdb"))
-    result_db_path = str(result_db_candidates[0]) if result_db_candidates else str(project_dir / params["gold"])
+    _path = _find_result_db(project_dir, params["gold"])
+    result_db_path = str(_path) if _path else str(project_dir / params["gold"])
 
     condition_tabs: list[str] | None = params.get("condition_tabs")
     condition_cols: list[list[int]] | None = params.get("condition_cols")
@@ -1616,8 +1636,8 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
         )
 
         # NEW: post-success value verification agent (triggers always when eval-critical tables may exist)
-        result_db_candidates = list(work_dir.glob("*.duckdb"))
-        if eval_critical_models and result_db_candidates:
+        _result_db = _find_result_db(work_dir)
+        if eval_critical_models and _result_db:
             verify_prompt = _build_value_verify_prompt(
                 work_dir, instance_id, eval_critical_models, instruction,
                 _extract_model_columns(work_dir)
@@ -1634,11 +1654,11 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
 
         # Post-agent check: are all eval-critical tables in the result DB?
         if eval_critical_models:
-            result_db_candidates = list(work_dir.glob("*.duckdb"))
-            if result_db_candidates:
+            _result_db = _find_result_db(work_dir)
+            if _result_db:
                 try:
                     import duckdb as _ddb
-                    _con = _ddb.connect(str(result_db_candidates[0]), read_only=True)
+                    _con = _ddb.connect(str(_result_db), read_only=True)
                     existing_tables = set(r[0] for r in _con.execute("SHOW TABLES").fetchall())
                     _con.close()
                     missing_eval_tables = eval_critical_models - existing_tables
@@ -1714,11 +1734,11 @@ RULES:
     # ── Flush DuckDB WAL before evaluation ──────────────────────────────────
     # The SDK's MCP server subprocess may still hold write connections.
     # Open a write connection briefly to force a WAL checkpoint, then close.
-    result_db_candidates = list(work_dir.glob("*.duckdb"))
-    if result_db_candidates:
+    _result_db = _find_result_db(work_dir)
+    if _result_db:
         try:
             import duckdb as _ddb
-            _flush_con = _ddb.connect(database=str(result_db_candidates[0]))
+            _flush_con = _ddb.connect(database=str(_result_db))
             _flush_con.execute("CHECKPOINT")
             _flush_con.close()
             log("Flushed DuckDB WAL via CHECKPOINT")

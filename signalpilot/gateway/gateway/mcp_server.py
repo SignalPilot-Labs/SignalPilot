@@ -567,6 +567,7 @@ async def get_date_boundaries(connection_name: str) -> str:
     lines = [f"Date boundaries for: {connection_name} ({conn_info.db_type})", ""]
     global_max: str | None = None
     table_max: dict[str, str] = {}
+    table_row_count: dict[str, int] = {}
     found_any = False
 
     for key in sorted(schema.keys()):
@@ -598,22 +599,28 @@ async def get_date_boundaries(connection_name: str) -> str:
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 rows = await connector.execute(sql)
-            if rows:
-                row = rows[0]
-                for col in date_cols:
-                    col_name = col["name"]
-                    min_val = row.get(f"min_{col_name}")
-                    max_val = row.get(f"max_{col_name}")
-                    col_results[col_name] = (
-                        str(min_val).split(" ")[0] if min_val is not None else None,
-                        str(max_val).split(" ")[0] if max_val is not None else None,
-                    )
-                    if max_val is not None:
-                        max_str = str(max_val).split(" ")[0]
-                        if global_max is None or max_str > global_max:
-                            global_max = max_str
-                        if max_str > table_max.get(full_name, ""):
-                            table_max[full_name] = max_str
+                if rows:
+                    row = rows[0]
+                    for col in date_cols:
+                        col_name = col["name"]
+                        min_val = row.get(f"min_{col_name}")
+                        max_val = row.get(f"max_{col_name}")
+                        col_results[col_name] = (
+                            str(min_val).split(" ")[0] if min_val is not None else None,
+                            str(max_val).split(" ")[0] if max_val is not None else None,
+                        )
+                        if max_val is not None:
+                            max_str = str(max_val).split(" ")[0]
+                            if global_max is None or max_str > global_max:
+                                global_max = max_str
+                            if max_str > table_max.get(full_name, ""):
+                                table_max[full_name] = max_str
+                count_sql = f'SELECT COUNT(*) AS "cnt" FROM {quoted_table}'
+                count_rows = await connector.execute(count_sql)
+                if count_rows:
+                    raw = count_rows[0].get("cnt")
+                    if raw is not None:
+                        table_row_count[full_name] = int(raw)
         except Exception:
             for col in date_cols:
                 col_results[col["name"]] = (None, None)
@@ -634,6 +641,8 @@ async def get_date_boundaries(connection_name: str) -> str:
     if not found_any:
         return f"Date boundaries for: {connection_name} ({conn_info.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
 
+    largest_table: str | None = max(table_row_count, key=table_row_count.get) if table_row_count else None  # type: ignore[arg-type]
+
     if global_max:
         lines.append(f"GLOBAL MAX DATE: {global_max}")
         lines.append("")
@@ -641,8 +650,10 @@ async def get_date_boundaries(connection_name: str) -> str:
     if table_max:
         lines.append("TABLE MAX DATES (use these for date spine endpoints):")
         for tbl, tbl_max in sorted(table_max.items()):
-            marker = " ← USE THIS for spine if this is your fact/event table" if tbl_max != global_max else ""
-            lines.append(f"  {tbl} → {tbl_max}{marker}")
+            count_str = f"{table_row_count[tbl]:,} rows" if tbl in table_row_count else "row count unavailable"
+            size_marker = " (largest table)" if tbl == largest_table else ""
+            spine_marker = " ← USE THIS for spine if this is your fact/event table" if tbl_max != global_max else ""
+            lines.append(f"  {tbl} → {tbl_max} ({count_str}){size_marker}{spine_marker}")
         lines.append("")
         lines.append("RULE: Use the max date of your PRIMARY FACT TABLE (orders, events, transactions)")
         lines.append("      as the date spine endpoint. Do NOT use the global max if it comes from a")

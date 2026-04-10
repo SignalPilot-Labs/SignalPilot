@@ -219,48 +219,50 @@ def scan_current_date_models(work_dir: Path) -> list[tuple[str, int, str]]:
     return matches
 
 
-def scan_package_date_spine_models(work_dir: Path) -> list[tuple[str, int, str]]:
-    """Find SQL files in dbt_packages/ or models/ that call date_spine macros with current_date.
+def scan_nondeterministic_ordering(work_dir: Path) -> list[tuple[str, int, str]]:
+    """Find .sql files with ROW_NUMBER/RANK/DENSE_RANK whose ORDER BY may not be unique.
 
-    Uses a two-pass approach: first finds lines calling dbt_utils.date_spine or
-    dbt_date.get_base_dates, then checks a 5-line window around each call for
-    current_date (case-insensitive).
-
-    Returns [(rel_path_str, line_no, line_text)] relative to work_dir.
+    Returns [(rel_path, line_no, line)] for each window function call where the
+    ORDER BY clause within a 5-line lookahead window is absent or contains a single
+    column that does not carry a primary-key identifier suffix.
     """
-    SKIP_SCAN_DIRS = (".claude", "target", "integration_tests")
-    macro_pat = re.compile(
-        r'dbt_utils\.date_spine\s*\(|dbt_date\.get_base_dates\s*\(',
+    matches: list[tuple[str, int, str]] = []
+    models_dir = work_dir / "models"
+    if not models_dir.exists():
+        return matches
+    window_fn_pat = re.compile(
+        r"ROW_NUMBER\s*\(\s*\)|DENSE_RANK\s*\(\s*\)|RANK\s*\(\s*\)",
         re.IGNORECASE,
     )
-    current_date_pat = re.compile(r'\bcurrent_date\b', re.IGNORECASE)
-
-    matches: list[tuple[str, int, str]] = []
-    scan_roots = [work_dir / "dbt_packages", work_dir / "models"]
-
-    for scan_root in scan_roots:
-        if not scan_root.exists():
+    order_by_pat = re.compile(r"ORDER\s+BY\s+(.*?)(?:\)|$)", re.IGNORECASE | re.DOTALL)
+    pk_suffixes = ("_id", "_key", "_pk", "_uuid")
+    for sql_file in models_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in SKIP_DIRS):
             continue
-        for sql_file in scan_root.rglob("*.sql"):
-            if any(skip in str(sql_file) for skip in SKIP_SCAN_DIRS):
-                continue
-            try:
-                lines = sql_file.read_text().splitlines()
-                for i, line in enumerate(lines):
-                    if not macro_pat.search(line):
-                        continue
-                    window_start = max(0, i - 2)
-                    window_end = min(len(lines), i + 3)
-                    window = lines[window_start:window_end]
-                    for j, window_line in enumerate(window):
-                        if current_date_pat.search(window_line):
-                            actual_line_no = window_start + j + 1
-                            rel_path = str(sql_file.relative_to(work_dir))
-                            matches.append((rel_path, actual_line_no, window_line.strip()))
-            except Exception:
-                pass
-
+        try:
+            lines = sql_file.read_text().splitlines()
+            for i, line in enumerate(lines):
+                if not window_fn_pat.search(line):
+                    continue
+                window = lines[i : min(len(lines), i + 5)]
+                window_str = "\n".join(window)
+                order_match = order_by_pat.search(window_str)
+                if not order_match:
+                    rel_path = str(sql_file.relative_to(work_dir))
+                    matches.append((rel_path, i + 1, line.strip()))
+                    continue
+                order_cols = [c.strip() for c in order_match.group(1).split(",") if c.strip()]
+                if len(order_cols) >= 2:
+                    continue
+                col_token = order_cols[0].lower() if order_cols else ""
+                is_pk = col_token == "id" or any(col_token.endswith(s) for s in pk_suffixes)
+                if not is_pk:
+                    rel_path = str(sql_file.relative_to(work_dir))
+                    matches.append((rel_path, i + 1, line.strip()))
+        except Exception:
+            pass
     return matches
+
 
 
 def check_package_availability(work_dir: Path) -> list[str]:

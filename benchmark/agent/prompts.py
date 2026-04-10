@@ -11,6 +11,7 @@ from ..dbt_tools.scanner import (
     extract_model_descriptions,
     scan_current_date_models,
     scan_macros,
+    scan_nondeterministic_ordering,
     scan_yml_models,
 )
 from ..dbt_tools.templates import detect_precomputed_tables
@@ -140,7 +141,8 @@ DO THIS IN ORDER:
         ii. You have called: mcp__signalpilot__compare_join_types(...)
         iii. The tool output confirms row count drops are expected by the task
     - "based on", "for each X in Y", "calculates X from Y" are NOT exclusion phrases — keep LEFT JOIN.
-    - If you write INNER JOIN without calling compare_join_types first, the audit in step 4d WILL catch it.
+    - Do NOT use semantic reasoning to justify INNER JOIN (e.g., "only actors in movies should count"). The data defines the grain, not your intuition. Use LEFT JOIN and let the result include all source rows.
+    - If you write INNER/JOIN without calling compare_join_types first, the audit in step 4d WILL catch it.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
    a. Read its YML file. If dbt_packages/ exists, also read related package models (dbt_packages/*/models/**/*.sql) — they provide pre-built columns you can ref() instead of re-deriving.
    b. Write the .sql file
@@ -167,9 +169,10 @@ DO THIS IN ORDER:
    d. Run BOTH of these after every dbt run (mandatory):
       mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
       mcp__signalpilot__audit_model_sources connection_name="{instance_id}" model_name="<model>" source_tables="<comma-separated upstream tables>"
-      → 0 rows = fix JOIN/WHERE. Fan-out ratio > 2x = pre-aggregate or ROW_NUMBER() dedup. Over-filter < 0.5 = INNER→LEFT JOIN or WHERE too restrictive.
-      mcp__signalpilot__compare_join_types — REQUIRED if your model uses any INNER JOIN.
-      Call it for each INNER JOIN in the model to confirm row-drop behavior is intentional.
+      → 0 rows = fix JOIN/WHERE. Fan-out ratio > 2x = pre-aggregate or ROW_NUMBER() dedup.
+      → If output rows < largest source table rows (ANY reduction): call mcp__signalpilot__compare_join_types for each JOIN in the model. Row loss = likely wrong JOIN type or extra WHERE filter. Do NOT rationalize the drop — verify with the tool.
+      mcp__signalpilot__compare_join_types — REQUIRED if your model has fewer rows than any source, or uses INNER/JOIN (not LEFT).
+      The tool shows exactly how many rows each JOIN type produces. If LEFT JOIN gives more rows than your current query, switch to LEFT JOIN.
    e. Run: mcp__signalpilot__check_model_schema connection_name="{instance_id}" model_name="<model>" yml_columns="<exact comma-separated cols from YML>"
       → MISSING columns = add to SQL, go back to step c. Do NOT proceed until all columns match.
    MODEL IS COMPLETE only when c + d + e all pass. Then move to the next model.
@@ -199,6 +202,15 @@ DO THIS IN ORDER:
         warning_lines.append("  EXCEPTION: If current_date is used to compute 'current_age', 'age', or 'days_since_X' (real-time calculations), KEEP current_date.")
         warning_lines.append("This is the #1 cause of row count and value mismatches — fixing these files FIRST prevents wasted turns.")
         prompt += "\n".join(warning_lines)
+
+    nd_hits = scan_nondeterministic_ordering(work_dir)
+    if nd_hits:
+        nd_lines = ["", "⚠ NON-DETERMINISTIC ORDERING: These files have ROW_NUMBER/RANK with potentially non-unique ORDER BY:"]
+        for rel_path, line_no, line_text in nd_hits:
+            nd_lines.append(f"  {rel_path}:{line_no}: {line_text}")
+        nd_lines.append("  FIX: Add a unique tiebreaker column (e.g., _id, _key, primary_key) to the ORDER BY clause.")
+        nd_lines.append("  This prevents different row numbering across runs. Edit these files BEFORE building downstream models.")
+        prompt += "\n".join(nd_lines)
 
     if eval_critical_models:
         crit_names = ", ".join(sorted(eval_critical_models))

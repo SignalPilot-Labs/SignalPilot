@@ -667,6 +667,82 @@ def _extract_model_columns(work_dir: Path) -> dict[str, list[str]]:
     return result
 
 
+def _extract_unique_keys(work_dir: Path) -> dict[str, str]:
+    """Extract the first unique-tested column per model from YML definitions."""
+    import yaml
+
+    result: dict[str, str] = {}
+    for ext in ("*.yml", "*.yaml"):
+        for yml_file in work_dir.rglob(ext):
+            if any(skip in str(yml_file) for skip in (".claude", "dbt_packages", "target")):
+                continue
+            try:
+                data = yaml.safe_load(yml_file.read_text())
+                if data and "models" in data:
+                    for model in data["models"]:
+                        name = model.get("name")
+                        if not name or name in result:
+                            continue
+                        for col in model.get("columns", []):
+                            col_name = col.get("name")
+                            if not col_name:
+                                continue
+                            tests = col.get("tests", [])
+                            has_unique = any(
+                                t == "unique" or (isinstance(t, dict) and "unique" in t)
+                                for t in tests
+                            )
+                            if has_unique:
+                                result[name] = col_name
+                                break
+            except Exception:
+                pass
+    return result
+
+
+def _dedup_eval_tables(
+    work_dir: Path,
+    eval_critical_models: set[str],
+    result_db: "Path | None",
+) -> None:
+    """Deduplicate eval-critical tables that have a unique key defined in YML."""
+    import duckdb
+
+    if result_db is None:
+        return
+
+    unique_keys = _extract_unique_keys(work_dir)
+    log_separator("Dedup eval-critical tables on unique keys")
+
+    con = duckdb.connect(str(result_db), read_only=False)
+    try:
+        for model in sorted(eval_critical_models):
+            if model not in unique_keys:
+                continue
+            key_col = unique_keys[model]
+            try:
+                existing = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+                if model not in existing:
+                    log(f"  {model}: table not found in result DB, skipping")
+                    continue
+                total = con.execute(f'SELECT COUNT(*) FROM "{model}"').fetchone()[0]
+                distinct = con.execute(f'SELECT COUNT(DISTINCT "{key_col}") FROM "{model}"').fetchone()[0]
+                if total == distinct:
+                    log(f"  {model}: no duplicates on {key_col} ({total} rows)")
+                else:
+                    log(f"  DEDUP {model}: {total} rows -> {distinct} rows on key {key_col}")
+                    con.execute(
+                        f'CREATE OR REPLACE TABLE "{model}" AS '
+                        f'SELECT * EXCLUDE(__rn) FROM ('
+                        f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "{key_col}" ORDER BY "{key_col}") AS __rn '
+                        f'FROM "{model}") t WHERE __rn = 1'
+                    )
+            except Exception as e:
+                log(f"  WARN: dedup failed for {model}: {e}", "WARN")
+    finally:
+        con.close()
+
+
 def _extract_model_descriptions(work_dir: Path) -> dict[str, str]:
     """Extract model description text from YML files. Returns {model_name: description}."""
     import yaml
@@ -1844,6 +1920,8 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                 ["/home/agentuser/.local/bin/dbt", "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
                 cwd=str(work_dir), capture_output=True, text=True, timeout=180,
             )
+
+        _dedup_eval_tables(work_dir, eval_critical_models, _find_result_db(work_dir))
 
         # Post-agent check: are all eval-critical tables in the result DB?
         if eval_critical_models:

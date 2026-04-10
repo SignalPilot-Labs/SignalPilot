@@ -919,12 +919,24 @@ def build_agent_prompt(
     model_columns = _extract_model_columns(work_dir)
     model_descriptions = _extract_model_descriptions(work_dir)
     col_spec_lines = []
+    skeleton_lines = []
     for model_name in sorted(missing_priority | (stub_models & eval_critical_models)):
         desc = model_descriptions.get(model_name, "")
         desc_str = f" | DESC: {desc}" if desc else ""
         if model_name in model_columns:
-            col_spec_lines.append(f"  {model_name}: {', '.join(model_columns[model_name])}{desc_str}")
+            cols = model_columns[model_name]
+            col_spec_lines.append(f"  {model_name}: {', '.join(cols)}{desc_str}")
+            # Generate SQL skeleton template
+            col_aliases = ",\n    ".join(f"??? AS {c}" for c in cols)
+            skeleton_lines.append(
+                f"  -- {model_name}.sql skeleton (include ALL columns):\n"
+                f"  -- {{{{ config(materialized='table') }}}}\n"
+                f"  -- SELECT\n"
+                f"  --     {col_aliases}\n"
+                f"  -- FROM ???"
+            )
     col_spec_str = "\n".join(col_spec_lines) if col_spec_lines else "  (read YML files for column specs)"
+    skeleton_str = "\n".join(skeleton_lines) if skeleton_lines else ""
 
     # Build the selective dbt run command for priority models
     if missing_priority:
@@ -982,9 +994,9 @@ EXISTING SQL MODELS: {existing_str}
 MODEL DEPENDENCIES (write dependencies first):
 {deps_str}
 
-REQUIRED COLUMNS FOR PRIORITY MODELS:
+REQUIRED COLUMNS FOR PRIORITY MODELS (include ALL of these — missing columns = guaranteed FAIL):
 {col_spec_str}
-
+{f'{chr(10)}SQL TEMPLATES (start from these — fill in ??? with source expressions):{chr(10)}{skeleton_str}' if skeleton_str else ''}
 DO THIS IN ORDER:
 1. {'Run: dbt deps' if has_packages_yml else 'SKIP dbt deps — no packages.yml, packages are pre-installed. NEVER run dbt deps on this project.'}
 2. mcp__signalpilot__list_tables connection_name="{instance_id}"

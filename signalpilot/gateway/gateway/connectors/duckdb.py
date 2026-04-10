@@ -48,64 +48,86 @@ class DuckDBConnector(BaseConnector):
             config["motherduck_token"] = motherduck_token
 
         try:
-            self._conn = duckdb.connect(connection_string, read_only=not is_memory, config=config)
+            self._is_memory = is_memory
+            self._config = config
+            # For file-based DBs: don't hold a persistent write lock — connect transiently per query.
+            # This allows dbt to acquire write access between MCP queries.
+            if not is_memory:
+                self._conn = None  # will connect lazily per query
+            else:
+                self._conn = duckdb.connect(connection_string, read_only=False, config=config)
         except Exception as e:
             err = str(e).lower()
             if "motherduck" in err or "token" in err or "auth" in err:
                 raise RuntimeError(f"MotherDuck authentication failed: {e}") from e
             raise RuntimeError(f"DuckDB connection error: {e}") from e
 
+    def _open_transient(self):
+        """Open a transient read-only connection for file-based DBs."""
+        return duckdb.connect(self._db_path, read_only=True, config=self._config)
+
     def _ensure_connected(self) -> None:
         """Verify DuckDB connection is alive; raise RuntimeError if lost."""
-        if self._conn is None:
+        if self._conn is None and self._is_memory:
             raise RuntimeError("Not connected")
-        try:
-            self._conn.execute("SELECT 1")
-        except Exception:
+        if self._conn is not None:
             try:
-                self._conn.close()
+                self._conn.execute("SELECT 1")
             except Exception:
-                pass
-            self._conn = None
-            raise RuntimeError("Connection lost — please reconnect")
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+                if self._is_memory:
+                    raise RuntimeError("Connection lost — please reconnect")
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
-        if self._conn is None:
-            raise RuntimeError("Not connected")
-
         import asyncio
 
         effective_timeout = timeout or self._query_timeout
 
+        # For file-based DBs, open a transient read-only connection per query
+        # so we don't hold a persistent write lock that conflicts with dbt.
+        use_transient = not self._is_memory
+
         def _run():
-            if params:
-                result = self._conn.execute(sql, params)
-            else:
-                result = self._conn.execute(sql)
-            columns = [desc[0] for desc in result.description]
-            rows = result.fetchall()
-            return [{col: val for col, val in zip(columns, row)} for row in rows]
+            conn = self._open_transient() if use_transient else self._conn
+            try:
+                if params:
+                    result = conn.execute(sql, params)
+                else:
+                    result = conn.execute(sql)
+                columns = [desc[0] for desc in result.description]
+                rows = result.fetchall()
+                return [{col: val for col, val in zip(columns, row)} for row in rows]
+            finally:
+                if use_transient:
+                    conn.close()
 
         try:
             if effective_timeout:
-                # DuckDB has no native query timeout — use asyncio timeout on thread
                 return await asyncio.wait_for(
                     asyncio.to_thread(_run), timeout=effective_timeout
                 )
             return await asyncio.to_thread(_run)
         except asyncio.TimeoutError:
-            # Interrupt the connection to cancel the query
-            try:
-                self._conn.interrupt()
-            except Exception:
-                pass
             raise RuntimeError(f"DuckDB query timed out after {effective_timeout}s")
         except duckdb.Error as e:
             raise RuntimeError(f"DuckDB query error: {e}") from e
 
     async def get_schema(self) -> dict[str, Any]:
-        if self._conn is None:
+        # For file-based DBs, open a transient connection to avoid holding a write lock
+        conn = self._open_transient() if not self._is_memory else self._conn
+        if conn is None:
             raise RuntimeError("Not connected")
+        try:
+            return await self._get_schema_with_conn(conn)
+        finally:
+            if not self._is_memory:
+                conn.close()
+
+    async def _get_schema_with_conn(self, conn) -> dict[str, Any]:
 
         # Single optimized query for all columns across all tables
         cols_sql = """
@@ -120,7 +142,7 @@ class DuckDBConnector(BaseConnector):
                 AND t.table_type IN ('BASE TABLE', 'VIEW')
             ORDER BY c.table_schema, c.table_name, c.ordinal_position
         """
-        cols_result = self._conn.execute(cols_sql)
+        cols_result = conn.execute(cols_sql)
         all_cols = cols_result.fetchall()
 
         # Primary keys
@@ -135,7 +157,7 @@ class DuckDBConnector(BaseConnector):
         """
         pk_cols: set[str] = set()
         try:
-            pk_result = self._conn.execute(pk_sql)
+            pk_result = conn.execute(pk_sql)
             for row in pk_result.fetchall():
                 pk_cols.add(f"{row[0]}.{row[1]}.{row[2]}")
         except Exception:
@@ -160,7 +182,7 @@ class DuckDBConnector(BaseConnector):
         """
         foreign_keys: dict[str, list[dict]] = {}
         try:
-            fk_result = self._conn.execute(fk_sql)
+            fk_result = conn.execute(fk_sql)
             for row in fk_result.fetchall():
                 key = f"{row[0]}.{row[1]}"
                 if key not in foreign_keys:
@@ -183,7 +205,7 @@ class DuckDBConnector(BaseConnector):
                 FROM duckdb_tables()
                 WHERE NOT internal
             """
-            count_result = self._conn.execute(count_sql)
+            count_result = conn.execute(count_sql)
             for row in count_result.fetchall():
                 key = f"{row[0]}.{row[1]}"
                 row_counts[key] = row[2] or 0
@@ -200,7 +222,7 @@ class DuckDBConnector(BaseConnector):
                 FROM duckdb_columns()
                 WHERE comment IS NOT NULL AND comment != ''
             """
-            cc_result = self._conn.execute(cc_sql)
+            cc_result = conn.execute(cc_sql)
             for row in cc_result.fetchall():
                 col_key = f"{row[0]}.{row[1]}.{row[2]}"
                 col_comments[col_key] = row[3]
@@ -235,11 +257,14 @@ class DuckDBConnector(BaseConnector):
 
     async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
-        if self._conn is None or not columns:
+        if not columns:
+            return {}
+        conn = self._open_transient() if not self._is_memory else self._conn
+        if conn is None:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
-            result = self._conn.execute(sql)
+            result = conn.execute(sql)
             rows = result.fetchall()
             return self._parse_sample_union_result(rows)
         except Exception:
@@ -249,7 +274,7 @@ class DuckDBConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     safe_col = self._quote_identifier(col)
-                    r = self._conn.execute(
+                    r = conn.execute(
                         f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
                     )
                     values = [str(row[0]) for row in r.fetchall()]
@@ -258,12 +283,19 @@ class DuckDBConnector(BaseConnector):
                 except Exception:
                     continue
             return result
+        finally:
+            if not self._is_memory:
+                conn.close()
 
     async def health_check(self) -> bool:
-        if self._conn is None:
-            return False
         try:
-            self._conn.execute("SELECT 1")
+            conn = self._open_transient() if not self._is_memory else self._conn
+            if conn is None:
+                return False
+            result = conn.execute("SELECT 1")
+            result.fetchall()
+            if not self._is_memory:
+                conn.close()
             return True
         except Exception:
             return False

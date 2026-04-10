@@ -746,13 +746,10 @@ DO THIS IN ORDER:
       - Do NOT cast ID columns to different types. If the source column is INTEGER, keep it INTEGER in the output — do not CAST to VARCHAR.
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
-   d. Run: mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
-      → 0 rows = fix JOIN/WHERE and go back to step c. Fan-out = pre-aggregate or ROW_NUMBER() dedup.
-   d2. Run: mcp__signalpilot__audit_model_sources connection_name="{instance_id}" model_name="<model>" source_tables="<comma-separated upstream tables>"
-       → FAN-OUT ratio > 2x = pre-aggregate the source or deduplicate with ROW_NUMBER() before joining
-       → OVER-FILTER ratio < 0.5 = check if INNER JOIN should be LEFT JOIN or if WHERE is too restrictive
-       → CONSTANT column = CASE WHEN literal mismatch or wrong SELECT alias — run SELECT DISTINCT on source col
-       → 50%+ NULL column = LEFT JOIN dropping values — verify join key; COALESCE if nulls are valid
+   d. Run BOTH of these after every dbt run (mandatory):
+      mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
+      mcp__signalpilot__audit_model_sources connection_name="{instance_id}" model_name="<model>" source_tables="<comma-separated upstream tables>"
+      → 0 rows = fix JOIN/WHERE. Fan-out ratio > 2x = pre-aggregate or ROW_NUMBER() dedup. Over-filter < 0.5 = INNER→LEFT JOIN or WHERE too restrictive.
    e. Run: mcp__signalpilot__check_model_schema connection_name="{instance_id}" model_name="<model>" yml_columns="<exact comma-separated cols from YML>"
       → MISSING columns = add to SQL, go back to step c. Do NOT proceed until all columns match.
    MODEL IS COMPLETE only when c + d + e all pass. Then move to the next model.

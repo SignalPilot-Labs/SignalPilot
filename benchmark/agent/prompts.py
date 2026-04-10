@@ -141,7 +141,7 @@ DO THIS IN ORDER:
         ii. You have called: mcp__signalpilot__compare_join_types(...)
         iii. The tool output confirms row count drops are expected by the task
     - "based on", "for each X in Y", "calculates X from Y" are NOT exclusion phrases — keep LEFT JOIN.
-    - Do NOT use semantic reasoning alone to justify INNER JOIN (e.g., "only actors in movies should count"). Verify with compare_join_types before committing to either JOIN type when you are uncertain.
+    - Do NOT use semantic reasoning to justify INNER JOIN (e.g., "only actors in movies should count"). The data defines the grain, not your intuition. Use LEFT JOIN and let the result include all source rows.
     - After writing the model, step 4d will audit row counts in both directions — too many rows (fan-out) is also a JOIN signal, not just too few.
     - If you write INNER/JOIN without calling compare_join_types first, the audit in step 4d WILL catch it.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:

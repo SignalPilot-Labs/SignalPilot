@@ -730,7 +730,7 @@ DO THIS IN ORDER:
     - Never use current_date, now(), or current_timestamp.
 3. Explore at most 2 source tables with explore_table. Stop exploring — begin writing SQL.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
-   a. Read its YML file
+   a. Read its YML file. If dbt_packages/ exists, also read related package models (dbt_packages/*/models/**/*.sql) — they provide pre-built columns you can ref() instead of re-deriving.
    b. Write the .sql file
       - NEVER modify .yml or .yaml files — only create/edit .sql files
       - Column names in YML are exact — alias SELECT output to match them character-for-character
@@ -742,6 +742,8 @@ DO THIS IN ORDER:
       - When combining similar source tables (e.g., comedies + dramas + docuseries), prefer UNION (dedup) over UNION ALL if sources may contain duplicate/overlapping rows. UNION ALL keeps all rows including duplicates; UNION deduplicates. Check source data for identical rows before deciding.
       - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). For account-level summary/overview models, use ROUND(SUM(ABS(price)), 2) for spend totals. For detail/per-entity models, keep the original sign from source.
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
+      - ROLLING WINDOW / MoM / WoW models: If YML description says "rolling window", "MoM", "WoW", or "comparison" AND unique_key includes date×entity — the model outputs ONE date (the latest) per entity, NOT all dates. Add: WHERE date_col = (SELECT MAX(date_col) FROM source).
+      - Do NOT cast ID columns to different types. If the source column is INTEGER, keep it INTEGER in the output — do not CAST to VARCHAR.
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
    d. Run: mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"

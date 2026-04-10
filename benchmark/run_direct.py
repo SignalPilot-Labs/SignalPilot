@@ -1786,13 +1786,11 @@ CHECK 6 — CARDINALITY SANITY (catches silent wrong-scale errors):
        SELECT COUNT(*) FROM <branch_2_source> [WHERE <filter>]
      Sum must equal model row count. If any branch is 0 and should not be, the domain filter is wrong.
 
-CHECK 7 — NULL / JUNK ROW FILTER:
-  For UNION-based models or models sourced from scraped data (Google Sheets, CSV):
-    SELECT COUNT(*) FROM <model> WHERE <primary_identifying_col> IS NULL
-  If count > 0: inspect those rows. Rows where ALL columns are NULL are junk — filter them.
-  But rows where only the title/name is NULL but other columns have data (genre, date, etc.)
-  are likely valid data — keep those. Filter: WHERE NOT (col1 IS NULL AND col2 IS NULL AND col3 IS NULL)
-  instead of WHERE title IS NOT NULL.
+CHECK 7 — NULL / JUNK ROW FILTER (CAUTION — usually no action needed):
+  Only check UNION-based models where a branch might produce all-NULL rows.
+  NEVER filter rows where just one or two columns are NULL — those are real data.
+  Only filter rows where ALL columns are NULL. If unsure, DO NOT FILTER.
+  Adding WHERE col IS NOT NULL filters often removes valid data and causes row count failures.
 
 CHECK 8 — JOIN TYPE VERIFICATION (use compare_join_types tool):
   For each JOIN in the model SQL, call:

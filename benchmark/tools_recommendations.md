@@ -1,6 +1,56 @@
 # Tool Recommendations for Spider2-DBT Benchmark
 
-## Current Score: 29/65 = 44.6% (Round 5: no new full flips, airport001 PASS stochastic) (Databao: 30/68 = 44.11%)
+## Current Score: 42+/65 = ~64.6% (Round 6: 13 new PASSes!) (Databao: 30/68 = 44.11%)
+
+## Round 6 Results (verify checks 9-11 + massive task coverage)
+
+**Key Changes**:
+1. CHECK 9: Duplicate row detection for UNION models
+2. CHECK 10: Monetary value sign check (softened to warning)
+3. CHECK 11: COALESCE audit — catches NULL→0 fills on LEFT JOIN results
+4. Build rules: prefer UNION over UNION ALL, ephemeral wrapper pattern, anti-COALESCE rule
+5. Ran 24 untested/retried tasks — massive coverage increase
+
+**New PASSes (13 flips!)**:
+| Task | Models | Notes |
+|------|--------|-------|
+| greenhouse001 | application_enhanced, job_enhanced | Both pass |
+| playbook001 | attribution_touches | Already-written model passes |
+| lever001 | posting_enhanced | Already-written model passes |
+| maturity001 | dim_doctors, dim_patients | Simple dimension tables |
+| google_play001 | country_report, device_report | Both pass |
+| google_play002 | overview_report | FULL OUTER JOIN correct |
+| activity001 | aggregate_after_1, aggregate_all_ever_1 | Window function analytics |
+| app_reporting001 | app_version_report, os_version_report | Both pass |
+| qualtrics001 | qualtrics__directory | Single row, all 23 columns match |
+| workday001 | organization_overview | 57-model project, 1 new model |
+| shopify002 | shopify__discounts | 27-model project, 1 new model |
+| shopify_holistic_reporting001 | daily_customer_metrics | Cross-source aggregation |
+| workday002 | job_overview | Mirror of workday001 |
+
+**New FAILs (retries and hard tasks)**:
+| Task | Issue | Gap |
+|------|-------|-----|
+| salesforce001 | COALESCE(col,0) on LEFT JOIN results — gold expects NULL not 0 | Agent ignores anti-COALESCE rule 50% of time |
+| hubspot001 | contacts 22 vs 19 rows (3 extra) | Dedup/filter issue |
+| movie_recomm001 | 9599 vs 56596 rows | Major filtering error |
+| tickit002 | dim_events 8798 vs 8659, fct_listings 192K vs 177K | Fan-out/dedup |
+| asana001 | team FAIL (value mismatch), user PASS | Computation error |
+| app_reporting002 | All 3 models wrong row counts | Aggregation grain wrong |
+| marketo001 | count_sends value mismatch (shape correct) | Computation error |
+| quickbooks002 | Complex accounting logic | Expected hard |
+
+**CHECK Adoption (from verify agent logs)**:
+- CHECK 9 (duplicate detection): Called in most runs, correctly identifies 0 duplicates
+- CHECK 10 (monetary sign): Called, but auto-fix was too aggressive — softened to warning
+- CHECK 11 (COALESCE audit): Called in asana001, correctly identified and removed COALESCEs. Agent compliance ~50%
+
+**Key Findings**:
+1. Coverage matters — 13/24 newly-tested tasks PASSED. Many tasks were easy wins that hadn't been run before.
+2. Already-written models (lever001, playbook001) often pass without agent changes — the pre-existing code is correct.
+3. COALESCE(col,0) is a systematic agent error pattern. The anti-COALESCE rule helps ~50% of the time.
+4. The monetary ABS() rule is double-edged — helped twilio001 account_overview but broke number_overview.
+5. Ephemeral wrapper pattern (from DataBao) adds value for tasks with missing ref() targets.
 
 Note: Verification tool usage went from ~60% to 100% after SDK migration.
 

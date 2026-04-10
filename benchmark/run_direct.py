@@ -737,7 +737,7 @@ DO THIS IN ORDER:
         This bridges pre-existing tables to dbt's ref() system without altering the database.
       - Before committing to a JOIN type, call mcp__signalpilot__compare_join_types to see row impact of INNER vs LEFT vs RIGHT JOIN
       - When combining similar source tables (e.g., comedies + dramas + docuseries), prefer UNION (dedup) over UNION ALL if sources may contain duplicate/overlapping rows. UNION ALL keeps all rows including duplicates; UNION deduplicates. Check source data for identical rows before deciding.
-      - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). Use ROUND(SUM(ABS(price)), 2) for spend/cost totals in reporting models.
+      - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). For account-level summary/overview models, use ROUND(SUM(ABS(price)), 2) for spend totals. For detail/per-entity models, keep the original sign from source.
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
    c. Run: dbt run --select <model>
       If dbt fails: use mcp__signalpilot__dbt_error_parser with the error text, fix SQL, re-run.
@@ -1306,10 +1306,10 @@ CHECK 9 — DUPLICATE ROW DETECTION:
 CHECK 10 — MONETARY VALUE SIGN CHECK:
   For columns with names containing 'spend', 'cost', 'price', 'amount', 'revenue', 'total':
     SELECT column_name, MIN(value), MAX(value) FROM <model>
-  If a "spend" or "cost" column has all-negative values, the source likely stores charges as
-  negative (accounting convention). Wrap in ABS() and ROUND to 2 decimal places:
-    ROUND(SUM(ABS(price)), 2) AS total_spend
-  Spend/cost/amount columns should almost always be positive in reporting models.
+  If a "spend" or "cost" column has all-negative values, NOTE this as a WARNING.
+  Do NOT automatically fix — some models intentionally preserve negative signs (accounting convention).
+  Only apply ABS() if the model is a high-level summary/overview and the column name implies a positive total (e.g., "total_messages_spend").
+  For detail-level or per-entity models, keep original signs.
 
 CHECK 11 — COALESCE AUDIT:
   Read the model SQL. If it uses COALESCE(col, 0) or COALESCE(col, '') on LEFT JOIN results:

@@ -1208,7 +1208,7 @@ DO THIS IN ORDER:
         This bridges pre-existing tables to dbt's ref() system without altering the database.
       - DEFAULT to LEFT JOIN for all JOINs. Only use INNER JOIN if the task explicitly says to exclude non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without") AND you have called compare_join_types. Phrases like "based on", "for each X in Y", "calculates X from Y" are NOT exclusion — they describe the calculation scope, keep LEFT JOIN.
       - When combining similar source tables (e.g., comedies + dramas + docuseries), prefer UNION (dedup) over UNION ALL if sources may contain duplicate/overlapping rows. UNION ALL keeps all rows including duplicates; UNION deduplicates. Check source data for identical rows before deciding.
-      - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). For account-level summary/overview models, use ROUND(SUM(ABS(price)), 2) for spend totals. For detail/per-entity models, keep the original sign from source.
+      - For monetary columns (spend, cost, price, amount): keep the original sign from source data. Do NOT wrap in ABS() unless the task description explicitly says to convert negatives to positives. Negative prices are valid accounting data.
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
       - ROLLING WINDOW / MoM / WoW models: If YML description says "rolling window", "MoM", "WoW", or "comparison" AND unique_key includes date×entity — the model outputs ONE date (the latest) per entity, NOT all dates. Add: WHERE date_col = (SELECT MAX(date_col) FROM source).
       - For "top N" or ranking queries: use RANK() not DENSE_RANK(). RANK() gives ties the same rank and skips the next (1,2,2,4); DENSE_RANK() never skips (1,2,2,3). Standard "top 20" lists expect RANK().
@@ -1811,10 +1811,8 @@ CHECK 9 — DUPLICATE ROW DETECTION:
 CHECK 10 — MONETARY VALUE SIGN CHECK:
   For columns with names containing 'spend', 'cost', 'price', 'amount', 'revenue', 'total':
     SELECT column_name, MIN(value), MAX(value) FROM <model>
-  If a "spend" or "cost" column has all-negative values, NOTE this as a WARNING.
-  Do NOT automatically fix — some models intentionally preserve negative signs (accounting convention).
-  Only apply ABS() if the model is a high-level summary/overview and the column name implies a positive total (e.g., "total_messages_spend").
-  For detail-level or per-entity models, keep original signs.
+  Do NOT apply ABS() to monetary columns. Negative values are valid accounting data. Keep original signs from source.
+  Only change sign if the task description explicitly says to convert negatives.
 
 CHECK 11 — COALESCE AUDIT:
   Read the model SQL. If it uses COALESCE(col, 0) or COALESCE(col, '') on LEFT JOIN results:

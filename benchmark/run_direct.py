@@ -538,13 +538,12 @@ def _detect_precomputed_tables(work_dir: Path) -> list[str]:
     except ImportError:
         return []
 
-    db_candidates = list(work_dir.glob("*.duckdb"))
-    if not db_candidates:
+    db_path_obj = _find_result_db(work_dir)
+    if not db_path_obj:
         return []
 
-    db_path = str(db_candidates[0])
     try:
-        con = duckdb.connect(database=db_path, read_only=True)
+        con = duckdb.connect(database=str(db_path_obj), read_only=True)
         tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
         con.close()
         return tables
@@ -562,11 +561,11 @@ def _get_table_row_counts(work_dir: Path) -> dict[str, int]:
     except ImportError:
         return {}
 
-    db_candidates = list(work_dir.glob("*.duckdb"))
-    if not db_candidates:
+    db_path_obj = _find_result_db(work_dir)
+    if not db_path_obj:
         return {}
 
-    db_path = str(db_candidates[0])
+    db_path = str(db_path_obj)
     try:
         con = duckdb.connect(database=db_path, read_only=True)
         tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
@@ -1459,10 +1458,9 @@ def main() -> None:
         # ── Register connection ────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 3: Register DuckDB connection")
-        duckdb_files = list(work_dir.glob("*.duckdb"))
-        if duckdb_files:
-            db_path = str(duckdb_files[0])
-            register_local_connection(instance_id, db_path)
+        _db = _find_result_db(work_dir)
+        if _db:
+            register_local_connection(instance_id, str(_db))
         else:
             log(f"No .duckdb files in {work_dir}", "WARN")
         log(f"Connection registered in {time.monotonic()-t0:.2f}s")

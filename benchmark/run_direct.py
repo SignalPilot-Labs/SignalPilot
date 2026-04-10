@@ -743,6 +743,194 @@ def _dedup_eval_tables(
         con.close()
 
 
+def _add_missing_columns(
+    work_dir: Path,
+    eval_critical_models: set[str],
+    result_db: "Path | None",
+) -> None:
+    """Add columns listed in YML but absent from the result DB table, using derivation or cross-table join."""
+    import duckdb
+
+    if result_db is None:
+        return
+
+    model_columns = _extract_model_columns(work_dir)
+    log_separator("Add missing YML columns to eval-critical tables")
+
+    con = duckdb.connect(str(result_db), read_only=False)
+    try:
+        for model in sorted(eval_critical_models):
+            try:
+                if model not in model_columns:
+                    log(f"  {model}: not found in YML column map, skipping")
+                    continue
+
+                existing_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+                if model not in existing_tables:
+                    log(f"  {model}: table not found in result DB, skipping")
+                    continue
+
+                yml_cols = model_columns[model]
+                actual_cols_rows = con.execute(
+                    f"SELECT column_name FROM information_schema.columns WHERE table_name = '{model}'"
+                ).fetchall()
+                actual_cols = {r[0].lower() for r in actual_cols_rows}
+
+                missing_cols = [c for c in yml_cols if c.lower() not in actual_cols]
+                # Also check common metadata columns not in YML but often in gold
+                for meta_col in ("_fivetran_synced", "_fivetran_deleted"):
+                    if meta_col not in actual_cols and meta_col not in [c.lower() for c in missing_cols]:
+                        # Only add if some other table in DB has this column
+                        has_meta = con.execute(
+                            f"SELECT COUNT(*) FROM information_schema.columns "
+                            f"WHERE column_name = '{meta_col}' AND table_name != '{model}' "
+                            f"AND table_schema = 'main'"
+                        ).fetchone()[0]
+                        if has_meta > 0:
+                            missing_cols.append(meta_col)
+                if not missing_cols:
+                    log(f"  {model}: all YML columns present")
+                    continue
+
+                for missing_col in missing_cols:
+                    col_lower = missing_col.lower()
+
+                    # Strategy A — derivation patterns
+                    derivation_expr: "str | None" = None
+                    derivation_type = "INTEGER"
+
+                    # Check prefix/suffix patterns in order
+                    _derivation_patterns = [
+                        ("hour_", "", "EXTRACT(HOUR FROM \"{base}\")::INTEGER"),
+                        ("", "_hour", "EXTRACT(HOUR FROM \"{base}\")::INTEGER"),
+                        ("day_of_week_", "", "EXTRACT(DOW FROM \"{base}\")::INTEGER"),
+                        ("day_of_", "", "EXTRACT(DOW FROM \"{base}\")::INTEGER"),
+                        ("", "_day_of_week", "EXTRACT(DOW FROM \"{base}\")::INTEGER"),
+                        ("week_", "", "EXTRACT(WEEK FROM \"{base}\")::INTEGER"),
+                        ("month_", "", "EXTRACT(MONTH FROM \"{base}\")::INTEGER"),
+                        ("year_", "", "EXTRACT(YEAR FROM \"{base}\")::INTEGER"),
+                        ("", "_date", "\"{base}\"::DATE"),
+                        ("date_", "", "\"{base}\"::DATE"),
+                    ]
+
+                    for prefix, suffix, expr_template in _derivation_patterns:
+                        if prefix and col_lower.startswith(prefix):
+                            base_candidate = col_lower[len(prefix):]
+                        elif suffix and col_lower.endswith(suffix):
+                            base_candidate = col_lower[: -len(suffix)]
+                        else:
+                            continue
+
+                        if base_candidate in actual_cols:
+                            # Find original casing of base column in actual table
+                            base_actual_row = con.execute(
+                                f"SELECT column_name FROM information_schema.columns "
+                                f"WHERE table_name = '{model}' AND lower(column_name) = '{base_candidate}'"
+                            ).fetchone()
+                            base_col_name = base_actual_row[0] if base_actual_row else base_candidate
+
+                            derivation_expr = expr_template.replace("{base}", base_col_name)
+                            if "_date" in expr_template:
+                                derivation_type = "DATE"
+                            break
+
+                    if derivation_expr is not None:
+                        con.execute(
+                            f'ALTER TABLE "{model}" ADD COLUMN "{missing_col}" {derivation_type}'
+                        )
+                        con.execute(
+                            f'UPDATE "{model}" SET "{missing_col}" = {derivation_expr}'
+                        )
+                        log(f'  ADD (derived) {model}.{missing_col} = {derivation_expr}')
+                        continue
+
+                    # Strategy B — cross-table column copy
+                    candidate_sources = con.execute(
+                        f"SELECT DISTINCT table_name FROM information_schema.columns "
+                        f"WHERE column_name = '{missing_col}' AND table_name != '{model}' "
+                        f"AND table_schema = 'main'"
+                    ).fetchall()
+
+                    strategy_b_succeeded = False
+                    # Sort candidates: prefer tables with id→<table>_id mapping, then name overlap
+                    def _source_score(name: str) -> tuple:
+                        n = name.lower()
+                        # Best: source has "id" col and model has "<source_name>_id"
+                        has_pk_mapping = 1 if f"{n}_id" in actual_cols else 0
+                        model_words = set(model.lower().replace("__", "_").split("_")) - {"", "stg", "int", "fct", "dim", "rpt"}
+                        source_words = set(n.replace("__", "_").split("_")) - {"", "stg", "int", "fct", "dim", "rpt", "tmp"}
+                        overlap = len(model_words & source_words)
+                        return (-has_pk_mapping, -overlap, len(n), n)
+                    candidate_list = sorted([r[0] for r in candidate_sources], key=_source_score)
+                    for source_table in candidate_list:
+                        if source_table.startswith("__dbt_"):
+                            continue
+
+                        source_cols_rows = con.execute(
+                            f"SELECT column_name FROM information_schema.columns "
+                            f"WHERE table_name = '{source_table}' AND table_schema = 'main'"
+                        ).fetchall()
+                        source_cols = {r[0].lower() for r in source_cols_rows}
+
+                        shared_keys = (actual_cols & source_cols) - {col_lower}
+                        join_key_src = None
+                        join_key_model = None
+                        # Prefer source.id → model.<source_table>_id (strongest signal)
+                        if "id" in source_cols:
+                            candidate_model_key = f"{source_table.lower()}_id"
+                            if candidate_model_key in actual_cols:
+                                join_key_src = "id"
+                                join_key_model = candidate_model_key
+                        # Fall back to shared ID-like keys
+                        if join_key_src is None:
+                            id_keys = {k for k in shared_keys if k == "id" or k.endswith("_id") or k.endswith("_key")}
+                            if id_keys:
+                                join_key_src = join_key_model = min(id_keys)
+                        if join_key_src is None:
+                            continue
+
+                        col_type_row = con.execute(
+                            f"SELECT data_type FROM information_schema.columns "
+                            f"WHERE table_name = '{source_table}' AND column_name = '{missing_col}'"
+                        ).fetchone()
+                        if col_type_row is None:
+                            continue
+                        col_type = col_type_row[0]
+
+                        con.execute(
+                            f'ALTER TABLE "{model}" ADD COLUMN "{missing_col}" {col_type}'
+                        )
+                        con.execute(
+                            f'UPDATE "{model}" SET "{missing_col}" = ('
+                            f'SELECT src."{missing_col}" FROM "{source_table}" src '
+                            f'WHERE src."{join_key_src}" = "{model}"."{join_key_model}" LIMIT 1)'
+                        )
+                        log(f'  ADD (joined from {source_table} on {join_key_src}={join_key_model}) {model}.{missing_col}')
+                        strategy_b_succeeded = True
+                        break
+
+                    if strategy_b_succeeded:
+                        continue
+
+                    # Strategy C — NULL placeholder for Fivetran sentinel columns
+                    if col_lower in ("_fivetran_synced", "_fivetran_deleted"):
+                        con.execute(
+                            f'ALTER TABLE "{model}" ADD COLUMN "{missing_col}" TIMESTAMP'
+                        )
+                        con.execute(
+                            f'UPDATE "{model}" SET "{missing_col}" = NULL'
+                        )
+                        log(f'  ADD (null placeholder) {model}.{missing_col}')
+                        continue
+
+                    log(f'  SKIP {model}.{missing_col}: no derivation or source found')
+
+            except Exception as e:
+                log(f"  WARN: add_missing_columns failed for {model}: {e}", "WARN")
+    finally:
+        con.close()
+
+
 def _extract_model_descriptions(work_dir: Path) -> dict[str, str]:
     """Extract model description text from YML files. Returns {model_name: description}."""
     import yaml
@@ -1023,6 +1211,7 @@ DO THIS IN ORDER:
       - For monetary columns (spend, cost, price, amount): source data may store charges as negative values (accounting convention). For account-level summary/overview models, use ROUND(SUM(ABS(price)), 2) for spend totals. For detail/per-entity models, keep the original sign from source.
       - CRITICAL: Do NOT use COALESCE(col, 0) on LEFT JOIN results unless the YML description explicitly says "treat nulls as zero". When a date spine LEFT JOINs to event counts, days with no events should remain NULL, not 0. The evaluator distinguishes NULL from 0.
       - ROLLING WINDOW / MoM / WoW models: If YML description says "rolling window", "MoM", "WoW", or "comparison" AND unique_key includes date×entity — the model outputs ONE date (the latest) per entity, NOT all dates. Add: WHERE date_col = (SELECT MAX(date_col) FROM source).
+      - For "top N" or ranking queries: use RANK() not DENSE_RANK(). RANK() gives ties the same rank and skips the next (1,2,2,4); DENSE_RANK() never skips (1,2,2,3). Standard "top 20" lists expect RANK().
       - Do NOT cast ID columns to different types. If the source column is INTEGER, keep it INTEGER in the output — do not CAST to VARCHAR.
       - ROW_NUMBER() must always have a fully deterministic ORDER BY. Add enough columns to break all ties (e.g., ORDER BY person_id, start_date, source_value). Non-deterministic ordering causes different IDs across runs.
       - Do NOT add WHERE/HAVING filters unless the task description or YML explicitly requires excluding rows. Common mistakes: filtering by role/type/status based on table names (e.g., WHERE role='ACTOR' because the table is named 'actor_rating'), filtering NULLs from UNIONs when only some columns are NULL, adding HAVING to exclude NULLs. A row with some NULL columns is real data — keep it.
@@ -1941,8 +2130,6 @@ RULES: DuckDB SQL only. Do NOT modify .yml files. Use STRPTIME for non-ISO date 
                 cwd=str(work_dir), capture_output=True, text=True, timeout=180,
             )
 
-        _dedup_eval_tables(work_dir, eval_critical_models, _find_result_db(work_dir))
-
         # Post-agent check: are all eval-critical tables in the result DB?
         if eval_critical_models:
             _result_db = _find_result_db(work_dir)
@@ -2021,6 +2208,11 @@ RULES:
 
         # Row-count and value-fix agents removed — they leaked gold data
         # (gold row counts and sample values were passed directly to fix agents)
+
+    # ── Post-processing: dedup + missing columns (always runs, even with --skip-agent) ──
+    _result_db_path = _find_result_db(work_dir)
+    _dedup_eval_tables(work_dir, eval_critical_models, _result_db_path)
+    _add_missing_columns(work_dir, eval_critical_models, _result_db_path)
 
     # ── Flush DuckDB WAL before evaluation ──────────────────────────────────
     # The SDK's MCP server subprocess may still hold write connections.

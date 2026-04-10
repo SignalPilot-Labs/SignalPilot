@@ -204,7 +204,8 @@ DO THIS IN ORDER:
                         "will truncate most rows and fail the benchmark."
                     )
         warning_lines.append("⚡ THIS IS YOUR FIRST TASK after step 2b (get_date_boundaries). Edit EVERY file listed above.")
-        warning_lines.append("  Get the max date from get_date_boundaries (use the '← USE THIS' table's max date).")
+        warning_lines.append("  DEFAULT: Get the max date from get_date_boundaries (use the '← USE THIS' table's max date).")
+        warning_lines.append("  EXCEPTION: If a file above has a 'NOTE: ... already has pre-computed data' hint, query THAT TABLE's max date instead — it overrides get_date_boundaries.")
         warning_lines.append("  Then open each file and apply the appropriate replacement pattern:")
         warning_lines.append('  • end_date="current_date"  →  end_date="cast(\'<MAX_DATE>\' as date)"')
         warning_lines.append("  • {{ dbt.current_timestamp_backcompat() }}  →  cast('<MAX_DATE>' as date)")

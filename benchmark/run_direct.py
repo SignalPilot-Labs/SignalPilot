@@ -999,7 +999,9 @@ DO THIS IN ORDER:
    a. Read its YML file. If dbt_packages/ exists, also read related package models (dbt_packages/*/models/**/*.sql) — they provide pre-built columns you can ref() instead of re-deriving.
    b. Write the .sql file
       - NEVER modify .yml or .yaml files — only create/edit .sql files
-      - Column names in YML are exact — alias SELECT output to match them character-for-character
+      - EVERY column listed in the YML MUST appear in your SELECT — missing columns cause evaluation failure even if row count is correct.
+        Column names in YML are exact — alias SELECT output to match them character-for-character.
+        For derived columns (e.g., hour_*, day_of_*, month_*, *_months, *_days): derive them from base columns using EXTRACT(), DATEDIFF(), etc.
       - Use ref() for upstream models, source() for raw tables
       - If a ref('model_name') fails because no .sql file exists BUT the table already exists in the database,
         create an ephemeral wrapper: {{ config(materialized='ephemeral') }} SELECT * FROM model_name

@@ -132,6 +132,15 @@ DO THIS IN ORDER:
     - NEVER use GLOBAL MAX DATE — dimension, lookup, and reference tables often have later dates and must NOT set the endpoint.
     - Never use current_date, now(), or current_timestamp.
 3. Explore at most 2 source tables with explore_table. Stop exploring — begin writing SQL.
+3b. JOIN TYPE DECISION (decide before writing any SQL):
+    - DEFAULT: LEFT JOIN. This is correct for the vast majority of reporting models.
+    - INNER JOIN requires ALL THREE conditions to be true:
+        i.  The task description explicitly excludes non-matching rows
+            (exact phrases: "WITH orders", "only users who have", "exclude rows without")
+        ii. You have called: mcp__signalpilot__compare_join_types(...)
+        iii. The tool output confirms row count drops are expected by the task
+    - "based on", "for each X in Y", "calculates X from Y" are NOT exclusion phrases — keep LEFT JOIN.
+    - If you write INNER JOIN without calling compare_join_types first, the audit in step 4d WILL catch it.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
    a. Read its YML file. If dbt_packages/ exists, also read related package models (dbt_packages/*/models/**/*.sql) — they provide pre-built columns you can ref() instead of re-deriving.
    b. Write the .sql file
@@ -143,7 +152,8 @@ DO THIS IN ORDER:
       - If a ref('model_name') fails because no .sql file exists BUT the table already exists in the database,
         create an ephemeral wrapper: {{ config(materialized='ephemeral') }} SELECT * FROM model_name
         This bridges pre-existing tables to dbt's ref() system without altering the database.
-      - DEFAULT to LEFT JOIN for all JOINs. Only use INNER JOIN if the task explicitly says to exclude non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without") AND you have called compare_join_types. Phrases like "based on", "for each X in Y", "calculates X from Y" are NOT exclusion — they describe the calculation scope, keep LEFT JOIN.
+      - LEFT JOIN rule: see step 3b above. Do not use INNER JOIN without compare_join_types confirmation.
+      - CUMULATIVE / RUNNING-TOTAL MODELS (balance sheets, running balances, account snapshots): when you cross-join a calendar spine with transactions using `transaction_date <= spine_date`, the spine's date range defines the output range — include ALL spine months. Do NOT add `WHERE date_month <= max(transaction_date)` or any filter that limits output to months with new transactions. After the last transaction month the cumulative balance stays constant (same totals repeat) — those rows are correct and required. If the task says "balance sheet", "running total", "cumulative", or "account snapshot", the full spine range MUST appear in output.
       - When combining similar source tables (e.g., comedies + dramas + docuseries), prefer UNION (dedup) over UNION ALL if sources may contain duplicate/overlapping rows. UNION ALL keeps all rows including duplicates; UNION deduplicates. Check source data for identical rows before deciding.
       - For monetary columns (spend, cost, price, amount): check if the source data has negative values. For per-entity detail models, keep the original sign. For account-level summary/overview models (where spend should be a positive total), use ABS(). When unsure, check the dbt_packages source models for guidance.
       - COALESCE: For COUNT/SUM aggregates from LEFT JOINs (e.g., count_visitors, sum_pageviews), use COALESCE(col, 0) — zero is correct when no events exist. For non-aggregate columns (e.g., names, dates, IDs from optional JOINs), do NOT use COALESCE — let NULLs remain. The evaluator distinguishes NULL from 0.
@@ -158,6 +168,8 @@ DO THIS IN ORDER:
       mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
       mcp__signalpilot__audit_model_sources connection_name="{instance_id}" model_name="<model>" source_tables="<comma-separated upstream tables>"
       → 0 rows = fix JOIN/WHERE. Fan-out ratio > 2x = pre-aggregate or ROW_NUMBER() dedup. Over-filter < 0.5 = INNER→LEFT JOIN or WHERE too restrictive.
+      mcp__signalpilot__compare_join_types — REQUIRED if your model uses any INNER JOIN.
+      Call it for each INNER JOIN in the model to confirm row-drop behavior is intentional.
    e. Run: mcp__signalpilot__check_model_schema connection_name="{instance_id}" model_name="<model>" yml_columns="<exact comma-separated cols from YML>"
       → MISSING columns = add to SQL, go back to step c. Do NOT proceed until all columns match.
    MODEL IS COMPLETE only when c + d + e all pass. Then move to the next model.
@@ -171,17 +183,21 @@ DO THIS IN ORDER:
         for rel_path, line_no, line_text in current_date_hits:
             warning_lines.append(f"  {rel_path}:{line_no}: {line_text}")
             model_name = Path(rel_path).stem
-            if model_name in db_tables:
+            is_spine_model = any(kw in model_name.lower() for kw in ("calendar", "spine", "date_spine"))
+            if model_name in db_tables and not is_spine_model:
                 warning_lines.append(f"  NOTE: {model_name} already has pre-computed data in the database.")
                 warning_lines.append(f"  Query its max date with: SELECT MAX(<date_col>) FROM {model_name}")
                 warning_lines.append("  Use that value as the replacement for current_date in this file — NOT the fact table max from get_date_boundaries.")
                 warning_lines.append("  (Replace <date_col> with the actual date column name you see in the model's SELECT list.)")
-        warning_lines.append("After calling get_date_boundaries in step 2b, edit these files:")
-        warning_lines.append("  Replace current_date → CAST('<MAX_DATE>' AS DATE) in date spines, WHERE clauses, and date range boundaries.")
-        warning_lines.append("  where <MAX_DATE> is the primary fact/event table's max date from get_date_boundaries (look for the '← USE THIS' marker).")
-        warning_lines.append("  For dbt macros like dbt.current_timestamp_backcompat(): replace the entire macro call with the cast.")
-        warning_lines.append("  EXCEPTION: If current_date is used to compute 'current_age', 'age', or 'days_since_X' (real-time calculations), KEEP current_date — do NOT replace.")
-        warning_lines.append("This is the #1 cause of row count and value mismatches.")
+        warning_lines.append("⚡ THIS IS YOUR FIRST TASK after step 2b (get_date_boundaries). Edit EVERY file listed above.")
+        warning_lines.append("  Get the max date from get_date_boundaries (use the '← USE THIS' table's max date).")
+        warning_lines.append("  Then open each file and apply the appropriate replacement pattern:")
+        warning_lines.append('  • end_date="current_date"  →  end_date="cast(\'<MAX_DATE>\' as date)"')
+        warning_lines.append("  • {{ dbt.current_timestamp_backcompat() }}  →  cast('<MAX_DATE>' as date)")
+        warning_lines.append("  • dbt.dateadd(..., \"current_date\")  →  dbt.dateadd(..., \"cast('<MAX_DATE>' as date)\")")
+        warning_lines.append("  • WHERE ... <= current_date  →  WHERE ... <= cast('<MAX_DATE>' as date)")
+        warning_lines.append("  EXCEPTION: If current_date is used to compute 'current_age', 'age', or 'days_since_X' (real-time calculations), KEEP current_date.")
+        warning_lines.append("This is the #1 cause of row count and value mismatches — fixing these files FIRST prevents wasted turns.")
         prompt += "\n".join(warning_lines)
 
     if eval_critical_models:

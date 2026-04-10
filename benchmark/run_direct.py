@@ -1722,6 +1722,12 @@ def _build_value_verify_prompt(
 dbt build is complete. Audit each priority model for silent failures.
 Use ONLY: task's own .md files, YML specs, and your own output tables.
 
+CRITICAL RULE — DO NO HARM: Only fix issues you are CERTAIN about. If unsure whether a change
+improves or worsens the output, DO NOT make the change. Common harmful changes to AVOID:
+- Adding WHERE ... IS NOT NULL filters (removes valid data)
+- Removing COALESCE from aggregate metrics (introduces NULLs where 0 is correct)
+- Over-deduplicating with ROW_NUMBER when the task doesn't specify dedup
+
 TASK: {instruction}
 
 EVAL-CRITICAL MODELS: {model_names_str}

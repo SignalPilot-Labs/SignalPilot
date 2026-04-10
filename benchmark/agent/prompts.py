@@ -141,7 +141,8 @@ DO THIS IN ORDER:
         ii. You have called: mcp__signalpilot__compare_join_types(...)
         iii. The tool output confirms row count drops are expected by the task
     - "based on", "for each X in Y", "calculates X from Y" are NOT exclusion phrases — keep LEFT JOIN.
-    - Do NOT use semantic reasoning to justify INNER JOIN (e.g., "only actors in movies should count"). The data defines the grain, not your intuition. Use LEFT JOIN and let the result include all source rows.
+    - Do NOT use semantic reasoning alone to justify INNER JOIN (e.g., "only actors in movies should count"). Verify with compare_join_types before committing to either JOIN type when you are uncertain.
+    - After writing the model, step 4d will audit row counts in both directions — too many rows (fan-out) is also a JOIN signal, not just too few.
     - If you write INNER/JOIN without calling compare_join_types first, the audit in step 4d WILL catch it.
 4. For each priority model in dependency order — complete ALL sub-steps before moving to the next model:
    a. Read its YML file. If dbt_packages/ exists, also read related package models (dbt_packages/*/models/**/*.sql) — they provide pre-built columns you can ref() instead of re-deriving.
@@ -150,6 +151,7 @@ DO THIS IN ORDER:
       - EVERY column listed in the YML MUST appear in your SELECT — missing columns cause evaluation failure even if row count is correct.
         Column names in YML are exact — alias SELECT output to match them character-for-character.
         For derived columns (e.g., hour_*, day_of_*, month_*, *_months, *_days): derive them from base columns using EXTRACT(), DATEDIFF(), etc.
+        Zero-padding rule: if the column name is hour_*, month_*, or day_* and the gold-standard values are fixed-width strings (e.g., '07', '05', '12'), use LPAD(EXTRACT(... FROM col)::VARCHAR, 2, '0') — NOT bare EXTRACT() which returns an integer.
       - Use ref() for upstream models, source() for raw tables
       - If a ref('model_name') fails because no .sql file exists BUT the table already exists in the database,
         create an ephemeral wrapper: {{ config(materialized='ephemeral') }} SELECT * FROM model_name
@@ -170,9 +172,12 @@ DO THIS IN ORDER:
       mcp__signalpilot__validate_model_output connection_name="{instance_id}" model_name="<model>"
       mcp__signalpilot__audit_model_sources connection_name="{instance_id}" model_name="<model>" source_tables="<comma-separated upstream tables>"
       → 0 rows = fix JOIN/WHERE. Fan-out ratio > 2x = pre-aggregate or ROW_NUMBER() dedup.
-      → If output rows < largest source table rows (ANY reduction): call mcp__signalpilot__compare_join_types for each JOIN in the model. Row loss = likely wrong JOIN type or extra WHERE filter. Do NOT rationalize the drop — verify with the tool.
-      mcp__signalpilot__compare_join_types — REQUIRED if your model has fewer rows than any source, or uses INNER/JOIN (not LEFT).
-      The tool shows exactly how many rows each JOIN type produces. If LEFT JOIN gives more rows than your current query, switch to LEFT JOIN.
+      → If output row count differs significantly from source row count in EITHER direction: call mcp__signalpilot__compare_join_types for each JOIN in the model.
+        • Row loss (output < source): likely wrong JOIN type or over-filtering WHERE clause.
+        • Row gain / fan-out (output >> source, e.g., 3x or more rows than unique keys suggest): likely LEFT JOIN on a one-to-many where INNER JOIN or pre-aggregation is correct.
+        Do NOT rationalize the difference in either direction — verify with the tool.
+      mcp__signalpilot__compare_join_types — REQUIRED if your model has fewer rows than any source, uses INNER/JOIN (not LEFT), OR has significantly more rows than the source grain implies.
+      The tool shows exactly how many rows each JOIN type produces. Pick the JOIN type whose row count matches the expected grain of the output model.
    e. Run: mcp__signalpilot__check_model_schema connection_name="{instance_id}" model_name="<model>" yml_columns="<exact comma-separated cols from YML>"
       → MISSING columns = add to SQL, go back to step c. Do NOT proceed until all columns match.
    MODEL IS COMPLETE only when c + d + e all pass. Then move to the next model.

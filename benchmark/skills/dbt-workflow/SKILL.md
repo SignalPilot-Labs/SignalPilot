@@ -96,6 +96,7 @@ When joining to a lookup table, use source values directly unless the lookup pro
 - Do NOT use `SELECT DISTINCT` on fact tables — use `ROW_NUMBER()`.
 - Do NOT use `COALESCE(numeric_col, 0)` in aggregates unless YML says "treat nulls as zero".
 - ID columns: check source type with `explore_table` — VARCHAR `_id` must stay VARCHAR (`'100063' != 100063`).
+- Do NOT add WHERE/HAVING filters that are not in the task description or YML. Table/column names like "actor_rating" do NOT mean you should filter `role='ACTOR'`. Only filter when the task says "exclude", "only", "where", or YML docs blocks specify a filter condition.
 
 ## 11. dbt Syntax Essentials
 

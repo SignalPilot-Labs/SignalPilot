@@ -46,7 +46,7 @@ Scan `macros/` directory before writing any model. Call macros with `{{ macro_na
 ## 4. JOIN Type Selection
 
 - **DEFAULT: LEFT JOIN for all JOINs.** Start FROM the table that defines all output entities (all customers, all dates, all admins) and LEFT JOIN everything else to it. This is the correct choice for the vast majority of reporting models.
-- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "drivers who completed a trip"). When considering INNER JOIN, call `compare_join_types` first to confirm row counts match expectations:
+- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. When considering INNER JOIN, call `compare_join_types` first:
   ```
   mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
   ```

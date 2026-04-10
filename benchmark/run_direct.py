@@ -41,6 +41,11 @@ from claude_agent_sdk._errors import ProcessError, ClaudeSDKError
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
+# Ensure dbt (pip-installed to ~/.local/bin) is on PATH for agent subprocesses
+_local_bin = os.path.expanduser("~/.local/bin")
+if _local_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _local_bin + ":" + os.environ.get("PATH", "")
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SPIDER2_DBT_DIR = Path(
     os.environ.get("SPIDER2_DBT_DIR", os.path.expanduser("~/spider2-repo/spider2-dbt"))

@@ -763,3 +763,77 @@ SELECT
     assert sql_records["stub_visits"]["status"] == ModelStatus.STUB
     # The COMPLETE-only filter must prevent this STUB from appearing in warnings.
     assert result["nondeterminism_warnings"] == []
+
+
+# ── dbt_packages/ hazard detection ────────────────────────────────────────────
+
+
+def test_date_hazard_in_dbt_packages(tmp_path: Path):
+    """scan_filesystem detects current_date in a dbt_packages/ model."""
+    (tmp_path / "models").mkdir()
+    pkg_models = tmp_path / "dbt_packages" / "some_pkg" / "models"
+    pkg_models.mkdir(parents=True)
+    (pkg_models / "spine.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT UNNEST(GENERATE_SERIES('2020-01-01'::DATE, CURRENT_DATE, INTERVAL '1 day')) AS date_day
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    hazards = result["date_hazards"]
+    assert len(hazards) == 1
+    h = hazards[0]
+    assert h["model_name"] == "spine"
+    assert "current_date" in h["pattern"]
+    assert h.get("package") is True
+    assert h["override_path"] == "models/spine.sql"
+    # Package models must NOT appear in sql_records (not part of the project graph).
+    assert all(rec["name"] != "spine" for rec in result["sql_records"])
+
+
+def test_nondeterminism_in_dbt_packages(tmp_path: Path):
+    """scan_filesystem detects ROW_NUMBER in a dbt_packages/ model."""
+    (tmp_path / "models").mkdir()
+    pkg_models = tmp_path / "dbt_packages" / "some_pkg" / "models"
+    pkg_models.mkdir(parents=True)
+    (pkg_models / "ranked_orders.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT
+    order_id,
+    customer_id,
+    ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date) AS rn
+FROM {{ ref('stg_orders') }}
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    warnings = result["nondeterminism_warnings"]
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w["model_name"] == "ranked_orders"
+    assert "ROW_NUMBER" in w["pattern"].upper()
+    assert w.get("package") is True
+    assert w["override_path"] == "models/ranked_orders.sql"
+    # Package models must NOT appear in sql_records.
+    assert all(rec["name"] != "ranked_orders" for rec in result["sql_records"])
+
+
+def test_dbt_packages_hazard_renders_override_instruction(tmp_path: Path):
+    """Formatter output contains PACKAGE MODEL and the override path for package hazards."""
+    pkg_hazard = {
+        "file": "dbt_packages/shopify_source/models/stg_shopify__order.sql",
+        "pattern": "current_date",
+        "model_name": "stg_shopify__order",
+        "package": True,
+        "override_path": "models/stg_shopify__order.sql",
+    }
+    # Build a minimal ProjectMap with the hazard injected directly.
+    project = scan_project(tmp_path)
+    # Inject the package hazard into the project's date_hazards list.
+    project.date_hazards.append(pkg_hazard)
+
+    from signalpilot.gateway.gateway.dbt.formatters import render_full
+    rendered = render_full(project, max_per_section=40, include_columns=False)
+
+    assert "PACKAGE MODEL" in rendered
+    assert "models/stg_shopify__order.sql" in rendered

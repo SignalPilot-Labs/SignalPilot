@@ -23,6 +23,24 @@ Edit the model SQL directly. Replace `current_date`/`current_timestamp`/`now()` 
 
 Use the fact table with the most rows, or the one referenced in the task instruction.
 
+## Package Model Override
+
+If the flagged file is in `dbt_packages/` (marked "PACKAGE MODEL" in the warning):
+1. Read the full SQL from the package model file
+2. Create `models/<same_filename>.sql` — dbt prioritizes local models over package models
+3. Paste the entire package SQL into the new file and replace `current_date` with the data-driven endpoint
+4. Add `{{ config(materialized='table') }}` at the top
+
+Example: if `dbt_packages/shopify_source/models/stg_shopify__order.sql` uses `current_date`:
+```sql
+-- models/stg_shopify__order.sql  (local override — copy ENTIRE package SQL here)
+{{ config(materialized='table') }}
+-- Replace current_date with a data-driven endpoint:
+-- (SELECT MAX(order_date) FROM {{ ref('stg_orders') }})
+```
+
+Do NOT edit files inside `dbt_packages/` directly — `dbt deps` will overwrite your changes.
+
 ## Finding the Right Date
 
 Call `mcp__signalpilot__get_date_boundaries(connection_name="<id>")`.

@@ -59,10 +59,9 @@ anything else. This single call tells you:
 - every model defined in the project (complete, stub, missing, orphan)
 - the exact yml-declared column contract for every model that needs work
 - the topologically-sorted build order for actionable models
-- source tables, macros, packages
-- any parse errors in the yml files themselves
+- source tables, macros, packages, and any yml parse errors
 
-Read the output carefully. The work order at the bottom is your plan.
+The work order at the bottom is your plan.
 
 If the output contains a "WARNING: Models use current_date" section, fix every
 flagged file before writing new SQL:
@@ -70,11 +69,14 @@ flagged file before writing new SQL:
 2. Find the column and table marked "USE THIS" in the output
 3. Replace `current_date`/`current_timestamp`/`now()` with
    `(SELECT MAX(<column>) FROM {{ ref('<table>') }})` using values from step 2
-4. Run `dbt run --select <model_name>` to verify.
+4. If the file is marked "PACKAGE MODEL": read it, create models/<name>.sql,
+   paste the full SQL, replace current_date with the subquery from step 3,
+   add `{{ config(materialized='table') }}` at top.
+5. Run `dbt run --select <model_name>` to verify each fix.
 
 If the output contains a "WARNING: Pre-shipped models use ROW_NUMBER" section,
-fix each flagged file:
-1. Find every ROW_NUMBER()/RANK()/DENSE_RANK() OVER (...)
+fix each flagged file (project: edit in-place; package: create override as above):
+1. Find every ROW_NUMBER()/RANK()/DENSE_RANK() OVER(...)
 2. Run `explore_table` or `SELECT COUNT(*), COUNT(DISTINCT <col>)` to check
    if ORDER BY columns are unique within each partition
 3. If not unique, append the primary key to the ORDER BY

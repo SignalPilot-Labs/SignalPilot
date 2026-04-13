@@ -412,6 +412,100 @@ def extract_macros_from_file(path: Path, project_dir: Path) -> list[MacroInfo]:
     return out
 
 
+# ── dbt_packages/ hazard detection ───────────────────────────────────────────
+
+# Skip set for use inside dbt_packages/ traversal.
+# Keeps dbt_packages in the set (prevents recursing into nested package installs)
+# and reuses the rest of _SKIP_DIRS as-is.
+_PKG_SKIP_DIRS = _SKIP_DIRS  # same set — dbt_packages in it blocks nested installs
+
+
+def scan_dbt_packages(project_dir: Path) -> tuple[list[dict], list[dict]]:
+    """Walk dbt_packages/ and return (date_hazards, nondeterminism_warnings).
+
+    All .sql files inside dbt_packages/ are treated as COMPLETE without calling
+    classify_sql_file — they are authored third-party code, not benchmark stubs.
+    Results include ``package: True`` and ``override_path`` so the formatter can
+    instruct the agent to create a local override in models/.
+
+    Returns empty lists if dbt_packages/ does not exist (e.g. before dbt deps).
+    """
+    pkg_dir = project_dir / "dbt_packages"
+    if not pkg_dir.exists():
+        return [], []
+
+    date_hazards: list[dict] = []
+    nd_warnings: list[dict] = []
+
+    # Walk pkg_dir using an explicit stack to respect _PKG_SKIP_DIRS.
+    # We start from pkg_dir itself, not the project root, so the dbt_packages
+    # entry in _PKG_SKIP_DIRS only blocks *nested* installs inside packages.
+    stack: list[Path] = []
+    try:
+        for entry in pkg_dir.iterdir():
+            if entry.is_dir() and entry.name not in _PKG_SKIP_DIRS:
+                stack.append(entry)
+            elif entry.is_file() and entry.suffix.lower() == ".sql":
+                stack.append(entry)
+    except OSError:
+        return [], []
+
+    while stack:
+        current = stack.pop()
+        try:
+            if current.is_dir():
+                for entry in current.iterdir():
+                    if entry.is_dir():
+                        if entry.name not in _PKG_SKIP_DIRS:
+                            stack.append(entry)
+                    elif entry.suffix.lower() == ".sql":
+                        stack.append(entry)
+            elif current.suffix.lower() == ".sql":
+                _scan_pkg_sql_file(current, project_dir, date_hazards, nd_warnings)
+        except OSError:
+            continue
+
+    return date_hazards, nd_warnings
+
+
+def _scan_pkg_sql_file(
+    sql_path: Path,
+    project_dir: Path,
+    date_hazards: list[dict],
+    nd_warnings: list[dict],
+) -> None:
+    """Scan a single package .sql file for date hazards and non-determinism."""
+    try:
+        content = sql_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+
+    rel = _rel(sql_path, project_dir)
+    stem = sql_path.stem
+    override_path = f"models/{stem}.sql"
+
+    matched_patterns = list(dict.fromkeys(
+        m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)
+    ))
+    if matched_patterns:
+        date_hazards.append({
+            "file": rel,
+            "pattern": ", ".join(matched_patterns),
+            "model_name": stem,
+            "package": True,
+            "override_path": override_path,
+        })
+
+    if _RE_NONDETERMINISTIC_WINDOW.search(content):
+        nd_warnings.append({
+            "file": rel,
+            "model_name": stem,
+            "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
+            "package": True,
+            "override_path": override_path,
+        })
+
+
 # ── Top-level orchestration ──────────────────────────────────────────────────
 
 
@@ -496,6 +590,12 @@ def scan_filesystem(project_dir: Path) -> dict:
                     "model_name": sql_path.stem,
                     "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
                 })
+
+    # Walk dbt_packages/ for date hazards and non-determinism (read-only detection).
+    # Package models are not added to sql_records — they are third-party code.
+    pkg_date_hazards, pkg_nd_warnings = scan_dbt_packages(project_dir)
+    date_hazards.extend(pkg_date_hazards)
+    nondeterminism_warnings.extend(pkg_nd_warnings)
 
     # Walk macros/.
     macros: list[MacroInfo] = []

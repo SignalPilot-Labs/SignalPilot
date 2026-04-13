@@ -47,12 +47,21 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
     lines = [
         "## WARNING: Models use current_date (date spine hazard)",
         "These model files use current_date/current_timestamp which will produce incorrect",
-        "row counts when run after the source data's date range. Edit them directly —",
-        "replace current_date with a subquery using MAX(date_col) from the source table.",
+        "row counts when run after the source data's date range.",
         "Load the dbt-date-spines skill for the fix procedure.",
     ]
     for hazard in project.date_hazards:
-        lines.append(f"  - {hazard['file']} ({hazard['pattern']})")
+        if hazard.get("package"):
+            lines.append(
+                f"  - PACKAGE MODEL — copy to {hazard['override_path']} and fix there"
+                f" ({hazard['file']}, {hazard['pattern']})"
+            )
+        else:
+            lines.append(f"  - {hazard['file']} ({hazard['pattern']}) — edit directly")
+    lines.append(
+        "Action: edit project files in-place; for package files,"
+        " create a local override in models/ with the same filename."
+    )
     lines.append("")
     return lines
 
@@ -66,7 +75,17 @@ def _nondeterminism_lines(project: ProjectMap) -> list[str]:
         "ORDER BY may not be unique — add a tiebreaker (primary key) to each flagged file.",
     ]
     for warning in project.nondeterminism_warnings:
-        lines.append(f"  - {warning['file']}")
+        if warning.get("package"):
+            lines.append(
+                f"  - PACKAGE MODEL — copy to {warning['override_path']} and fix there"
+                f" ({warning['file']})"
+            )
+        else:
+            lines.append(f"  - {warning['file']} — edit directly")
+    lines.append(
+        "Action: edit project files in-place; for package files,"
+        " create a local override in models/ with the same filename."
+    )
     lines.append("")
     return lines
 

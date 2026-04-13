@@ -359,7 +359,7 @@ def run_dbt(project_dir: Path) -> tuple[bool, str]:
 
 
 # ── Evaluate ─────────────────────────────────────────────────
-from .evaluation.local_comparator import evaluate  # noqa: E402
+from .evaluation.comparator import evaluate  # noqa: E402
 
 
 # ── Main ─────────────────────────────────────────────────────

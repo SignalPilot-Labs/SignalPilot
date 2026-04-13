@@ -69,7 +69,7 @@ def _replace_date_patterns(sql: str, replacement_date: str) -> tuple[str, list[s
     # current_date returns "today", which is always 1 day after the last complete
     # day in the source data. Date spine macros treat end_date as exclusive, so
     # without +1 the spine would be 1 row short.
-    date_literal = f"('{replacement_date}'::date + INTERVAL '1 day')"
+    date_literal = f"('{replacement_date}'::date + INTERVAL '1 day')::date"
     found_patterns: set[str] = set()
 
     output_lines: list[str] = []

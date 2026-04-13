@@ -46,11 +46,22 @@ Scan `macros/` directory before writing any model. Call macros with `{{ macro_na
 ## 4. JOIN Type Selection
 
 - **DEFAULT: LEFT JOIN for all JOINs.** Start FROM the table that defines all output entities (all customers, all dates, all admins) and LEFT JOIN everything else to it. This is the correct choice for the vast majority of reporting models.
-- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. When considering INNER JOIN, call `compare_join_types` first:
+- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows. After writing any model where you chose INNER JOIN, call `compare_join_types` to verify:
   ```
   mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
   ```
+  If LEFT JOIN produces more rows than INNER JOIN, switch to LEFT JOIN unless the task explicitly requires filtering.
 - `LEFT JOIN + WHERE right.col IS NOT NULL` silently becomes INNER JOIN — avoid.
+
+Phrases that mean LEFT JOIN (keep all rows):
+- "enriched with", "augmented by", "combined with", "aggregates from"
+- "for each X" (all X, not just matched ones)
+- "daily/monthly/yearly summary" (all periods, not just active ones)
+- "reporting model", "analytics model", "dashboard model"
+
+Phrases that mean INNER JOIN (filter rows):
+- "only customers WITH orders", "exclude rows without", "where X exists"
+- "matching records only", "intersection of"
 
 ## 5. Pre-JOIN Cardinality Check
 
@@ -97,6 +108,10 @@ When joining to a lookup table, use source values directly unless the lookup pro
 - Do NOT use `COALESCE(numeric_col, 0)` in aggregates unless YML says "treat nulls as zero".
 - ID columns: check source type with `explore_table` — VARCHAR `_id` must stay VARCHAR (`'100063' != 100063`).
 - Do NOT add WHERE/HAVING filters that are not in the task description or YML. Table/column names like "actor_rating" do NOT mean you should filter `role='ACTOR'`. Only filter when the task says "exclude", "only", "where", or YML docs blocks specify a filter condition.
+- COALESCE(avg_col, 0) is WRONG for AVG/mean/rate/ratio/percent/pct columns on zero-activity days.
+  Leave them NULL. Only COALESCE COUNT and SUM columns to 0.
+  If a column name contains "avg", "average", "mean", "rate", "ratio", "percent", or "pct",
+  it MUST be NULL when there is no underlying data — COALESCE to 0 for these columns is ALWAYS WRONG.
 
 ## 11. dbt Syntax Essentials
 

@@ -63,6 +63,10 @@ from .dbt import (
 )
 from .dbt.date_spine_fixer import generate_date_spine_fixes
 from .dbt.inventory import scan_project as _scan_project
+from .dbt.nondeterminism_fixer import (
+    build_table_columns_from_schema,
+    generate_nondeterminism_fixes,
+)
 
 def _gateway_url() -> str:
     """Get the gateway API URL for internal MCP→REST calls."""
@@ -958,6 +962,152 @@ async def fix_date_spine_hazards(
 
     report_lines.append("")
     report_lines.append(f"Date used: {date_source}")
+
+    return "\n".join(report_lines)
+
+
+@mcp.tool()
+async def fix_nondeterminism_hazards(
+    project_dir: str,
+    connection_name: str,
+) -> str:
+    """
+    Auto-fix all non-deterministic window function hazards in a dbt project.
+
+    Finds ROW_NUMBER/RANK/DENSE_RANK OVER(...) clauses whose ORDER BY may not be
+    unique, then appends a tiebreaker column (first *_id column found in referenced
+    tables) to each ambiguous ORDER BY.
+
+    Creates local override files for package models; edits project models in-place.
+    If the DB connection is unavailable, skips all fixes and returns a warning
+    listing the affected models for manual review.
+
+    Args:
+        project_dir: Absolute path to the dbt project root.
+        connection_name: Name of a configured database connection (used to discover
+                         column names for tiebreaker selection).
+
+    Returns:
+        Markdown report listing every file fixed and a dbt run --select command.
+    """
+    from pathlib import Path as _Path
+
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
+    project_path = _Path(project_dir)
+    if not project_path.exists():
+        return f"Error: project directory does not exist: {project_dir}"
+
+    # Scan the project to get nd_warnings.
+    project = _scan_project(project_path)
+    nd_warnings = project.nondeterminism_warnings
+
+    if not nd_warnings:
+        return "No non-determinism hazards found — nothing to fix."
+
+    # Fetch schema to build table->columns map (graceful degradation if unavailable).
+    table_columns: dict[str, list[str]] = {}
+    schema_error: str = ""
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        schema_error = (
+            f"Connection '{connection_name}' not found (available: {available}). "
+            "Tiebreaker selection skipped — all patterns will need manual fixes."
+        )
+    else:
+        conn_str = get_connection_string(connection_name)
+        if not conn_str:
+            schema_error = "No credentials stored for this connection. Tiebreaker selection skipped."
+        else:
+            from .connectors.pool_manager import pool_manager
+            from .connectors.schema_cache import schema_cache
+
+            schema = schema_cache.get(connection_name)
+            if schema is None:
+                try:
+                    async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                        schema = await connector.get_schema()
+                    schema_cache.put(connection_name, schema)
+                except Exception as e:
+                    schema_error = f"Could not fetch schema: {e}. Tiebreaker selection skipped."
+                    schema = {}
+            table_columns = build_table_columns_from_schema(schema)
+
+    # Generate fixes (pure, no I/O).
+    try:
+        fixes = generate_nondeterminism_fixes(project_path, nd_warnings, table_columns)
+    except OSError as e:
+        return f"Error reading source files: {e}"
+
+    # Write files.
+    written: list[str] = []
+    skipped_files: list[str] = []
+    errors: list[str] = []
+
+    for fix in fixes:
+        if fix.already_overridden:
+            skipped_files.append(fix.original_path)
+            continue
+        if not fix.content:
+            # No content means nothing could be fixed (no tiebreaker, read error, etc.)
+            skipped_files.append(fix.original_path)
+            continue
+        if not fix.fixes_applied:
+            # Parsed OK but nothing needed changing.
+            skipped_files.append(fix.original_path)
+            continue
+        try:
+            fix.output_path.parent.mkdir(parents=True, exist_ok=True)
+            fix.output_path.write_text(fix.content, encoding="utf-8")
+            written.append(fix.output_path.name.removesuffix(".sql"))
+        except OSError as e:
+            errors.append(f"{fix.output_path}: {e}")
+
+    # Build markdown report.
+    total_fixed = len([f for f in fixes if f.fixes_applied and not f.already_overridden])
+    report_lines = [f"## Non-determinism hazards fixed ({total_fixed} files)", ""]
+
+    if schema_error:
+        report_lines.append(f"Warning: {schema_error}")
+        report_lines.append("")
+
+    item_num = 0
+    for fix in fixes:
+        if fix.already_overridden:
+            report_lines.append(f"  SKIPPED {fix.original_path} — override already exists")
+            continue
+
+        if not fix.fixes_applied and not fix.skipped_patterns:
+            continue
+
+        item_num += 1
+        if fix.fixes_applied:
+            action = "CREATED" if fix.is_package else "MODIFIED"
+            try:
+                out_rel = str(fix.output_path.relative_to(project_path))
+            except ValueError:
+                out_rel = str(fix.output_path)
+            source_note = f" (override of {fix.original_path})" if fix.is_package else " (edited in-place)"
+            report_lines.append(f"{item_num}. {action} {out_rel}{source_note}")
+            for applied in fix.fixes_applied:
+                report_lines.append(f"   Fixed: {applied}")
+
+        for skipped in fix.skipped_patterns:
+            report_lines.append(f"   SKIPPED: {skipped}")
+
+    if errors:
+        report_lines.append("")
+        report_lines.append("## Errors")
+        for err in errors:
+            report_lines.append(f"  - {err}")
+
+    if written:
+        model_list = " ".join(written)
+        report_lines.append("")
+        report_lines.append(f"Verify: dbt run --select {model_list}")
 
     return "\n".join(report_lines)
 

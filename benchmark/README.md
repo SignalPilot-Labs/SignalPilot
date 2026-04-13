@@ -215,6 +215,9 @@ benchmark/
 │   ├── sql_snowflake_system.md
 │   └── sql_lite_system.md
 │
+├── validate_bench.py      # structural validation (per-suite, 6 checks)
+├── validate_bench_e2e.py  # end-to-end validation (all suites, 30 checks)
+│
 ├── legacy/                # older Spider2-SQLite flow (not imported by active runners)
 └── docs/                  # supplementary notes
 ```
@@ -262,39 +265,57 @@ Gold results are CSV files in the evaluation suite. The evaluator compares the a
 
 ## Validation
 
-Before running the full benchmark, use the validation script to verify that all infrastructure components are working correctly for a given suite.
+Two validation scripts verify the benchmark infrastructure before running real tasks.
 
-### Running Validation
+### Structural Validation (per-suite)
 
 ```bash
-# Validate spider2-lite (fastest — no Snowflake required)
 python -m benchmark.validate_bench --suite spider2-lite
-
-# Validate spider2-snowflake (requires .env.snowflake)
 python -m benchmark.validate_bench --suite spider2-snowflake
-
-# Validate spider2-dbt (requires spider2-dbt data directory)
 python -m benchmark.validate_bench --suite spider2-dbt
 ```
 
-Exits 0 if all checks pass or skip, 1 if any check fails.
+Runs 6 structural checks per suite: workdir creation, MCP config, skills discovery, system prompt, connection registration, and gold leak prevention. Exits 0 if all pass/skip, 1 if any fail.
 
-### What the 6 Checks Verify
+### End-to-End Validation (all suites at once)
+
+```bash
+python -m benchmark.validate_bench_e2e
+python -m benchmark.validate_bench_e2e --verbose
+```
+
+Runs 5 synthetic tasks across all 3 suites and all 4 database backends (30 total checks):
+
+| Task | Suite | DB Backend | What it tests |
+|------|-------|------------|---------------|
+| 1 | spider2-snowflake | Snowflake | OAuth connection via `.env.snowflake` |
+| 2 | spider2-dbt | DuckDB | Local DuckDB file + dbt skills + dbt system prompt |
+| 3 | spider2-lite | SQLite | Local SQLite file + SQL skills |
+| 4 | spider2-lite | Snowflake | Snowflake connection via lite suite |
+| 5 | spider2-lite | BigQuery | BigQuery via `service_account.json` |
+
+Each task runs 6 checks:
 
 | # | Check | What it verifies |
 |---|-------|-----------------|
-| 1 | **workdir_creation** | Creates a synthetic task workdir; verifies `.mcp.json`, `.git`, and skills are in place |
-| 2 | **mcp_config** | Loads `mcp_test_config.json`; verifies `signalpilot` key with `command` and `args` |
-| 3 | **skills_discoverable** | Verifies every skill in `config.skills` has a `SKILL.md` under `benchmark/skills/` |
-| 4 | **system_prompt** | SQL suites: verifies `system_general.md` exists and has no hardcoded DB names. DBT: verifies `dbt_local_system.md` mentions dbt |
-| 5 | **connection_registration** | Registers a test connection per backend type, verifies it appears in the gateway store, then deletes it. Skips if credential files are absent |
-| 6 | **no_gold_leak** | Prepares a workdir and checks that no gold filenames appear in it. Skipped if spider2 data is not downloaded |
+| 1 | **workdir_setup** | Directory created with `.mcp.json`, `.git/`, correct structure |
+| 2 | **skills_copied** | Suite-specific `SKILL.md` files present in `.claude/skills/` |
+| 3 | **system_prompt** | Correct prompt file exists; template variables resolve cleanly |
+| 4 | **connection_registered** | DB connection in gateway store with correct `db_type` |
+| 5 | **no_bloat** | No leftover `e2e_validate_*` connections from prior tasks |
+| 6 | **no_gold_leak** | No gold-related files in the workdir |
 
-### Graceful Handling
+Snowflake/BigQuery checks SKIP (not FAIL) if credential files are absent. All cleanup (workdirs, connections, temp DB files) runs in `finally` blocks.
 
-- Checks that need spider2 data dirs (`check_1`, `check_6`) emit `SKIP` (not `FAIL`) if the data has not been downloaded.
-- Checks that need credential files (`check_5`) emit `SKIP` if `.env.snowflake` or `service_account.json` is absent.
-- All cleanup (workdirs, registered connections) runs in `finally` blocks.
+### Quick Verification Sequence
+
+```bash
+# Run both validations to confirm everything works:
+python -m benchmark.validate_bench --suite spider2-dbt
+python -m benchmark.validate_bench --suite spider2-snowflake
+python -m benchmark.validate_bench --suite spider2-lite
+python -m benchmark.validate_bench_e2e
+```
 
 ## System Prompts
 

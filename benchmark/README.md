@@ -225,7 +225,7 @@ Skills are suite-specific and copied to `.claude/skills/` in each task's workdir
 |-------|--------------|
 | spider2-dbt | dbt-workflow, dbt-verification, dbt-debugging, duckdb-sql |
 | spider2-snowflake | sql-workflow, snowflake-sql |
-| spider2-lite | sql-workflow, snowflake-sql, bigquery-sql |
+| spider2-lite | sql-workflow, snowflake-sql, bigquery-sql, sqlite-sql |
 
 Add new skills by creating `benchmark/skills/<name>/SKILL.md` with frontmatter:
 
@@ -251,6 +251,55 @@ python -m benchmark.setup_dbt --build-gold       # build missing gold DBs
 ### Spider2-Snowflake / Lite Gold
 
 Gold results are CSV files in the evaluation suite. The evaluator compares the agent's `result.csv` against gold CSVs using the same vector-matching algorithm as the dbt evaluator.
+
+## Validation
+
+Before running the full benchmark, use the validation script to verify that all infrastructure components are working correctly for a given suite.
+
+### Running Validation
+
+```bash
+# Validate spider2-lite (fastest — no Snowflake required)
+python -m benchmark.validate_bench --suite spider2-lite
+
+# Validate spider2-snowflake (requires .env.snowflake)
+python -m benchmark.validate_bench --suite spider2-snowflake
+
+# Validate spider2-dbt (requires spider2-dbt data directory)
+python -m benchmark.validate_bench --suite spider2-dbt
+```
+
+Exits 0 if all checks pass or skip, 1 if any check fails.
+
+### What the 6 Checks Verify
+
+| # | Check | What it verifies |
+|---|-------|-----------------|
+| 1 | **workdir_creation** | Creates a synthetic task workdir; verifies `.mcp.json`, `.git`, and skills are in place |
+| 2 | **mcp_config** | Loads `mcp_test_config.json`; verifies `signalpilot` key with `command` and `args` |
+| 3 | **skills_discoverable** | Verifies every skill in `config.skills` has a `SKILL.md` under `benchmark/skills/` |
+| 4 | **system_prompt** | SQL suites: verifies `system_general.md` exists and has no hardcoded DB names. DBT: verifies `dbt_local_system.md` mentions dbt |
+| 5 | **connection_registration** | Registers a test connection per backend type, verifies it appears in the gateway store, then deletes it. Skips if credential files are absent |
+| 6 | **no_gold_leak** | Prepares a workdir and checks that no gold filenames appear in it. Skipped if spider2 data is not downloaded |
+
+### Graceful Handling
+
+- Checks that need spider2 data dirs (`check_1`, `check_6`) emit `SKIP` (not `FAIL`) if the data has not been downloaded.
+- Checks that need credential files (`check_5`) emit `SKIP` if `.env.snowflake` or `service_account.json` is absent.
+- All cleanup (workdirs, registered connections) runs in `finally` blocks.
+
+## System Prompts
+
+### Generalized System Prompt (`prompts/system_general.md`)
+
+SQL suites (spider2-snowflake, spider2-lite) receive a generalized system prompt injected via the Claude Agent SDK. The prompt:
+
+- Describes all SignalPilot MCP tools generically (no hardcoded database names)
+- Uses template variables `${work_dir}`, `${instance_id}`, `${connection_name}` filled at runtime
+- Lists dbt tools as conditionally available
+- Keeps the agent focused: explore schema → write query → verify → save `result.csv`
+
+The dbt suite continues to use its own `prompts/dbt_local_system.md` (unchanged).
 
 ## Environment Variables
 

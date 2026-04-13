@@ -76,7 +76,7 @@ def get_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
             eval_jsonl=data_dir / "evaluation_suite" / "gold" / "spider2lite_eval.jsonl",
             gold_dir=data_dir / "evaluation_suite" / "gold",
             work_dir=SQL_WORK_DIR / "lite",
-            skills=["sql-workflow", "snowflake-sql", "bigquery-sql"],
+            skills=["sql-workflow", "snowflake-sql", "bigquery-sql", "sqlite-sql"],
         )
 
     raise ValueError(f"Unknown suite: {suite}")

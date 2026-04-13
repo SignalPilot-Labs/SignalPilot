@@ -26,7 +26,7 @@ from ..core.mcp import (
     register_snowflake_connection,
     register_sqlite_connection,
 )
-from ..core.paths import ensure_local_bin_on_path
+from ..core.paths import PROMPTS_DIR, ensure_local_bin_on_path
 from ..core.suite import BenchmarkSuite, DBBackend, SuiteConfig, get_suite_config
 from ..core.tasks import load_task_for_suite
 from ..core.workdir import prepare_sql_workdir, write_sql_claude_md
@@ -34,9 +34,11 @@ from ..evaluation.sql_comparator import evaluate_sql
 
 ensure_local_bin_on_path()
 
+_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "system_general.md").read_text()
+
 _SUITE_SKILL_NAMES: dict[BenchmarkSuite, tuple[str, ...]] = {
     BenchmarkSuite.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),
-    BenchmarkSuite.LITE: ("sql-workflow", "snowflake-sql", "bigquery-sql"),
+    BenchmarkSuite.LITE: ("sql-workflow", "snowflake-sql", "bigquery-sql", "sqlite-sql"),
 }
 
 
@@ -111,6 +113,13 @@ async def _run_agent(
     )
     log(f"Prompt length: {len(prompt)} chars")
 
+    system_prompt = (
+        _SYSTEM_PROMPT_TEMPLATE
+        .replace("${work_dir}", str(work_dir))
+        .replace("${instance_id}", instance_id)
+        .replace("${connection_name}", connection_name)
+    )
+
     skill_names = _SUITE_SKILL_NAMES.get(suite)
 
     result = await run_sdk_agent(
@@ -121,6 +130,7 @@ async def _run_agent(
         timeout=900,
         label="sql-agent",
         skill_names=skill_names,
+        system_prompt=system_prompt,
     )
 
     transcript_path = work_dir / "agent_output.json"

@@ -24,6 +24,28 @@ Common patterns to fix:
 
 Do NOT skip this step. Pre-existing models are NOT read-only — you must edit them when they contain date functions that reference the current runtime date.
 
+## 0b. Non-Deterministic Ordering -- Fix ROW_NUMBER Tiebreakers
+
+The `dbt_project_map` tool flags `ROW_NUMBER() OVER (ORDER BY ...)` calls
+where the ORDER BY does not uniquely identify rows within the partition.
+This produces different surrogate keys depending on execution environment,
+thread count, and DuckDB version.
+
+For each flagged file:
+1. Identify the PARTITION BY columns (the grouping context)
+2. Identify what makes each row unique WITHIN that partition -- check the
+   source table's primary key or unique columns via `explore_table`
+3. Add those columns to the ORDER BY as tiebreakers
+
+Common fix patterns:
+- `ROW_NUMBER() OVER (ORDER BY patient_id)` where rows have an encounter_id
+  -> `ROW_NUMBER() OVER (ORDER BY patient_id, encounter_id)`
+- `ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at)` where
+  multiple events share the same timestamp
+  -> add the event's primary key: `ORDER BY created_at, event_id`
+- `ROW_NUMBER() OVER (ORDER BY NULL)` or missing ORDER BY
+  -> find the natural key of the table and use it as the full ORDER BY
+
 ## 1. Output Shape Inference — Read YML description Before Writing SQL
 
 Extract from `description:` field:

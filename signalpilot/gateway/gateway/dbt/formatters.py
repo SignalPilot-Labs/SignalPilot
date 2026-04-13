@@ -129,6 +129,25 @@ def render_full(
         lines.append("  3. If the file uses `greatest(max_date, current_date)`, remove the greatest() and keep only max_date")
         lines.append("Do NOT skip this — pre-existing models are NOT read-only. Edit them directly.")
 
+    if project.nondeterministic_warnings:
+        lines.append("")
+        lines.append(f"## WARNING: Non-deterministic ROW_NUMBER detected ({len(project.nondeterministic_warnings)} hits)")
+        lines.append("")
+        lines.append("These files use ROW_NUMBER() with an ORDER BY that does not uniquely identify rows.")
+        lines.append("This produces different surrogate keys across environments. ADD a tiebreaker column.")
+        lines.append("")
+        for w in project.nondeterministic_warnings[:15]:
+            over_parts: list[str] = []
+            if w.get("partition_by"):
+                over_parts.append(f"PARTITION BY {w['partition_by']}")
+            if w.get("order_by"):
+                over_parts.append(f"ORDER BY {w['order_by']}")
+            over_display = " ".join(over_parts) if over_parts else "(no ORDER BY)"
+            lines.append(f"  - {w['file']}:{w['line']} — ROW_NUMBER() OVER ({over_display})")
+            lines.append("    -> Add a secondary sort column that makes each row unique within the partition")
+        if len(project.nondeterministic_warnings) > 15:
+            lines.append(f"  (+{len(project.nondeterministic_warnings) - 15} more)")
+
     lines.append("")
 
     # Models by directory

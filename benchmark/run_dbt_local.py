@@ -77,8 +77,12 @@ def log(msg: str, level: str = "INFO"):
 
 def _force_rmtree(path: Path):
     def on_error(func, fpath, exc_info):
-        os.chmod(fpath, stat.S_IWRITE)
-        func(fpath)
+        os.chmod(fpath, stat.S_IRWXU)
+        if func is os.open:
+            # rmtree retries open() on dirs — just recurse after chmod
+            shutil.rmtree(fpath, onerror=on_error)
+        else:
+            func(fpath)
     shutil.rmtree(path, onerror=on_error)
 
 

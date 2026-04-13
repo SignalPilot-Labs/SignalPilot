@@ -41,6 +41,7 @@ def scan_project(project_dir: Path | str) -> ProjectMap:
         packages=raw["packages"],
         parse_errors=raw["parse_errors"],
         current_date_warnings=raw["current_date_warnings"],
+        nondeterministic_warnings=raw["nondeterministic_warnings"],
         scan_time_ms=raw["scan_ms"],
     )
 

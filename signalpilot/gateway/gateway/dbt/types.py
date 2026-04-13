@@ -130,6 +130,9 @@ class ProjectMap:
     # Each dict has keys: file (str), line (int), match (str).
     # Heuristic only — does not handle all SQL string literal edge cases.
     current_date_warnings: list[dict] = field(default_factory=list)
+    # Each dict has keys: file (str), line (int), match (str), partition_by (str|None), order_by (str|None).
+    # Flags ROW_NUMBER() OVER (...) calls where ORDER BY does not uniquely identify rows.
+    nondeterministic_warnings: list[dict] = field(default_factory=list)
     scan_time_ms: float = 0.0
 
     # Counts (cheap to access in formatters)

@@ -75,6 +75,16 @@ Do not proceed to Step 1 until every flagged file is fixed. These are NOT
 read-only — they are project files you must edit. Skipping this step guarantees
 wrong row counts in downstream models.
 
+**CRITICAL -- Non-deterministic ROW_NUMBER check**: if the output contains
+"Non-deterministic ROW_NUMBER detected", you MUST fix every flagged file
+before Step 1. For each flagged file:
+1. Open the .sql file with Read
+2. Find the ROW_NUMBER() OVER (...) call
+3. Add a tiebreaker column to the ORDER BY that makes each row unique within
+   its PARTITION BY. Good tiebreakers: a unique ID column, a timestamp, or
+   multiple columns that together form a composite key.
+Do not proceed to Step 1 until every flagged file is fixed.
+
 Cross-check the result against the Task instruction above — if the task
 mentions a model or table that does NOT appear in the project map, the task
 wants you to create it from scratch. Add it to your build list.

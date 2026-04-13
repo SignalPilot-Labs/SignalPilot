@@ -242,7 +242,7 @@ Skills are suite-specific and copied to `.claude/skills/` in each task's workdir
 
 | Suite | Skills Loaded |
 |-------|--------------|
-| spider2-dbt | dbt-workflow, dbt-verification, dbt-debugging, duckdb-sql |
+| spider2-dbt | dbt-workflow, dbt-verification, dbt-debugging, dbt-date-spines, duckdb-sql |
 | spider2-snowflake | sql-workflow, snowflake-sql |
 | spider2-lite | sql-workflow, snowflake-sql, bigquery-sql, sqlite-sql |
 

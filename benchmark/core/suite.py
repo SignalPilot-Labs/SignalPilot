@@ -52,7 +52,7 @@ def get_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
             eval_jsonl=EVAL_JSONL,
             gold_dir=GOLD_DIR,
             work_dir=WORK_DIR,
-            skills=["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql"],
+            skills=["dbt-workflow", "dbt-verification", "dbt-debugging", "dbt-date-spines", "duckdb-sql"],
         )
 
     if suite == BenchmarkSuite.SNOWFLAKE:

@@ -1,0 +1,270 @@
+"""Spider2 SQL benchmark runner — handles spider2-snowflake and spider2-lite suites.
+
+Mirrors the structure of runners/direct.py but without dbt dependencies.
+The agent writes its result as result.csv and result.sql in the workdir.
+
+Usage:
+    python -m benchmark.run_direct --suite spider2-snowflake sf_tpch001
+    python -m benchmark.run_direct --suite spider2-lite lite_sqlite001
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import time
+from pathlib import Path
+
+from ..agent.sdk_runner import run_sdk_agent
+from ..agent.sql_prompts import build_sql_agent_prompt
+from ..core.logging import log, log_separator
+from ..core.mcp import (
+    delete_local_connection,
+    register_bigquery_connection,
+    register_snowflake_connection,
+    register_sqlite_connection,
+)
+from ..core.paths import ensure_local_bin_on_path
+from ..core.suite import BenchmarkSuite, DBBackend, SuiteConfig, get_suite_config
+from ..core.tasks import load_task_for_suite
+from ..core.workdir import prepare_sql_workdir, write_sql_claude_md
+from ..evaluation.sql_comparator import evaluate_sql
+
+ensure_local_bin_on_path()
+
+_SUITE_SKILL_NAMES: dict[BenchmarkSuite, tuple[str, ...]] = {
+    BenchmarkSuite.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),
+    BenchmarkSuite.LITE: ("sql-workflow", "snowflake-sql", "bigquery-sql"),
+}
+
+
+def _determine_backend(suite: BenchmarkSuite, task: dict) -> DBBackend:
+    """Determine the DB backend for a task."""
+    if suite == BenchmarkSuite.SNOWFLAKE:
+        return DBBackend.SNOWFLAKE
+
+    task_type = task.get("type", "sqlite")
+    mapping: dict[str, DBBackend] = {
+        "sqlite": DBBackend.SQLITE,
+        "snowflake": DBBackend.SNOWFLAKE,
+        "bigquery": DBBackend.BIGQUERY,
+    }
+    backend = mapping.get(task_type)
+    if backend is None:
+        raise ValueError(f"Unknown task type '{task_type}' — expected sqlite/snowflake/bigquery")
+    return backend
+
+
+def _register_connection(
+    instance_id: str,
+    backend: DBBackend,
+    task: dict,
+    work_dir: Path,
+    config: SuiteConfig,
+) -> bool:
+    """Register the appropriate DB connection for the task."""
+    if backend == DBBackend.SNOWFLAKE:
+        database: str = task.get("db", task.get("database", ""))
+        schema: str = task.get("schema", task.get("schema_name", "PUBLIC"))
+        if not database:
+            log(f"Task '{instance_id}' missing 'db'/'database' field for Snowflake", "WARN")
+        return register_snowflake_connection(instance_id, database, schema)
+
+    if backend == DBBackend.SQLITE:
+        db_id: str = task.get("db_id", "")
+        db_path = str(work_dir / f"{db_id}.sqlite") if db_id else str(work_dir)
+        return register_sqlite_connection(instance_id, db_path)
+
+    if backend == DBBackend.BIGQUERY:
+        project: str = task.get("project_id", task.get("project", ""))
+        dataset: str = task.get("dataset", task.get("schema", ""))
+        if not project:
+            log(f"Task '{instance_id}' missing 'project_id'/'project' field for BigQuery", "WARN")
+        return register_bigquery_connection(instance_id, project, dataset)
+
+    log(f"Unsupported backend '{backend}' — cannot register connection", "ERROR")
+    return False
+
+
+async def _run_agent(
+    instance_id: str,
+    instruction: str,
+    work_dir: Path,
+    db_backend: DBBackend,
+    connection_name: str,
+    model: str,
+    max_turns: int,
+    suite: BenchmarkSuite,
+) -> bool:
+    """Run the SQL agent for this task."""
+    log_separator(f"AGENT  model={model}  max_turns={max_turns}  instance={instance_id}")
+
+    prompt = build_sql_agent_prompt(
+        instance_id=instance_id,
+        instruction=instruction,
+        work_dir=work_dir,
+        db_backend=db_backend,
+        connection_name=connection_name,
+        max_turns=max_turns,
+    )
+    log(f"Prompt length: {len(prompt)} chars")
+
+    skill_names = _SUITE_SKILL_NAMES.get(suite)
+
+    result = await run_sdk_agent(
+        prompt=prompt,
+        work_dir=work_dir,
+        model=model,
+        max_turns=max_turns,
+        timeout=900,
+        label="sql-agent",
+        skill_names=skill_names,
+    )
+
+    transcript_path = work_dir / "agent_output.json"
+    transcript_path.write_text(json.dumps({
+        "tool_calls": result["tool_calls"],
+        "messages": result["messages"],
+        "turns": result["turns"],
+    }))
+
+    return result["success"]
+
+
+def main(suite: BenchmarkSuite) -> None:
+    """Entry point for SQL runner, called from run_direct.py with suite routing."""
+    parser = argparse.ArgumentParser(
+        description=f"Run a {suite.value} task directly using Claude Agent SDK + MCP"
+    )
+    parser.add_argument("instance_id", help="Task instance ID")
+    parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model to use")
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=100,
+        help="Safety cap on agent turns. Default 100.",
+    )
+    parser.add_argument("--skip-agent", action="store_true", help="Skip agent, only evaluate existing results")
+    args = parser.parse_args()
+
+    instance_id: str = args.instance_id
+    model: str = args.model
+    max_turns: int = args.max_turns
+
+    log_separator(f"{suite.value} Direct Benchmark: {instance_id}")
+    log(f"Model:     {model}")
+    log(f"Max turns: {max_turns}")
+
+    # ── Load suite config ──────────────────────────────────────────────────────
+    config = get_suite_config(suite)
+
+    # ── Load task ──────────────────────────────────────────────────────────────
+    t0 = time.monotonic()
+    task = load_task_for_suite(instance_id, config)
+    instruction: str = task["instruction"]
+    log(f"Task loaded in {time.monotonic()-t0:.2f}s")
+    log(f"Instruction: {instruction}")
+
+    # ── Determine DB backend ───────────────────────────────────────────────────
+    backend = _determine_backend(suite, task)
+    log(f"DB backend: {backend.value}")
+
+    work_dir = config.work_dir / instance_id
+
+    if not args.skip_agent:
+        # ── Prepare workdir ────────────────────────────────────────────────────
+        t0 = time.monotonic()
+        log_separator("Step 1: Prepare SQL workdir")
+        work_dir = prepare_sql_workdir(instance_id, config, task)
+        log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
+
+        # ── Write CLAUDE.md ────────────────────────────────────────────────────
+        t0 = time.monotonic()
+        log_separator("Step 2: Write CLAUDE.md")
+        write_sql_claude_md(work_dir, instance_id, instruction, backend, connection_name=instance_id)
+        log(f"CLAUDE.md written in {time.monotonic()-t0:.2f}s")
+
+        # ── Register DB connection ─────────────────────────────────────────────
+        t0 = time.monotonic()
+        log_separator("Step 3: Register DB connection")
+        conn_ok = _register_connection(instance_id, backend, task, work_dir, config)
+        if not conn_ok:
+            log(f"Connection registration failed for '{instance_id}' ({backend.value})", "WARN")
+        log(f"Connection registration in {time.monotonic()-t0:.2f}s")
+
+        # ── Run agent ──────────────────────────────────────────────────────────
+        t0 = time.monotonic()
+        log_separator("Step 4: Run Claude SQL agent")
+        try:
+            agent_ok = asyncio.run(_run_agent(
+                instance_id=instance_id,
+                instruction=instruction,
+                work_dir=work_dir,
+                db_backend=backend,
+                connection_name=instance_id,
+                model=model,
+                max_turns=max_turns,
+                suite=suite,
+            ))
+        except Exception as e:
+            log(f"Agent SDK error: {e}", "ERROR")
+            agent_ok = False
+        elapsed = time.monotonic() - t0
+        log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
+
+        # ── Fail fast if result.csv is missing ────────────────────────────────
+        result_csv = work_dir / "result.csv"
+        if not result_csv.exists():
+            log(
+                f"result.csv not found in {work_dir} — agent did not save output. "
+                "This task cannot be evaluated.",
+                "ERROR",
+            )
+            # Delete connection before exiting
+            if delete_local_connection(instance_id):
+                log(f"Cleaned up connection '{instance_id}'")
+            sys.exit(1)
+
+        # ── Delete connection (cleanup, prevent cross-task leakage) ───────────
+        if delete_local_connection(instance_id):
+            log(f"Released MCP connection '{instance_id}' before evaluation")
+
+    # ── Evaluate ───────────────────────────────────────────────────────────────
+    t0 = time.monotonic()
+    log_separator("Step 5: Evaluate against gold standard")
+
+    if not work_dir.exists():
+        log(f"Work dir not found: {work_dir}", "ERROR")
+        log("Run without --skip-agent first to generate results.")
+        sys.exit(1)
+
+    result_csv = work_dir / "result.csv"
+    if not result_csv.exists():
+        log(
+            f"result.csv not found in {work_dir}. "
+            "Run without --skip-agent to generate results.",
+            "ERROR",
+        )
+        sys.exit(1)
+
+    try:
+        passed, details = evaluate_sql(work_dir, instance_id, config)
+    except Exception as e:
+        import traceback
+        log(f"Evaluation error: {e}", "ERROR")
+        traceback.print_exc()
+        log_separator("RESULT: ERROR")
+        sys.exit(1)
+
+    log(f"Evaluation finished in {time.monotonic()-t0:.2f}s")
+    print(details)
+    log_separator(f"RESULT: {'PASS' if passed else 'FAIL'}")
+
+    sys.exit(0 if passed else 1)
+
+
+if __name__ == "__main__":
+    # This file should not be run directly; use run_direct.py with --suite
+    raise SystemExit("Use: python -m benchmark.run_direct --suite spider2-snowflake <instance_id>")

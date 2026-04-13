@@ -21,7 +21,10 @@ from claude_agent_sdk._errors import ClaudeSDKError, ProcessError
 from ..core.logging import log, log_separator
 from ..core.mcp import load_mcp_servers
 
-SKILL_TOOL_NAMES = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
+DEFAULT_SKILL_NAMES = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
+
+# Back-compat alias — existing callers that import SKILL_TOOL_NAMES still work.
+SKILL_TOOL_NAMES = DEFAULT_SKILL_NAMES
 
 
 async def run_sdk_agent(
@@ -32,8 +35,17 @@ async def run_sdk_agent(
     timeout: int,
     label: str = "agent",
     max_retries: int = 3,
+    skill_names: tuple[str, ...] | None = None,
 ) -> dict:
-    """Run the Claude Agent SDK with retry on 529/overload errors."""
+    """Run the Claude Agent SDK with retry on 529/overload errors.
+
+    skill_names controls which tool names are logged as skill invocations.
+    It does NOT affect which skills the agent can access — that is determined
+    by which SKILL.md files exist in .claude/skills/ inside work_dir.
+    Defaults to DEFAULT_SKILL_NAMES (dbt skill set) when None.
+    """
+    active_skill_names = skill_names if skill_names is not None else DEFAULT_SKILL_NAMES
+
     options = ClaudeAgentOptions(
         model=model,
         max_turns=max_turns,
@@ -70,7 +82,7 @@ async def run_sdk_agent(
                             log(f"[tool_use] {block.name}")
                             log(f"  input: {truncated}")
                             tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count})
-                            if block.name in SKILL_TOOL_NAMES:
+                            if block.name in active_skill_names:
                                 log(f"[skill] Agent invoked /{block.name}")
                             elif block.name == "Skill" and isinstance(block.input, dict):
                                 skill_name = block.input.get("skill", "unknown")

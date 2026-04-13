@@ -125,3 +125,12 @@ FORMAT('%s-%d', str_col, int_col)        -- printf-style formatting
 - Do NOT forget to filter partitioned tables — costs money
 - Do NOT use `COUNT(DISTINCT ...)` on huge tables — use `APPROX_COUNT_DISTINCT`
 - Always backtick-quote table names with dots in them
+
+## 11. Benchmark Patterns
+
+- **STRING_AGG**: Use `STRING_AGG(col, ',' ORDER BY col)` for string aggregation (not GROUP_CONCAT).
+- **SAFE_DIVIDE / SAFE_CAST**: Use to avoid division-by-zero errors and cast failures.
+- **IF / IIF**: BigQuery supports `IF(condition, true_val, false_val)` — often cleaner than CASE WHEN for simple conditions.
+- **GENERATE_DATE_ARRAY / GENERATE_TIMESTAMP_ARRAY**: For date spine generation.
+- **Numeric precision**: BigQuery's FLOAT64 can lose precision. Use NUMERIC type or ROUND() only when the question asks for it.
+- **INFORMATION_SCHEMA**: `SELECT * FROM dataset.INFORMATION_SCHEMA.COLUMNS` for metadata queries — useful when schema_overview is insufficient.

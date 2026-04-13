@@ -169,3 +169,10 @@ SELECT printf('%s-%s', category, subcategory) FROM t;
 - `IN (SELECT ...)` is generally faster than correlated subqueries in SQLite
 - Do NOT use `= NULL` — use `IS NULL`
 - `||` propagates NULL — wrap with `COALESCE` when concatenating nullable columns
+
+## 12. Benchmark Patterns
+
+- **Window functions**: SQLite supports ROW_NUMBER, RANK, DENSE_RANK, NTILE, LAG, LEAD since 3.25. No QUALIFY — use subquery wrapping.
+- **HAVING without GROUP BY**: Not valid in SQLite — always pair HAVING with GROUP BY.
+- **Recursive CTEs**: `WITH RECURSIVE` works in SQLite — useful for hierarchical data (org charts, category trees).
+- **No LIMIT in subqueries with IN**: `WHERE col IN (SELECT ... LIMIT N)` is not supported — use a CTE instead.

@@ -1,0 +1,3 @@
+{"instance_id": "test_lite_sqlite001", "evaluation": {"parameters": {"condition_cols": [], "ignore_orders": [false]}}}
+{"instance_id": "test_lite_sf001", "evaluation": {"parameters": {"condition_cols": [], "ignore_orders": [false]}}}
+{"instance_id": "test_lite_bq001", "evaluation": {"parameters": {"condition_cols": [], "ignore_orders": [false]}}}

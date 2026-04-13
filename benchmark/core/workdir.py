@@ -26,9 +26,13 @@ def force_rmtree(path: Path) -> None:
     shutil.rmtree(path, onerror=on_error)
 
 
-def prepare_workdir(instance_id: str) -> Path:
-    """Copy the task's dbt project into a fresh working directory under _dbt_workdir/."""
-    src = EXAMPLES_DIR / instance_id
+def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
+    """Copy the task's dbt project into a fresh working directory under _dbt_workdir/.
+
+    When data_dir is provided, copies from data_dir/instance_id instead of
+    EXAMPLES_DIR/instance_id.
+    """
+    src = (data_dir if data_dir is not None else EXAMPLES_DIR) / instance_id
     dst = WORK_DIR / instance_id
     if dst.exists():
         force_rmtree(dst)
@@ -107,7 +111,12 @@ Use SignalPilot MCP tools to explore and query the database:
     log(f"Wrote CLAUDE.md to {work_dir}")
 
 
-def prepare_sql_workdir(instance_id: str, config: "SuiteConfig", task: dict) -> Path:
+def prepare_sql_workdir(
+    instance_id: str,
+    config: "SuiteConfig",
+    task: dict,
+    sqlite_db_dir: Path | None = None,
+) -> Path:
     """Create a fresh working directory for a SQL-suite task (no dbt project copy).
 
     - Creates config.work_dir / instance_id
@@ -157,7 +166,10 @@ def prepare_sql_workdir(instance_id: str, config: "SuiteConfig", task: dict) -> 
     if config.suite == BenchmarkSuite.LITE and task.get("type") == "sqlite":
         db_id: str = task.get("db_id", "")
         if db_id:
-            sqlite_db_src = SPIDER2_LITE_DIR / "resource" / "databases" / "sqlite" / f"{db_id}.sqlite"
+            if sqlite_db_dir is not None:
+                sqlite_db_src = sqlite_db_dir / f"{db_id}.sqlite"
+            else:
+                sqlite_db_src = SPIDER2_LITE_DIR / "resource" / "databases" / "sqlite" / f"{db_id}.sqlite"
             if sqlite_db_src.exists():
                 shutil.copy2(sqlite_db_src, dst / f"{db_id}.sqlite")
                 log(f"Copied SQLite DB: {sqlite_db_src} -> {dst / f'{db_id}.sqlite'}")

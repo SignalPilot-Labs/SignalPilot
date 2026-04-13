@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..core.logging import log
 from ..core.paths import GOLD_DIR
-from ..core.tasks import load_eval_config
+from ..core.tasks import load_eval_config, load_eval_config_for_suite
 from .db_utils import find_result_db
+
+if TYPE_CHECKING:
+    from ..core.suite import SuiteConfig
 
 
 def _official_compare(pred_df, gold_df, cols, ignore_order):
@@ -78,18 +82,25 @@ def _official_compare(pred_df, gold_df, cols, ignore_order):
     return True, None
 
 
-def evaluate(project_dir: Path, instance_id: str) -> tuple[bool, str]:
+def evaluate(
+    project_dir: Path, instance_id: str, config: "SuiteConfig | None" = None
+) -> tuple[bool, str]:
     """Evaluate the result against gold standard by comparing DuckDB table contents."""
     import duckdb
 
-    eval_config = load_eval_config(instance_id)
+    if config is not None:
+        eval_config = load_eval_config_for_suite(instance_id, config)
+    else:
+        eval_config = load_eval_config(instance_id)
+
     if not eval_config:
         return False, "No evaluation config found in spider2_eval.jsonl"
 
     params = eval_config["evaluation"]["parameters"]
     # The DB filename in eval config may not match the actual filename — find it
-    gold_db_candidates = list((GOLD_DIR / instance_id).glob("*.duckdb"))
-    gold_db_path = str(gold_db_candidates[0]) if gold_db_candidates else str(GOLD_DIR / instance_id / params["gold"])
+    gold_base = config.gold_dir if config is not None else GOLD_DIR
+    gold_db_candidates = list((gold_base / instance_id).glob("*.duckdb"))
+    gold_db_path = str(gold_db_candidates[0]) if gold_db_candidates else str(gold_base / instance_id / params["gold"])
     _path = find_result_db(project_dir, params["gold"])
     result_db_path = str(_path) if _path else str(project_dir / params["gold"])
 

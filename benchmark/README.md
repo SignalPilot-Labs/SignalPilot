@@ -226,6 +226,11 @@ benchmark/
 ├── validate_bench.py      # structural validation (per-suite, 6 checks)
 ├── validate_bench_e2e.py  # end-to-end validation (all suites, 45 checks)
 │
+├── test_tasks/            # self-contained test suite (no spider2 data repo needed)
+│   ├── setup_test_data.py # one-time fixture creation (SQLite DBs, gold CSVs)
+│   ├── runner.py          # runs 5 tasks across all 3 suites and 4 DB backends
+│   └── tasks/             # inline task definitions + gold fixtures
+│
 ├── legacy/                # older Spider2-SQLite flow (not imported by active runners)
 └── docs/                  # supplementary notes
 ```
@@ -362,7 +367,58 @@ python -m benchmark.validate_bench --suite spider2-dbt
 python -m benchmark.validate_bench --suite spider2-snowflake
 python -m benchmark.validate_bench --suite spider2-lite
 python -m benchmark.validate_bench_e2e
+
+# Run the self-contained test task suite (no spider2 data repo needed):
+python -m benchmark.test_tasks.setup_test_data   # one-time setup
+python -m benchmark.test_tasks.runner             # 5/5 tasks should pass
 ```
+
+## Test Task Suite
+
+Self-contained test tasks that exercise the full benchmark pipeline without requiring the 10 GB+ spider2 data repository. Each task is defined inline with its own gold answer; no external data download is needed.
+
+### Purpose
+
+Verify that the benchmark infrastructure — task JSONL loading, workdir setup, skills copy, CLAUDE.md generation, MCP connection registration, and CSV evaluation — works end-to-end on a fresh clone or after a code change, without pulling the full spider2 datasets.
+
+### Setup (one-time)
+
+```bash
+python -m benchmark.test_tasks.setup_test_data
+```
+
+Creates the minimal data fixtures (SQLite databases, CSV gold files) that the test tasks reference.
+
+### Run
+
+```bash
+python -m benchmark.test_tasks.runner
+```
+
+All 5 tasks should report PASS. Exit code is 0 on success, 1 if any task fails.
+
+### Tasks
+
+| Task ID | Suite | DB Backend | What it covers |
+|---------|-------|------------|----------------|
+| `test_sf_current_date` | spider2-snowflake | Snowflake | PAT connection, SQL prompt building, CSV eval |
+| `test_dbt_simple001` | spider2-dbt | DuckDB | dbt workdir, dbt skills, CLAUDE.md, dbt eval |
+| `test_lite_sqlite001` | spider2-lite | SQLite | local SQLite file, SQL skills, CSV eval |
+| `test_lite_sf001` | spider2-lite | Snowflake | lite-suite Snowflake path, CSV eval |
+| `test_lite_bq001` | spider2-lite | BigQuery | service-account path, CSV eval |
+
+### Pipeline Coverage
+
+Each task verifies:
+
+1. **Task JSONL loading** — task record parsed correctly from the inline fixture
+2. **Workdir setup** — directory created with `.mcp.json`, `.git/`, correct structure
+3. **Skills copy** — suite-appropriate `SKILL.md` files present in `.claude/skills/`
+4. **CLAUDE.md generation** — `write_sql_claude_md` / `write_claude_md` produces valid content
+5. **MCP connection registration** — connection stored in gateway with correct `db_type`
+6. **Evaluation against gold data** — result CSV matched against gold CSV via the standard comparator
+
+> **Note:** Agent execution is skipped by default. The runner writes known-correct results directly to `result.csv` and proceeds straight to evaluation. This validates the benchmark infrastructure, not agent quality. To test the agent itself, use `run_direct.py` with real spider2 data.
 
 ## System Prompts
 

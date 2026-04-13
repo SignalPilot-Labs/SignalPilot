@@ -1,0 +1,1 @@
+{"instance_id": "test_dbt_simple001", "evaluation": {"parameters": {"gold": "test_dbt_simple001.duckdb", "condition_tabs": ["customer_summary"], "condition_cols": [[]], "ignore_orders": [true]}}}

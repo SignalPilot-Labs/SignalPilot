@@ -57,7 +57,7 @@ GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
 GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 DBT_BIN = shutil.which("dbt") or str(Path.home() / ".local" / "bin" / "dbt")
 
-SKILL_NAMES = ["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql"]
+SKILL_NAMES = ["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql", "dbt-date-spines"]
 
 
 # ── Helpers (identical to run_dbt_local.py) ───────────────────
@@ -190,13 +190,14 @@ def build_skills_system_prompt(instruction: str, instance_id: str, dbt_bin: str)
     bootstrap = f"""\
 ## BOOTSTRAP — Execute these steps FIRST, before any task work
 
-You have 4 skills and a SignalPilot MCP server available. Load them all now.
+You have 5 skills and a SignalPilot MCP server available. Load them all now.
 
-### Step 1: Load all skills (call the Skill tool 4 times)
+### Step 1: Load all skills (call the Skill tool 5 times)
 - `Skill({{"skill": "dbt-workflow"}})`
 - `Skill({{"skill": "dbt-verification"}})`
 - `Skill({{"skill": "dbt-debugging"}})`
 - `Skill({{"skill": "duckdb-sql"}})`
+- `Skill({{"skill": "dbt-date-spines"}})`
 
 ### Step 2: Verify SignalPilot MCP connectivity
 - Call `ToolSearch({{"query": "select:mcp__signalpilot__dbt_project_map,mcp__signalpilot__dbt_project_validate,mcp__signalpilot__schema_link,mcp__signalpilot__query_database", "max_results": 5}})` to fetch the MCP tool schemas.
@@ -441,7 +442,7 @@ def main():
 
     # Evaluate
     print(f"\n{'=' * 60}")
-    print(f"Evaluating against gold standard...")
+    print("Evaluating against gold standard...")
     print(f"{'=' * 60}")
 
     try:
@@ -455,7 +456,7 @@ def main():
         print(f"\n  Evaluation error: {e}")
         traceback.print_exc()
         print(f"\n{'=' * 60}")
-        print(f"RESULT: ERROR")
+        print("RESULT: ERROR")
         print(f"{'=' * 60}")
 
 

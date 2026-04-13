@@ -40,6 +40,23 @@ _ICON = {
 }
 
 
+def _date_hazard_lines(project: ProjectMap) -> list[str]:
+    """Render the date hazard warning section (if any)."""
+    if not project.date_hazards:
+        return []
+    lines = [
+        "## WARNING: Models use current_date (date spine hazard)",
+        "These model files use current_date/current_timestamp which will produce incorrect",
+        "row counts when run after the source data's date range. Edit them directly —",
+        "replace current_date with a subquery using MAX(date_col) from the source table.",
+        "Load the dbt-date-spines skill for the fix procedure.",
+    ]
+    for hazard in project.date_hazards:
+        lines.append(f"  - {hazard['file']} ({hazard['pattern']})")
+    lines.append("")
+    return lines
+
+
 def render_project_map(
     project_dir: str | Path,
     focus: str = "all",
@@ -175,6 +192,9 @@ def render_full(
         if len(project.parse_errors) > 20:
             lines.append(f"  (+{len(project.parse_errors) - 20} more)")
         lines.append("")
+
+    # Date hazard warning (if any model files use current_date)
+    lines.extend(_date_hazard_lines(project))
 
     # Footer — actionable next step hint
     lines.append(_footer(project))
@@ -323,6 +343,8 @@ def render_work_order(project: ProjectMap) -> str:
         for name, refs in sorted(project.unresolved_refs.items()):
             lines.append(f"   {name}: {', '.join(refs)}")
         lines.append("")
+
+    lines.extend(_date_hazard_lines(project))
 
     return "\n".join(lines).rstrip() + "\n"
 

@@ -67,6 +67,14 @@ _RE_TRIVIAL_SELECT = re.compile(
     re.IGNORECASE,
 )
 
+# Date hazard detection: SQL functions that produce the current date at runtime.
+# When used as spine endpoints in pre-shipped model files, they cause row-count
+# inflation when the project is run years after the source data was collected.
+_RE_DATE_HAZARD = re.compile(
+    r"\b(current_date|current_timestamp|now\(\)|getdate\(\)|sysdate)\b",
+    re.IGNORECASE,
+)
+
 
 def _iter_files(root: Path, suffixes: tuple[str, ...]) -> Iterable[Path]:
     """Yield files under root whose suffix is in `suffixes`, skipping _SKIP_DIRS."""
@@ -441,6 +449,7 @@ def scan_filesystem(project_dir: Path) -> dict:
 
     # Walk models/ for sql files.
     sql_records: list[dict] = []
+    date_hazards: list[dict] = []
     for sql_path in _iter_files(models_dir, (".sql",)):
         rel = _rel(sql_path, project_dir)
         status, size, content = classify_sql_file(sql_path)
@@ -459,6 +468,15 @@ def scan_filesystem(project_dir: Path) -> dict:
             "materialization": sql_mat,
             "unique_key": sql_uk,
         })
+        matched_patterns = list(dict.fromkeys(
+            m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)
+        ))
+        if matched_patterns:
+            date_hazards.append({
+                "file": rel,
+                "pattern": ", ".join(matched_patterns),
+                "model_name": sql_path.stem,
+            })
 
     # Walk macros/.
     macros: list[MacroInfo] = []
@@ -479,6 +497,7 @@ def scan_filesystem(project_dir: Path) -> dict:
         "macros": macros,
         "parse_errors": parse_errors,
         "scan_ms": scan_ms,
+        "date_hazards": date_hazards,
     }
 
 

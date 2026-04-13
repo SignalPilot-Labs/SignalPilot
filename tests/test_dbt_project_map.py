@@ -35,6 +35,7 @@ from signalpilot.gateway.gateway.dbt.scanner import (
     extract_refs_from_sql,
     extract_sources_from_sql,
     parse_yml_file,
+    scan_filesystem,
 )
 from signalpilot.gateway.gateway.dbt.types import ModelStatus
 from signalpilot.gateway.gateway.dbt.work_order import compute_work_order
@@ -45,7 +46,7 @@ from signalpilot.gateway.gateway.dbt.work_order import compute_work_order
 SPIDER2_BASE = Path(
     os.environ.get(
         "SPIDER2_DBT_DIR",
-        r"C:/Users/kiwi0/Desktop/what/spider2-repo/spider2-dbt",
+        "/nonexistent/SPIDER2_DBT_DIR_not_configured",
     )
 ) / "examples"
 
@@ -663,3 +664,37 @@ def test_render_project_map_idempotent_ordering(broken_project: Path):
 def test_render_output_ends_with_newline(broken_project: Path):
     rendered = build_project_map(str(broken_project))
     assert rendered.endswith("\n")
+
+
+# ── Date hazard detection ─────────────────────────────────────────────────────
+
+
+def test_date_hazards_found_in_models(tmp_path: Path):
+    """scan_filesystem detects current_date in a model SQL file."""
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "spine.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT UNNEST(GENERATE_SERIES('2020-01-01'::DATE, CURRENT_DATE, INTERVAL '1 day')) AS date_day
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    hazards = result["date_hazards"]
+    assert len(hazards) == 1
+    assert hazards[0]["model_name"] == "spine"
+    assert "current_date" in hazards[0]["pattern"]
+
+
+def test_date_hazards_empty_when_clean(tmp_path: Path):
+    """scan_filesystem returns no date_hazards for SQL that does not use current_date."""
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "clean_spine.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT UNNEST(GENERATE_SERIES('2020-01-01'::DATE,
+    (SELECT MAX(order_date) FROM {{ ref('stg_orders') }}),
+    INTERVAL '1 day')) AS date_day
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    assert result["date_hazards"] == []

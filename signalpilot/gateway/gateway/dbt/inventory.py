@@ -95,6 +95,8 @@ def scan_project(project_dir: Path | str) -> ProjectMap:
     project_map.cycles = work_result["cycles"]
     project_map.unresolved_refs = work_result["unresolved"]
 
+    project_map.date_hazards = raw.get("date_hazards", [])
+
     return project_map
 
 

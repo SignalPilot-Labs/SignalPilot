@@ -29,7 +29,7 @@ from ..agent.sdk_runner import (
 )
 from ..core.logging import log, log_separator
 from ..core.mcp import delete_local_connection, register_local_connection
-from ..core.paths import GOLD_DIR, MCP_CONFIG, WORK_DIR, ensure_local_bin_on_path
+from ..core.paths import GOLD_DIR, MCP_CONFIG, PROMPTS_DIR, WORK_DIR, ensure_local_bin_on_path
 from ..core.tasks import load_eval_config, load_task
 from ..core.workdir import prepare_workdir, write_claude_md
 from ..dbt_tools.fixes import run_post_agent_sql_fixes
@@ -48,6 +48,10 @@ ensure_local_bin_on_path()
 
 DBT_BIN = "/home/agentuser/.local/bin/dbt"
 
+_DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_text()
+
+_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
+
 
 async def run_agent(
     instance_id: str,
@@ -63,7 +67,24 @@ async def run_agent(
     prompt = build_agent_prompt(instance_id, instruction, work_dir, eval_critical_models, max_turns=max_turns)
     log(f"Prompt length: {len(prompt)} chars")
 
-    result = await run_sdk_agent(prompt, work_dir, model, max_turns, timeout=900, label="main-agent")
+    system_prompt = (
+        _DBT_SYSTEM_PROMPT_TEMPLATE
+        .replace("${work_dir}", str(work_dir))
+        .replace("${instance_id}", instance_id)
+        .replace("${instruction}", instruction)
+        .replace("${dbt_bin}", DBT_BIN)
+    )
+
+    result = await run_sdk_agent(
+        prompt,
+        work_dir,
+        model,
+        max_turns,
+        timeout=900,
+        label="main-agent",
+        skill_names=_DBT_SKILL_NAMES,
+        system_prompt=system_prompt,
+    )
 
     transcript_path = work_dir / "agent_output.json"
     transcript_path.write_text(json.dumps({

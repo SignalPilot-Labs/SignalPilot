@@ -276,7 +276,21 @@ def check_system_prompt(suite_name: str) -> CheckResult:
             content = prompt_file.read_text()
             if not content.strip():
                 return (name, "FAIL", "dbt_local_system.md is empty")
-            return (name, "PASS", f"dbt_local_system.md OK ({len(content)} chars), .bak present")
+
+            # Template variable substitution check
+            substituted = (
+                content
+                .replace("${work_dir}", "/tmp/test_workdir")
+                .replace("${instance_id}", "test_instance")
+                .replace("${instruction}", "Test instruction")
+                .replace("${dbt_bin}", "/usr/local/bin/dbt")
+            )
+            if "${" in substituted:
+                unresolved = [tok for tok in substituted.split("${")[1:]]
+                samples = [f"${{{tok.split('}')[0]}}}" for tok in unresolved[:3]]
+                return (name, "FAIL", f"unresolved template variables in dbt_local_system.md: {samples}")
+
+            return (name, "PASS", f"dbt_local_system.md OK ({len(content)} chars), .bak present, all template vars resolve")
 
         # SQL suites
         prompt_file = PROMPTS_DIR / "system_general.md"

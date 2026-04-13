@@ -441,7 +441,9 @@ Each task verifies:
 
 ## System Prompts
 
-### Generalized System Prompt (`prompts/system_general.md`)
+Both suites now pass their system prompt through the Claude Agent SDK's `system_prompt` parameter. Template variables are resolved at runtime before the agent starts.
+
+### SQL Suites (`prompts/system_general.md`)
 
 SQL suites (spider2-snowflake, spider2-lite) receive a generalized system prompt injected via the Claude Agent SDK. The prompt:
 
@@ -450,7 +452,16 @@ SQL suites (spider2-snowflake, spider2-lite) receive a generalized system prompt
 - Lists dbt tools as conditionally available
 - Keeps the agent focused: explore schema → write query → verify → save `result.csv`
 
-The dbt suite continues to use its own `prompts/dbt_local_system.md` (unchanged).
+### dbt Suite (`prompts/dbt_local_system.md`)
+
+The dbt suite (spider2-dbt) passes `dbt_local_system.md` as the SDK `system_prompt` parameter. Template variables resolved at runtime:
+
+- `${work_dir}` — absolute path to the task workdir
+- `${instance_id}` — task instance ID (also the DuckDB MCP connection name)
+- `${instruction}` — task-specific instruction text
+- `${dbt_bin}` — absolute path to the dbt binary
+
+The E2E validator (criterion C3) verifies that all four variables resolve with no `${...}` patterns remaining after substitution.
 
 ## Environment Variables
 

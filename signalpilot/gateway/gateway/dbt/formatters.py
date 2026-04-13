@@ -57,6 +57,20 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
     return lines
 
 
+def _nondeterminism_lines(project: ProjectMap) -> list[str]:
+    """Render the non-determinism warning section (if any)."""
+    if not project.nondeterminism_warnings:
+        return []
+    lines = [
+        "## WARNING: Pre-shipped models use ROW_NUMBER (potential non-determinism)",
+        "ORDER BY may not be unique — add a tiebreaker (primary key) to each flagged file.",
+    ]
+    for warning in project.nondeterminism_warnings:
+        lines.append(f"  - {warning['file']}")
+    lines.append("")
+    return lines
+
+
 def render_project_map(
     project_dir: str | Path,
     focus: str = "all",
@@ -195,6 +209,9 @@ def render_full(
 
     # Date hazard warning (if any model files use current_date)
     lines.extend(_date_hazard_lines(project))
+
+    # Non-determinism warning (if any pre-shipped models use window ranking functions)
+    lines.extend(_nondeterminism_lines(project))
 
     # Footer — actionable next step hint
     lines.append(_footer(project))
@@ -345,6 +362,7 @@ def render_work_order(project: ProjectMap) -> str:
         lines.append("")
 
     lines.extend(_date_hazard_lines(project))
+    lines.extend(_nondeterminism_lines(project))
 
     return "\n".join(lines).rstrip() + "\n"
 

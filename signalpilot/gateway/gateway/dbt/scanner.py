@@ -75,6 +75,15 @@ _RE_DATE_HAZARD = re.compile(
     re.IGNORECASE,
 )
 
+# Non-determinism detection: window functions that may produce different results
+# across runs when the ORDER BY clause does not uniquely identify rows.
+# Flags ROW_NUMBER, RANK, and DENSE_RANK — all share the same non-determinism
+# problem when the ORDER BY is not unique within the partition.
+_RE_NONDETERMINISTIC_WINDOW = re.compile(
+    r"(ROW_NUMBER|RANK|DENSE_RANK)\s*\(\s*\)\s*OVER\s*\(",
+    re.IGNORECASE,
+)
+
 
 def _iter_files(root: Path, suffixes: tuple[str, ...]) -> Iterable[Path]:
     """Yield files under root whose suffix is in `suffixes`, skipping _SKIP_DIRS."""
@@ -450,6 +459,7 @@ def scan_filesystem(project_dir: Path) -> dict:
     # Walk models/ for sql files.
     sql_records: list[dict] = []
     date_hazards: list[dict] = []
+    nondeterminism_warnings: list[dict] = []
     for sql_path in _iter_files(models_dir, (".sql",)):
         rel = _rel(sql_path, project_dir)
         status, size, content = classify_sql_file(sql_path)
@@ -468,15 +478,24 @@ def scan_filesystem(project_dir: Path) -> dict:
             "materialization": sql_mat,
             "unique_key": sql_uk,
         })
-        matched_patterns = list(dict.fromkeys(
-            m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)
-        ))
-        if matched_patterns:
-            date_hazards.append({
-                "file": rel,
-                "pattern": ", ".join(matched_patterns),
-                "model_name": sql_path.stem,
-            })
+        # Only flag COMPLETE models — stubs are going to be rewritten anyway,
+        # and flagging incomplete SQL wastes agent attention.
+        if status == ModelStatus.COMPLETE:
+            matched_patterns = list(dict.fromkeys(
+                m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)
+            ))
+            if matched_patterns:
+                date_hazards.append({
+                    "file": rel,
+                    "pattern": ", ".join(matched_patterns),
+                    "model_name": sql_path.stem,
+                })
+            if _RE_NONDETERMINISTIC_WINDOW.search(content):
+                nondeterminism_warnings.append({
+                    "file": rel,
+                    "model_name": sql_path.stem,
+                    "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
+                })
 
     # Walk macros/.
     macros: list[MacroInfo] = []
@@ -498,6 +517,7 @@ def scan_filesystem(project_dir: Path) -> dict:
         "parse_errors": parse_errors,
         "scan_ms": scan_ms,
         "date_hazards": date_hazards,
+        "nondeterminism_warnings": nondeterminism_warnings,
     }
 
 

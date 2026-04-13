@@ -129,6 +129,7 @@ class ProjectMap:
     parse_errors: list[ParseError] = field(default_factory=list)
     scan_time_ms: float = 0.0
     date_hazards: list[dict] = field(default_factory=list)
+    nondeterminism_warnings: list[dict] = field(default_factory=list)
 
     # Counts (cheap to access in formatters)
     @property

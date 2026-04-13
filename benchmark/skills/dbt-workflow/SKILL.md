@@ -118,3 +118,16 @@ Over-exploration is the #1 cause of missing models. Follow this discipline:
 - **Last 25% of turns**: Fix errors, write non-priority models, run /dbt-verification.
 
 If halfway through your budget any priority model lacks a .sql file, STOP everything else and write it immediately — even a minimal version.
+
+## 13. Non-Deterministic Window Functions
+
+If `dbt_project_map` warns about ROW_NUMBER/RANK/DENSE_RANK in pre-shipped models, review each flagged file:
+1. Open the file and find every `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` (or RANK/DENSE_RANK)
+2. Run `explore_table` or a COUNT DISTINCT query to verify whether the ORDER BY columns uniquely identify rows within each partition:
+   ```sql
+   SELECT COUNT(*), COUNT(DISTINCT <order_by_col>) FROM <table>;
+   ```
+3. If not unique, add a tiebreaker: append the table's primary key or a unique ID column to the ORDER BY
+4. Run `dbt run --select <model>` and verify row counts match expectations
+
+Common pattern: `ROW_NUMBER() OVER (ORDER BY patient_id)` — if patient_id repeats across rows, add a secondary sort like `ORDER BY patient_id, encounter_id`.

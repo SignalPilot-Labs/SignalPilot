@@ -64,6 +64,22 @@ anything else. This single call tells you:
 
 Read the output carefully. The work order at the bottom is your plan.
 
+If the output contains a "WARNING: Models use current_date" section, fix every
+flagged file before writing new SQL:
+1. Call `mcp__signalpilot__get_date_boundaries connection_name="${instance_id}"`
+2. Find the column and table marked "USE THIS" in the output
+3. Replace `current_date`/`current_timestamp`/`now()` with
+   `(SELECT MAX(<column>) FROM {{ ref('<table>') }})` using values from step 2
+4. Run `dbt run --select <model_name>` to verify.
+
+If the output contains a "WARNING: Pre-shipped models use ROW_NUMBER" section,
+fix each flagged file:
+1. Find every ROW_NUMBER()/RANK()/DENSE_RANK() OVER (...)
+2. Run `explore_table` or `SELECT COUNT(*), COUNT(DISTINCT <col>)` to check
+   if ORDER BY columns are unique within each partition
+3. If not unique, append the primary key to the ORDER BY
+4. Run `dbt run --select <model_name>` to verify.
+
 Cross-check the result against the Task instruction above — if the task
 mentions a model or table that does NOT appear in the project map, the task
 wants you to create it from scratch. Add it to your build list.
@@ -93,6 +109,11 @@ For each missing model (in dependency order):
 - Use `{{ ref('model_name') }}` for other models, `{{ source('schema', 'table') }}` for raw tables
 - Use DuckDB syntax (no DATEADD, no ::date on non-ISO strings, INTERVAL '1' DAY not +1)
 - Add `{{ config(materialized='table') }}` at the top
+- Default to LEFT JOIN for all joins. Use INNER JOIN only when the task explicitly
+  says "only matching", "exclude", or filters non-matching rows. After writing any
+  model with JOINs, call `mcp__signalpilot__compare_join_types connection_name="${instance_id}"
+  left_table="<left>" right_table="<right>" join_keys="<keys>"` to verify no rows
+  are silently dropped.
 
 ### Step 4 — Run and fix
 Run: `${dbt_bin} run` (skip `dbt deps` unless `dbt_project_validate` told you to).

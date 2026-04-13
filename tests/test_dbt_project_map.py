@@ -698,3 +698,68 @@ SELECT UNNEST(GENERATE_SERIES('2020-01-01'::DATE,
     )
     result = scan_filesystem(tmp_path)
     assert result["date_hazards"] == []
+
+
+# ── Non-determinism detection ─────────────────────────────────────────────────
+
+
+def test_nondeterminism_warning_for_rownum(tmp_path: Path):
+    """scan_filesystem detects ROW_NUMBER in a COMPLETE model SQL file."""
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "visits.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT
+    patient_id,
+    encounter_id,
+    visit_date,
+    ROW_NUMBER() OVER (ORDER BY patient_id) AS rn
+FROM {{ ref('stg_visits') }}
+WHERE visit_date IS NOT NULL
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    warnings = result["nondeterminism_warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["model_name"] == "visits"
+    assert "ROW_NUMBER" in warnings[0]["pattern"].upper()
+
+
+def test_nondeterminism_warning_empty_when_no_window_function(tmp_path: Path):
+    """scan_filesystem returns no nondeterminism_warnings for SQL with no ranking functions."""
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "summary.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT
+    patient_id,
+    COUNT(*) AS visit_count,
+    MAX(visit_date) AS latest_visit
+FROM {{ ref('stg_visits') }}
+WHERE visit_date IS NOT NULL
+GROUP BY patient_id
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    assert result["nondeterminism_warnings"] == []
+
+
+def test_nondeterminism_warning_skips_stub_models(tmp_path: Path):
+    """scan_filesystem does NOT flag ROW_NUMBER in a STUB model (COMPLETE-only filter)."""
+    (tmp_path / "models").mkdir()
+    # A stub with ROW_NUMBER — the body ends with a dangling comma so it is
+    # classified STUB. The non-determinism scan must NOT flag it.
+    (tmp_path / "models" / "stub_visits.sql").write_text(
+        """{{ config(materialized='table') }}
+SELECT
+    patient_id,
+    ROW_NUMBER() OVER (ORDER BY patient_id) AS rn,
+""",
+        encoding="utf-8",
+    )
+    result = scan_filesystem(tmp_path)
+    # Confirm the file was classified as STUB (dangling comma triggers stub heuristic).
+    sql_records = {rec["name"]: rec for rec in result["sql_records"]}
+    assert sql_records["stub_visits"]["status"] == ModelStatus.STUB
+    # The COMPLETE-only filter must prevent this STUB from appearing in warnings.
+    assert result["nondeterminism_warnings"] == []

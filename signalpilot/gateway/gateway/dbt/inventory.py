@@ -96,6 +96,7 @@ def scan_project(project_dir: Path | str) -> ProjectMap:
     project_map.unresolved_refs = work_result["unresolved"]
 
     project_map.date_hazards = raw.get("date_hazards", [])
+    project_map.nondeterminism_warnings = raw.get("nondeterminism_warnings", [])
 
     return project_map
 

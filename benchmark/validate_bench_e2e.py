@@ -1,8 +1,9 @@
 """End-to-end validation of the Spider2 benchmark pipeline.
 
-Runs 5 synthetic tasks (1 snowflake, 1 dbt, 3 lite backends) with 6 checks
-each (30 total checks), verifying workdir setup, skills, system prompts,
-connection registration, bloat-free store, and no gold file leakage.
+Runs 5 synthetic tasks (1 snowflake, 1 dbt, 3 lite backends) with 9 checks
+each (45 total checks), verifying workdir setup, skills, system prompts,
+prompt building, CLAUDE.md writing, connection registration, bloat-free store,
+no gold file leakage, and live MCP queries.
 
 Usage:
     python -m benchmark.validate_bench_e2e
@@ -37,8 +38,9 @@ from .core.paths import (
     SNOWFLAKE_ENV_FILE,
     WORK_DIR,
 )
-from .core.suite import BenchmarkSuite, get_suite_config
-from .core.workdir import force_rmtree, prepare_sql_workdir
+from .agent.sql_prompts import build_sql_agent_prompt
+from .core.suite import BenchmarkSuite, DBBackend, get_suite_config
+from .core.workdir import force_rmtree, prepare_sql_workdir, write_claude_md, write_sql_claude_md
 
 # ANSI color codes
 _GREEN = "\033[92m"
@@ -56,6 +58,14 @@ _CONN_LITE_SF = "e2e_validate_lite_sf"
 _CONN_LITE_BQ = "e2e_validate_lite_bq"
 
 _E2E_PREFIX = "e2e_validate_"
+
+# Mapping from backend string to DBBackend enum value
+_BACKEND_MAP: dict[str, DBBackend] = {
+    "snowflake": DBBackend.SNOWFLAKE,
+    "bigquery": DBBackend.BIGQUERY,
+    "sqlite": DBBackend.SQLITE,
+    "duckdb": DBBackend.DUCKDB,
+}
 
 # All 5 task descriptors: (suite_name, backend_name, conn_id, task_dict)
 _TASK_SPECS: list[tuple[str, str, str, dict]] = [
@@ -275,6 +285,88 @@ def check_system_prompt(suite_name: str) -> CheckResult:
         return (name, "FAIL", f"exception: {exc}")
 
 
+def check_prompt_building(
+    suite_name: str,
+    backend: str,
+    work_dir: Path | None,
+    conn_id: str,
+) -> CheckResult:
+    """Check 4: build the agent prompt and verify its contents."""
+    name = "prompt_building"
+    if work_dir is None:
+        return (name, "SKIP", "workdir not available (prior check failed)")
+    if suite_name == "spider2-dbt":
+        return (name, "SKIP", "dbt prompt builder requires real dbt project files — skip in e2e")
+    try:
+        db_backend = _BACKEND_MAP.get(backend)
+        if db_backend is None:
+            return (name, "FAIL", f"unknown backend: {backend}")
+        prompt = build_sql_agent_prompt(
+            instance_id=conn_id,
+            instruction="Test instruction",
+            work_dir=work_dir,
+            db_backend=db_backend,
+            connection_name=conn_id,
+            max_turns=10,
+        )
+        if not prompt:
+            return (name, "FAIL", "build_sql_agent_prompt returned empty string")
+        if backend not in prompt:
+            return (name, "FAIL", f"backend value '{backend}' not found in prompt")
+        if conn_id not in prompt:
+            return (name, "FAIL", f"connection name '{conn_id}' not found in prompt")
+        if "${" in prompt:
+            return (name, "FAIL", "unresolved template variables found in prompt")
+        if "dbt run" in prompt or "dbt_project" in prompt:
+            return (name, "FAIL", "dbt leakage found in SQL prompt")
+        return (name, "PASS", f"prompt OK ({len(prompt)} chars, backend={backend}, conn={conn_id})")
+    except Exception as exc:
+        return (name, "FAIL", f"exception: {exc}")
+
+
+def check_claude_md_written(
+    suite_name: str,
+    backend: str,
+    work_dir: Path | None,
+    instance_id: str,
+    conn_id: str,
+) -> CheckResult:
+    """Check 5: write CLAUDE.md and verify its contents."""
+    name = "claude_md_written"
+    if work_dir is None:
+        return (name, "SKIP", "workdir not available (prior check failed)")
+    try:
+        if suite_name == "spider2-dbt":
+            write_claude_md(work_dir, instance_id, "Test instruction")
+            claude_md = work_dir / "CLAUDE.md"
+            if not claude_md.exists():
+                return (name, "FAIL", f"CLAUDE.md not created at {claude_md}")
+            content = claude_md.read_text()
+            if instance_id not in content:
+                return (name, "FAIL", f"instance_id '{instance_id}' not found in CLAUDE.md")
+            if "dbt" not in content.lower():
+                return (name, "FAIL", "no dbt references found in dbt CLAUDE.md")
+            return (name, "PASS", f"CLAUDE.md OK ({len(content)} chars), contains instance_id and dbt refs")
+        else:
+            db_backend = _BACKEND_MAP.get(backend)
+            if db_backend is None:
+                return (name, "FAIL", f"unknown backend: {backend}")
+            write_sql_claude_md(work_dir, instance_id, "Test instruction", db_backend, conn_id)
+            claude_md = work_dir / "CLAUDE.md"
+            if not claude_md.exists():
+                return (name, "FAIL", f"CLAUDE.md not created at {claude_md}")
+            content = claude_md.read_text()
+            if conn_id not in content:
+                return (name, "FAIL", f"connection name '{conn_id}' not found in CLAUDE.md")
+            if backend not in content:
+                return (name, "FAIL", f"backend value '{backend}' not found in CLAUDE.md")
+            if "dbt" in content.lower():
+                return (name, "FAIL", "dbt leakage found in SQL CLAUDE.md")
+            return (name, "PASS", f"CLAUDE.md OK ({len(content)} chars), contains conn and backend refs")
+    except Exception as exc:
+        return (name, "FAIL", f"exception: {exc}")
+
+
 def check_connection_registered(
     suite_name: str,
     backend: str,
@@ -441,7 +533,7 @@ def run_task(
     task: dict,
     verbose: bool,
 ) -> list[CheckResult]:
-    """Run all 6 checks for one task, cleaning up in a finally block."""
+    """Run all 9 checks for one task, cleaning up in a finally block."""
     print(f"\n== Task {task_num}/{total_tasks}: {suite_name} / {backend} ==")
 
     results: list[CheckResult] = []
@@ -465,27 +557,37 @@ def run_task(
         _print_check(r3, verbose)
 
         # Check 4
-        r4, tmp_db_path = check_connection_registered(suite_name, backend, conn_id, task, work_dir)
+        r4 = check_prompt_building(suite_name, backend, work_dir, conn_id)
         results.append(r4)
         _print_check(r4, verbose)
 
-        # Whether connection was actually registered (not skipped/failed)
-        conn_registered = r4[1] == "PASS"
-
         # Check 5
-        r5 = check_no_bloat(conn_id, conn_registered)
+        r5 = check_claude_md_written(suite_name, backend, work_dir, task["instance_id"], conn_id)
         results.append(r5)
         _print_check(r5, verbose)
 
         # Check 6
-        r6 = check_no_gold_leak(work_dir)
+        r6, tmp_db_path = check_connection_registered(suite_name, backend, conn_id, task, work_dir)
         results.append(r6)
         _print_check(r6, verbose)
 
-        # Check 7: actually query the connection via pool_manager
-        r7 = check_mcp_query(backend, conn_id, conn_registered, tmp_db_path)
+        # Whether connection was actually registered (not skipped/failed)
+        conn_registered = r6[1] == "PASS"
+
+        # Check 7
+        r7 = check_no_bloat(conn_id, conn_registered)
         results.append(r7)
         _print_check(r7, verbose)
+
+        # Check 8
+        r8 = check_no_gold_leak(work_dir)
+        results.append(r8)
+        _print_check(r8, verbose)
+
+        # Check 9: actually query the connection via pool_manager
+        r9 = check_mcp_query(backend, conn_id, conn_registered, tmp_db_path)
+        results.append(r9)
+        _print_check(r9, verbose)
 
     finally:
         # Clean up connection

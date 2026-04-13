@@ -162,15 +162,17 @@ The benchmark runner registers connections via `gateway.store.create_connection(
 
 All MCP tool handlers in `gateway/mcp_server.py` pass `credential_extras` to the pool manager when acquiring connections. This ensures that BigQuery service account JSON and Snowflake PAT credentials flow through to the connectors for **every** tool — not just `query_database`. Without this, schema exploration tools (`list_tables`, `describe_table`, `schema_overview`, etc.) would fail for cloud databases because the connector falls back to default credentials (ADC / password auth).
 
-### Validation Checks (every task must pass all 7)
+### Validation Checks (every task must pass all 9)
 
 1. **SDK connects to MCP** — agent runs without connection errors
 2. **SDK sees skills** — skills copied to `.claude/skills/`, git init for discovery
 3. **Correct system prompt** — suite-appropriate prompt with correct DB backend
-4. **MCP connected to correct DB** — connection registered before agent, correct type
-5. **No cross-task leakage** — connection deleted after each task, fresh registration
-6. **Gold not leaked** — gold files live outside workdir, never copied in
-7. **MCP query works** — actual SQL query executes through pool_manager with credential extras
+4. **Prompt building** — `build_sql_agent_prompt` returns non-empty string with correct backend/conn values and no unresolved template vars or dbt leakage
+5. **CLAUDE.md written** — `write_sql_claude_md` / `write_claude_md` creates a valid CLAUDE.md with correct content
+6. **MCP connected to correct DB** — connection registered before agent, correct type
+7. **No cross-task leakage** — connection deleted after each task, fresh registration
+8. **Gold not leaked** — gold files live outside workdir, never copied in
+9. **MCP query works** — actual SQL query executes through pool_manager with credential extras
 
 ## Architecture
 
@@ -222,7 +224,7 @@ benchmark/
 │   └── sql_lite_system.md
 │
 ├── validate_bench.py      # structural validation (per-suite, 6 checks)
-├── validate_bench_e2e.py  # end-to-end validation (all suites, 30 checks)
+├── validate_bench_e2e.py  # end-to-end validation (all suites, 45 checks)
 │
 ├── legacy/                # older Spider2-SQLite flow (not imported by active runners)
 └── docs/                  # supplementary notes
@@ -290,7 +292,7 @@ python -m benchmark.validate_bench_e2e
 python -m benchmark.validate_bench_e2e --verbose
 ```
 
-Runs 5 synthetic tasks across all 3 suites and all 4 database backends (35 total checks):
+Runs 5 synthetic tasks across all 3 suites and all 4 database backends (45 total checks):
 
 | Task | Suite | DB Backend | What it tests |
 |------|-------|------------|---------------|
@@ -300,17 +302,19 @@ Runs 5 synthetic tasks across all 3 suites and all 4 database backends (35 total
 | 4 | spider2-lite | Snowflake | Snowflake connection via lite suite |
 | 5 | spider2-lite | BigQuery | BigQuery via `service_account.json` |
 
-Each task runs 7 checks:
+Each task runs 9 checks:
 
 | # | Check | What it verifies |
 |---|-------|-----------------|
 | 1 | **workdir_setup** | Directory created with `.mcp.json`, `.git/`, correct structure |
 | 2 | **skills_copied** | Suite-specific `SKILL.md` files present in `.claude/skills/` |
 | 3 | **system_prompt** | Correct prompt file exists; template variables resolve cleanly |
-| 4 | **connection_registered** | DB connection in gateway store with correct `db_type` |
-| 5 | **no_bloat** | No leftover `e2e_validate_*` connections from prior tasks |
-| 6 | **no_gold_leak** | No gold-related files in the workdir |
-| 7 | **mcp_query** | Actual SQL query executes through pool_manager with credential extras |
+| 4 | **prompt_building** | `build_sql_agent_prompt` returns non-empty string with correct backend/conn, no template leakage (SQL suites only; SKIP for dbt) |
+| 5 | **claude_md_written** | `write_sql_claude_md` / `write_claude_md` creates a valid CLAUDE.md with correct content |
+| 6 | **connection_registered** | DB connection in gateway store with correct `db_type` |
+| 7 | **no_bloat** | No leftover `e2e_validate_*` connections from prior tasks |
+| 8 | **no_gold_leak** | No gold-related files in the workdir |
+| 9 | **mcp_query** | Actual SQL query executes through pool_manager with credential extras |
 
 Snowflake/BigQuery checks SKIP (not FAIL) if credential files are absent or cloud auth fails (credential issue, not code bug). All cleanup (workdirs, connections, temp DB files) runs in `finally` blocks.
 

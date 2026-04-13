@@ -82,20 +82,17 @@ def register_snowflake_connection(
     database: str,
     schema: str,
 ) -> bool:
-    """Register a Snowflake connection using OAuth token from SNOWFLAKE_ENV_FILE.
+    """Register a Snowflake connection using a PAT from SNOWFLAKE_ENV_FILE.
 
-    The SNOWFLAKE_TOKEN in .env.snowflake is a JWT OAuth token (starts with 'eyJ').
-    The Snowflake connector reads oauth_access_token and auth_method from
-    credential_extras. We inject them after create_connection() because
-    ConnectionCreate has no oauth_access_token field.
-
-    Tech debt: this workaround will be unnecessary once ConnectionCreate gains
-    oauth_access_token / auth_method fields (gateway model update).
+    The SNOWFLAKE_TOKEN in .env.snowflake is a Programmatic Access Token (PAT).
+    PATs are authenticated by passing them as the password field — no special
+    authenticator value is needed. The token flows as password via ConnectionCreate,
+    and _extract_credential_extras in store.py copies it into credential_extras
+    so the Snowflake connector uses password auth automatically.
     """
     try:
         sys.path.insert(0, str(GATEWAY_SRC))
         from gateway.models import ConnectionCreate, DBType
-        from gateway.store import _credential_extras, _save_credentials
 
         env_vars = _load_dotenv_file(SNOWFLAKE_ENV_FILE)
         account: str = env_vars["SNOWFLAKE_ACCOUNT"]
@@ -120,15 +117,7 @@ def register_snowflake_connection(
         if not ok:
             return False
 
-        # Inject OAuth extras — create_connection() already wrote _credential_extras[instance_id]
-        # with password, account, etc. We add auth_method and oauth_access_token so the
-        # Snowflake connector uses OAuth instead of password auth.
-        if instance_id not in _credential_extras:
-            _credential_extras[instance_id] = {}
-        _credential_extras[instance_id]["auth_method"] = "oauth"
-        _credential_extras[instance_id]["oauth_access_token"] = token
-        _save_credentials()
-        log(f"Injected OAuth extras for Snowflake connection '{instance_id}'")
+        log(f"Registered Snowflake connection '{instance_id}' using PAT auth")
         return True
 
     except KeyError as e:

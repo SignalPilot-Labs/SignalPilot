@@ -5,7 +5,7 @@ Run [Spider2](https://github.com/xlang-ai/Spider2) benchmark tasks using Claude 
 | Suite | Tasks | Database | Agent Mode |
 |-------|-------|----------|------------|
 | **spider2-dbt** | dbt transformation projects | DuckDB | dbt project completion |
-| **spider2-snowflake** | SQL questions against Snowflake | Snowflake (OAuth) | SQL query writing |
+| **spider2-snowflake** | SQL questions against Snowflake | Snowflake (PAT) | SQL query writing |
 | **spider2-lite** | SQL questions against multiple DBs | SQLite, BigQuery, Snowflake | SQL query writing |
 
 The agent gets:
@@ -64,7 +64,7 @@ export SPIDER2_SNOWFLAKE_DIR=~/spider2-repo/spider2-snowflake
 # Create benchmark/.env.snowflake with:
 SNOWFLAKE_ACCOUNT=<your-account>
 SNOWFLAKE_USER=<your-user>
-SNOWFLAKE_TOKEN=<your-oauth-token>
+SNOWFLAKE_TOKEN=<your-programmatic-access-token>
 SNOWFLAKE_ROLE=<your-role>
 SNOWFLAKE_WAREHOUSE=<your-warehouse>
 ```
@@ -84,7 +84,7 @@ export SPIDER2_LITE_DIR=~/spider2-repo/spider2-lite
 
 | File | Purpose | Required For |
 |------|---------|--------------|
-| `benchmark/.env.snowflake` | Snowflake OAuth credentials | spider2-snowflake, spider2-lite (Snowflake tasks) |
+| `benchmark/.env.snowflake` | Snowflake PAT credentials | spider2-snowflake, spider2-lite (Snowflake tasks) |
 | `benchmark/service_account.json` | BigQuery service account | spider2-lite (BigQuery tasks) |
 
 These are covered by `benchmark/.gitignore`.
@@ -136,7 +136,7 @@ python -m benchmark.run_batch --suite spider2-lite --tasks lite001,lite002
 ### Spider2-Snowflake / Spider2-Lite Flow
 
 1. Creates clean workdir in `_sql_workdir/<suite>/<id>` with SQL skills
-2. Registers appropriate connection (Snowflake OAuth, SQLite file, or BigQuery service account)
+2. Registers appropriate connection (Snowflake PAT, SQLite file, or BigQuery service account)
 3. Runs SQL agent (explores schema, writes query, executes via MCP, saves `result.csv`)
 4. Evaluates: `result.csv` vs gold CSV
 5. Cleans up connection
@@ -146,7 +146,7 @@ python -m benchmark.run_batch --suite spider2-lite --tasks lite001,lite002
 | Database | Method | Connection Fields |
 |----------|--------|-------------------|
 | DuckDB | Direct file path | `db_type=duckdb, database=<path>` |
-| Snowflake | OAuth token | `db_type=snowflake, account, user, token` + OAuth extras |
+| Snowflake | PAT (Programmatic Access Token) | `db_type=snowflake, account, user, password=<PAT>` |
 | SQLite | File path | `db_type=sqlite, database=<path>` |
 | BigQuery | Service account | `db_type=bigquery, project, dataset, credentials_json` |
 
@@ -160,7 +160,7 @@ The benchmark runner registers connections via `gateway.store.create_connection(
 
 ### MCP Credential Extras (All Tools)
 
-All MCP tool handlers in `gateway/mcp_server.py` pass `credential_extras` to the pool manager when acquiring connections. This ensures that BigQuery service account JSON and Snowflake OAuth tokens flow through to the connectors for **every** tool — not just `query_database`. Without this, schema exploration tools (`list_tables`, `describe_table`, `schema_overview`, etc.) would fail for cloud databases because the connector falls back to default credentials (ADC / password auth).
+All MCP tool handlers in `gateway/mcp_server.py` pass `credential_extras` to the pool manager when acquiring connections. This ensures that BigQuery service account JSON and Snowflake PAT credentials flow through to the connectors for **every** tool — not just `query_database`. Without this, schema exploration tools (`list_tables`, `describe_table`, `schema_overview`, etc.) would fail for cloud databases because the connector falls back to default credentials (ADC / password auth).
 
 ### Validation Checks (every task must pass all 7)
 
@@ -294,7 +294,7 @@ Runs 5 synthetic tasks across all 3 suites and all 4 database backends (35 total
 
 | Task | Suite | DB Backend | What it tests |
 |------|-------|------------|---------------|
-| 1 | spider2-snowflake | Snowflake | OAuth connection via `.env.snowflake` |
+| 1 | spider2-snowflake | Snowflake | PAT connection via `.env.snowflake` |
 | 2 | spider2-dbt | DuckDB | Local DuckDB file + dbt skills + dbt system prompt |
 | 3 | spider2-lite | SQLite | Local SQLite file + SQL skills |
 | 4 | spider2-lite | Snowflake | Snowflake connection via lite suite |

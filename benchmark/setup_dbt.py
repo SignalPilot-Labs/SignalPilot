@@ -229,7 +229,7 @@ def adopt_result_as_gold(instance_id: str, spider2_dir: Path, result_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description="Setup Spider2-DBT benchmark")
     parser.add_argument("--spider2-dir", type=Path,
-                        default=Path("C:/Users/kiwi0/Desktop/what/spider2-repo"))
+                        default=Path(os.environ.get("SPIDER2_DBT_DIR", "/home/agentuser/spider2-repo/spider2-dbt")).parent)
     parser.add_argument("--build-gold", nargs="?", const="all", default=None,
                         help="Build missing gold DBs. Optionally specify instance_id.")
     parser.add_argument("--adopt-result", nargs=2, metavar=("INSTANCE_ID", "RESULT_DIR"),

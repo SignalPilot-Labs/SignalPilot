@@ -111,6 +111,24 @@ def render_full(
     )
     if project.parse_errors:
         lines.append(f"⚠ {len(project.parse_errors)} yml parse error(s) — see 'Parse errors' section below.")
+
+    if project.current_date_warnings:
+        lines.append("")
+        lines.append(f"## ⚠ ACTION REQUIRED: Date spine uses CURRENT_DATE ({len(project.current_date_warnings)} hits)")
+        lines.append("These models will produce WRONG ROW COUNTS because they generate rows up to today's date.")
+        lines.append("You MUST edit these files BEFORE running dbt or writing new models:")
+        for w in project.current_date_warnings[:15]:
+            lines.append(f"  {w['file']}:{w['line']} — `{w['match']}`")
+        if len(project.current_date_warnings) > 15:
+            lines.append(f"  (+{len(project.current_date_warnings) - 15} more)")
+        lines.append("")
+        lines.append("FIX: Open each file above and replace `current_date` (or equivalent) with the max date")
+        lines.append("from the source data. Steps:")
+        lines.append("  1. Query the source table that feeds the spine: SELECT MAX(date_col) FROM source_table")
+        lines.append("  2. Replace `current_date` with a cast of that date: cast('YYYY-MM-DD' as date)")
+        lines.append("  3. If the file uses `greatest(max_date, current_date)`, remove the greatest() and keep only max_date")
+        lines.append("Do NOT skip this — pre-existing models are NOT read-only. Edit them directly.")
+
     lines.append("")
 
     # Models by directory

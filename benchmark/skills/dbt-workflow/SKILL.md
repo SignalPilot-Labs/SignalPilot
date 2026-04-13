@@ -6,6 +6,24 @@ type: skill
 
 # dbt Workflow Skill
 
+## 0. Date Spine Override — Fix CURRENT_DATE in Existing Models
+
+**Before writing any new SQL**, scan ALL existing `.sql` files under `models/` for `current_date`, `now()`, `getdate()`, or `sysdate`. The `dbt_project_map` tool flags these automatically.
+
+These produce future-dated rows when the run date is after the source data's date range. Fix them:
+
+1. Identify the date column used in the spine (look for `date_spine`, `dateadd`, or date range generation patterns)
+2. Find the source table that feeds the spine — trace through `ref()` or `source()` calls
+3. Query that source table: `SELECT MAX(date_column) FROM source_table`
+4. Replace `current_date` (or equivalent) with a hardcoded date literal from step 3, or wrap it: `(SELECT MAX(date_column) FROM source_table)`
+
+Common patterns to fix:
+- `end_date = "current_date"` in `dbt_utils.date_spine()` calls
+- `dbt.dateadd("day", 1, "current_date")` as a spine endpoint
+- `greatest(max_date, current_date)` — remove the `greatest()` wrapper entirely, keep only the data-derived date
+
+Do NOT skip this step. Pre-existing models are NOT read-only — you must edit them when they contain date functions that reference the current runtime date.
+
 ## 1. Output Shape Inference — Read YML description Before Writing SQL
 
 Extract from `description:` field:
@@ -46,11 +64,13 @@ Scan `macros/` directory before writing any model. Call macros with `{{ macro_na
 ## 4. JOIN Type Selection
 
 - **DEFAULT: LEFT JOIN for all JOINs.** Start FROM the table that defines all output entities (all customers, all dates, all admins) and LEFT JOIN everything else to it. This is the correct choice for the vast majority of reporting models.
-- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. When considering INNER JOIN, call `compare_join_types` first:
+- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. ALWAYS call `compare_join_types` before finalizing any JOIN that is not a self-join or date-spine join:
   ```
   mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
   ```
 - `LEFT JOIN + WHERE right.col IS NOT NULL` silently becomes INNER JOIN — avoid.
+
+**Never switch from LEFT JOIN to INNER JOIN to fix row counts.** If output has too many rows, the problem is fan-out (missing GROUP BY or un-deduplicated right table), not JOIN type. Switching to INNER JOIN silently drops entities and produces wrong answers.
 
 ## 5. Pre-JOIN Cardinality Check
 

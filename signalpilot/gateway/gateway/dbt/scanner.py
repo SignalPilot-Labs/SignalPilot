@@ -58,6 +58,14 @@ _RE_MACRO = re.compile(
     re.DOTALL,
 )
 
+# Matches bare current_date / current_timestamp / now() / getdate() / getutcdate() / sysdate
+# in SQL files. Case-insensitive. Used to flag models that produce future-dated rows
+# when the run date is past the source data's date range.
+_RE_CURRENT_DATE = re.compile(
+    r"\b(current_date\b|current_timestamp\b|now\s*\(\s*\)|getdate\s*\(\s*\)|getutcdate\s*\(\s*\)|sysdate\b)",
+    re.IGNORECASE,
+)
+
 # Stub-detection patterns (heuristics for incomplete sql files).
 # Matches any "select * from ..." where "..." is a bareword, a quoted
 # identifier, or a Jinja ref/source/macro call — all forms of trivial
@@ -441,6 +449,7 @@ def scan_filesystem(project_dir: Path) -> dict:
 
     # Walk models/ for sql files.
     sql_records: list[dict] = []
+    current_date_warnings: list[dict] = []
     for sql_path in _iter_files(models_dir, (".sql",)):
         rel = _rel(sql_path, project_dir)
         status, size, content = classify_sql_file(sql_path)
@@ -459,6 +468,7 @@ def scan_filesystem(project_dir: Path) -> dict:
             "materialization": sql_mat,
             "unique_key": sql_uk,
         })
+        current_date_warnings.extend(detect_current_date_usage(content, rel))
 
     # Walk macros/.
     macros: list[MacroInfo] = []
@@ -478,6 +488,7 @@ def scan_filesystem(project_dir: Path) -> dict:
         "sql_records": sql_records,
         "macros": macros,
         "parse_errors": parse_errors,
+        "current_date_warnings": current_date_warnings,
         "scan_ms": scan_ms,
     }
 
@@ -490,3 +501,69 @@ def _coerce_str(value) -> str | None:
         value = str(value)
     value = value.strip()
     return value or None
+
+
+def _strip_sql_line_comment(line: str) -> str:
+    """Remove a `--` line-comment suffix from a single line.
+
+    Strips everything from the first `--` to end of line. This is a heuristic
+    and does not handle `--` inside string literals, which is an accepted
+    tradeoff for a regex-based scanner.
+    """
+    idx = line.find("--")
+    if idx == -1:
+        return line
+    return line[:idx]
+
+
+def detect_current_date_usage(content: str, rel_path: str) -> list[dict]:
+    """Scan SQL content line-by-line for bare current_date / now() / etc. calls.
+
+    Processes each line individually so match positions map directly to correct
+    line numbers without any offset translation. Tracks `/* */` block comment
+    state across lines to skip commented-out code.
+
+    Returns a list of dicts, each with keys: file (str), line (int), match (str).
+    Line numbers are 1-indexed. At most one warning per occurrence is emitted.
+    """
+    warnings: list[dict] = []
+    in_block_comment = False
+
+    for line_num, line in enumerate(content.splitlines(), start=1):
+        # Handle block comment state transitions for this line.
+        # We process the line in segments separated by `/*` and `*/` markers.
+        processed_line = ""
+        remaining = line
+
+        while remaining:
+            if in_block_comment:
+                end = remaining.find("*/")
+                if end == -1:
+                    # Entire remaining line is inside a block comment — discard.
+                    remaining = ""
+                else:
+                    in_block_comment = False
+                    remaining = remaining[end + 2:]
+            else:
+                start = remaining.find("/*")
+                if start == -1:
+                    # No block comment start — rest of line is live SQL.
+                    processed_line += remaining
+                    remaining = ""
+                else:
+                    # Everything before `/*` is live SQL.
+                    processed_line += remaining[:start]
+                    in_block_comment = True
+                    remaining = remaining[start + 2:]
+
+        # Strip `--` line-comment suffix from the live SQL portion.
+        processed_line = _strip_sql_line_comment(processed_line)
+
+        for m in _RE_CURRENT_DATE.finditer(processed_line):
+            warnings.append({
+                "file": rel_path,
+                "line": line_num,
+                "match": m.group(0),
+            })
+
+    return warnings

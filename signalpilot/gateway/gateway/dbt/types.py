@@ -127,6 +127,9 @@ class ProjectMap:
     unresolved_refs: dict[str, list[str]] = field(default_factory=dict)  # model -> refs that don't resolve
 
     parse_errors: list[ParseError] = field(default_factory=list)
+    # Each dict has keys: file (str), line (int), match (str).
+    # Heuristic only — does not handle all SQL string literal edge cases.
+    current_date_warnings: list[dict] = field(default_factory=list)
     scan_time_ms: float = 0.0
 
     # Counts (cheap to access in formatters)

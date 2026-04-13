@@ -35,6 +35,7 @@ from signalpilot.gateway.gateway.dbt.scanner import (
     extract_refs_from_sql,
     extract_sources_from_sql,
     parse_yml_file,
+    scan_filesystem,
 )
 from signalpilot.gateway.gateway.dbt.types import ModelStatus
 from signalpilot.gateway.gateway.dbt.work_order import compute_work_order
@@ -663,3 +664,112 @@ def test_render_project_map_idempotent_ordering(broken_project: Path):
 def test_render_output_ends_with_newline(broken_project: Path):
     rendered = build_project_map(str(broken_project))
     assert rendered.endswith("\n")
+
+
+# ── current_date detection ───────────────────────────────────────────────────
+
+
+def test_current_date_detection_in_sql(tmp_path: Path):
+    """Scanner detects current_date and now() but not commented-out references."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    # File 1: uses current_date in a date_spine call — should be detected on line 3.
+    spine_sql = models_dir / "spine_model.sql"
+    spine_sql.write_text(
+        "{{ config(materialized='table') }}\n"
+        "select * from {{ dbt_utils.date_spine(\n"
+        "    datepart='day',\n"
+        "    start_date=cast('2020-01-01' as date),\n"
+        "    end_date=current_date\n"
+        ") }}\n",
+        encoding="utf-8",
+    )
+
+    # File 2: uses now() — should be detected on line 2.
+    now_sql = models_dir / "now_model.sql"
+    now_sql.write_text(
+        "select\n"
+        "    now() as loaded_at,\n"
+        "    id\n"
+        "from {{ ref('stg_events') }}\n",
+        encoding="utf-8",
+    )
+
+    # File 3: current_date only inside a -- line comment — must NOT be detected.
+    comment_sql = models_dir / "comment_model.sql"
+    comment_sql.write_text(
+        "-- end_date = current_date -- replaced with hardcoded value\n"
+        "select id from {{ ref('stg_users') }}\n",
+        encoding="utf-8",
+    )
+
+    raw = scan_filesystem(tmp_path)
+    warnings = raw["current_date_warnings"]
+
+    assert len(warnings) == 2, f"expected 2 warnings, got {warnings}"
+
+    files_hit = {w["file"] for w in warnings}
+    assert any("spine_model.sql" in f for f in files_hit)
+    assert any("now_model.sql" in f for f in files_hit)
+    assert not any("comment_model.sql" in f for f in files_hit)
+
+    spine_warning = next(w for w in warnings if "spine_model.sql" in w["file"])
+    assert spine_warning["line"] == 5
+    assert spine_warning["match"].lower() == "current_date"
+
+    now_warning = next(w for w in warnings if "now_model.sql" in w["file"])
+    assert now_warning["line"] == 2
+    assert now_warning["match"].lower().startswith("now")
+
+
+def test_current_date_warnings_in_rendered_output(tmp_path: Path):
+    """Date spine warnings appear prominently at the top of the rendered project map."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    (tmp_path / "dbt_project.yml").write_text(
+        "name: test_project\nversion: '1.0'\nconfig-version: 2\n",
+        encoding="utf-8",
+    )
+
+    offending_sql = models_dir / "date_spine.sql"
+    offending_sql.write_text(
+        "select current_date as spine_date\n",
+        encoding="utf-8",
+    )
+
+    rendered = build_project_map(str(tmp_path), use_cache=False)
+
+    assert "Date spine uses CURRENT_DATE" in rendered
+    assert "date_spine.sql" in rendered
+
+
+def test_no_current_date_warnings_when_clean(tmp_path: Path):
+    """Projects with no current_date usage produce no warnings in scan or render."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    (tmp_path / "dbt_project.yml").write_text(
+        "name: clean_project\nversion: '1.0'\nconfig-version: 2\n",
+        encoding="utf-8",
+    )
+
+    clean_sql = models_dir / "clean_model.sql"
+    clean_sql.write_text(
+        "select\n"
+        "    id,\n"
+        "    cast('2023-12-31' as date) as hardcoded_date,\n"
+        "    current_date_column,\n"
+        "    current_timestamp_ltz,\n"
+        "    -- current_date in a comment should not trigger\n"
+        "    now_playing\n"
+        "from {{ ref('stg_users') }}\n",
+        encoding="utf-8",
+    )
+
+    raw = scan_filesystem(tmp_path)
+    assert raw["current_date_warnings"] == []
+
+    rendered = build_project_map(str(tmp_path), use_cache=False)
+    assert "Date spine uses CURRENT_DATE" not in rendered

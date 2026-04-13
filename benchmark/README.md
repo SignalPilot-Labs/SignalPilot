@@ -219,9 +219,12 @@ benchmark/
 │   └── sqlite-sql/        # SQLite SQL patterns
 │
 ├── prompts/               # prompt reference docs
-│   ├── dbt_local_system.md
-│   ├── sql_snowflake_system.md
-│   └── sql_lite_system.md
+│   ├── dbt_local_system.md        # dbt suite system prompt (runtime: SDK system_prompt)
+│   ├── dbt_local_system.md.bak    # backup of original dbt prompt before generalization
+│   ├── dbt_local_user.md          # dbt suite user prompt template
+│   ├── system_general.md          # generalized SQL system prompt (runtime: Snowflake/Lite suites)
+│   ├── sql_snowflake_system.md    # reference doc (not used at runtime)
+│   └── sql_lite_system.md         # reference doc (not used at runtime)
 │
 ├── validate_bench.py      # structural validation (per-suite, 6 checks)
 ├── validate_bench_e2e.py  # end-to-end validation (all suites, 45 checks)

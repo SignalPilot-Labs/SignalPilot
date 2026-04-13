@@ -225,6 +225,7 @@ benchmark/
 │
 ├── validate_bench.py      # structural validation (per-suite, 6 checks)
 ├── validate_bench_e2e.py  # end-to-end validation (all suites, 45 checks)
+├── validate_live_mcp.py   # live MCP connectivity (all 4 DB backends)
 │
 ├── test_tasks/            # self-contained test suite (no spider2 data repo needed)
 │   ├── setup_test_data.py # one-time fixture creation (SQLite DBs, gold CSVs)
@@ -278,7 +279,7 @@ Gold results are CSV files in the evaluation suite. The evaluator compares the a
 
 ## Validation
 
-Two validation scripts verify the benchmark infrastructure before running real tasks.
+Three validation scripts verify the benchmark infrastructure before running real tasks.
 
 ### Structural Validation (per-suite)
 
@@ -289,6 +290,23 @@ python -m benchmark.validate_bench --suite spider2-dbt
 ```
 
 Runs 6 structural checks per suite: workdir creation, MCP config, skills discovery, system prompt, connection registration, and gold leak prevention. Exits 0 if all pass/skip, 1 if any fail.
+
+### Live MCP Connectivity (all databases)
+
+```bash
+python -m benchmark.validate_live_mcp
+```
+
+Tests live database connectivity through the full MCP gateway stack for all 4 backends (Snowflake, BigQuery, SQLite, DuckDB). For each backend: registers a test connection, queries through pool_manager with credential_extras, verifies the result, then cleans up. Cloud backends SKIP (not FAIL) when credential files are missing.
+
+```
+Backend    | Status | Detail
+-----------|--------|-------
+snowflake  | PASS   | Query returned 1 row(s)
+bigquery   | PASS   | Query returned 1 row(s)
+sqlite     | PASS   | Query returned 1 row(s)
+duckdb     | PASS   | Query returned 1 row(s)
+```
 
 ### End-to-End Validation (all suites at once)
 
@@ -332,7 +350,7 @@ The validator maps all 9 checks to 6 user-facing acceptance criteria and prints 
 
 Task                               | C1  | C2  | C3  | C4  | C5  | C6
 spider2-snowflake / snowflake      | PASS| PASS| PASS| PASS| PASS| PASS
-spider2-dbt / duckdb               | PASS| PASS| SKIP| PASS| PASS| PASS
+spider2-dbt / duckdb               | PASS| PASS| PASS| PASS| PASS| PASS
 spider2-lite / sqlite              | PASS| PASS| PASS| PASS| PASS| PASS
 spider2-lite / snowflake           | PASS| PASS| PASS| PASS| PASS| PASS
 spider2-lite / bigquery            | PASS| PASS| PASS| PASS| PASS| PASS
@@ -362,11 +380,12 @@ Criterion status rules: PASS if all mapped checks pass; FAIL if any mapped check
 ### Quick Verification Sequence
 
 ```bash
-# Run both validations to confirm everything works:
+# Run all validations to confirm everything works:
+python -m benchmark.validate_live_mcp                        # 4/4 DB backends
 python -m benchmark.validate_bench --suite spider2-dbt
 python -m benchmark.validate_bench --suite spider2-snowflake
 python -m benchmark.validate_bench --suite spider2-lite
-python -m benchmark.validate_bench_e2e
+python -m benchmark.validate_bench_e2e                       # 45/45 checks
 
 # Run the self-contained test task suite (no spider2 data repo needed):
 python -m benchmark.test_tasks.setup_test_data   # one-time setup

@@ -43,6 +43,7 @@ from .core.paths import (
     SNOWFLAKE_ENV_FILE,
     WORK_DIR,
 )
+from .agent.prompts import build_agent_prompt as build_dbt_agent_prompt
 from .agent.sql_prompts import build_sql_agent_prompt
 from .core.suite import BenchmarkSuite, DBBackend, get_suite_config
 from .core.workdir import force_rmtree, prepare_sql_workdir, write_claude_md, write_sql_claude_md
@@ -314,7 +315,20 @@ def check_prompt_building(
     if work_dir is None:
         return (name, "SKIP", "workdir not available (prior check failed)")
     if suite_name == "spider2-dbt":
-        return (name, "SKIP", "dbt prompt builder requires real dbt project files — skip in e2e")
+        try:
+            prompt = build_dbt_agent_prompt(
+                instance_id=conn_id,
+                instruction="Test instruction",
+                work_dir=work_dir,
+                eval_critical_models=set(),
+            )
+            if not prompt:
+                return (name, "FAIL", "build_dbt_agent_prompt returned empty string")
+            if conn_id not in prompt:
+                return (name, "FAIL", f"instance_id '{conn_id}' not found in dbt prompt")
+            return (name, "PASS", f"dbt prompt OK ({len(prompt)} chars, instance_id present)")
+        except Exception as exc:
+            return (name, "FAIL", f"exception: {exc}")
     try:
         db_backend = _BACKEND_MAP.get(backend)
         if db_backend is None:

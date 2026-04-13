@@ -318,6 +318,42 @@ Each task runs 9 checks:
 
 Snowflake/BigQuery checks SKIP (not FAIL) if credential files are absent or cloud auth fails (credential issue, not code bug). All cleanup (workdirs, connections, temp DB files) runs in `finally` blocks.
 
+#### User Acceptance Criteria
+
+The validator maps all 9 checks to 6 user-facing acceptance criteria and prints a summary table after all tasks complete. This gives a high-level pass/fail view before the numeric totals:
+
+```
+== User Acceptance Criteria ==
+
+Task                               | C1  | C2  | C3  | C4  | C5  | C6
+spider2-snowflake / snowflake      | PASS| PASS| PASS| PASS| PASS| PASS
+spider2-dbt / duckdb               | PASS| PASS| SKIP| PASS| PASS| PASS
+spider2-lite / sqlite              | PASS| PASS| PASS| PASS| PASS| PASS
+spider2-lite / snowflake           | PASS| PASS| PASS| PASS| PASS| PASS
+spider2-lite / bigquery            | PASS| PASS| PASS| PASS| PASS| PASS
+
+Legend:
+  C1: SDK connects to MCP
+  C2: SDK can call and see skills
+  C3: SDK has correct system prompt
+  C4: MCP connected to correct DB
+  C5: MCP not bloated with other tasks
+  C6: Gold never leaked
+```
+
+The 6 criteria and their check mappings:
+
+| Criterion | Label | Checks |
+|-----------|-------|--------|
+| C1 | SDK connects to MCP | `workdir_setup`, `mcp_query` |
+| C2 | SDK can call and see skills | `skills_copied` |
+| C3 | SDK has correct system prompt | `system_prompt`, `prompt_building`, `claude_md_written` |
+| C4 | MCP connected to correct DB | `connection_registered` |
+| C5 | MCP not bloated with other tasks | `no_bloat` |
+| C6 | Gold never leaked | `no_gold_leak` |
+
+Criterion status rules: PASS if all mapped checks pass; FAIL if any mapped check fails; SKIP if no failures but at least one mapped check was skipped (e.g. cloud credentials absent).
+
 ### Quick Verification Sequence
 
 ```bash

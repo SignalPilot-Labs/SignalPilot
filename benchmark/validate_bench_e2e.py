@@ -5,6 +5,11 @@ each (45 total checks), verifying workdir setup, skills, system prompts,
 prompt building, CLAUDE.md writing, connection registration, bloat-free store,
 no gold file leakage, and live MCP queries.
 
+After all tasks complete, prints two summary sections:
+1. User Acceptance Criteria table — maps the 9 checks to 6 user-facing criteria,
+   showing PASS/FAIL/SKIP per criterion per task at a glance.
+2. Numeric summary — total PASS/FAIL/SKIP counts across all 45 checks.
+
 Usage:
     python -m benchmark.validate_bench_e2e
     python -m benchmark.validate_bench_e2e --verbose
@@ -65,6 +70,19 @@ _BACKEND_MAP: dict[str, DBBackend] = {
     "bigquery": DBBackend.BIGQUERY,
     "sqlite": DBBackend.SQLITE,
     "duckdb": DBBackend.DUCKDB,
+}
+
+# Maps 6 user acceptance criteria to the check names that must all pass for each.
+# Key: criterion number (string "1"-"6").
+# Value: (human label, list of check names that must all PASS for criterion to PASS).
+# Logic: PASS if all checks PASS; FAIL if any check FAILs; SKIP if no FAILs but any SKIP.
+_CRITERIA_MAP: dict[str, tuple[str, list[str]]] = {
+    "1": ("SDK connects to MCP", ["workdir_setup", "mcp_query"]),
+    "2": ("SDK can call and see skills", ["skills_copied"]),
+    "3": ("SDK has correct system prompt", ["system_prompt", "prompt_building", "claude_md_written"]),
+    "4": ("MCP connected to correct DB", ["connection_registered"]),
+    "5": ("MCP not bloated with other tasks", ["no_bloat"]),
+    "6": ("Gold never leaked", ["no_gold_leak"]),
 }
 
 # All 5 task descriptors: (suite_name, backend_name, conn_id, task_dict)
@@ -625,6 +643,63 @@ def _print_check(result: CheckResult, verbose: bool) -> None:
         print(f"         {detail}")
 
 
+def _criterion_status(check_names: list[str], results: list[CheckResult]) -> str:
+    """Derive criterion status from a subset of check results.
+
+    Returns PASS if all named checks passed, FAIL if any failed,
+    SKIP if no failures but at least one was skipped.
+    """
+    status_by_name: dict[str, str] = {name: status for name, status, _ in results}
+    statuses = [status_by_name.get(check, "SKIP") for check in check_names]
+    if any(s == "FAIL" for s in statuses):
+        return "FAIL"
+    if any(s == "SKIP" for s in statuses):
+        return "SKIP"
+    return "PASS"
+
+
+def _colored_status(status: str) -> str:
+    """Return ANSI-colored 4-char status label."""
+    if status == "PASS":
+        return f"{_GREEN}PASS{_RESET}"
+    if status == "FAIL":
+        return f"{_RED}FAIL{_RESET}"
+    return f"{_YELLOW}SKIP{_RESET}"
+
+
+def _print_criteria_summary(task_result_groups: list[tuple[str, list[CheckResult]]]) -> None:
+    """Print a per-task, per-criterion acceptance criteria table.
+
+    Each row is one task; each column is one of the 6 user acceptance criteria.
+    Status per cell: PASS / FAIL / SKIP.
+    """
+    criterion_keys = list(_CRITERIA_MAP.keys())
+    header_cols = " | ".join(f"C{k}" for k in criterion_keys)
+    task_col_width = 34
+
+    print()
+    print("== User Acceptance Criteria ==")
+    print()
+    print(f"{'Task':<{task_col_width}} | {header_cols}")
+    print("-" * (task_col_width + 2 + len(criterion_keys) * 7))
+
+    for task_label, task_results in task_result_groups:
+        col_parts: list[str] = []
+        for key in criterion_keys:
+            _, check_names = _CRITERIA_MAP[key]
+            status = _criterion_status(check_names, task_results)
+            col_parts.append(_colored_status(status))
+        # Colored statuses have ANSI escapes; pad the raw label only
+        cols_str = " | ".join(col_parts)
+        print(f"{task_label:<{task_col_width}} | {cols_str}")
+
+    print()
+    print("Legend:")
+    for key, (label, _) in _CRITERIA_MAP.items():
+        print(f"  C{key}: {label}")
+    print()
+
+
 def _print_summary(all_results: list[CheckResult]) -> None:
     total = len(all_results)
     passed = sum(1 for _, s, _ in all_results if s == "PASS")
@@ -658,6 +733,7 @@ def main() -> None:
     args = parser.parse_args()
 
     all_results: list[CheckResult] = []
+    task_result_groups: list[tuple[str, list[CheckResult]]] = []
     total_tasks = len(_TASK_SPECS)
 
     for i, (suite_name, backend, conn_id, task) in enumerate(_TASK_SPECS, start=1):
@@ -671,7 +747,9 @@ def main() -> None:
             verbose=args.verbose,
         )
         all_results.extend(task_results)
+        task_result_groups.append((f"{suite_name} / {backend}", task_results))
 
+    _print_criteria_summary(task_result_groups)
     _print_summary(all_results)
 
     all_ok = all(status in ("PASS", "SKIP") for _, status, _ in all_results)

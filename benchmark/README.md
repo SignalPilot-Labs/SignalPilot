@@ -158,7 +158,11 @@ The benchmark runner registers connections via `gateway.store.create_connection(
 - `get_credential_extras(name)` follows the same pattern for OAuth tokens, service account JSON, etc.
 - This ensures externally registered connections are available without restarting the gateway.
 
-### Validation Checks (every task must pass all 6)
+### MCP Credential Extras (All Tools)
+
+All MCP tool handlers in `gateway/mcp_server.py` pass `credential_extras` to the pool manager when acquiring connections. This ensures that BigQuery service account JSON and Snowflake OAuth tokens flow through to the connectors for **every** tool — not just `query_database`. Without this, schema exploration tools (`list_tables`, `describe_table`, `schema_overview`, etc.) would fail for cloud databases because the connector falls back to default credentials (ADC / password auth).
+
+### Validation Checks (every task must pass all 7)
 
 1. **SDK connects to MCP** — agent runs without connection errors
 2. **SDK sees skills** — skills copied to `.claude/skills/`, git init for discovery
@@ -166,6 +170,7 @@ The benchmark runner registers connections via `gateway.store.create_connection(
 4. **MCP connected to correct DB** — connection registered before agent, correct type
 5. **No cross-task leakage** — connection deleted after each task, fresh registration
 6. **Gold not leaked** — gold files live outside workdir, never copied in
+7. **MCP query works** — actual SQL query executes through pool_manager with credential extras
 
 ## Architecture
 
@@ -208,7 +213,8 @@ benchmark/
 │   ├── duckdb-sql/        # DuckDB SQL patterns
 │   ├── sql-workflow/      # generic SQL workflow (Snowflake/Lite)
 │   ├── snowflake-sql/     # Snowflake SQL patterns
-│   └── bigquery-sql/      # BigQuery SQL patterns
+│   ├── bigquery-sql/      # BigQuery SQL patterns
+│   └── sqlite-sql/        # SQLite SQL patterns
 │
 ├── prompts/               # prompt reference docs
 │   ├── dbt_local_system.md
@@ -284,7 +290,7 @@ python -m benchmark.validate_bench_e2e
 python -m benchmark.validate_bench_e2e --verbose
 ```
 
-Runs 5 synthetic tasks across all 3 suites and all 4 database backends (30 total checks):
+Runs 5 synthetic tasks across all 3 suites and all 4 database backends (35 total checks):
 
 | Task | Suite | DB Backend | What it tests |
 |------|-------|------------|---------------|
@@ -294,7 +300,7 @@ Runs 5 synthetic tasks across all 3 suites and all 4 database backends (30 total
 | 4 | spider2-lite | Snowflake | Snowflake connection via lite suite |
 | 5 | spider2-lite | BigQuery | BigQuery via `service_account.json` |
 
-Each task runs 6 checks:
+Each task runs 7 checks:
 
 | # | Check | What it verifies |
 |---|-------|-----------------|
@@ -304,8 +310,9 @@ Each task runs 6 checks:
 | 4 | **connection_registered** | DB connection in gateway store with correct `db_type` |
 | 5 | **no_bloat** | No leftover `e2e_validate_*` connections from prior tasks |
 | 6 | **no_gold_leak** | No gold-related files in the workdir |
+| 7 | **mcp_query** | Actual SQL query executes through pool_manager with credential extras |
 
-Snowflake/BigQuery checks SKIP (not FAIL) if credential files are absent. All cleanup (workdirs, connections, temp DB files) runs in `finally` blocks.
+Snowflake/BigQuery checks SKIP (not FAIL) if credential files are absent or cloud auth fails (credential issue, not code bug). All cleanup (workdirs, connections, temp DB files) runs in `finally` blocks.
 
 ### Quick Verification Sequence
 

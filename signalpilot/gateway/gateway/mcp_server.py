@@ -51,6 +51,7 @@ from .store import (
     append_audit,
     get_connection,
     get_connection_string,
+    get_credential_extras,
     list_connections,
     list_sandboxes,
     load_settings,
@@ -239,9 +240,10 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         from .connectors.pool_manager import pool_manager
         from .connectors.health_monitor import health_monitor
 
+        extras = get_credential_extras(connection_name)
         start = time.monotonic()
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 rows = await connector.execute(safe_sql)
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
@@ -407,8 +409,9 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
+        extras = get_credential_extras(connection_name)
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
             return f"Error: {e}"
@@ -486,8 +489,8 @@ async def list_tables(connection_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
+        extras = get_credential_extras(connection_name)
         try:
-            extras = {}
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
@@ -558,10 +561,11 @@ async def get_date_boundaries(connection_name: str) -> str:
     if not conn_str:
         return "Error: No credentials stored for this connection"
 
+    extras = get_credential_extras(connection_name)
     schema = schema_cache.get(connection_name)
     if schema is None:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
             return f"Error: {e}"
@@ -602,7 +606,7 @@ async def get_date_boundaries(connection_name: str) -> str:
 
         col_results: dict[str, tuple[str | None, str | None]] = {}
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 rows = await connector.execute(sql)
                 if rows:
                     row = rows[0]
@@ -1817,8 +1821,9 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
 
     from .connectors.pool_manager import pool_manager
 
+    extras = get_credential_extras(connection_name)
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
     except Exception as e:
         return f"Error: {e}"
@@ -2017,8 +2022,9 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
 
     from .connectors.pool_manager import pool_manager
 
+    extras = get_credential_extras(connection_name)
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM "{table_name}"')
     except Exception as e:
         return f"Error: {e}"
@@ -2033,7 +2039,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             return f"Error: Invalid candidate key name(s): {', '.join(invalid_keys)}"
     else:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 pragma_rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         except Exception as e:
             return f"Error fetching schema: {e}"
@@ -2053,7 +2059,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     unique_keys: list[str] = []
     if keys:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 for key in keys:
                     try:
                         dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM "{table_name}"')
@@ -2119,8 +2125,9 @@ async def validate_model_output(
 
     from .connectors.pool_manager import pool_manager
 
+    extras = get_credential_extras(connection_name)
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
     except Exception as e:
         return f"Error: {e}"
@@ -2133,7 +2140,7 @@ async def validate_model_output(
         if not _MODEL_NAME_RE.match(source_table):
             return f"Error: Invalid source_table name '{source_table}'."
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{source_table}"')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
@@ -2212,9 +2219,11 @@ async def audit_model_sources(
 
     from .connectors.pool_manager import pool_manager
 
+    extras = get_credential_extras(connection_name)
+
     # Step 1: Get model row count.
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
     except Exception as e:
         return f"Error: could not query model '{model_name}': {e}"
@@ -2235,7 +2244,7 @@ async def audit_model_sources(
             source_lines.append(f"  {src}:  ERROR: invalid table name (skipped)")
             continue
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{src}"')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
@@ -2272,7 +2281,7 @@ async def audit_model_sources(
     if sample_nulls and model_rows > 0:
         _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 pragma_rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
             all_cols = [r.get("name", "") for r in pragma_rows if r.get("name")]
             total_col_count = len(all_cols)
@@ -2288,7 +2297,7 @@ async def audit_model_sources(
                     col_scan_lines.append(f"  [--] {col}: skipped (unsafe column name)")
                     continue
                 try:
-                    async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                    async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                         col_result = await connector.execute(
                             f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
                             f'COUNT(DISTINCT "{col}") as dist '
@@ -2398,6 +2407,8 @@ async def compare_join_types(
 
     from .connectors.pool_manager import pool_manager
 
+    extras = get_credential_extras(connection_name)
+
     # Extract left and right columns from the first join key for NULL detection.
     # join_keys like "a.id = b.id" — extract "a.id" and "b.id"
     first_key = join_keys.split(",")[0].strip()
@@ -2455,7 +2466,7 @@ SELECT
 """
 
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             result = await connector.execute(sql)
     except Exception as e:
         return f"Error: {e}"

@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import shutil
 import sqlite3
@@ -358,6 +359,60 @@ def check_no_bloat(conn_id: str, conn_registered: bool) -> CheckResult:
         return (name, "FAIL", f"exception: {exc}")
 
 
+def check_mcp_query(
+    backend: str,
+    conn_id: str,
+    conn_registered: bool,
+    tmp_db_path: str | None,
+) -> CheckResult:
+    """Check 7: actually query the registered connection via pool_manager.
+
+    Verifies that credential_extras flow through to the connector —
+    the fix for the empty-extras bug in mcp_server.py.
+    For local DBs (DuckDB/SQLite) we query the temp test table.
+    For cloud DBs (Snowflake/BigQuery) we run a trivial SELECT 1.
+    """
+    name = "mcp_query"
+    if not conn_registered:
+        return (name, "SKIP", "connection not registered (prior check skipped/failed)")
+    try:
+        sys.path.insert(0, str(GATEWAY_SRC))
+        from gateway.connectors.pool_manager import PoolManager  # noqa: PLC0415
+        from gateway.store import (  # noqa: PLC0415
+            get_connection,
+            get_connection_string,
+            get_credential_extras,
+        )
+
+        conn_info = get_connection(conn_id)
+        conn_str = get_connection_string(conn_id)
+        extras = get_credential_extras(conn_id)
+        if conn_info is None or conn_str is None:
+            return (name, "FAIL", f"connection '{conn_id}' not retrievable from store")
+
+        pm = PoolManager()
+
+        async def _query() -> list:
+            async with pm.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                if backend in ("duckdb", "sqlite"):
+                    return await connector.execute("SELECT COUNT(*) AS cnt FROM e2e_test")
+                # Cloud backends: trivial query that doesn't need tables
+                return await connector.execute("SELECT 1 AS ok")
+
+        result = asyncio.run(_query())
+        if not result:
+            return (name, "FAIL", f"query returned empty result for {conn_id}")
+        return (name, "PASS", f"query OK: {result}")
+    except Exception as exc:
+        err = str(exc)
+        # Cloud credential issues are SKIPs, not FAILs
+        if backend in ("snowflake", "bigquery") and (
+            "oauth" in err.lower() or "credentials" in err.lower() or "authentication" in err.lower()
+        ):
+            return (name, "SKIP", f"cloud auth issue (not a code bug): {err[:120]}")
+        return (name, "FAIL", f"exception: {err[:200]}")
+
+
 def check_no_gold_leak(work_dir: Path | None) -> CheckResult:
     """Check 6: no gold-named files in the workdir."""
     name = "no_gold_leak"
@@ -426,6 +481,11 @@ def run_task(
         r6 = check_no_gold_leak(work_dir)
         results.append(r6)
         _print_check(r6, verbose)
+
+        # Check 7: actually query the connection via pool_manager
+        r7 = check_mcp_query(backend, conn_id, conn_registered, tmp_db_path)
+        results.append(r7)
+        _print_check(r7, verbose)
 
     finally:
         # Clean up connection

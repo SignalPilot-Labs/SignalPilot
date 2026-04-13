@@ -150,6 +150,14 @@ python -m benchmark.run_batch --suite spider2-lite --tasks lite001,lite002
 | SQLite | File path | `db_type=sqlite, database=<path>` |
 | BigQuery | Service account | `db_type=bigquery, project, dataset, credentials_json` |
 
+### Credential Reload (Gateway Integration)
+
+The benchmark runner registers connections via `gateway.store.create_connection()` before launching the agent. The MCP gateway process (started by Claude Agent SDK) picks up these credentials automatically via a **reload-on-miss** mechanism in `gateway/store.py`:
+
+- `get_connection_string(name)` checks the in-memory vault first. If the key is missing, it re-reads `credentials.enc` from disk and retries.
+- `get_credential_extras(name)` follows the same pattern for OAuth tokens, service account JSON, etc.
+- This ensures externally registered connections are available without restarting the gateway.
+
 ### Validation Checks (every task must pass all 6)
 
 1. **SDK connects to MCP** — agent runs without connection errors

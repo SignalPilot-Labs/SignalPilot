@@ -154,6 +154,15 @@ def _load_credentials():
         logger.warning("Failed to load encrypted credentials: %s", e)
 
 
+def reload_credentials() -> None:
+    """Re-read credentials from disk into the in-memory vault.
+
+    Call this to pick up credentials written by another process without restarting.
+    """
+    _load_credentials()
+    logger.info("Reloaded credentials from disk")
+
+
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -356,7 +365,11 @@ def update_connection(name: str, update: ConnectionUpdate) -> ConnectionInfo | N
 
 
 def get_connection_string(name: str) -> str | None:
-    return _credential_vault.get(name)
+    result = _credential_vault.get(name)
+    if result is None:
+        reload_credentials()
+        return _credential_vault.get(name)
+    return result
 
 
 def _build_connection_string(conn: ConnectionCreate) -> str:
@@ -519,6 +532,8 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
 
 def get_credential_extras(name: str) -> dict:
     """Get extra credential data for a connection."""
+    if name not in _credential_extras:
+        reload_credentials()
     return _credential_extras.get(name, {})
 
 

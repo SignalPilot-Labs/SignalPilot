@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "signalpilot-gateway"
+version = "0.1.0"
+description = "SignalPilot Gateway — governed MCP server for AI database access"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "httpx>=0.28.0",
+    "sqlglot>=25.0.0",
+    "asyncpg>=0.30.0",
+    "aiofiles>=24.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "cryptography>=44.0.0",
+    "python-multipart>=0.0.9",
+    "typer>=0.15.0",
+    "mcp>=1.0.0",
+    "pyyaml>=6.0.0",
+    # Database connectors
+    "pymysql>=1.1.0",
+    "pymssql>=2.3.0",
+    "psycopg2-binary>=2.9.0",
+    "sshtunnel>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.28.0"]
+snowflake = ["snowflake-connector-python>=3.6.0"]
+bigquery = ["google-cloud-bigquery>=3.20.0"]
+clickhouse = ["clickhouse-driver>=0.2.7"]
+databricks = ["databricks-sql-connector>=3.0.0"]
+trino = ["trino>=0.330.0"]
+all-connectors = [
+    "snowflake-connector-python>=3.6.0",
+    "google-cloud-bigquery>=3.20.0",
+    "clickhouse-driver>=0.2.7",
+    "databricks-sql-connector>=3.0.0",
+    "trino>=0.330.0",
+]
+
+[project.scripts]
+sp = "gateway.cli:app"
+signalpilot-mcp = "gateway.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gateway"]

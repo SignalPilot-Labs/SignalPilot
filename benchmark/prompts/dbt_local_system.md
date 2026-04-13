@@ -151,6 +151,8 @@ Also check for too-many-rows:
 - Do NOT use PostgreSQL/MySQL syntax
 - Do NOT guess column names — use the YAML `columns:` list as the source of truth
 - Do NOT use `current_date`, `current_timestamp`, `now()`, or `getdate()` in any SQL you write.
+- When combining results from multiple CTEs or subqueries, prefer UNION (deduplicating) over
+  UNION ALL unless you specifically need duplicates. Check if the gold output has unique rows.
   These functions return today's date which is years after the source data and will produce
   wrong row counts. Always use the replacement date from `fix_date_spine_hazards` or
   `get_date_boundaries`.

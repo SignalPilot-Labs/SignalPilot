@@ -55,7 +55,11 @@ class DateSpineFix:
 # ── Replacement logic ─────────────────────────────────────────────────────────
 
 
-def _replace_date_patterns(sql: str, replacement_date: str) -> tuple[str, list[str]]:
+def _replace_date_patterns(
+    sql: str,
+    replacement_date: str,
+    add_day_offset: bool = True,
+) -> tuple[str, list[str]]:
     """Replace date hazard patterns in SQL, skipping comment regions.
 
     Uses a line-by-line strategy:
@@ -63,13 +67,24 @@ def _replace_date_patterns(sql: str, replacement_date: str) -> tuple[str, list[s
     - Block comment regions (/* ... */) are tracked with a simple open/close flag.
     - Content inside comment regions is never substituted.
 
+    Args:
+        sql: Source SQL to transform.
+        replacement_date: Date string like "2022-01-31" used as the literal replacement.
+        add_day_offset: When True (default), adds INTERVAL '1 day' to mimic current_date
+            behavior for raw source data (max data date + 1 = today). When False, uses
+            the date as-is (for hazard table dates or explicit caller-provided dates that
+            already reflect the desired current_date value).
+
     Returns (modified_sql, list_of_matched_pattern_names).
     """
-    # Use max_date + 1 day to mimic current_date behavior.
-    # current_date returns "today", which is always 1 day after the last complete
-    # day in the source data. Date spine macros treat end_date as exclusive, so
-    # without +1 the spine would be 1 row short.
-    date_literal = f"('{replacement_date}'::date + INTERVAL '1 day')::date"
+    if add_day_offset:
+        # Use max_date + 1 day to mimic current_date behavior.
+        # current_date returns "today", which is always 1 day after the last complete
+        # day in the source data. Date spine macros treat end_date as exclusive, so
+        # without +1 the spine would be 1 row short.
+        date_literal = f"('{replacement_date}'::date + INTERVAL '1 day')::date"
+    else:
+        date_literal = f"'{replacement_date}'::date"
     found_patterns: set[str] = set()
 
     output_lines: list[str] = []
@@ -115,15 +130,23 @@ def _replace_date_patterns(sql: str, replacement_date: str) -> tuple[str, list[s
     return "".join(output_lines), sorted(found_patterns)
 
 
-def _make_override_content(source_sql: str, replacement_date: str) -> tuple[str, list[str]]:
+def _make_override_content(
+    source_sql: str,
+    replacement_date: str,
+    add_day_offset: bool = True,
+) -> tuple[str, list[str]]:
     """Create a package model override: prepend config block + replace date patterns."""
-    replaced_sql, patterns = _replace_date_patterns(source_sql, replacement_date)
+    replaced_sql, patterns = _replace_date_patterns(source_sql, replacement_date, add_day_offset)
     return CONFIG_BLOCK + replaced_sql, patterns
 
 
-def _make_inplace_content(source_sql: str, replacement_date: str) -> tuple[str, list[str]]:
+def _make_inplace_content(
+    source_sql: str,
+    replacement_date: str,
+    add_day_offset: bool = True,
+) -> tuple[str, list[str]]:
     """Edit a project model in-place: replace date patterns, preserve config block if present."""
-    return _replace_date_patterns(source_sql, replacement_date)
+    return _replace_date_patterns(source_sql, replacement_date, add_day_offset)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -133,6 +156,7 @@ def generate_date_spine_fixes(
     project_dir: Path,
     hazards: list[dict],
     replacement_date: str,
+    add_day_offset: bool = True,
 ) -> list[DateSpineFix]:
     """Generate DateSpineFix objects for all hazards.
 
@@ -141,6 +165,9 @@ def generate_date_spine_fixes(
         hazards: List of hazard dicts from scanner (date_hazards field on ProjectMap).
                  Each dict has: file, pattern, model_name, package (bool), override_path (str).
         replacement_date: Date string like "2022-01-31" used as the literal replacement.
+        add_day_offset: When True (default), adds INTERVAL '1 day' to mimic current_date
+            behavior for raw source data. When False, uses the date as-is (for hazard table
+            dates or explicit caller-provided dates that already reflect the right value).
 
     Returns:
         List of DateSpineFix objects. Caller is responsible for writing files.
@@ -173,7 +200,7 @@ def generate_date_spine_fixes(
             except OSError as e:
                 raise OSError(f"Cannot read package source {source_path}: {e}") from e
 
-            content, patterns = _make_override_content(source_sql, replacement_date)
+            content, patterns = _make_override_content(source_sql, replacement_date, add_day_offset)
             fixes.append(DateSpineFix(
                 original_path=source_rel,
                 output_path=output_path,
@@ -192,7 +219,7 @@ def generate_date_spine_fixes(
             except OSError as e:
                 raise OSError(f"Cannot read project model {source_path}: {e}") from e
 
-            content, patterns = _make_inplace_content(source_sql, replacement_date)
+            content, patterns = _make_inplace_content(source_sql, replacement_date, add_day_offset)
             fixes.append(DateSpineFix(
                 original_path=source_rel,
                 output_path=output_path,

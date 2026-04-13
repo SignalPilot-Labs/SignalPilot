@@ -852,12 +852,18 @@ async def fix_date_spine_hazards(
     if not project_path.exists():
         return f"Error: project directory does not exist: {project_dir}"
 
-    # Determine the replacement date.
+    # Determine the replacement date and whether to add a +1 day offset.
+    # add_day_offset=True only when the date comes from raw source data (global_max),
+    # where max_data_date + 1 = current_date. When the date comes from a pre-existing
+    # hazard table or is provided explicitly by the caller, it already reflects the
+    # correct current_date value, so no offset is needed.
     resolved_date: str
     date_source: str
+    add_day_offset: bool
     if replacement_date.strip():
         resolved_date = replacement_date.strip()
         date_source = f"{resolved_date} (provided explicitly)"
+        add_day_offset = False
     else:
         try:
             boundaries = await _fetch_date_boundaries(connection_name)
@@ -880,9 +886,11 @@ async def fix_date_spine_hazards(
         )
         if hazard_date:
             resolved_date, date_source = hazard_date
+            add_day_offset = False
         elif boundaries.global_max:
             resolved_date = boundaries.global_max
             date_source = f"{resolved_date} (global max date — no hazard table found)"
+            add_day_offset = True
         else:
             return (
                 f"Error: Could not determine a replacement date from connection '{connection_name}'. "
@@ -898,7 +906,7 @@ async def fix_date_spine_hazards(
 
     # Generate fixes (pure, no I/O).
     try:
-        fixes = generate_date_spine_fixes(project_path, hazards, resolved_date)
+        fixes = generate_date_spine_fixes(project_path, hazards, resolved_date, add_day_offset)
     except OSError as e:
         return f"Error reading source files: {e}"
 

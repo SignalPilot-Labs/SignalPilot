@@ -135,13 +135,30 @@ FORMAT('%s-%d', str_col, int_col)        -- printf-style formatting
 - **Numeric precision**: BigQuery's FLOAT64 can lose precision. Use NUMERIC type or ROUND() only when the question asks for it.
 - **INFORMATION_SCHEMA**: `SELECT * FROM dataset.INFORMATION_SCHEMA.COLUMNS` for metadata queries — useful when schema_overview is insufficient.
 
-## 12. Spider2 BigQuery Patterns
+## 12. Spider2 BigQuery Patterns (CRITICAL)
 
 - **Default project**: `spider2-public-data`. Table references: `spider2-public-data.{dataset}.{table}`
-- **StackOverflow tags**: Stored as pipe-delimited strings in `tags` column (e.g., `|python|python-2.7|`).
-  To filter for Python 2 specific questions (excluding Python 3):
-  ```sql
-  WHERE REGEXP_CONTAINS(tags, r'python-2') AND NOT REGEXP_CONTAINS(tags, r'python-3')
-  ```
+- **StackOverflow tags format**: Pipe-delimited e.g. `|python|python-2.7|`
+  * Python 2 specific: `REGEXP_CONTAINS(tags, r'\|python-2\.\d+\|') AND NOT REGEXP_CONTAINS(tags, r'\|python-3')`
+  * ALWAYS use `explore_column` on the tags column first to see the exact format in the actual data.
+  * The pipe delimiters are part of the format — `'|python|'` not `'python'`.
+- **accepted_answer_id**: Check if it's an ID column (join to answers table) or a boolean flag.
+- **view_count, answer_count**: These are per-question metrics, not per-answer.
+- **For "maximum number of answers"**: COUNT answers grouped by question, then MAX.
 - **Date columns**: Many BQ tables store dates as TIMESTAMP or DATE. Always check the actual type with describe_table.
-- **Large tables**: Use partition filters and LIMIT during exploration. Avoid SELECT * on tables with >1M rows.
+- **Large tables**: Always check partition columns — unfiltered scans may timeout or be blocked.
+  Use partition filters and LIMIT during exploration. Avoid SELECT * on tables with >1M rows.
+- **Omitting project**: If the connection already points to spider2-public-data, omit the project prefix.
+
+## 13. BigQuery Schema Discovery
+
+When MCP tools are slow for BigQuery, use SQL directly:
+
+```sql
+SELECT table_name, column_name, data_type
+FROM `{dataset}.INFORMATION_SCHEMA.COLUMNS`
+ORDER BY table_name, ordinal_position;
+```
+
+This is faster than schema_overview for BigQuery and gives exact column names and types.
+Use this when you need to discover what columns exist without calling describe_table multiple times.

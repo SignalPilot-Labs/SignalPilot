@@ -6,6 +6,23 @@ type: skill
 
 # SQL Workflow Skill
 
+## 0. How Your Output Is Evaluated
+
+The evaluator compares your result.csv against a gold CSV:
+- Row count MUST match exactly (no partial credit)
+- Column VALUES are compared, not column NAMES — each gold column vector is matched
+  against ANY of your result columns
+- Float tolerance: 0.01 absolute (so 3.14159 matches 3.14)
+- Dates: '2024-01-01 00:00:00' matches '2024-01-01'
+- Row order does not matter (results are sorted before comparison)
+
+PRIORITY: (1) correct row count > (2) correct values > (3) correct column count > (4) column names
+
+This means:
+- Do NOT waste turns renaming columns to match gold — only VALUES matter
+- DO spend turns on getting the row count right — a single extra or missing row fails the task
+- DO spend turns on getting the values right — precision matters within the 0.01 tolerance
+
 ## 1. Schema Exploration — Do This First
 
 Before writing any SQL, understand the data:
@@ -41,6 +58,13 @@ Critical checks:
 - If the question asks for a single number, the result MUST be 1 row × 1 column
 - If the question says "how many", verify the CSV has exactly 1 row with a COUNT value
 - If "top N" appears in the question, verify the CSV has at most N rows
+
+After running your final query, ALWAYS run this check:
+```sql
+SELECT COUNT(*) FROM (<your_query>) sub;
+```
+Compare against your EXPECTED comment. If they differ by more than 10%, re-examine your
+query logic — wrong row count is the single most common cause of task failure.
 
 ## 3. Iterative Query Building — Build Bottom-Up
 
@@ -147,3 +171,19 @@ If your query works and passes all verification checks, SAVE IMMEDIATELY — do 
   * Filter conditions match domain values (check with explore_column if unsure)
   * "Excluding X" means the right thing (NOT IN vs EXCEPT vs WHERE NOT)
   * Metrics match domain definitions (e.g., "scored points" in F1 = points > 0, not just participated)
+
+## 9. Mandatory Early Save
+
+Save result.csv and result.sql the FIRST time you have a working query with
+plausible results. You can overwrite them later. Reasons:
+- Rate limits may prevent you from saving later
+- Timeout kills your process — unsaved work is lost
+- An imperfect CSV that's close scores the same as a perfect one (evaluator tolerance)
+
+RULE: By turn (max_turns - 5), you MUST have saved result.csv. If you haven't,
+save whatever you have immediately. An imperfect saved result beats a perfect
+unsaved one every time — timeouts and rate limits are real failure modes.
+
+SAVE EARLY, SAVE OFTEN: Once you have a query that returns plausible results,
+write result.csv and result.sql IMMEDIATELY. You can always overwrite them later
+with improved results. An imperfect result.csv beats a missing one.

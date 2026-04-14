@@ -37,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
-CHINOOK_CANONICAL = r"C:\Users\kiwi0\Desktop\what\spider2-repo\spider2-dbt\examples\chinook001"
+CHINOOK_CANONICAL = "/home/agentuser/spider2-repo/spider2-dbt/examples/chinook001"
 
 
 def _truncate(s: str, n: int = 800) -> str:

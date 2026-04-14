@@ -176,3 +176,29 @@ SELECT printf('%s-%s', category, subcategory) FROM t;
 - **HAVING without GROUP BY**: Not valid in SQLite — always pair HAVING with GROUP BY.
 - **Recursive CTEs**: `WITH RECURSIVE` works in SQLite — useful for hierarchical data (org charts, category trees).
 - **No LIMIT in subqueries with IN**: `WHERE col IN (SELECT ... LIMIT N)` is not supported — use a CTE instead.
+
+## 13. Spider2 SQLite Patterns
+
+- Tables often have inconsistent casing — use `PRAGMA table_info(table_name)` to check exact column names
+- Many SQLite databases have TEXT columns storing numbers — CAST to REAL/INTEGER for math:
+  ```sql
+  CAST(salary_col AS REAL)
+  ```
+- Date columns are often TEXT in YYYY-MM-DD format — use `date()` for comparison:
+  ```sql
+  WHERE date(event_col) >= '2024-01-01'
+  ```
+- Some databases have salary/monetary columns with commas or currency symbols —
+  use REPLACE to clean before CAST:
+  ```sql
+  CAST(REPLACE(REPLACE(salary_col, ',', ''), '$', '') AS REAL)
+  ```
+- NTILE and window functions work but can be slow on large tables —
+  consider alternatives (subquery with ROW_NUMBER) if timing out
+- No QUALIFY clause — wrap in subquery:
+  ```sql
+  SELECT * FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY x ORDER BY y DESC) AS rn
+    FROM t
+  ) WHERE rn = 1
+  ```

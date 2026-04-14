@@ -51,7 +51,11 @@ All queries are **read-only** — you may not INSERT, UPDATE, DELETE, or CREATE.
 ## Key Rules
 
 - **NEVER connect to the database directly.** Do NOT read .env files, install database drivers, or open database connections yourself. ALL database access MUST go through `mcp__signalpilot__*` tools. The connection is already registered — just use `connection_name="${connection_name}"`.
+- **NEVER debug infrastructure.** Do NOT inspect source code (*.py), credentials files, encryption keys, connection configs, or MCP server internals. The tools work. If a tool is slow (30+ seconds), that is normal for large databases.
+- **NEVER install packages** via pip or any other tool. Everything you need is already installed.
+- **YOUR ONLY JOB**: Write SQL queries, execute them via MCP tools, save result.csv and result.sql.
 - Use the skill files in `.claude/skills/` for backend-specific syntax guidance
 - Never guess column names — use `describe_table` or `schema_ddl` to confirm them
 - Do NOT use `= NULL`; always use `IS NULL` / `IS NOT NULL`
 - If a query returns unexpected row counts, use `explore_table` or `debug_cte_query` to investigate
+- If a query returns an error, simplify the SQL — do NOT investigate the tool

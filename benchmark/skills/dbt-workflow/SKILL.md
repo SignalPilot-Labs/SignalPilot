@@ -6,6 +6,46 @@ type: skill
 
 # dbt Workflow Skill
 
+## 0. Date Spine Override — Fix CURRENT_DATE in Existing Models
+
+**Before writing any new SQL**, scan ALL existing `.sql` files under `models/` for `current_date`, `now()`, `getdate()`, or `sysdate`. The `dbt_project_map` tool flags these automatically.
+
+These produce future-dated rows when the run date is after the source data's date range. Fix them:
+
+1. Identify the date column used in the spine (look for `date_spine`, `dateadd`, or date range generation patterns)
+2. Find the source table that feeds the spine — trace through `ref()` or `source()` calls
+3. Query that source table: `SELECT MAX(date_column) FROM source_table`
+4. Replace `current_date` (or equivalent) with a hardcoded date literal from step 3, or wrap it: `(SELECT MAX(date_column) FROM source_table)`
+
+Common patterns to fix:
+- `end_date = "current_date"` in `dbt_utils.date_spine()` calls
+- `dbt.dateadd("day", 1, "current_date")` as a spine endpoint
+- `greatest(max_date, current_date)` — remove the `greatest()` wrapper entirely, keep only the data-derived date
+
+Do NOT skip this step. Pre-existing models are NOT read-only — you must edit them when they contain date functions that reference the current runtime date.
+
+## 0b. Non-Deterministic Ordering -- Fix ROW_NUMBER Tiebreakers
+
+The `dbt_project_map` tool flags `ROW_NUMBER() OVER (ORDER BY ...)` calls
+where the ORDER BY does not uniquely identify rows within the partition.
+This produces different surrogate keys depending on execution environment,
+thread count, and DuckDB version.
+
+For each flagged file:
+1. Identify the PARTITION BY columns (the grouping context)
+2. Identify what makes each row unique WITHIN that partition -- check the
+   source table's primary key or unique columns via `explore_table`
+3. Add those columns to the ORDER BY as tiebreakers
+
+Common fix patterns:
+- `ROW_NUMBER() OVER (ORDER BY patient_id)` where rows have an encounter_id
+  -> `ROW_NUMBER() OVER (ORDER BY patient_id, encounter_id)`
+- `ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at)` where
+  multiple events share the same timestamp
+  -> add the event's primary key: `ORDER BY created_at, event_id`
+- `ROW_NUMBER() OVER (ORDER BY NULL)` or missing ORDER BY
+  -> find the natural key of the table and use it as the full ORDER BY
+
 ## 1. Output Shape Inference — Read YML description Before Writing SQL
 
 Extract from `description:` field:
@@ -46,11 +86,13 @@ Scan `macros/` directory before writing any model. Call macros with `{{ macro_na
 ## 4. JOIN Type Selection
 
 - **DEFAULT: LEFT JOIN for all JOINs.** Start FROM the table that defines all output entities (all customers, all dates, all admins) and LEFT JOIN everything else to it. This is the correct choice for the vast majority of reporting models.
-- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. When considering INNER JOIN, call `compare_join_types` first:
+- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. ALWAYS call `compare_join_types` before finalizing any JOIN that is not a self-join or date-spine join:
   ```
   mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
   ```
 - `LEFT JOIN + WHERE right.col IS NOT NULL` silently becomes INNER JOIN — avoid.
+
+**Never switch from LEFT JOIN to INNER JOIN to fix row counts.** If output has too many rows, the problem is fan-out (missing GROUP BY or un-deduplicated right table), not JOIN type. Switching to INNER JOIN silently drops entities and produces wrong answers.
 
 ## 5. Pre-JOIN Cardinality Check
 
@@ -131,3 +173,35 @@ If `dbt_project_map` warns about ROW_NUMBER/RANK/DENSE_RANK in pre-shipped model
 4. Run `dbt run --select <model>` and verify row counts match expectations
 
 Common pattern: `ROW_NUMBER() OVER (ORDER BY patient_id)` — if patient_id repeats across rows, add a secondary sort like `ORDER BY patient_id, encounter_id`.
+
+## 14. DuckDB Type System for dbt
+
+DuckDB is strict about types in UNION, COALESCE, and CASE WHEN:
+- Cannot mix VARCHAR and INTEGER in CASE WHEN branches — CAST explicitly:
+  ```sql
+  CASE WHEN condition THEN CAST(int_col AS VARCHAR) ELSE 'default' END
+  ```
+- Cannot COALESCE(timestamp_col, integer_default) — types must match
+- UNION requires matching column types across branches — CAST if needed:
+  ```sql
+  SELECT CAST(id AS VARCHAR) AS id FROM a
+  UNION ALL
+  SELECT id FROM b  -- both must be same type
+  ```
+- DATE vs TIMESTAMP: DuckDB distinguishes these. Use `DATE '2024-01-01'` not `TIMESTAMP`
+- INTEGER division: `5/2 = 2` (integer division). Use `5.0/2` or `CAST(5 AS DOUBLE)/2` for decimal results
+
+Before running dbt, validate your SQL mentally for type consistency in:
+- Every CASE WHEN (all THEN/ELSE branches must be the same type)
+- Every COALESCE (all arguments must be the same type)
+- Every UNION (column types must match positionally)
+
+## 15. First-Run Checklist (Before dbt run)
+
+1. Read ALL .yml files — extract model names, column lists, and descriptions
+2. Read ALL existing .sql files — understand what's already implemented
+3. Run `dbt_project_map` to get dependency graph and warnings
+4. Check for `packages.yml` — if present, run `dbt deps` first
+5. Create ephemeral stubs for any missing `ref()` targets
+6. Write ALL model SQL files before running dbt (even minimal versions)
+7. Run `dbt run --select +model_name` for each evaluation target

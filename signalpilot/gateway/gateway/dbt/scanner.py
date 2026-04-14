@@ -58,6 +58,22 @@ _RE_MACRO = re.compile(
     re.DOTALL,
 )
 
+# Matches bare current_date / current_timestamp / now() / getdate() / getutcdate() / sysdate
+# in SQL files. Case-insensitive. Used to flag models that produce future-dated rows
+# when the run date is past the source data's date range.
+_RE_CURRENT_DATE = re.compile(
+    r"\b(current_date\b|current_timestamp\b|now\s*\(\s*\)|getdate\s*\(\s*\)|getutcdate\s*\(\s*\)|sysdate\b)",
+    re.IGNORECASE,
+)
+
+# Matches ROW_NUMBER() OVER ( ... ) — full content regex with DOTALL since
+# OVER clauses routinely span multiple lines. Captures the OVER body in group 1.
+# Uses a simple one-level paren nesting pattern sufficient for benchmark SQL.
+_RE_NONDETERMINISTIC_ROWNUM = re.compile(
+    r"ROW_NUMBER\s*\(\s*\)\s*OVER\s*\(\s*((?:[^()]*|\([^()]*\))*)\)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 # Stub-detection patterns (heuristics for incomplete sql files).
 # Matches any "select * from ..." where "..." is a bareword, a quoted
 # identifier, or a Jinja ref/source/macro call — all forms of trivial
@@ -620,6 +636,8 @@ def scan_filesystem(project_dir: Path) -> dict:
         "sql_records": sql_records,
         "macros": macros,
         "parse_errors": parse_errors,
+        "current_date_warnings": date_hazards,
+        "nondeterministic_warnings": nondeterminism_warnings,
         "scan_ms": scan_ms,
         "date_hazards": date_hazards,
         "nondeterminism_warnings": nondeterminism_warnings,
@@ -634,3 +652,210 @@ def _coerce_str(value) -> str | None:
         value = str(value)
     value = value.strip()
     return value or None
+
+
+def _strip_sql_line_comment(line: str) -> str:
+    """Remove a `--` line-comment suffix from a single line.
+
+    Strips everything from the first `--` to end of line. This is a heuristic
+    and does not handle `--` inside string literals, which is an accepted
+    tradeoff for a regex-based scanner.
+    """
+    idx = line.find("--")
+    if idx == -1:
+        return line
+    return line[:idx]
+
+
+def _blank_sql_comments(content: str) -> str:
+    """Replace SQL comments with same-length whitespace to preserve character offsets.
+
+    Line comments (`--` to end of line) are replaced with spaces up to the
+    newline; block comments (`/* ... */`) are replaced with spaces, keeping
+    newlines in place so line numbers derived from offset counting stay correct.
+    """
+    result = list(content)
+    i = 0
+    length = len(content)
+    while i < length:
+        # Check for block comment start
+        if content[i] == "/" and i + 1 < length and content[i + 1] == "*":
+            j = i + 2
+            while j < length - 1:
+                if content[j] == "*" and content[j + 1] == "/":
+                    j += 2
+                    break
+                j += 1
+            else:
+                j = length
+            # Replace from i to j with spaces, preserving newlines
+            for k in range(i, j):
+                if result[k] != "\n":
+                    result[k] = " "
+            i = j
+        # Check for line comment start
+        elif content[i] == "-" and i + 1 < length and content[i + 1] == "-":
+            j = i
+            while j < length and content[j] != "\n":
+                result[j] = " "
+                j += 1
+            i = j
+        else:
+            i += 1
+    return "".join(result)
+
+
+def _count_order_by_columns(order_by_text: str) -> int:
+    """Count comma-separated items in an ORDER BY clause, ignoring commas inside parens.
+
+    Returns the number of segments. Used to determine if ORDER BY has only one
+    column (flag as potentially non-deterministic) or multiple columns (skip).
+    """
+    depth = 0
+    segments = 0
+    has_content = False
+    for ch in order_by_text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            if has_content:
+                segments += 1
+            has_content = False
+        else:
+            if not ch.isspace():
+                has_content = True
+    if has_content:
+        segments += 1
+    return segments
+
+
+def _normalize_clause(text: str) -> str:
+    """Lowercase and strip all whitespace from a clause text for comparison."""
+    return "".join(text.lower().split())
+
+
+def detect_nondeterministic_row_number(content: str, rel_path: str) -> list[dict]:
+    """Scan SQL content for ROW_NUMBER() OVER (...) calls that are non-deterministic.
+
+    Operates on full file content with re.DOTALL because OVER clauses span
+    multiple lines. Pre-processes content to blank out comments before matching.
+
+    Flags as non-deterministic when:
+    - ORDER BY is missing from the OVER body
+    - ORDER BY has only one comma-separated item (one column)
+    - PARTITION BY text exactly equals ORDER BY text (after normalization)
+
+    Returns list of dicts with keys: file, line, match, partition_by, order_by.
+    Line numbers are 1-indexed, computed from original content offsets.
+    """
+    cleaned = _blank_sql_comments(content)
+    warnings: list[dict] = []
+
+    for m in _RE_NONDETERMINISTIC_ROWNUM.finditer(cleaned):
+        over_body = m.group(1)
+        over_body_upper = over_body.upper()
+
+        # Extract ORDER BY text
+        order_by_text: str | None = None
+        ob_idx = over_body_upper.find("ORDER BY")
+        if ob_idx != -1:
+            order_by_text = over_body[ob_idx + len("ORDER BY"):].strip()
+
+        # Extract PARTITION BY text (everything between PARTITION BY and ORDER BY or end)
+        partition_by_text: str | None = None
+        pb_idx = over_body_upper.find("PARTITION BY")
+        if pb_idx != -1:
+            pb_end = ob_idx if ob_idx != -1 and ob_idx > pb_idx else len(over_body)
+            partition_by_text = over_body[pb_idx + len("PARTITION BY"):pb_end].strip()
+
+        # Determine if this is non-deterministic
+        is_nondeterministic = False
+
+        if order_by_text is None:
+            # No ORDER BY at all
+            is_nondeterministic = True
+        else:
+            col_count = _count_order_by_columns(order_by_text)
+            if col_count <= 1:
+                is_nondeterministic = True
+            elif (
+                partition_by_text is not None
+                and _normalize_clause(partition_by_text) == _normalize_clause(order_by_text)
+            ):
+                is_nondeterministic = True
+
+        if not is_nondeterministic:
+            continue
+
+        # Compute line number from original content (not cleaned — same offsets)
+        line_num = content[: m.start()].count("\n") + 1
+
+        # Build a trimmed display of the full match
+        full_match = m.group(0).strip()
+        # Normalize whitespace runs in the match for compact display
+        display_match = " ".join(full_match.split())
+
+        warnings.append({
+            "file": rel_path,
+            "line": line_num,
+            "match": display_match,
+            "partition_by": partition_by_text,
+            "order_by": order_by_text,
+        })
+
+    return warnings
+
+
+def detect_current_date_usage(content: str, rel_path: str) -> list[dict]:
+    """Scan SQL content line-by-line for bare current_date / now() / etc. calls.
+
+    Processes each line individually so match positions map directly to correct
+    line numbers without any offset translation. Tracks `/* */` block comment
+    state across lines to skip commented-out code.
+
+    Returns a list of dicts, each with keys: file (str), line (int), match (str).
+    Line numbers are 1-indexed. At most one warning per occurrence is emitted.
+    """
+    warnings: list[dict] = []
+    in_block_comment = False
+
+    for line_num, line in enumerate(content.splitlines(), start=1):
+        # Handle block comment state transitions for this line.
+        # We process the line in segments separated by `/*` and `*/` markers.
+        processed_line = ""
+        remaining = line
+
+        while remaining:
+            if in_block_comment:
+                end = remaining.find("*/")
+                if end == -1:
+                    # Entire remaining line is inside a block comment — discard.
+                    remaining = ""
+                else:
+                    in_block_comment = False
+                    remaining = remaining[end + 2:]
+            else:
+                start = remaining.find("/*")
+                if start == -1:
+                    # No block comment start — rest of line is live SQL.
+                    processed_line += remaining
+                    remaining = ""
+                else:
+                    # Everything before `/*` is live SQL.
+                    processed_line += remaining[:start]
+                    in_block_comment = True
+                    remaining = remaining[start + 2:]
+
+        # Strip `--` line-comment suffix from the live SQL portion.
+        processed_line = _strip_sql_line_comment(processed_line)
+
+        for m in _RE_CURRENT_DATE.finditer(processed_line):
+            warnings.append({
+                "file": rel_path,
+                "line": line_num,
+                "match": m.group(0),
+            })
+
+    return warnings

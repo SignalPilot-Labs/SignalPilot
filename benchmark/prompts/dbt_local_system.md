@@ -82,6 +82,27 @@ fix each flagged file (project: edit in-place; package: create override as above
 3. If not unique, append the primary key to the ORDER BY
 4. Run `dbt run --select <model_name>` to verify.
 
+**CRITICAL — Date spine check**: if the output contains "ACTION REQUIRED: Date
+spine uses CURRENT_DATE", you MUST fix every flagged file RIGHT NOW — before
+Step 1, before writing any new SQL. For each flagged file:
+1. Query the source table for its max date: `SELECT MAX(date_col) FROM table`
+2. Open the flagged `.sql` file with Edit
+3. Replace `current_date` with `cast('YYYY-MM-DD' as date)` using the date from step 1
+4. If it uses `greatest(X, current_date)`, simplify to just `X`
+Do not proceed to Step 1 until every flagged file is fixed. These are NOT
+read-only — they are project files you must edit. Skipping this step guarantees
+wrong row counts in downstream models.
+
+**CRITICAL -- Non-deterministic ROW_NUMBER check**: if the output contains
+"Non-deterministic ROW_NUMBER detected", you MUST fix every flagged file
+before Step 1. For each flagged file:
+1. Open the .sql file with Read
+2. Find the ROW_NUMBER() OVER (...) call
+3. Add a tiebreaker column to the ORDER BY that makes each row unique within
+   its PARTITION BY. Good tiebreakers: a unique ID column, a timestamp, or
+   multiple columns that together form a composite key.
+Do not proceed to Step 1 until every flagged file is fixed.
+
 Cross-check the result against the Task instruction above — if the task
 mentions a model or table that does NOT appear in the project map, the task
 wants you to create it from scratch. Add it to your build list.
@@ -129,12 +150,19 @@ For each model you created, run a SQL query via `mcp__signalpilot__query_databas
 to confirm it produced rows: `SELECT COUNT(*) FROM model_name`
 If a model has 0 rows and it should have data, something is wrong — debug it.
 
-Also check for too-many-rows:
-- A summary model (one row per driver, year, category) should return COUNT(*) equal to
-  COUNT(DISTINCT group_key). If it returns more, your JOIN is fanning out or GROUP BY is missing a column.
-- A detail model should return <= source row count unless the JOIN intentionally expands rows.
-- If counts are unexpectedly high: add a missing WHERE clause, switch LEFT JOIN to INNER JOIN,
-  or pre-aggregate the right side of a JOIN before joining.
+Also check row counts in both directions:
+
+**Too-many-rows (fan-out):** A summary model should return COUNT(*) == COUNT(DISTINCT group_key).
+If higher, the JOIN is fanning out or GROUP BY is missing a column. Fix: add the missing GROUP BY
+column or pre-aggregate the right side before joining.
+
+**Too-few-rows (over-filter):** If COUNT(*) is lower than the driving table, an INNER JOIN or WHERE
+is silently dropping rows. Call `mcp__signalpilot__compare_join_types` to compare LEFT vs INNER row
+counts, then switch to LEFT JOIN if entities are lost. Never switch LEFT JOIN to INNER JOIN to reduce
+counts — that drops data and masks the real problem.
+
+Use `mcp__signalpilot__compare_join_types` and `mcp__signalpilot__audit_model_sources` to diagnose
+JOIN issues rather than guessing.
 
 ### STOP only when: dbt run exits 0 AND all your new models have row counts > 0.
 

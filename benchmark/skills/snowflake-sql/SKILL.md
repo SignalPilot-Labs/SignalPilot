@@ -116,3 +116,28 @@ SELECT * FROM my_table AT (TIMESTAMP => '2024-01-01'::TIMESTAMP);
 - **LISTAGG**: Use `LISTAGG(col, ',') WITHIN GROUP (ORDER BY col)` for string aggregation (not GROUP_CONCAT).
 - **TRY_CAST / TRY_TO_NUMBER**: Use for safe type conversion that returns NULL instead of error.
 - **OBJECT_KEYS / ARRAY_SIZE**: Useful for introspecting semi-structured data before querying.
+
+## 10. Large Database Patterns
+
+For databases with 50+ tables or millions of rows (CMS_DATA, STACKOVERFLOW,
+NHTSA_TRAFFIC_FATALITIES, WORLD_BANK):
+
+- Read DDL.csv from schema/ directory FIRST — do not call schema_overview
+- Column names are UPPERCASE in Snowflake. Do not try lowercase first.
+- Always use fully qualified table names: SCHEMA.TABLE
+- Use LIMIT 100 on all exploratory queries
+- If describe_table is slow, read the JSON schema file instead
+- For date filtering, check actual date ranges with:
+  ```sql
+  SELECT MIN(date_col), MAX(date_col) FROM schema.table LIMIT 1;
+  ```
+
+## 11. Spider2-Snowflake Gotchas
+
+- Non-PUBLIC schemas: Most Spider2 databases store data in named schemas, not PUBLIC.
+  Always check with list_tables which schema has the actual tables.
+- IDENTIFIER CASE: Unquoted identifiers are uppercased. If a column was created with
+  double-quotes as "myCol", you must reference it as "myCol" (quoted). Check with describe_table.
+- FLOAT vs NUMBER: Snowflake defaults to NUMBER(38,0) for integers. Do not CAST to FLOAT
+  for aggregations — precision loss will fail evaluation.
+- LISTAGG for string agg: LISTAGG(col, ',') WITHIN GROUP (ORDER BY col)

@@ -236,11 +236,21 @@ Use SignalPilot MCP tools to explore and query the database:
         content += f"However, do NOT query it directly — use the MCP tools with connection_name=\"{connection_name}\".\n"
 
     content += """
+## Evaluation
+Your result.csv is compared against a gold CSV by an automated evaluator:
+- ROW COUNT must match exactly (no partial credit for being close)
+- Column values are compared (not names) — column naming is cosmetic, values must be correct
+- Float tolerance: 0.01 absolute (3.14159 matches 3.14)
+- Row order does not matter (results are sorted before comparison)
+- Dates: '2024-01-01 00:00:00' matches '2024-01-01' (datetime suffixes are normalized)
+
 ## Key Rules
 - This is a READ-ONLY task — do NOT insert, update, delete, or create objects
 - Write your final SQL query to `result.sql` in this directory
 - Write your final result as a CSV to `result.csv` in this directory
 - Use the connection name shown above for all MCP tool calls
+- SAVE EARLY: Write result.csv the moment you have plausible results. You can overwrite later.
+  An imperfect saved result beats a perfect unsaved one (timeouts and rate limits are real).
 """
 
     (work_dir / "CLAUDE.md").write_text(content)

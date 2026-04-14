@@ -94,6 +94,10 @@ _LARGE_DB_MAX_TURNS: dict[str, int] = {
     "CMS_DATA": 75,
     "STACKOVERFLOW": 75,
     "complex_oracle": 75,
+    "NHTSA_TRAFFIC_FATALITIES": 75,
+    "WORLD_BANK": 75,
+    "PATENTS": 75,
+    "stackoverflow": 75,  # BigQuery lowercase variant
 }
 
 

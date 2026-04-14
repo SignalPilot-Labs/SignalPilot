@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_agent_sdk import (
@@ -63,6 +64,10 @@ async def run_sdk_agent(
 
     log_separator(f"AGENT model={model}  max_turns={max_turns}  timeout={timeout}s  label={label}")
 
+    start_iso = datetime.now(timezone.utc).isoformat()
+    cost_usd: float | None = None
+    usage: dict | None = None
+
     for attempt in range(1, max_retries + 1):
         messages: list[str] = []
         tool_calls: list[dict] = []
@@ -87,7 +92,7 @@ async def run_sdk_agent(
                             truncated = tool_input_str[:500] + "..." if len(tool_input_str) > 500 else tool_input_str
                             log(f"[tool_use] {block.name}")
                             log(f"  input: {truncated}")
-                            tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count})
+                            tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count, "timestamp": time.time()})
                             if block.name in SKILL_TOOL_NAMES:
                                 log(f"[skill] Agent invoked /{block.name}")
                             elif block.name == "Skill" and isinstance(block.input, dict):
@@ -102,9 +107,11 @@ async def run_sdk_agent(
                     elapsed = time.monotonic() - start_time
                     log(f"AGENT FINISHED after {turn_count} turns, {elapsed:.1f}s")
                     if hasattr(message, "cost_usd"):
-                        log(f"  Cost: ${getattr(message, 'cost_usd', 'N/A')}")
+                        cost_usd = getattr(message, "cost_usd", None)
+                        log(f"  Cost: ${cost_usd!r}")
                     if hasattr(message, "usage"):
-                        log(f"  Usage: {getattr(message, 'usage', 'N/A')}")
+                        usage = getattr(message, "usage", None)
+                        log(f"  Usage: {usage!r}")
                     success = True
 
         except (ProcessError, ClaudeSDKError) as e:
@@ -127,6 +134,7 @@ async def run_sdk_agent(
             return {
                 "success": False, "messages": messages, "tool_calls": tool_calls,
                 "turns": turn_count, "elapsed": time.monotonic() - start_time,
+                "cost_usd": cost_usd, "usage": usage, "started_at": start_iso,
             }
 
         except Exception as e:
@@ -147,15 +155,20 @@ async def run_sdk_agent(
                 return {
                     "success": False, "messages": messages, "tool_calls": tool_calls,
                     "turns": turn_count, "elapsed": time.monotonic() - start_time,
+                    "cost_usd": cost_usd, "usage": usage, "started_at": start_iso,
                 }
 
         elapsed = time.monotonic() - start_time
         return {
             "success": success, "messages": messages, "tool_calls": tool_calls,
             "turns": turn_count, "elapsed": elapsed,
+            "cost_usd": cost_usd, "usage": usage, "started_at": start_iso,
         }
 
-    return {"success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0}
+    return {
+        "success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0,
+        "cost_usd": None, "usage": None, "started_at": start_iso,
+    }
 
 
 async def run_quick_fix_agent(fix_prompt: str, work_dir: Path, model: str) -> bool:

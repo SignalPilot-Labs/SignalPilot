@@ -157,11 +157,10 @@ The database is registered in SignalPilot as connection `{connection_name}`.
 Database type: `{backend.value}`
 
 Use SignalPilot MCP tools to explore and query the database:
-- `mcp__signalpilot__list_tables` — list all tables
+- `mcp__signalpilot__list_tables` — list all tables with column names and row counts (START HERE)
 - `mcp__signalpilot__describe_table` — column details for a table
 - `mcp__signalpilot__explore_table` — deep-dive with sample values
 - `mcp__signalpilot__query_database` — run SQL queries (read-only)
-- `mcp__signalpilot__schema_overview` — quick overview of the whole database
 - `mcp__signalpilot__schema_ddl` — full schema as DDL (CREATE TABLE statements)
 - `mcp__signalpilot__schema_link` — find tables relevant to a question
 - `mcp__signalpilot__find_join_path` — find how to join two tables
@@ -169,6 +168,7 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__validate_sql` — check SQL syntax without executing
 - `mcp__signalpilot__debug_cte_query` — test CTE steps independently
 - `mcp__signalpilot__explain_query` — get execution plan
+- `mcp__signalpilot__schema_overview` — whole-database overview (slow — prefer list_tables instead)
 """
 
     # Add external knowledge section if non-CLAUDE.md .md files exist

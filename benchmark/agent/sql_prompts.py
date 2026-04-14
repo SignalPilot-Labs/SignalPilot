@@ -72,16 +72,26 @@ DATABASE: SignalPilot connection '{connection_name}' (backend: {db_backend.value
 
 WORKFLOW — follow these steps in order:
 
-1. SCHEMA DISCOVERY (at most 3-5 tool calls — stop when you have enough):
-   - mcp__signalpilot__schema_overview — high-level overview of schemas and tables
-   - mcp__signalpilot__describe_table — column details for relevant tables
-   - mcp__signalpilot__explore_column — distinct values for key categorical columns
-   - mcp__signalpilot__find_join_path — if join relationships are unclear
-   STOP after 3-5 calls. Do not explore exhaustively.
+1. SCHEMA DISCOVERY (at most 3-5 tool calls):
+   - mcp__signalpilot__list_tables — START HERE. Lists all tables with column names and row counts.
+   - mcp__signalpilot__describe_table — column details for the 2-3 most relevant tables
+   - mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly)
+   Do NOT call schema_overview — it is slow in this environment. list_tables gives you what you need.
 
 2. PLAN THE QUERY (before writing SQL):
    - Read the question for cardinality clues: "for each X" = GROUP BY, "top N" = LIMIT/QUALIFY,
      "total/sum" = 1-row aggregate, "how many" = COUNT (1 row result)
+   - COUNT SEMANTICS — read the question carefully:
+     * "How many [things]" = COUNT(DISTINCT thing_identifier), NOT COUNT(*)
+       Example: "How many indicators have value 0" = COUNT(DISTINCT indicator_name) WHERE value = 0
+       Example: "How many customers ordered" = COUNT(DISTINCT customer_id)
+     * "How many rows/records/entries" = COUNT(*) — only when the question explicitly says rows/records
+     * "How many times" = COUNT(*) — counting occurrences, not distinct entities
+     * When in doubt, ask: "Am I counting unique entities or total rows?" — usually unique entities.
+   - COLUMN NAMING — the output column name must reflect the question's intent:
+     * "How many debt indicators" -> zero_value_indicator_count, NOT just "count"
+     * Use AS to give every computed column a descriptive snake_case alias
+     * Never leave a column named COUNT(*) or SUM(...) — always alias it
    - Write a comment: -- EXPECTED: <row count estimate> rows because <reason>
 
 3. BUILD INCREMENTALLY (do not write a 50-line query and run it):
@@ -98,6 +108,9 @@ WORKFLOW — follow these steps in order:
    e. Fan-out: if JOINing, run SELECT COUNT(*), COUNT(DISTINCT <pk>) FROM (your_query) t
       If they differ, you have duplicate rows — fix the JOIN before saving.
    f. Re-read the question: does your output actually answer what was asked?
+   g. Semantic cross-check: if the question asks "how many X", verify your count is plausible.
+      Run: SELECT COUNT(*) as total_rows, COUNT(DISTINCT x_column) as distinct_x FROM source_table WHERE <conditions>
+      If your result equals total_rows but distinct_x is much smaller, you likely need COUNT(DISTINCT).
 
 5. ERROR RECOVERY — diagnose, do not just retry:
    - Syntax error: use validate_sql to catch errors before burning a query turn
@@ -124,6 +137,15 @@ RULES:
 - Date values in CSV: use ISO 8601 (YYYY-MM-DD) unless the question specifies otherwise
 - String case in CSV: preserve the case from the database — do not change case unless asked
 - If the correct answer is 0 or empty: write a CSV with just the header row (or header + "0")
+
+CRITICAL — DO NOT:
+- Read, explore, or modify source code files (*.py, *.js). You are a SQL analyst, not a developer.
+- Debug MCP server internals, gateway infrastructure, or connection code. The tools work as-is.
+- Try to start, restart, or configure the HTTP gateway. It is intentionally not running.
+- Spend turns on anything other than SQL exploration, query writing, and result saving.
+- If an MCP tool returns an error, try a different tool or approach — do NOT investigate the tool's code.
+- If list_tables returns empty or errors, try: mcp__signalpilot__schema_ddl or read schema/ files.
+- Tables may be in a non-PUBLIC schema. Use fully qualified names: SCHEMA.TABLE (e.g., STACKOVERFLOW.POSTS_QUESTIONS).
 
 TURN BUDGET: You have {max_turns} turns.
 - Spend at most 20% on schema exploration (turns 1-3).

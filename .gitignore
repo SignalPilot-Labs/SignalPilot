@@ -10,6 +10,8 @@ __pycache__/
 benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json
+benchmark/_sql_workdir/
+benchmark/test_tasks/_workdir/
 
 # Self-improve build artifacts
 self-improve/monitor-web/.next/

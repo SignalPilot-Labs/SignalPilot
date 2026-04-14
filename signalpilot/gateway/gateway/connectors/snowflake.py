@@ -27,7 +27,7 @@ class SnowflakeConnector(BaseConnector):
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
         self._login_timeout: int = 15
-        self._network_timeout: int = 30
+        self._network_timeout: int = 120
         self._keepalive: bool = True
         self._keepalive_heartbeat: int = 900  # 15 min default
 
@@ -285,6 +285,14 @@ class SnowflakeConnector(BaseConnector):
                 return []
 
         def _fetch_all():
+            # Increase statement timeout for metadata queries — large databases
+            # (e.g., STACKOVERFLOW with 23M+ rows) can timeout at the default 30s.
+            try:
+                timeout_cursor = self._conn.cursor()
+                timeout_cursor.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 120")
+                timeout_cursor.close()
+            except Exception:
+                pass
             return (
                 _fetch(col_sql, "columns"),
                 _fetch(rc_sql, "row_counts"),

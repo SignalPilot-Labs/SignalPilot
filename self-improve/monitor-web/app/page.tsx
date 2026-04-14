@@ -2,15 +2,31 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
+import { clsx } from "clsx";
 import Image from "next/image";
 import Link from "next/link";
-import type { Run, FeedEvent, RunStatus, ToolCall, SettingsStatus, RepoInfo } from "@/lib/types";
-import { fetchToolCalls, fetchAuditLog, startRun, fetchAgentHealth, fetchBranches, fetchRepos, setActiveRepo } from "@/lib/api";
+import type {
+  Run,
+  FeedEvent,
+  RunStatus,
+  ToolCall,
+  SettingsStatus,
+  RepoInfo,
+} from "@/lib/types";
+import {
+  fetchToolCalls,
+  fetchAuditLog,
+  fetchAgentHealth,
+  fetchBranches,
+  fetchRepos,
+  setActiveRepo,
+  fetchRuns,
+} from "@/lib/api";
 import type { AgentHealth } from "@/lib/api";
 import { fetchSettingsStatus } from "@/lib/settings-api";
 import { useRuns } from "@/hooks/useRuns";
 import { useSSE } from "@/hooks/useSSE";
-import { useControl } from "@/hooks/useControl";
+import { useParallelRuns } from "@/hooks/useParallelRuns";
 import { RunList } from "@/components/sidebar/RunList";
 import { EventFeed } from "@/components/feed/EventFeed";
 import { ControlBar } from "@/components/controls/ControlBar";
@@ -23,13 +39,28 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { RepoSelector } from "@/components/ui/RepoSelector";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
+import { ParallelRunsView } from "@/components/parallel/ParallelRunsView";
+import { MobileTab } from "@/components/mobile/MobileTab";
+import { MobileControlSheet } from "@/components/mobile/MobileControlSheet";
+import { TunnelPopover } from "@/components/ui/TunnelPopover";
+import { useMobile } from "@/hooks/useMobile";
 
 export default function MonitorPage() {
-  const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(() => {
-    try { return localStorage.getItem("sp_improve_active_repo") || null; } catch { return null; }
-  });
+  const [activeRepoFilter, setActiveRepoFilter] = useState<string | null>(
+    () => {
+      try {
+        return localStorage.getItem("sp_improve_active_repo") || null;
+      } catch {
+        return null;
+      }
+    },
+  );
   const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const { runs, loading: runsLoading, refresh: refreshRuns } = useRuns(activeRepoFilter);
+  const {
+    runs,
+    loading: runsLoading,
+    refresh: refreshRuns,
+  } = useRuns(activeRepoFilter);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [historyEvents, setHistoryEvents] = useState<FeedEvent[]>([]);
@@ -38,9 +69,28 @@ export default function MonitorPage() {
   const [startBusy, setStartBusy] = useState(false);
   const [agentHealth, setAgentHealth] = useState<AgentHealth | null>(null);
   const [branches, setBranches] = useState<string[]>(["main"]);
-  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null);
+  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(
+    null,
+  );
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [suppressAutoSelect, setSuppressAutoSelect] = useState(false);
+  const [activeView, setActiveView] = useState<"feed" | "bots">("bots");
+  const isMobile = useMobile();
+  const [mobilePanel, setMobilePanel] = useState<"feed" | "runs" | "changes" | "bots">("bots");
+  const [controlsOpen, setControlsOpen] = useState(false);
+
+  const {
+    status: parallelStatus,
+    loading: parallelBusy,
+    startRun: startParallelRun,
+    stopRun: parallelStop,
+    killRun: parallelKill,
+    pauseRun: parallelPause,
+    resumeRun: parallelResume,
+    unlockRun: parallelUnlock,
+    injectPrompt: parallelInject,
+  } = useParallelRuns();
+  const parallelActive = parallelStatus?.active ?? 0;
 
   const { events: liveEvents, connected, clearEvents } = useSSE(selectedRunId);
 
@@ -52,19 +102,34 @@ export default function MonitorPage() {
     const merged = [...historyEvents];
     for (let i = 0; i < merged.length; i++) {
       const ev = merged[i];
-      if (ev._kind === "tool" && ev.data.phase === "pre" && !ev.data.output_data && ev.data.tool_use_id) {
+      if (
+        ev._kind === "tool" &&
+        ev.data.phase === "pre" &&
+        !ev.data.output_data &&
+        ev.data.tool_use_id
+      ) {
         preIndex.set(ev.data.tool_use_id, i);
       }
     }
     for (const ev of liveEvents) {
-      if (ev._kind === "tool" && ev.data.phase === "post" && ev.data.tool_use_id && preIndex.has(ev.data.tool_use_id)) {
+      if (
+        ev._kind === "tool" &&
+        ev.data.phase === "post" &&
+        ev.data.tool_use_id &&
+        preIndex.has(ev.data.tool_use_id)
+      ) {
         // Merge post into the matching pre in history
         const idx = preIndex.get(ev.data.tool_use_id)!;
         const pre = merged[idx];
         if (pre._kind === "tool") {
           merged[idx] = {
             _kind: "tool",
-            data: { ...pre.data, output_data: ev.data.output_data, duration_ms: ev.data.duration_ms, phase: "post" },
+            data: {
+              ...pre.data,
+              output_data: ev.data.output_data,
+              duration_ms: ev.data.duration_ms,
+              phase: "post",
+            },
           };
         }
         preIndex.delete(ev.data.tool_use_id);
@@ -78,11 +143,6 @@ export default function MonitorPage() {
   const addEvent = useCallback((event: FeedEvent) => {
     setHistoryEvents((prev) => [...prev, event]);
   }, []);
-
-  const { pause, resume, stop, kill, inject, unlock, resumeSession, busy } = useControl(
-    selectedRunId,
-    addEvent
-  );
 
   // Poll agent health
   useEffect(() => {
@@ -111,7 +171,9 @@ export default function MonitorPage() {
           const withRuns = r.find((repo) => repo.run_count > 0);
           const picked = withRuns?.repo || r[0].repo;
           setActiveRepoFilter(picked);
-          try { localStorage.setItem("sp_improve_active_repo", picked); } catch {}
+          try {
+            localStorage.setItem("sp_improve_active_repo", picked);
+          } catch {}
           fetchBranches(picked).then(setBranches);
         } else {
           fetchBranches(stored).then(setBranches);
@@ -123,24 +185,30 @@ export default function MonitorPage() {
   // Handle repo switch — refresh everything that depends on the active repo
   // NOTE: do NOT call refreshRuns() here — it holds a stale closure with the old repo.
   // useRuns already auto-fetches when activeRepoFilter changes via its useEffect.
-  const handleRepoSwitch = useCallback(async (repo: string) => {
-    setSuppressAutoSelect(true);
-    setActiveRepoFilter(repo || null);
-    try { if (repo) localStorage.setItem("sp_improve_active_repo", repo); else localStorage.removeItem("sp_improve_active_repo"); } catch {}
-    setSelectedRunId(null);
-    setSelectedRun(null);
-    setHistoryEvents([]);
-    clearEvents();
-    if (repo) {
-      await setActiveRepo(repo);
-      // Re-fetch branches for the new repo (direct GitHub API, no agent needed)
-      fetchBranches(repo).then(setBranches);
-    } else {
-      setBranches(["main"]);
-    }
-    // Refresh repos list to get updated counts
-    fetchRepos().then(setRepos);
-  }, [clearEvents]);
+  const handleRepoSwitch = useCallback(
+    async (repo: string) => {
+      setSuppressAutoSelect(true);
+      setActiveRepoFilter(repo || null);
+      try {
+        if (repo) localStorage.setItem("sp_improve_active_repo", repo);
+        else localStorage.removeItem("sp_improve_active_repo");
+      } catch {}
+      setSelectedRunId(null);
+      setSelectedRun(null);
+      setHistoryEvents([]);
+      clearEvents();
+      if (repo) {
+        await setActiveRepo(repo);
+        // Re-fetch branches for the new repo (direct GitHub API, no agent needed)
+        fetchBranches(repo).then(setBranches);
+      } else {
+        setBranches(["main"]);
+      }
+      // Refresh repos list to get updated counts
+      fetchRepos().then(setRepos);
+    },
+    [clearEvents],
+  );
 
   // Keep selectedRun fresh
   useEffect(() => {
@@ -165,8 +233,12 @@ export default function MonitorPage() {
         ]);
 
         // API returns DESC order — sort ASC so pre comes before post
-        tools.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-        audits.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+        tools.sort(
+          (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+        );
+        audits.sort(
+          (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime(),
+        );
 
         // Merge pre/post tool call pairs.
         // Pre has input_data (no output), post has output_data (no input).
@@ -225,30 +297,30 @@ export default function MonitorPage() {
         }));
 
         const auditEvents: FeedEvent[] = audits
-          .filter(
-            (a) => !["llm_text", "llm_thinking"].includes(a.event_type)
-          )
+          .filter((a) => !["llm_text", "llm_thinking"].includes(a.event_type))
           .map((a) => ({
             _kind: "audit" as const,
             data: a,
           }));
 
         const getTs = (e: FeedEvent): string =>
-          e._kind === "tool" ? e.data.ts
-          : e._kind === "audit" ? e.data.ts
-          : e._kind === "usage" ? e.data.ts
-          : e.ts;
-        const merged = [...toolEvents, ...auditEvents].sort((a, b) =>
-          new Date(getTs(a)).getTime() - new Date(getTs(b)).getTime()
+          e._kind === "tool"
+            ? e.data.ts
+            : e._kind === "audit"
+              ? e.data.ts
+              : e._kind === "usage"
+                ? e.data.ts
+                : e.ts;
+        const merged = [...toolEvents, ...auditEvents].sort(
+          (a, b) => new Date(getTs(a)).getTime() - new Date(getTs(b)).getTime(),
         );
 
         setHistoryEvents(merged);
       } catch {
         // SSE will pick up live events
       }
-
     },
-    [clearEvents]
+    [clearEvents],
   );
 
   // Auto-select first running or latest run on initial load only
@@ -261,65 +333,146 @@ export default function MonitorPage() {
     }
   }, [runs, selectedRunId, handleSelectRun, suppressAutoSelect]);
 
-  // Start a new run
+  // Start a new bot run (always spawns an isolated container)
   const handleStartRun = useCallback(
-    async (prompt: string | undefined, budget: number, durationMinutes: number, baseBranch: string) => {
-      setStartBusy(true);
-      try {
-        const result = await startRun(prompt, budget, durationMinutes, baseBranch);
-        setStartModalOpen(false);
-        addEvent({
-          _kind: "control",
-          text: `New run started${prompt ? ` with custom prompt` : ""}`,
-          ts: new Date().toISOString(),
-        });
-        // Switch to the new run immediately
-        if (result.run_id) {
-          setSuppressAutoSelect(false);
-          setSelectedRunId(result.run_id);
-          setSelectedRun(null);
-          setHistoryEvents([]);
-          clearEvents();
-        }
-      } catch (err) {
-        addEvent({
-          _kind: "control",
-          text: `Failed to start run: ${err}`,
-          ts: new Date().toISOString(),
-        });
-      } finally {
-        setStartBusy(false);
+    async (
+      prompt: string | undefined,
+      budget: number,
+      durationMinutes: number,
+      baseBranch: string,
+    ) => {
+      // Close modal immediately — don't block on the API
+      setStartModalOpen(false);
+      const existingIds = new Set(runs.map((r) => r.id));
+
+      // Fire API call in background
+      startParallelRun(prompt, budget, durationMinutes, baseBranch).catch(
+        (err) => {
+          addEvent({
+            _kind: "control",
+            text: `Failed to launch bot: ${err}`,
+            ts: new Date().toISOString(),
+          });
+        },
+      );
+
+      addEvent({
+        _kind: "control",
+        text: `Bot launching${prompt ? ` with custom prompt` : ""}...`,
+        ts: new Date().toISOString(),
+      });
+
+      // Poll runs list until the new run appears in the sidebar
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const freshRuns = await fetchRuns(activeRepoFilter || undefined);
+          const newRun = freshRuns.find((r) => !existingIds.has(r.id));
+          if (newRun) {
+            setSuppressAutoSelect(false);
+            refreshRuns(); // Update sidebar immediately
+            handleSelectRun(newRun.id);
+            setActiveView("feed");
+            return;
+          }
+        } catch {}
       }
     },
-    [addEvent, refreshRuns, handleSelectRun]
+    [startParallelRun, addEvent, runs, activeRepoFilter, handleSelectRun],
   );
 
   const runStatus: RunStatus | null =
     (selectedRun?.status as RunStatus) || null;
   const agentIdle = agentHealth?.status === "idle";
-  const agentReachable = agentHealth != null && agentHealth.status !== "unreachable";
+  const agentReachable =
+    agentHealth != null && agentHealth.status !== "unreachable";
   const isConfigured = settingsStatus?.configured ?? false;
 
   return (
     <div className="h-screen flex flex-col bg-[var(--color-bg)]">
-      {/* Header */}
-      <header className="relative z-10 flex items-center gap-3 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
+      {/* ── Mobile Top Bar ── */}
+      <header className="mobile-top-bar items-center gap-2 px-3 py-2 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow safe-area-top">
+        {/* Logo */}
+        <div className="relative flex items-center justify-center h-7 w-7">
+          <svg width="28" height="28" viewBox="0 0 28 28" className="absolute">
+            <circle cx="14" cy="14" r="12" fill="none"
+              stroke={runStatus === "running" ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}
+              strokeWidth="1" strokeDasharray="4 3"
+              style={runStatus === "running" ? { animation: "spin 8s linear infinite" } : undefined}
+            />
+          </svg>
+          <Image src="/logo.svg" alt="SignalPilot" width={18} height={18} className="relative z-[1]" />
+        </div>
+
+        <div>
+          <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">SignalPilot</h1>
+          <p className="text-[8px] text-[#777] tracking-[0.1em] uppercase -mt-0.5">Monitor</p>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Agent health dot */}
+        <span
+          className={`h-2 w-2 rounded-full ${
+            agentReachable ? (agentIdle ? "bg-[#00ff88]/60" : "bg-[#00ff88]") : "bg-[#ff4444]/60"
+          }`}
+          style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
+        />
+
+        {/* Tunnel manager */}
+        <TunnelPopover />
+
+        {/* Run status */}
+        {selectedRun && <StatusBadge status={selectedRun.status as RunStatus} size="md" />}
+
+        {/* Settings */}
+        <Link href="/settings" className="p-2 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </Link>
+      </header>
+
+      {/* ── Desktop Header ── */}
+      <header className="desktop-header relative z-10 flex items-center gap-3 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0a0a0a] header-glow">
         {/* Logo */}
         <div className="flex items-center gap-2">
           <div className="relative flex items-center justify-center h-7 w-7">
             {/* Animated status ring */}
-            <svg width="28" height="28" viewBox="0 0 28 28" className="absolute">
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 28 28"
+              className="absolute"
+            >
               <circle
-                cx="14" cy="14" r="12"
+                cx="14"
+                cy="14"
+                r="12"
                 fill="none"
-                stroke={runStatus === "running" ? "rgba(0,255,136,0.2)" : "rgba(255,255,255,0.06)"}
+                stroke={
+                  runStatus === "running"
+                    ? "rgba(0,255,136,0.2)"
+                    : "rgba(255,255,255,0.06)"
+                }
                 strokeWidth="1"
                 strokeDasharray="4 3"
-                style={runStatus === "running" ? { animation: "spin 8s linear infinite" } : undefined}
+                style={
+                  runStatus === "running"
+                    ? { animation: "spin 8s linear infinite" }
+                    : undefined
+                }
               />
             </svg>
             {/* Logo */}
-            <Image src="/logo.svg" alt="SignalPilot" width={18} height={18} className="relative z-[1]" />
+            <Image
+              src="/logo.svg"
+              alt="SignalPilot"
+              width={18}
+              height={18}
+              className="relative z-[1]"
+            />
           </div>
           <div>
             <h1 className="text-[12px] font-bold text-[#e8e8e8] tracking-tight">
@@ -346,10 +499,7 @@ export default function MonitorPage() {
             className="flex items-center gap-2.5 ml-1"
           >
             <div className="w-px h-4 bg-[#1a1a1a]" />
-            <StatusBadge
-              status={selectedRun.status as RunStatus}
-              size="md"
-            />
+            <StatusBadge status={selectedRun.status as RunStatus} size="md" />
             <span className="text-[10px] text-[#888] font-medium">
               {selectedRun.branch_name.replace("improvements-round-", "")}
             </span>
@@ -357,6 +507,44 @@ export default function MonitorPage() {
         )}
 
         <div className="flex-1" />
+
+        {/* View toggle */}
+        <div className="flex items-center gap-0.5 bg-white/[0.03] rounded p-0.5 border border-[#1a1a1a]">
+          <button
+            onClick={() => setActiveView("bots")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all flex items-center gap-1.5",
+              activeView === "bots"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]",
+            )}
+          >
+            Bots
+            {parallelActive > 0 && (
+              <span className="min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-[#00ff88]/15 text-[#00ff88] text-[9px] font-bold px-1">
+                {parallelActive}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveView("feed")}
+            className={clsx(
+              "px-2.5 py-1 rounded text-[10px] font-medium transition-all",
+              activeView === "feed"
+                ? "bg-white/[0.08] text-[#e8e8e8]"
+                : "text-[#666] hover:text-[#aaa]",
+            )}
+          >
+            Event Feed
+          </button>
+        </div>
+
+        <div className="w-px h-4 bg-[#1a1a1a]" />
+
+        {/* Tunnel manager */}
+        <TunnelPopover />
+
+        <div className="w-px h-4 bg-[#1a1a1a]" />
 
         {/* Agent health indicator */}
         <div className="flex items-center gap-1.5 mr-2">
@@ -368,7 +556,11 @@ export default function MonitorPage() {
                   : "bg-[#00ff88]"
                 : "bg-[#ff4444]/60"
             }`}
-            style={!agentIdle && agentReachable ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" } : undefined}
+            style={
+              !agentIdle && agentReachable
+                ? { boxShadow: "0 0 4px rgba(0,255,136,0.3)" }
+                : undefined
+            }
           />
           <span className="text-[10px] text-[#888]">
             {!agentReachable ? "Offline" : agentIdle ? "Idle" : "Active"}
@@ -381,7 +573,16 @@ export default function MonitorPage() {
           className="p-1.5 rounded hover:bg-white/[0.04] text-[#888] hover:text-[#ccc] transition-colors"
           title="Settings"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
@@ -391,47 +592,61 @@ export default function MonitorPage() {
         <Button
           variant="success"
           size="md"
-          onClick={() => { fetchBranches(activeRepoFilter || undefined).then(setBranches); setStartModalOpen(true); }}
-          disabled={!agentIdle || !agentReachable || !isConfigured}
-          title={!isConfigured ? "Configure credentials in Settings first" : undefined}
+          onClick={() => {
+            fetchBranches(activeRepoFilter || undefined).then(setBranches);
+            setStartModalOpen(true);
+          }}
+          disabled={!isConfigured}
+          title={
+            !isConfigured
+              ? "Configure credentials in Settings first"
+              : undefined
+          }
           icon={
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <polygon points="3 2 8 5 3 8" />
             </svg>
           }
         >
-          {!isConfigured
-            ? "Setup Required"
-            : !agentReachable
-              ? "Offline"
-              : !agentIdle
-                ? "Running"
-                : "New Run"}
+          {!isConfigured ? "Setup Required" : "New Bot"}
         </Button>
 
-        <div className="w-px h-4 bg-[#1a1a1a]" />
-
-        <ControlBar
-          status={runStatus}
-          onPause={pause}
-          onResume={resume}
-          onStop={stop}
-          onKill={kill}
-          onUnlock={unlock}
-          onToggleInject={() => setInjectOpen(!injectOpen)}
-          onResumeRun={resumeSession}
-          busy={busy}
-          sessionLocked={agentHealth?.session_unlocked === false}
-          timeRemaining={agentHealth?.time_remaining || null}
-        />
+        {activeView === "feed" && selectedRunId && (
+          <>
+            <div className="w-px h-4 bg-[#1a1a1a]" />
+            <ControlBar
+              status={runStatus}
+              onPause={() => parallelPause(selectedRunId)}
+              onResume={() => parallelResume(selectedRunId)}
+              onStop={() => parallelStop(selectedRunId)}
+              onKill={() => parallelKill(selectedRunId)}
+              onUnlock={() => parallelUnlock(selectedRunId)}
+              onToggleInject={() => setInjectOpen(!injectOpen)}
+              onResumeRun={() => parallelResume(selectedRunId)}
+              busy={parallelBusy}
+              sessionLocked={false}
+              timeRemaining={null}
+            />
+          </>
+        )}
       </header>
 
       {/* Inject Panel */}
       <InjectPanel
         open={injectOpen}
         onClose={() => setInjectOpen(false)}
-        onSend={inject}
-        busy={busy}
+        onSend={(prompt: string) => {
+          if (!selectedRunId) { addEvent({ _kind: "control", text: "No run selected", ts: new Date().toISOString() }); return; }
+          parallelInject(selectedRunId, prompt);
+        }}
+        busy={parallelBusy}
       />
 
       {/* Start Run Modal */}
@@ -466,30 +681,162 @@ export default function MonitorPage() {
       {selectedRun?.status === "rate_limited" && selectedRun.rate_limit_resets_at && (
         <RateLimitBanner
           resetsAt={selectedRun.rate_limit_resets_at}
-          onResume={resumeSession}
-          busy={busy}
+          onResume={() => { if (selectedRunId) parallelResume(selectedRunId); }}
+          busy={parallelBusy}
         />
       )}
 
       {/* Main Content */}
       <div className="flex flex-1 min-h-0">
-        {/* Left sidebar - Run list */}
-        <RunList
-          runs={runs}
-          activeId={selectedRunId}
-          onSelect={handleSelectRun}
-          loading={runsLoading}
-        />
+        {/* ── Desktop Layout ── */}
+        <div className="desktop-sidebar">
+          <RunList
+            runs={runs}
+            activeId={selectedRunId}
+            onSelect={(id: string) => {
+              handleSelectRun(id);
+              setActiveView("feed");
+            }}
+            loading={runsLoading}
+          />
+        </div>
 
-        {/* Center - Event feed */}
-        <main className="flex-1 flex flex-col min-h-0 min-w-0">
-          <EventFeed events={allEvents} />
-          <StatsBar run={selectedRun} connected={connected} />
-        </main>
+        {!isMobile && (
+          <>
+            {activeView === "feed" ? (
+              <>
+                <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                  <EventFeed events={allEvents} />
+                  <StatsBar
+                    run={selectedRun}
+                    connected={connected}
+                    events={allEvents}
+                  />
+                </main>
+                <div className="desktop-worktree">
+                  <WorkTree events={allEvents} runId={selectedRunId} />
+                </div>
+              </>
+            ) : (
+              <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                <ParallelRunsView
+                  onStartNew={() => {
+                    fetchBranches(activeRepoFilter || undefined).then(setBranches);
+                    setStartModalOpen(true);
+                  }}
+                  branches={branches}
+                  label="Bots"
+                />
+              </main>
+            )}
+          </>
+        )}
 
-        {/* Right sidebar - WorkTree */}
-        <WorkTree events={allEvents} runId={selectedRunId} />
+        {/* ── Mobile Layout ── */}
+        {isMobile && (
+          <div className="flex-1 flex flex-col min-h-0 min-w-0" style={{ paddingBottom: "calc(56px + env(safe-area-inset-bottom, 0px))" }}>
+            {mobilePanel === "runs" && (
+              <RunList
+                runs={runs}
+                activeId={selectedRunId}
+                onSelect={(id: string) => {
+                  handleSelectRun(id);
+                  setMobilePanel("feed");
+                }}
+                loading={runsLoading}
+                mobile
+              />
+            )}
+
+            {mobilePanel === "feed" && (
+              <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                <EventFeed events={allEvents} />
+                <StatsBar
+                  run={selectedRun}
+                  connected={connected}
+                  events={allEvents}
+                />
+              </main>
+            )}
+
+            {mobilePanel === "changes" && (
+              <WorkTree events={allEvents} runId={selectedRunId} mobile />
+            )}
+
+            {mobilePanel === "bots" && (
+              <main className="flex-1 flex flex-col min-h-0 min-w-0">
+                <ParallelRunsView
+                  onStartNew={() => {
+                    fetchBranches(activeRepoFilter || undefined).then(setBranches);
+                    setStartModalOpen(true);
+                  }}
+                  branches={branches}
+                  label="Bots"
+                />
+              </main>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* ── Mobile Bottom Tab Bar ── */}
+      <nav className="mobile-bottom-bar">
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="5" cy="5" r="3" /><circle cx="13" cy="5" r="3" /><circle cx="9" cy="13" r="3" /></svg>}
+          label="Bots"
+          active={mobilePanel === "bots"}
+          onClick={() => setMobilePanel("bots")}
+          badge={parallelActive || null}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="2" width="14" height="14" rx="2" /><line x1="2" y1="6" x2="16" y2="6" /><line x1="2" y1="10" x2="16" y2="10" /></svg>}
+          label="Runs"
+          active={mobilePanel === "runs"}
+          onClick={() => setMobilePanel("runs")}
+          badge={runs.length || null}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M3 9h12" /><path d="M3 5h8" /><path d="M3 13h10" /></svg>}
+          label="Feed"
+          active={mobilePanel === "feed"}
+          onClick={() => setMobilePanel("feed")}
+          badge={allEvents.length || null}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M9 2v14M9 2L5 6M9 2l4 4" /><circle cx="5" cy="10" r="1.5" /><circle cx="13" cy="12" r="1.5" /><line x1="5" y1="10" x2="9" y2="10" /><line x1="13" y1="12" x2="9" y2="12" /></svg>}
+          label="Changes"
+          active={mobilePanel === "changes"}
+          onClick={() => setMobilePanel("changes")}
+        />
+        <MobileTab
+          icon={<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="9" cy="6" r="2" /><path d="M5 14h8" /><path d="M4 10h10" /></svg>}
+          label="Controls"
+          active={controlsOpen}
+          onClick={() => setControlsOpen(!controlsOpen)}
+        />
+      </nav>
+
+      {/* ── Mobile Control Sheet ── */}
+      <MobileControlSheet
+        open={controlsOpen}
+        onClose={() => setControlsOpen(false)}
+        status={runStatus}
+        onPause={() => { if (selectedRunId) parallelPause(selectedRunId); }}
+        onResume={() => { if (selectedRunId) parallelResume(selectedRunId); }}
+        onStop={() => { if (selectedRunId) parallelStop(selectedRunId); }}
+        onKill={() => { if (selectedRunId) parallelKill(selectedRunId); }}
+        onUnlock={() => { if (selectedRunId) parallelUnlock(selectedRunId); }}
+        onToggleInject={() => { setInjectOpen(!injectOpen); }}
+        busy={parallelBusy}
+        repos={repos}
+        activeRepo={activeRepoFilter}
+        onRepoSelect={handleRepoSwitch}
+        onNewRun={() => {
+          fetchBranches(activeRepoFilter || undefined).then(setBranches);
+          setStartModalOpen(true);
+        }}
+        isConfigured={isConfigured}
+      />
     </div>
   );
 }

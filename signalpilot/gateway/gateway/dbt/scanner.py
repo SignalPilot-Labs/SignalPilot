@@ -461,7 +461,12 @@ def scan_dbt_packages(project_dir: Path) -> tuple[list[dict], list[dict]]:
                     elif entry.suffix.lower() == ".sql":
                         stack.append(entry)
             elif current.suffix.lower() == ".sql":
-                _scan_pkg_sql_file(current, project_dir, date_hazards, nd_warnings)
+                # Only scan model files, not macros or integration tests.
+                # Creating a model override for a macro has no effect and
+                # produces broken SQL when the fixer replaces inside Jinja calls.
+                parts = current.relative_to(pkg_dir).parts
+                if not any(p in ("macros", "integration_tests") for p in parts):
+                    _scan_pkg_sql_file(current, project_dir, date_hazards, nd_warnings)
         except OSError:
             continue
 

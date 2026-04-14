@@ -13,8 +13,23 @@ services:
       DB_PATH: /data/improve.db
       MASTER_KEY_PATH: /data/master.key
       AGENT_API_URL: http://agent:8500
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3401/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     volumes:
       - improve-db:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: improve-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://monitor:3400
+    depends_on:
+      - monitor
 
   agent:
     image: signalpilot/improve-agent
@@ -24,8 +39,7 @@ services:
     container_name: improve-agent
     restart: unless-stopped
     env_file:
-      - path: ../.env
-        required: false
+      - ../.env
     environment:
       GIT_TERMINAL_PROMPT: "0"
       DB_PATH: /data/improve.db
@@ -42,7 +56,7 @@ services:
       - ../:/workspace:rw
       - ../research:/home/agentuser/research:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${SP_BENCHMARK_DIR:-D:\signalpilot-bench}:/bench:rw
+      - ${SP_BENCHMARK_DIR:-/tmp/signalpilot-bench}:/bench:rw
       # Persist Claude CLI auth + sessions across restarts
       - claude-agent-sessions:/home/agentuser/.claude
       # Persist cloned repo so resume can pick up where it left off

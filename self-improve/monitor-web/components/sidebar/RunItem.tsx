@@ -34,17 +34,17 @@ export function RunItem({
   active: boolean;
   onClick: () => void;
 }) {
-  const branchShort = run.branch_name.replace("improvements-round-", "").slice(0, 20);
+  const branchShort = run.branch_name
+    .replace("improvements-round-", "")
+    .slice(0, 20);
 
   return (
     <motion.button
       layout
       onClick={onClick}
       className={clsx(
-        "group relative w-full text-left px-4 py-3 border-b border-[#1a1a1a]/60 transition-colors",
-        active
-          ? "bg-[#00ff88]/[0.04]"
-          : "hover:bg-white/[0.02]"
+        "group relative w-full text-left px-4 py-3 sm:py-3 border-b border-[#1a1a1a]/60 transition-colors min-h-[56px] sm:min-h-0",
+        active ? "bg-[#00ff88]/[0.04]" : "hover:bg-white/[0.02]",
       )}
     >
       {active && (
@@ -56,10 +56,12 @@ export function RunItem({
       )}
 
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={clsx(
-          "text-[12px] font-medium truncate flex-1",
-          active ? "text-[#e8e8e8]" : "text-[#ccc]"
-        )}>
+        <span
+          className={clsx(
+            "text-[12px] font-medium truncate flex-1",
+            active ? "text-[#e8e8e8]" : "text-[#ccc]",
+          )}
+        >
           {branchShort}
         </span>
         <StatusBadge status={run.status} />
@@ -69,7 +71,14 @@ export function RunItem({
         <span className="tabular-nums">{timeAgo(run.started_at)}</span>
         {run.total_tool_calls > 0 && (
           <span className="flex items-center gap-0.5">
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1">
+            <svg
+              width="8"
+              height="8"
+              viewBox="0 0 8 8"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1"
+            >
               <path d="M5.5 1L7 2.5 2.5 7H1V5.5L5.5 1z" />
             </svg>
             {run.total_tool_calls}

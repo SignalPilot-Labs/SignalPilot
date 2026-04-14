@@ -10,6 +10,7 @@ Provides:
 import asyncio
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -101,31 +102,38 @@ CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id
 """
 
 db: aiosqlite.Connection | None = None
+_db_lock = asyncio.Lock()
 
 
 async def _get_db() -> aiosqlite.Connection:
-    """Get or create the SQLite connection."""
+    """Get or create the SQLite connection (concurrency-safe)."""
     global db
-    if db is None:
+    if db is not None:
+        return db
+    async with _db_lock:
+        # Double-check after acquiring lock
+        if db is not None:
+            return db
         Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        db = await aiosqlite.connect(DB_PATH)
-        db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA busy_timeout=5000")
-        await db.executescript(SCHEMA)
+        conn = await aiosqlite.connect(DB_PATH)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
+        await conn.executescript(SCHEMA)
         # Migrate: add github_repo column to runs if missing
-        cursor = await db.execute("PRAGMA table_info(runs)")
+        cursor = await conn.execute("PRAGMA table_info(runs)")
         cols = {row[1] for row in await cursor.fetchall()}
         if "github_repo" not in cols:
-            await db.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
+            await conn.execute("ALTER TABLE runs ADD COLUMN github_repo TEXT")
         # Migrate: add session_id and agent_id to tool_calls if missing
-        cursor = await db.execute("PRAGMA table_info(tool_calls)")
+        cursor = await conn.execute("PRAGMA table_info(tool_calls)")
         tc_cols = {row[1] for row in await cursor.fetchall()}
         if "session_id" not in tc_cols:
-            await db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
+            await conn.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
         if "agent_id" not in tc_cols:
-            await db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
-        await db.commit()
+            await conn.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
+        await conn.commit()
+        db = conn
     return db
 
 
@@ -167,9 +175,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SignalPilot Self-Improve Monitor API", lifespan=lifespan)
+
+# Restrict CORS to known frontends — do not use wildcard in production
+_CORS_ORIGINS = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:3401,http://localhost:3400,http://127.0.0.1:3401,http://127.0.0.1:3400",
+).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _CORS_ORIGINS],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -193,6 +207,15 @@ def _row_to_dict(row: aiosqlite.Row) -> dict:
     if "permitted" in d:
         d["permitted"] = bool(d["permitted"])
     return d
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -383,15 +406,8 @@ async def unlock_run(run_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Agent proxy (start / health / branches / diff / stop / kill / resume)
+# Agent proxy (health / branches / diff)
 # ---------------------------------------------------------------------------
-
-class StartRunRequest(BaseModel):
-    prompt: str | None = None
-    max_budget_usd: float = 0
-    duration_minutes: float = 0
-    base_branch: str = "main"
-
 
 @app.get("/api/agent/health")
 async def agent_health():
@@ -401,41 +417,6 @@ async def agent_health():
             return res.json()
     except Exception as e:
         return {"status": "unreachable", "error": str(e)}
-
-
-@app.post("/api/agent/start")
-async def start_agent_run(body: StartRunRequest = StartRunRequest()):
-    """Trigger a new improvement run. Decrypts stored credentials and passes them to agent."""
-    conn = await _get_db()
-
-    # Read decrypted credentials from settings DB
-    creds = {}
-    for key, env_key in [("claude_token", "claude_token"), ("git_token", "git_token"), ("github_repo", "github_repo")]:
-        cursor = await conn.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
-        row = await cursor.fetchone()
-        if row:
-            val = crypto.decrypt(row["value"], MASTER_KEY_PATH) if row["encrypted"] else row["value"]
-            creds[env_key] = val
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(
-                f"{AGENT_API_URL}/start",
-                json={
-                    "prompt": body.prompt,
-                    "max_budget_usd": body.max_budget_usd,
-                    "duration_minutes": body.duration_minutes,
-                    "base_branch": body.base_branch,
-                    **creds,
-                },
-            )
-            if res.status_code == 409:
-                raise HTTPException(status_code=409, detail=res.json().get("detail", "Run in progress"))
-            return res.json()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
 @app.get("/api/agent/branches")
@@ -534,26 +515,34 @@ async def get_run_diff(run_id: str):
     return {"files": [], "total_files": 0, "total_added": 0, "total_removed": 0, "source": "unavailable"}
 
 
-@app.post("/api/agent/stop")
-async def stop_agent_instant():
+# ---------------------------------------------------------------------------
+# Parallel Run APIs (proxy to agent orchestrator)
+# ---------------------------------------------------------------------------
+
+class ParallelStartRequest(BaseModel):
+    prompt: str | None = None
+    max_budget_usd: float = 0
+    duration_minutes: float = 0
+    base_branch: str = "main"
+
+
+@app.get("/api/parallel/runs")
+async def list_parallel_runs():
+    """List all parallel run slots from the agent orchestrator."""
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.post(f"{AGENT_API_URL}/stop")
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/parallel/runs")
             return res.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+        return {"runs": [], "error": str(e)}
 
 
-class ResumeRunRequest(BaseModel):
-    run_id: str
-    max_budget_usd: float = 0
-
-
-@app.post("/api/agent/resume")
-async def resume_agent_run(body: ResumeRunRequest):
-    """Resume a previous run. Passes decrypted credentials to agent."""
+@app.post("/api/parallel/start")
+async def start_parallel_run(body: ParallelStartRequest = ParallelStartRequest()):
+    """Start a new parallel agent run. Decrypts credentials and passes to orchestrator."""
     conn = await _get_db()
 
+    # Read decrypted credentials from settings DB
     creds = {}
     for key in ("claude_token", "git_token", "github_repo"):
         cursor = await conn.execute("SELECT value, encrypted FROM settings WHERE key = ?", (key,))
@@ -563,13 +552,19 @@ async def resume_agent_run(body: ResumeRunRequest):
             creds[key] = val
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=180) as client:
             res = await client.post(
-                f"{AGENT_API_URL}/resume",
-                json={"run_id": body.run_id, "max_budget_usd": body.max_budget_usd, **creds},
+                f"{AGENT_API_URL}/parallel/start",
+                json={
+                    "prompt": body.prompt,
+                    "max_budget_usd": body.max_budget_usd,
+                    "duration_minutes": body.duration_minutes,
+                    "base_branch": body.base_branch,
+                    **creds,
+                },
             )
-            if res.status_code == 409:
-                raise HTTPException(status_code=409, detail=res.json().get("detail", "Run in progress"))
+            if res.status_code >= 400:
+                raise HTTPException(status_code=res.status_code, detail=res.json().get("detail", "Failed"))
             return res.json()
     except HTTPException:
         raise
@@ -577,11 +572,112 @@ async def resume_agent_run(body: ResumeRunRequest):
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
 
-@app.post("/api/agent/kill")
-async def kill_agent():
+@app.get("/api/parallel/status")
+async def parallel_status():
+    """Get parallel run system status."""
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.post(f"{AGENT_API_URL}/kill")
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/parallel/status")
+            return res.json()
+    except Exception as e:
+        return {"status": "unreachable", "error": str(e)}
+
+
+@app.get("/api/parallel/runs/{run_id}")
+async def get_parallel_run(run_id: str):
+    """Get status of a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{AGENT_API_URL}/parallel/runs/{run_id}")
+            if res.status_code == 404:
+                raise HTTPException(status_code=404, detail="Run not found")
+            return res.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/stop")
+async def stop_parallel_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
+    """Stop a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/parallel/runs/{run_id}/stop",
+                json={"payload": body.payload or "Operator stop"},
+            )
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/kill")
+async def kill_parallel_run(run_id: str):
+    """Kill a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/kill")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/pause")
+async def pause_parallel_run(run_id: str):
+    """Pause a specific parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/pause")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/resume")
+async def resume_parallel_run(run_id: str):
+    """Resume a paused parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/resume")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/inject")
+async def inject_parallel_run(run_id: str, body: ControlSignalRequest = ControlSignalRequest()):
+    """Inject a prompt into a parallel run."""
+    if not body.payload:
+        raise HTTPException(status_code=400, detail="Payload required")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                f"{AGENT_API_URL}/parallel/runs/{run_id}/inject",
+                json={"payload": body.payload},
+            )
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/runs/{run_id}/unlock")
+async def unlock_parallel_run(run_id: str):
+    """Unlock session for a parallel run."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/runs/{run_id}/unlock")
+            return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+
+@app.post("/api/parallel/cleanup")
+async def cleanup_parallel():
+    """Clean up finished parallel run containers."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(f"{AGENT_API_URL}/parallel/cleanup")
             return res.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
@@ -654,6 +750,35 @@ async def stream_events(run_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/poll/{run_id}")
+async def poll_events(run_id: str, after_tool: int = 0, after_audit: int = 0):
+    """Polling fallback for environments where SSE doesn't work (e.g. Cloudflare tunnels)."""
+    conn = await _get_db()
+
+    tool_calls = []
+    cursor = await conn.execute(
+        "SELECT * FROM tool_calls WHERE run_id = ? AND id > ? ORDER BY id LIMIT 100",
+        (run_id, after_tool),
+    )
+    rows = await cursor.fetchall()
+    for r in rows:
+        tool_calls.append(_row_to_dict(r))
+
+    audit_events = []
+    cursor = await conn.execute(
+        "SELECT * FROM audit_log WHERE run_id = ? AND id > ? ORDER BY id LIMIT 100",
+        (run_id, after_audit),
+    )
+    rows = await cursor.fetchall()
+    for r in rows:
+        audit_events.append(_row_to_dict(r))
+
+    return {
+        "tool_calls": tool_calls,
+        "audit_events": audit_events,
+    }
 
 
 @app.get("/api/stream/latest")
@@ -847,3 +972,70 @@ async def remove_repo(repo_slug: str):
     )
     await conn.commit()
     return {"ok": True, "remaining": repos}
+
+
+# ── Tunnel management ────────────────────────────────────────────────────────
+
+import docker  # noqa: E402
+
+_docker_client: docker.DockerClient | None = None
+TUNNEL_CONTAINER = "improve-tunnel"
+TUNNEL_URL_RE = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+
+
+def _get_docker() -> docker.DockerClient:
+    global _docker_client
+    if _docker_client is None:
+        _docker_client = docker.from_env()
+    return _docker_client
+
+
+def _parse_tunnel_url(container) -> str | None:
+    try:
+        logs = container.logs(tail=50).decode("utf-8", errors="replace")
+        matches = TUNNEL_URL_RE.findall(logs)
+        return matches[-1] if matches else None
+    except Exception:
+        return None
+
+
+@app.get("/api/tunnel/status")
+async def tunnel_status():
+    try:
+        container = _get_docker().containers.get(TUNNEL_CONTAINER)
+        url = _parse_tunnel_url(container) if container.status == "running" else None
+        return {
+            "status": container.status,
+            "url": url,
+            "container_id": container.short_id,
+        }
+    except docker.errors.NotFound:
+        return {"status": "not_found", "url": None}
+    except docker.errors.APIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/tunnel/start")
+async def tunnel_start():
+    try:
+        container = _get_docker().containers.get(TUNNEL_CONTAINER)
+        if container.status == "running":
+            return {"ok": True, "message": "already running"}
+        container.start()
+        return {"ok": True}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Tunnel container not found")
+    except docker.errors.APIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/tunnel/stop")
+async def tunnel_stop():
+    try:
+        container = _get_docker().containers.get(TUNNEL_CONTAINER)
+        container.stop(timeout=5)
+        return {"ok": True}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Tunnel container not found")
+    except docker.errors.APIError as e:
+        raise HTTPException(status_code=502, detail=str(e))

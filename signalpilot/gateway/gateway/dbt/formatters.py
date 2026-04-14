@@ -45,22 +45,25 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
     if not project.date_hazards:
         return []
     lines = [
-        "## WARNING: Models use current_date (date spine hazard)",
+        "## WARNING: Models use current_date (date spine hazard) -- AUTO-FIXABLE",
         "These model files use current_date/current_timestamp which will produce incorrect",
         "row counts when run after the source data's date range.",
-        "Load the dbt-date-spines skill for the fix procedure.",
     ]
     for hazard in project.date_hazards:
         if hazard.get("package"):
             lines.append(
-                f"  - PACKAGE MODEL — copy to {hazard['override_path']} and fix there"
+                f"  - PACKAGE MODEL -- {hazard['override_path']}"
                 f" ({hazard['file']}, {hazard['pattern']})"
             )
         else:
-            lines.append(f"  - {hazard['file']} ({hazard['pattern']}) — edit directly")
+            lines.append(f"  - {hazard['file']} ({hazard['pattern']}) -- edit directly")
+    lines.append("")
     lines.append(
-        "Action: edit project files in-place; for package files,"
-        " create a local override in models/ with the same filename."
+        f'>>> FIX: Call fix_date_spine_hazards(project_dir="{project.project_dir}",'
+        ' connection_name="<connection>") to auto-fix ALL of these.'
+    )
+    lines.append(
+        "    This will create local overrides for package models and edit project models in-place."
     )
     lines.append("")
     return lines
@@ -71,20 +74,24 @@ def _nondeterminism_lines(project: ProjectMap) -> list[str]:
     if not project.nondeterminism_warnings:
         return []
     lines = [
-        "## WARNING: Pre-shipped models use ROW_NUMBER (potential non-determinism)",
-        "ORDER BY may not be unique — add a tiebreaker (primary key) to each flagged file.",
+        "## WARNING: Pre-shipped models use ROW_NUMBER (potential non-determinism) -- AUTO-FIXABLE",
+        "ORDER BY may not be unique — tiebreaker column needed in each flagged file.",
     ]
     for warning in project.nondeterminism_warnings:
         if warning.get("package"):
             lines.append(
-                f"  - PACKAGE MODEL — copy to {warning['override_path']} and fix there"
+                f"  - PACKAGE MODEL — {warning['override_path']}"
                 f" ({warning['file']})"
             )
         else:
             lines.append(f"  - {warning['file']} — edit directly")
+    lines.append("")
     lines.append(
-        "Action: edit project files in-place; for package files,"
-        " create a local override in models/ with the same filename."
+        f'>>> FIX: Call fix_nondeterminism_hazards(project_dir="{project.project_dir}",'
+        ' connection_name="<connection>") to auto-fix ALL of these.'
+    )
+    lines.append(
+        "    This will append a tiebreaker column to ambiguous ORDER BY clauses."
     )
     lines.append("")
     return lines

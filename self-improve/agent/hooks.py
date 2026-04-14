@@ -28,19 +28,28 @@ _agent_role: str = "worker"  # "worker" or "ceo"
 
 def get_stuck_subagents() -> list[dict]:
     """Return subagents that have been idle longer than IDLE_KILL threshold.
-    Called by the main loop's background pulse checker."""
+    Called by the main loop's background pulse checker.
+    Also cleans up stale entries from subagents that exceeded the absolute timeout
+    without the stop hook firing (e.g., crashed subagents)."""
     now = time.time()
     stuck = []
+    stale_ids = []
     for agent_id, start_t in _subagent_start_times.items():
         last_tool_t = _subagent_last_tool.get(agent_id, start_t)
         idle_sec = now - last_tool_t
         total_sec = now - start_t
-        if idle_sec > SUBAGENT_IDLE_KILL_SEC:
+        if total_sec > SUBAGENT_TIMEOUT_SEC * 2:
+            # Far past absolute timeout — stop hook never fired, clean up
+            stale_ids.append(agent_id)
+        elif idle_sec > SUBAGENT_IDLE_KILL_SEC:
             stuck.append({
                 "agent_id": agent_id,
                 "idle_seconds": int(idle_sec),
                 "total_seconds": int(total_sec),
             })
+    for agent_id in stale_ids:
+        _subagent_start_times.pop(agent_id, None)
+        _subagent_last_tool.pop(agent_id, None)
     return stuck
 
 
@@ -89,8 +98,8 @@ async def pre_tool_use_hook(
                         "tool_name": tool_name,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[hooks] Failed to log subagent timeout: {e}")
             return {"decision": "block", "reason": f"Subagent timed out after {int(elapsed)}s (limit: {SUBAGENT_TIMEOUT_SEC}s). You must stop now and return your results."}
 
     # Record timestamp for duration calculation

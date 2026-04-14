@@ -28,10 +28,16 @@ const STEPS = [
           This authenticates the Claude CLI inside Docker.
         </p>
         <div className="mt-2 p-2.5 bg-black/40 rounded border border-[#1a1a1a]">
-          <p className="text-[9px] text-[#999] uppercase tracking-wider font-semibold mb-1.5">How to get it</p>
+          <p className="text-[9px] text-[#999] uppercase tracking-wider font-semibold mb-1.5">
+            How to get it
+          </p>
           <ol className="text-[10px] text-[#999] space-y-1 list-decimal list-inside">
             <li>
-              Run <code className="text-[#00ff88] bg-[#00ff88]/[0.06] px-1 py-0.5 rounded text-[9px]">claude setup-token</code> in your terminal
+              Run{" "}
+              <code className="text-[#00ff88] bg-[#00ff88]/[0.06] px-1 py-0.5 rounded text-[9px]">
+                claude setup-token
+              </code>{" "}
+              in your terminal
             </li>
             <li>Follow the prompts to authenticate</li>
             <li>Copy the token that is output</li>
@@ -49,16 +55,28 @@ const STEPS = [
     help: (
       <>
         <p className="text-[10px] text-[#888] leading-relaxed">
-          Used by the agent to push branches and create PRs. Never exposed to the LLM.
+          Used by the agent to push branches and create PRs. Never exposed to
+          the LLM.
         </p>
         <div className="mt-2 p-2.5 bg-black/40 rounded border border-[#1a1a1a]">
-          <p className="text-[9px] text-[#999] uppercase tracking-wider font-semibold mb-1.5">How to get it</p>
+          <p className="text-[9px] text-[#999] uppercase tracking-wider font-semibold mb-1.5">
+            How to get it
+          </p>
           <ol className="text-[10px] text-[#999] space-y-1 list-decimal list-inside">
-            <li>Go to GitHub Settings &rarr; Developer settings &rarr; Personal access tokens &rarr; Fine-grained tokens</li>
+            <li>
+              Go to GitHub Settings &rarr; Developer settings &rarr; Personal
+              access tokens &rarr; Fine-grained tokens
+            </li>
             <li>Click &ldquo;Generate new token&rdquo;</li>
             <li>
-              Select your repo and grant <code className="text-[#ffcc44] bg-[#ffcc44]/[0.06] px-1 py-0.5 rounded text-[9px]">Contents: Read and write</code> and{" "}
-              <code className="text-[#ffcc44] bg-[#ffcc44]/[0.06] px-1 py-0.5 rounded text-[9px]">Pull requests: Read and write</code>
+              Select your repo and grant{" "}
+              <code className="text-[#ffcc44] bg-[#ffcc44]/[0.06] px-1 py-0.5 rounded text-[9px]">
+                Contents: Read and write
+              </code>{" "}
+              and{" "}
+              <code className="text-[#ffcc44] bg-[#ffcc44]/[0.06] px-1 py-0.5 rounded text-[9px]">
+                Pull requests: Read and write
+              </code>
             </li>
             <li>Copy the generated token</li>
           </ol>
@@ -74,14 +92,21 @@ const STEPS = [
     type: "text" as const,
     help: (
       <p className="text-[10px] text-[#888] leading-relaxed">
-        The repository slug in <code className="text-[#88ccff] bg-[#88ccff]/[0.06] px-1 py-0.5 rounded text-[9px]">owner/repo</code> format.
-        The agent is gated to only operate on this repository.
+        The repository slug in{" "}
+        <code className="text-[#88ccff] bg-[#88ccff]/[0.06] px-1 py-0.5 rounded text-[9px]">
+          owner/repo
+        </code>{" "}
+        format. The agent is gated to only operate on this repository.
       </p>
     ),
   },
 ];
 
-export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingModalProps) {
+export function OnboardingModal({
+  open,
+  onComplete,
+  initialStatus,
+}: OnboardingModalProps) {
   const [step, setStep] = useState(0);
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -98,7 +123,9 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
   useEffect(() => {
     if (open) {
       document.body.style.overflow = "hidden";
-      return () => { document.body.style.overflow = ""; };
+      return () => {
+        document.body.style.overflow = "";
+      };
     }
   }, [open]);
 
@@ -156,20 +183,25 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
             className="fixed inset-0 z-[9990] bg-black/80"
           />
 
-          <div className="fixed inset-0 z-[9991] flex items-center justify-center pointer-events-none">
+          <div className="fixed inset-0 z-[9991] flex items-end sm:items-center justify-center pointer-events-none">
             <motion.div
               key="onboard-content"
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="w-[480px] bg-[#0a0a0a] border border-[#1a1a1a] rounded-lg shadow-2xl shadow-black/60 card-accent-top pointer-events-auto"
+              className="w-full sm:w-[480px] max-h-[90vh] sm:max-h-[80vh] overflow-y-auto bg-[#0a0a0a] border border-[#1a1a1a] rounded-t-xl sm:rounded-lg shadow-2xl shadow-black/60 card-accent-top pointer-events-auto"
             >
               {/* Header */}
               <div className="px-5 py-4 border-b border-[#1a1a1a]">
                 <div className="flex items-center gap-2.5">
                   <div className="flex items-center justify-center h-7 w-7 rounded bg-white/[0.04] border border-white/[0.08]">
-                    <Image src="/logo.svg" alt="SignalPilot" width={16} height={16} />
+                    <Image
+                      src="/logo.svg"
+                      alt="SignalPilot"
+                      width={16}
+                      height={16}
+                    />
                   </div>
                   <div>
                     <h2 className="text-[12px] font-semibold text-[#e8e8e8]">
@@ -191,8 +223,8 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
                           i === step
                             ? "w-8 bg-[#00ff88]"
                             : i < step || initialStatus[s.statusKey]
-                            ? "w-4 bg-[#00ff88]/30"
-                            : "w-4 bg-[#1a1a1a]"
+                              ? "w-4 bg-[#00ff88]/30"
+                              : "w-4 bg-[#1a1a1a]",
                         )}
                       />
                     </div>
@@ -211,16 +243,24 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
                     transition={{ duration: 0.2 }}
                   >
                     <label className="text-[9px] uppercase tracking-[0.15em] text-[#999] font-semibold">
-                      Step {step + 1} of {STEPS.length} &mdash; {currentStep.label}
+                      Step {step + 1} of {STEPS.length} &mdash;{" "}
+                      {currentStep.label}
                     </label>
 
                     <div className="mt-3 relative">
                       <input
                         ref={inputRef}
-                        type={currentStep.type === "password" && !showPassword ? "password" : "text"}
+                        type={
+                          currentStep.type === "password" && !showPassword
+                            ? "password"
+                            : "text"
+                        }
                         value={currentValue}
                         onChange={(e) =>
-                          setValues({ ...values, [currentStep.key]: e.target.value })
+                          setValues({
+                            ...values,
+                            [currentStep.key]: e.target.value,
+                          })
                         }
                         onKeyDown={handleKeyDown}
                         placeholder={currentStep.placeholder}
@@ -236,12 +276,26 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
                           tabIndex={-1}
                         >
                           {showPassword ? (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                            >
                               <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
                               <line x1="1" y1="1" x2="23" y2="23" />
                             </svg>
                           ) : (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                            >
                               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                               <circle cx="12" cy="12" r="3" />
                             </svg>
@@ -252,10 +306,18 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
 
                     {initialStatus[currentStep.statusKey] && !currentValue && (
                       <p className="mt-2 text-[9px] text-[#00ff88]/60 flex items-center gap-1">
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 10 10"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                        >
                           <polyline points="2 5 4 7 8 3" />
                         </svg>
-                        Already configured &mdash; leave blank to keep current value
+                        Already configured &mdash; leave blank to keep current
+                        value
                       </p>
                     )}
 
@@ -274,14 +336,18 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
                   {step > 0 && (
                     <Button
                       variant="ghost"
-                      onClick={() => { setStep(step - 1); setShowPassword(false); }}
+                      onClick={() => {
+                        setStep(step - 1);
+                        setShowPassword(false);
+                      }}
                     >
                       Back
                     </Button>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {(initialStatus[currentStep.statusKey] || !currentValue.trim()) && (
+                  {(initialStatus[currentStep.statusKey] ||
+                    !currentValue.trim()) && (
                     <Button variant="ghost" onClick={handleSkip}>
                       {isLastStep ? "Done" : "Skip"}
                     </Button>
@@ -292,7 +358,11 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
                     onClick={handleNext}
                     disabled={saving || !currentValue.trim()}
                   >
-                    {saving ? "Saving..." : isLastStep ? "Save & Finish" : "Save & Continue"}
+                    {saving
+                      ? "Saving..."
+                      : isLastStep
+                        ? "Save & Finish"
+                        : "Save & Continue"}
                   </Button>
                 </div>
               </div>
@@ -301,6 +371,6 @@ export function OnboardingModal({ open, onComplete, initialStatus }: OnboardingM
         </>
       )}
     </AnimatePresence>,
-    document.body
+    document.body,
   );
 }

@@ -29,19 +29,6 @@ GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
 MCP_CONFIG = BENCHMARK_DIR / "mcp_test_config.json"
 GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 
-# ── SQL suite roots ─────────────────────────────────────────────────────────
-SPIDER2_SNOWFLAKE_DIR = Path(
-    os.environ.get("SPIDER2_SNOWFLAKE_DIR", os.path.expanduser("~/spider2-repo/spider2-snowflake"))
-)
-SPIDER2_LITE_DIR = Path(
-    os.environ.get("SPIDER2_LITE_DIR", os.path.expanduser("~/spider2-repo/spider2-lite"))
-)
-
-SQL_WORK_DIR = BENCHMARK_DIR / "_sql_workdir"
-
-SNOWFLAKE_ENV_FILE = BENCHMARK_DIR / ".env.snowflake"
-BIGQUERY_SA_FILE = BENCHMARK_DIR / "service_account.json"
-
 
 def ensure_local_bin_on_path() -> None:
     """Ensure pip-installed CLIs (like dbt) are on PATH for subprocess children."""

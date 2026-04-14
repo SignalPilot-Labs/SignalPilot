@@ -18,6 +18,7 @@ import json
 import re
 import time
 import uuid
+from dataclasses import dataclass
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -51,7 +52,6 @@ from .store import (
     append_audit,
     get_connection,
     get_connection_string,
-    get_credential_extras,
     list_connections,
     list_sandboxes,
     load_settings,
@@ -60,6 +60,12 @@ from .dbt import (
     build_project_map as _build_project_map,
     format_validation_result as _format_validation_result,
     validate_project as _validate_project,
+)
+from .dbt.date_spine_fixer import generate_date_spine_fixes
+from .dbt.inventory import scan_project as _scan_project
+from .dbt.nondeterminism_fixer import (
+    build_table_columns_from_schema,
+    generate_nondeterminism_fixes,
 )
 
 def _gateway_url() -> str:
@@ -240,10 +246,9 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         from .connectors.pool_manager import pool_manager
         from .connectors.health_monitor import health_monitor
 
-        extras = get_credential_extras(connection_name)
         start = time.monotonic()
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 rows = await connector.execute(safe_sql)
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
@@ -409,9 +414,8 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
-        extras = get_credential_extras(connection_name)
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
             return f"Error: {e}"
@@ -489,8 +493,8 @@ async def list_tables(connection_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
-        extras = get_credential_extras(connection_name)
         try:
+            extras = {}
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
@@ -531,52 +535,55 @@ async def list_tables(connection_name: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
-async def get_date_boundaries(connection_name: str) -> str:
+@dataclass
+class _DateBoundaryResult:
+    """Structured result from the internal date-boundary query."""
+
+    global_max: str | None
+    largest_table: str | None
+    largest_table_row_count: int
+    largest_table_max: str | None
+    table_max: dict[str, str]
+    table_row_count: dict[str, int]
+    found_any: bool
+    error: str | None
+    # Per-table detail: {full_name: {col_name: (min, max)}}
+    table_col_results: dict[str, dict[str, tuple[str | None, str | None]]]
+    db_type: str
+
+
+async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
+    """Shared internal function that queries date column boundaries for a connection.
+
+    Returns a structured _DateBoundaryResult. Both get_date_boundaries and
+    fix_date_spine_hazards call this to avoid duplicating the query logic.
+
+    Raises ValueError if the connection name or credentials are invalid.
     """
-    Get the MIN and MAX dates across all DATE and TIMESTAMP columns in a connection.
-
-    Queries every table to find date column boundaries. Use the returned
-    GLOBAL MAX DATE as your date spine endpoint — never use current_date,
-    now(), or current_timestamp as a spine endpoint.
-
-    Args:
-        connection_name: Name of a configured database connection
-
-    Returns:
-        Formatted string with per-table MIN/MAX dates and the global MAX date.
-    """
-    if err := _validate_connection_name(connection_name):
-        return f"Error: {err}"
-
     from .connectors.schema_cache import schema_cache
     from .connectors.pool_manager import pool_manager
 
     conn_info = get_connection(connection_name)
     if not conn_info:
         available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+        raise ValueError(f"Connection '{connection_name}' not found. Available: {available}")
 
     conn_str = get_connection_string(connection_name)
     if not conn_str:
-        return "Error: No credentials stored for this connection"
+        raise ValueError("No credentials stored for this connection")
 
-    extras = get_credential_extras(connection_name)
     schema = schema_cache.get(connection_name)
     if schema is None:
-        try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                schema = await connector.get_schema()
-        except Exception as e:
-            return f"Error: {e}"
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            schema = await connector.get_schema()
         schema_cache.put(connection_name, schema)
 
     DATE_TYPE_KEYWORDS = ("date", "timestamp", "datetime")
 
-    lines = [f"Date boundaries for: {connection_name} ({conn_info.db_type})", ""]
     global_max: str | None = None
     table_max: dict[str, str] = {}
     table_row_count: dict[str, int] = {}
+    table_col_results: dict[str, dict[str, tuple[str | None, str | None]]] = {}
     found_any = False
 
     for key in sorted(schema.keys()):
@@ -594,6 +601,7 @@ async def get_date_boundaries(connection_name: str) -> str:
             continue
 
         found_any = True
+        col_results: dict[str, tuple[str | None, str | None]] = {}
 
         select_parts = []
         for col in date_cols:
@@ -604,9 +612,8 @@ async def get_date_boundaries(connection_name: str) -> str:
         quoted_table = f'"{table_schema}"."{table_name}"' if table_schema else f'"{table_name}"'
         sql = f'SELECT {", ".join(select_parts)} FROM {quoted_table}'
 
-        col_results: dict[str, tuple[str | None, str | None]] = {}
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 rows = await connector.execute(sql)
                 if rows:
                     row = rows[0]
@@ -634,34 +641,107 @@ async def get_date_boundaries(connection_name: str) -> str:
             for col in date_cols:
                 col_results[col["name"]] = (None, None)
 
+        table_col_results[full_name] = col_results
+
+    largest_table: str | None = (
+        max(table_row_count, key=table_row_count.__getitem__) if table_row_count else None
+    )
+    largest_table_max = table_max.get(largest_table) if largest_table else None
+    largest_table_row_count = table_row_count.get(largest_table, 0) if largest_table else 0
+
+    return _DateBoundaryResult(
+        global_max=global_max,
+        largest_table=largest_table,
+        largest_table_row_count=largest_table_row_count,
+        largest_table_max=largest_table_max,
+        table_max=table_max,
+        table_row_count=table_row_count,
+        found_any=found_any,
+        error=None,
+        table_col_results=table_col_results,
+        db_type=conn_info.db_type,
+    )
+
+
+@mcp.tool()
+async def get_date_boundaries(connection_name: str) -> str:
+    """
+    Get the MIN and MAX dates across all DATE and TIMESTAMP columns in a connection.
+
+    Queries every table to find date column boundaries. Use the returned
+    GLOBAL MAX DATE as your date spine endpoint — never use current_date,
+    now(), or current_timestamp as a spine endpoint.
+
+    Args:
+        connection_name: Name of a configured database connection
+
+    Returns:
+        Formatted string with per-table MIN/MAX dates and the global MAX date.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
+    try:
+        result = await _fetch_date_boundaries(connection_name)
+    except Exception as e:
+        return f"Error: {e}"
+
+    if not result.found_any:
+        return f"Date boundaries for: {connection_name} ({result.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
+
+    lines = [f"Date boundaries for: {connection_name} ({result.db_type})", ""]
+
+    # Reconstruct per-table detail lines from structured result.
+    # We need the schema object to iterate in the same order, so we re-use
+    # the table_col_results that _fetch_date_boundaries already collected.
+    from .connectors.schema_cache import schema_cache
+    schema = schema_cache.get(connection_name) or {}
+
+    DATE_TYPE_KEYWORDS = ("date", "timestamp", "datetime")
+    for key in sorted(schema.keys()):
+        table = schema[key]
+        table_schema = table.get("schema", "")
+        table_name = table.get("name", key)
+        full_name = f"{table_schema}.{table_name}" if table_schema else table_name
+        date_cols = [
+            col for col in table.get("columns", [])
+            if any(kw in col.get("type", "").lower() for kw in DATE_TYPE_KEYWORDS)
+        ]
+        if not date_cols:
+            continue
+        col_results = result.table_col_results.get(full_name, {})
         lines.append(f"Table: {full_name}")
         for col in date_cols:
             col_name = col["name"]
             col_type = col.get("type", "")
-            min_val, max_val = col_results.get(col_name, (None, None))
             if col_name not in col_results:
                 lines.append(f"  {col_name} ({col_type}): (query failed)")
-            elif min_val is None and max_val is None:
-                lines.append(f"  {col_name} ({col_type}): (no data)")
             else:
-                lines.append(f"  {col_name} ({col_type}): {min_val} → {max_val}")
+                min_val, max_val = col_results[col_name]
+                if min_val is None and max_val is None:
+                    lines.append(f"  {col_name} ({col_type}): (no data)")
+                else:
+                    lines.append(f"  {col_name} ({col_type}): {min_val} → {max_val}")
         lines.append("")
 
-    if not found_any:
-        return f"Date boundaries for: {connection_name} ({conn_info.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
-
-    largest_table: str | None = max(table_row_count, key=table_row_count.get) if table_row_count else None  # type: ignore[arg-type]
-
-    if global_max:
-        lines.append(f"GLOBAL MAX DATE: {global_max}")
+    if result.global_max:
+        lines.append(f"GLOBAL MAX DATE: {result.global_max}")
         lines.append("")
 
-    if table_max:
+    if result.table_max:
         lines.append("TABLE MAX DATES (use these for date spine endpoints):")
-        for tbl, tbl_max in sorted(table_max.items()):
-            count_str = f"{table_row_count[tbl]:,} rows" if tbl in table_row_count else "row count unavailable"
-            size_marker = " (largest table)" if tbl == largest_table else ""
-            spine_marker = " ← USE THIS for spine if this is your fact/event table" if tbl_max != global_max else ""
+        for tbl, tbl_max in sorted(result.table_max.items()):
+            count_str = (
+                f"{result.table_row_count[tbl]:,} rows"
+                if tbl in result.table_row_count
+                else "row count unavailable"
+            )
+            size_marker = " (largest table)" if tbl == result.largest_table else ""
+            spine_marker = (
+                " ← USE THIS for spine if this is your fact/event table"
+                if tbl_max != result.global_max
+                else ""
+            )
             lines.append(f"  {tbl} → {tbl_max} ({count_str}){size_marker}{spine_marker}")
         lines.append("")
         lines.append("RULE: Use the max date of your PRIMARY FACT TABLE (orders, events, transactions)")
@@ -671,6 +751,385 @@ async def get_date_boundaries(connection_name: str) -> str:
         lines.append("GLOBAL MAX DATE: (no non-null date values found)")
 
     return "\n".join(lines)
+
+
+async def _find_hazard_table_date(
+    connection_name: str,
+    project_path: "Path",
+    boundaries: _DateBoundaryResult,
+) -> tuple[str, str] | None:
+    """Look for pre-existing hazard model tables in the DB and return their max date.
+
+    When the source DB contains gold-generated tables (e.g. a pre-existing
+    ``shopify__calendar`` or ``int_quickbooks__general_ledger_date_spine``),
+    their max date reflects the original gold generation date — the correct
+    replacement for ``current_date`` in the model SQL.
+
+    Returns (date_string, source_description) or None.
+    """
+    from .connectors.pool_manager import pool_manager
+
+    project = _scan_project(project_path)
+    if not project.date_hazards:
+        return None
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        return None
+    conn_str = get_connection_string(connection_name)
+    if not conn_str:
+        return None
+
+    # Collect model names from hazards (the tables we want to check).
+    model_names = [h.get("model_name", "") for h in project.date_hazards if h.get("model_name")]
+    if not model_names:
+        return None
+
+    # Also check tables whose name contains '__' (dbt derived pattern) from boundaries.
+    derived_max: dict[str, tuple[str, int]] = {}  # table -> (max_date, row_count)
+    if boundaries.table_col_results:
+        for tbl_name, col_results in boundaries.table_col_results.items():
+            short_name = tbl_name.split(".")[-1] if "." in tbl_name else tbl_name
+            for _, (_, max_val) in col_results.items():
+                if max_val and "__" in short_name:
+                    row_count = boundaries.table_row_count.get(tbl_name, 0)
+                    if max_val > derived_max.get(short_name, ("", 0))[0]:
+                        derived_max[short_name] = (max_val, row_count)
+
+    # Priority 1: check if any hazard model name exists as a table with date data.
+    # Take the MAX across all date columns (e.g. date_year=2024-01-01 vs
+    # period_first_day=2024-09-01 — we want the latter).
+    for model_name in model_names:
+        for tbl_name, col_results in (boundaries.table_col_results or {}).items():
+            short_name = tbl_name.split(".")[-1] if "." in tbl_name else tbl_name
+            if short_name == model_name:
+                best = max(
+                    (mv for _, (_, mv) in col_results.items() if mv),
+                    default=None,
+                )
+                if best:
+                    return best, f"{best} (from pre-existing table {short_name})"
+
+    # Priority 2: use the max date from the largest derived table (name contains '__').
+    if derived_max:
+        best_table = max(derived_max, key=lambda k: derived_max[k][1])
+        max_date, row_count = derived_max[best_table]
+        return max_date, f"{max_date} (from largest derived table {best_table}, {row_count:,} rows)"
+
+    return None
+
+
+@mcp.tool()
+async def fix_date_spine_hazards(
+    project_dir: str,
+    connection_name: str,
+    replacement_date: str = "",
+) -> str:
+    """
+    Auto-fix all date spine hazards in a dbt project in one call.
+
+    Reads the project scan to find all current_date/current_timestamp/now() hazards,
+    then creates local override files for package models and edits project models
+    in-place. Uses the largest-table max date from the connection as the replacement
+    literal date, or an explicit replacement_date if provided.
+
+    Args:
+        project_dir: Absolute path to the dbt project root.
+        connection_name: Name of a configured database connection (used to auto-detect
+                         the replacement date from the largest fact table).
+        replacement_date: Optional override date string like "2022-01-31". If omitted,
+                          the date is auto-detected from the connection's largest table.
+
+    Returns:
+        Markdown report listing every file created/modified and a dbt run command.
+    """
+    from pathlib import Path as _Path
+
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
+    project_path = _Path(project_dir)
+    if not project_path.exists():
+        return f"Error: project directory does not exist: {project_dir}"
+
+    # Determine the replacement date and whether to add a +1 day offset.
+    # add_day_offset=True only when the date comes from raw source data (global_max),
+    # where max_data_date + 1 = current_date. When the date comes from a pre-existing
+    # hazard table or is provided explicitly by the caller, it already reflects the
+    # correct current_date value, so no offset is needed.
+    resolved_date: str
+    date_source: str
+    add_day_offset: bool
+    if replacement_date.strip():
+        resolved_date = replacement_date.strip()
+        date_source = f"{resolved_date} (provided explicitly)"
+        add_day_offset = False
+    else:
+        try:
+            boundaries = await _fetch_date_boundaries(connection_name)
+        except Exception as e:
+            return f"Error fetching date boundaries: {e}"
+
+        if not boundaries.found_any:
+            return (
+                f"Error: No DATE/TIMESTAMP columns found in connection '{connection_name}'. "
+                "Pass replacement_date explicitly."
+            )
+
+        # Strategy: look for the hazard model(s) as pre-existing tables in the
+        # DB — their max date reflects the gold generation date. This is more
+        # reliable than global_max (which picks up outlier dates from raw data,
+        # e.g. purchase orders dated 2050) or largest_table_max (which misses
+        # derived tables that aren't the largest).
+        hazard_date = await _find_hazard_table_date(
+            connection_name, project_path, boundaries
+        )
+        if hazard_date:
+            resolved_date, date_source = hazard_date
+            add_day_offset = False
+        elif boundaries.global_max:
+            resolved_date = boundaries.global_max
+            date_source = f"{resolved_date} (global max date — no hazard table found)"
+            add_day_offset = True
+        else:
+            return (
+                f"Error: Could not determine a replacement date from connection '{connection_name}'. "
+                "Pass replacement_date explicitly."
+            )
+
+    # Scan the project to get hazards.
+    project = _scan_project(project_path)
+    hazards = project.date_hazards
+
+    if not hazards:
+        return "No date spine hazards found — nothing to fix."
+
+    # Generate fixes (pure, no I/O).
+    try:
+        fixes = generate_date_spine_fixes(project_path, hazards, resolved_date, add_day_offset)
+    except OSError as e:
+        return f"Error reading source files: {e}"
+
+    # Write files.
+    written: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    for fix in fixes:
+        if fix.already_overridden:
+            skipped.append(fix.original_path)
+            continue
+        try:
+            fix.output_path.parent.mkdir(parents=True, exist_ok=True)
+            fix.output_path.write_text(fix.content, encoding="utf-8")
+            written.append(fix.output_path.name.removesuffix(".sql"))
+        except OSError as e:
+            errors.append(f"{fix.output_path}: {e}")
+
+    # Build markdown report.
+    report_lines = [f"## Date spine hazards fixed ({len([f for f in fixes if not f.already_overridden])} files)", ""]
+
+    item_num = 0
+    for fix in fixes:
+        if fix.already_overridden:
+            report_lines.append(
+                f"  SKIPPED {fix.original_path} — override already exists"
+            )
+            continue
+
+        item_num += 1
+        action = "CREATED" if fix.is_package else "MODIFIED"
+        out_rel = str(fix.output_path.relative_to(project_path))
+
+        # Include a short snippet: first replacement found in context.
+        snippet = _extract_replacement_snippet(fix.content, resolved_date)
+        snippet_str = f"\n     snippet: {snippet}" if snippet else ""
+
+        patterns_str = ", ".join(fix.patterns_replaced) if fix.patterns_replaced else "unknown"
+        if fix.is_package:
+            report_lines.append(
+                f"{item_num}. {action} {out_rel} (override of {fix.original_path})\n"
+                f"   Replaced: {patterns_str} -> ('{resolved_date}'::date + INTERVAL '1 day'){snippet_str}"
+            )
+        else:
+            report_lines.append(
+                f"{item_num}. {action} {out_rel} (project model, edited in-place)\n"
+                f"   Replaced: {patterns_str} -> ('{resolved_date}'::date + INTERVAL '1 day'){snippet_str}"
+            )
+
+    if errors:
+        report_lines.append("")
+        report_lines.append("## Errors")
+        for err in errors:
+            report_lines.append(f"  - {err}")
+
+    if written:
+        model_list = " ".join(written)
+        report_lines.append("")
+        report_lines.append(f"Verify: dbt run --select {model_list}")
+
+    report_lines.append("")
+    report_lines.append(f"Date used: {date_source}")
+
+    return "\n".join(report_lines)
+
+
+@mcp.tool()
+async def fix_nondeterminism_hazards(
+    project_dir: str,
+    connection_name: str,
+) -> str:
+    """
+    Auto-fix all non-deterministic window function hazards in a dbt project.
+
+    Finds ROW_NUMBER/RANK/DENSE_RANK OVER(...) clauses whose ORDER BY may not be
+    unique, then appends a tiebreaker column (first *_id column found in referenced
+    tables) to each ambiguous ORDER BY.
+
+    Creates local override files for package models; edits project models in-place.
+    If the DB connection is unavailable, skips all fixes and returns a warning
+    listing the affected models for manual review.
+
+    Args:
+        project_dir: Absolute path to the dbt project root.
+        connection_name: Name of a configured database connection (used to discover
+                         column names for tiebreaker selection).
+
+    Returns:
+        Markdown report listing every file fixed and a dbt run --select command.
+    """
+    from pathlib import Path as _Path
+
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+
+    project_path = _Path(project_dir)
+    if not project_path.exists():
+        return f"Error: project directory does not exist: {project_dir}"
+
+    # Scan the project to get nd_warnings.
+    project = _scan_project(project_path)
+    nd_warnings = project.nondeterminism_warnings
+
+    if not nd_warnings:
+        return "No non-determinism hazards found — nothing to fix."
+
+    # Fetch schema to build table->columns map (graceful degradation if unavailable).
+    table_columns: dict[str, list[str]] = {}
+    schema_error: str = ""
+
+    conn_info = get_connection(connection_name)
+    if not conn_info:
+        available = [c.name for c in list_connections()]
+        schema_error = (
+            f"Connection '{connection_name}' not found (available: {available}). "
+            "Tiebreaker selection skipped — all patterns will need manual fixes."
+        )
+    else:
+        conn_str = get_connection_string(connection_name)
+        if not conn_str:
+            schema_error = "No credentials stored for this connection. Tiebreaker selection skipped."
+        else:
+            from .connectors.pool_manager import pool_manager
+            from .connectors.schema_cache import schema_cache
+
+            schema = schema_cache.get(connection_name)
+            if schema is None:
+                try:
+                    async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+                        schema = await connector.get_schema()
+                    schema_cache.put(connection_name, schema)
+                except Exception as e:
+                    schema_error = f"Could not fetch schema: {e}. Tiebreaker selection skipped."
+                    schema = {}
+            table_columns = build_table_columns_from_schema(schema)
+
+    # Generate fixes (pure, no I/O).
+    try:
+        fixes = generate_nondeterminism_fixes(project_path, nd_warnings, table_columns)
+    except OSError as e:
+        return f"Error reading source files: {e}"
+
+    # Write files.
+    written: list[str] = []
+    skipped_files: list[str] = []
+    errors: list[str] = []
+
+    for fix in fixes:
+        if fix.already_overridden:
+            skipped_files.append(fix.original_path)
+            continue
+        if not fix.content:
+            # No content means nothing could be fixed (no tiebreaker, read error, etc.)
+            skipped_files.append(fix.original_path)
+            continue
+        if not fix.fixes_applied:
+            # Parsed OK but nothing needed changing.
+            skipped_files.append(fix.original_path)
+            continue
+        try:
+            fix.output_path.parent.mkdir(parents=True, exist_ok=True)
+            fix.output_path.write_text(fix.content, encoding="utf-8")
+            written.append(fix.output_path.name.removesuffix(".sql"))
+        except OSError as e:
+            errors.append(f"{fix.output_path}: {e}")
+
+    # Build markdown report.
+    total_fixed = len([f for f in fixes if f.fixes_applied and not f.already_overridden])
+    report_lines = [f"## Non-determinism hazards fixed ({total_fixed} files)", ""]
+
+    if schema_error:
+        report_lines.append(f"Warning: {schema_error}")
+        report_lines.append("")
+
+    item_num = 0
+    for fix in fixes:
+        if fix.already_overridden:
+            report_lines.append(f"  SKIPPED {fix.original_path} — override already exists")
+            continue
+
+        if not fix.fixes_applied and not fix.skipped_patterns:
+            continue
+
+        item_num += 1
+        if fix.fixes_applied:
+            action = "CREATED" if fix.is_package else "MODIFIED"
+            try:
+                out_rel = str(fix.output_path.relative_to(project_path))
+            except ValueError:
+                out_rel = str(fix.output_path)
+            source_note = f" (override of {fix.original_path})" if fix.is_package else " (edited in-place)"
+            report_lines.append(f"{item_num}. {action} {out_rel}{source_note}")
+            for applied in fix.fixes_applied:
+                report_lines.append(f"   Fixed: {applied}")
+
+        for skipped in fix.skipped_patterns:
+            report_lines.append(f"   SKIPPED: {skipped}")
+
+    if errors:
+        report_lines.append("")
+        report_lines.append("## Errors")
+        for err in errors:
+            report_lines.append(f"  - {err}")
+
+    if written:
+        model_list = " ".join(written)
+        report_lines.append("")
+        report_lines.append(f"Verify: dbt run --select {model_list}")
+
+    return "\n".join(report_lines)
+
+
+def _extract_replacement_snippet(content: str, replacement_date: str) -> str:
+    """Return a short context snippet showing where the replacement appears."""
+    needle = f"'{replacement_date}'::date"
+    idx = content.find(needle)
+    if idx == -1:
+        return ""
+    start = max(0, idx - 30)
+    end = min(len(content), idx + len(needle) + 30)
+    snippet = content[start:end].replace("\n", " ").strip()
+    return f"...{snippet}..."
 
 
 @mcp.tool()
@@ -1821,9 +2280,8 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
 
     from .connectors.pool_manager import pool_manager
 
-    extras = get_credential_extras(connection_name)
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
             rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
     except Exception as e:
         return f"Error: {e}"
@@ -2022,9 +2480,8 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
 
     from .connectors.pool_manager import pool_manager
 
-    extras = get_credential_extras(connection_name)
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
             count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM "{table_name}"')
     except Exception as e:
         return f"Error: {e}"
@@ -2039,7 +2496,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             return f"Error: Invalid candidate key name(s): {', '.join(invalid_keys)}"
     else:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 pragma_rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         except Exception as e:
             return f"Error fetching schema: {e}"
@@ -2059,7 +2516,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     unique_keys: list[str] = []
     if keys:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 for key in keys:
                     try:
                         dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM "{table_name}"')
@@ -2125,9 +2582,8 @@ async def validate_model_output(
 
     from .connectors.pool_manager import pool_manager
 
-    extras = get_credential_extras(connection_name)
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
             model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
     except Exception as e:
         return f"Error: {e}"
@@ -2140,7 +2596,7 @@ async def validate_model_output(
         if not _MODEL_NAME_RE.match(source_table):
             return f"Error: Invalid source_table name '{source_table}'."
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{source_table}"')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
@@ -2219,11 +2675,9 @@ async def audit_model_sources(
 
     from .connectors.pool_manager import pool_manager
 
-    extras = get_credential_extras(connection_name)
-
     # Step 1: Get model row count.
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
             model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
     except Exception as e:
         return f"Error: could not query model '{model_name}': {e}"
@@ -2244,7 +2698,7 @@ async def audit_model_sources(
             source_lines.append(f"  {src}:  ERROR: invalid table name (skipped)")
             continue
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{src}"')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
@@ -2281,7 +2735,7 @@ async def audit_model_sources(
     if sample_nulls and model_rows > 0:
         _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                 pragma_rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
             all_cols = [r.get("name", "") for r in pragma_rows if r.get("name")]
             total_col_count = len(all_cols)
@@ -2297,7 +2751,7 @@ async def audit_model_sources(
                     col_scan_lines.append(f"  [--] {col}: skipped (unsafe column name)")
                     continue
                 try:
-                    async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                    async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
                         col_result = await connector.execute(
                             f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
                             f'COUNT(DISTINCT "{col}") as dist '
@@ -2407,8 +2861,6 @@ async def compare_join_types(
 
     from .connectors.pool_manager import pool_manager
 
-    extras = get_credential_extras(connection_name)
-
     # Extract left and right columns from the first join key for NULL detection.
     # join_keys like "a.id = b.id" — extract "a.id" and "b.id"
     first_key = join_keys.split(",")[0].strip()
@@ -2466,7 +2918,7 @@ SELECT
 """
 
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
             result = await connector.execute(sql)
     except Exception as e:
         return f"Error: {e}"

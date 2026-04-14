@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
 import time
 from pathlib import Path
 
@@ -21,12 +19,9 @@ from claude_agent_sdk import (
 from claude_agent_sdk._errors import ClaudeSDKError, ProcessError
 
 from ..core.logging import log, log_separator
-from ..core.paths import GATEWAY_SRC, GATEWAY_URL
+from ..core.mcp import load_mcp_servers
 
-DEFAULT_SKILL_NAMES = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
-
-# Back-compat alias — existing callers that import SKILL_TOOL_NAMES still work.
-SKILL_TOOL_NAMES = DEFAULT_SKILL_NAMES
+SKILL_TOOL_NAMES = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
 
 
 async def run_sdk_agent(
@@ -37,50 +32,16 @@ async def run_sdk_agent(
     timeout: int,
     label: str = "agent",
     max_retries: int = 3,
-    skill_names: tuple[str, ...] | None = None,
-    system_prompt: str | None = None,
 ) -> dict:
-    """Run the Claude Agent SDK with retry on 529/overload errors.
-
-    skill_names controls which tool names are logged as skill invocations.
-    It does NOT affect which skills the agent can access — that is determined
-    by which SKILL.md files exist in .claude/skills/ inside work_dir.
-    Defaults to DEFAULT_SKILL_NAMES (dbt skill set) when None.
-    """
-    active_skill_names = skill_names if skill_names is not None else DEFAULT_SKILL_NAMES
-
-    # Build MCP config inline (same pattern as run_dbt_local.py).
-    # mcp_test_config.json has Docker/Linux paths that don't work on Windows.
-    # We use sys.executable + PYTHONPATH injection so the MCP subprocess can
-    # find the gateway package and inherit all installed connectors (snowflake, etc).
-    local_gateway_url = GATEWAY_URL.replace("host.docker.internal", "localhost")
-    child_env = {
-        **os.environ,
-        "SP_GATEWAY_URL": local_gateway_url,
-        "PYTHONPATH": (
-            str(GATEWAY_SRC) + os.pathsep + os.environ.get("PYTHONPATH", "")
-        ).rstrip(os.pathsep),
-    }
-    mcp_config = {
-        "signalpilot": {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "gateway.mcp_server"],
-            "env": child_env,
-        }
-    }
-
-    options_kwargs: dict = {
-        "model": model,
-        "max_turns": max_turns,
-        "permission_mode": "bypassPermissions",
-        "cwd": str(work_dir),
-        "mcp_servers": mcp_config,
-        "debug_stderr": True,
-    }
-    if system_prompt is not None:
-        options_kwargs["system_prompt"] = system_prompt
-    options = ClaudeAgentOptions(**options_kwargs)
+    """Run the Claude Agent SDK with retry on 529/overload errors."""
+    options = ClaudeAgentOptions(
+        model=model,
+        max_turns=max_turns,
+        permission_mode="bypassPermissions",
+        cwd=str(work_dir),
+        mcp_servers=load_mcp_servers(),
+        debug_stderr=True,
+    )
 
     log_separator(f"AGENT model={model}  max_turns={max_turns}  timeout={timeout}s  label={label}")
 
@@ -109,7 +70,7 @@ async def run_sdk_agent(
                             log(f"[tool_use] {block.name}")
                             log(f"  input: {truncated}")
                             tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count})
-                            if block.name in active_skill_names:
+                            if block.name in SKILL_TOOL_NAMES:
                                 log(f"[skill] Agent invoked /{block.name}")
                             elif block.name == "Skill" and isinstance(block.input, dict):
                                 skill_name = block.input.get("skill", "unknown")

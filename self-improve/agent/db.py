@@ -75,12 +75,28 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS workers (
+    container_name TEXT PRIMARY KEY,
+    run_id TEXT,
+    container_id TEXT,
+    status TEXT NOT NULL DEFAULT 'starting',
+    prompt TEXT,
+    max_budget_usd REAL DEFAULT 0,
+    duration_minutes REAL DEFAULT 0,
+    base_branch TEXT DEFAULT 'main',
+    volume_name TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at TEXT,
+    error_message TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_log_run_id ON audit_log(run_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_control_signals_run_id ON control_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_control_signals_pending ON control_signals(run_id, consumed);
+CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
 """
 
 
@@ -105,6 +121,8 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
         await _db.execute("ALTER TABLE tool_calls ADD COLUMN session_id TEXT")
     if "agent_id" not in tc_cols:
         await _db.execute("ALTER TABLE tool_calls ADD COLUMN agent_id TEXT")
+    # NOTE: Do NOT mark runs as crashed here — workers share this DB.
+    # Cleanup is handled by the orchestrator in lifespan() via mark_crashed_runs().
     await _db.commit()
     return _db
 
@@ -284,26 +302,6 @@ async def log_audit(
     await conn.commit()
 
 
-async def poll_control_signal(run_id: str) -> dict | None:
-    """Fetch and consume the oldest pending control signal for this run."""
-    conn = get_db()
-    cursor = await conn.execute(
-        """SELECT id, signal, payload FROM control_signals
-        WHERE run_id = ? AND consumed = 0
-        ORDER BY ts ASC LIMIT 1""",
-        (run_id,),
-    )
-    row = await cursor.fetchone()
-    if row:
-        await conn.execute(
-            "UPDATE control_signals SET consumed = 1 WHERE id = ?",
-            (row["id"],),
-        )
-        await conn.commit()
-        return {"signal": row["signal"], "payload": row["payload"]}
-    return None
-
-
 async def update_run_status(run_id: str, status: str) -> None:
     """Update the run status (e.g. to 'paused')."""
     conn = get_db()
@@ -321,6 +319,90 @@ async def mark_crashed_runs() -> int:
         """UPDATE runs SET status = 'crashed', ended_at = datetime('now'),
            error_message = 'Agent container restarted while run was in progress'
         WHERE status IN ('running', 'paused')"""
+    )
+    await conn.commit()
+    return cursor.rowcount
+
+
+# --- Worker (bot) tracking ---
+
+async def upsert_worker(
+    container_name: str,
+    status: str,
+    run_id: str | None = None,
+    container_id: str | None = None,
+    prompt: str | None = None,
+    max_budget_usd: float = 0,
+    duration_minutes: float = 0,
+    base_branch: str = "main",
+    volume_name: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Insert or update a worker slot in the DB."""
+    conn = get_db()
+    await conn.execute(
+        """INSERT INTO workers (container_name, run_id, container_id, status, prompt,
+                                max_budget_usd, duration_minutes, base_branch, volume_name, error_message)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(container_name) DO UPDATE SET
+               run_id = COALESCE(excluded.run_id, workers.run_id),
+               container_id = COALESCE(excluded.container_id, workers.container_id),
+               status = excluded.status,
+               error_message = excluded.error_message""",
+        (container_name, run_id, container_id, status, prompt,
+         max_budget_usd, duration_minutes, base_branch, volume_name, error_message),
+    )
+    await conn.commit()
+
+
+async def update_worker_status(container_name: str, status: str, error_message: str | None = None) -> None:
+    """Update a worker's status."""
+    conn = get_db()
+    ended = "datetime('now')" if status not in ("starting", "running") else "NULL"
+    await conn.execute(
+        f"""UPDATE workers SET status = ?, error_message = ?,
+            ended_at = CASE WHEN ? NOT IN ('starting', 'running') THEN datetime('now') ELSE ended_at END
+            WHERE container_name = ?""",
+        (status, error_message, status, container_name),
+    )
+    await conn.commit()
+
+
+async def update_worker_run_id(container_name: str, run_id: str) -> None:
+    """Set the run_id once the worker's agent starts."""
+    conn = get_db()
+    await conn.execute(
+        "UPDATE workers SET run_id = ? WHERE container_name = ?",
+        (run_id, container_name),
+    )
+    await conn.commit()
+
+
+async def get_active_workers() -> list[dict]:
+    """Get all workers with status starting or running."""
+    conn = get_db()
+    cursor = await conn.execute(
+        "SELECT * FROM workers WHERE status IN ('starting', 'running') ORDER BY started_at DESC"
+    )
+    return [dict(row) for row in await cursor.fetchall()]
+
+
+async def get_all_workers(limit: int = 50) -> list[dict]:
+    """Get all workers ordered by most recent."""
+    conn = get_db()
+    cursor = await conn.execute(
+        "SELECT * FROM workers ORDER BY started_at DESC LIMIT ?", (limit,)
+    )
+    return [dict(row) for row in await cursor.fetchall()]
+
+
+async def mark_orphaned_workers() -> int:
+    """Mark any 'starting'/'running' workers as 'killed' on startup (ghosts from previous process)."""
+    conn = get_db()
+    cursor = await conn.execute(
+        """UPDATE workers SET status = 'killed', ended_at = datetime('now'),
+           error_message = 'Orphaned: parent agent restarted'
+        WHERE status IN ('starting', 'running')"""
     )
     await conn.commit()
     return cursor.rowcount

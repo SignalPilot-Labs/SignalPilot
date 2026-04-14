@@ -151,15 +151,20 @@ def _register_connection(
         return local_ok or http_ok  # local is sufficient when gateway isn't running
 
     if backend == DBBackend.SQLITE:
-        db_id: str = task.get("db_id", "")
-        db_path = str(work_dir / f"{db_id}.sqlite") if db_id else str(work_dir)
+        db_name: str = task.get("db", task.get("db_id", ""))
+        db_path = str(work_dir / f"{db_name}.sqlite") if db_name else str(work_dir)
         return register_sqlite_connection(instance_id, db_path)
 
     if backend == DBBackend.BIGQUERY:
         project: str = task.get("project_id", task.get("project", ""))
         dataset: str = task.get("dataset", task.get("schema", ""))
         if not project:
-            log(f"Task '{instance_id}' missing 'project_id'/'project' field for BigQuery", "WARN")
+            # Spider2-Lite BQ tasks use spider2-public-data project by default
+            project = "spider2-public-data"
+            log(f"Task '{instance_id}' missing project_id, using default: {project}")
+        if not dataset:
+            # Use the db field as the dataset name
+            dataset = task.get("db", "")
         return register_bigquery_connection(instance_id, project, dataset)
 
     log(f"Unsupported backend '{backend}' — cannot register connection", "ERROR")
@@ -229,8 +234,8 @@ def main(suite: BenchmarkSuite) -> None:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=100,
-        help="Safety cap on agent turns. Default 100.",
+        default=50,
+        help="Safety cap on agent turns. Default 50.",
     )
     parser.add_argument("--skip-agent", action="store_true", help="Skip agent, only evaluate existing results")
     args = parser.parse_args()
@@ -266,7 +271,7 @@ def main(suite: BenchmarkSuite) -> None:
         # ── Prepare workdir ────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 1: Prepare SQL workdir")
-        work_dir = prepare_sql_workdir(instance_id, config, task)
+        work_dir = prepare_sql_workdir(instance_id, config, task, backend=backend)
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
         # ── Write CLAUDE.md ────────────────────────────────────────────────────

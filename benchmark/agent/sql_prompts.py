@@ -92,6 +92,12 @@ WORKFLOW — follow these steps in order:
      * "How many debt indicators" -> zero_value_indicator_count, NOT just "count"
      * Use AS to give every computed column a descriptive snake_case alias
      * Never leave a column named COUNT(*) or SUM(...) — always alias it
+   - AGGREGATION LEVEL — match the question's granularity exactly:
+     * "for each X" = one row per X. Your GROUP BY must be X, nothing else.
+     * "the top X" = exactly X rows (or fewer if tied). Use LIMIT X or QUALIFY.
+     * "for each X, the top Y" = at most X*Y rows. Use QUALIFY or a correlated subquery.
+     * If the question asks for a single value per group, do NOT return multiple rows per group.
+     * Compare your result row count against the expected shape BEFORE saving.
    - Write a comment: -- EXPECTED: <row count estimate> rows because <reason>
 
 3. BUILD INCREMENTALLY (do not write a 50-line query and run it):
@@ -111,6 +117,10 @@ WORKFLOW — follow these steps in order:
    g. Semantic cross-check: if the question asks "how many X", verify your count is plausible.
       Run: SELECT COUNT(*) as total_rows, COUNT(DISTINCT x_column) as distinct_x FROM source_table WHERE <conditions>
       If your result equals total_rows but distinct_x is much smaller, you likely need COUNT(DISTINCT).
+   h. Gold-format alignment: Re-read the question one more time. If it asks for
+      "the name and the count", your CSV must have exactly 2 columns with descriptive names.
+      If it asks for "top 5 by revenue", your CSV must have at most 5 rows.
+      Count your columns and rows — if they do not match the question, fix the query.
 
 5. ERROR RECOVERY — diagnose, do not just retry:
    - Syntax error: use validate_sql to catch errors before burning a query turn

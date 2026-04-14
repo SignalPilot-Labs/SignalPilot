@@ -62,7 +62,9 @@ def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
     return dst
 
 
-def prepare_sql_workdir(instance_id: str, config: "SuiteConfig", task: dict) -> Path:
+def prepare_sql_workdir(
+    instance_id: str, config: "SuiteConfig", task: dict, backend: "DBBackend | None" = None
+) -> Path:
     """Create a fresh SQL working directory for the given task.
 
     Unlike prepare_workdir (DBT), no project template is copied — the directory starts empty.
@@ -133,6 +135,30 @@ def prepare_sql_workdir(instance_id: str, config: "SuiteConfig", task: dict) -> 
                     log(f"Copied schema files for '{db_name}' ({db_type}) -> {schema_dst}")
                     break
 
+    # Set up SQLite database: prefer pre-downloaded .sqlite file, fall back to building from JSON+DDL
+    if backend is not None:
+        from .suite import DBBackend as _DBBackend
+
+        if backend == _DBBackend.SQLITE:
+            db_name = task.get("db", "")
+            if db_name:
+                sqlite_path = work_dir / f"{db_name}.sqlite"
+                # Check for pre-downloaded .sqlite file first
+                localdb_dir = config.data_dir / "resource" / "databases" / "spider2-localdb"
+                prebuilt = localdb_dir / f"{db_name}.sqlite"
+                if prebuilt.exists():
+                    shutil.copy2(prebuilt, sqlite_path)
+                    log(f"Copied pre-built SQLite DB '{db_name}' -> {sqlite_path}")
+                else:
+                    # Fall back to building from JSON+DDL resource files
+                    from .sqlite_builder import build_sqlite_db
+
+                    resource_db_dir = config.data_dir / "resource" / "databases" / "sqlite"
+                    try:
+                        build_sqlite_db(db_name, resource_db_dir, sqlite_path)
+                    except Exception as e:
+                        log(f"Failed to build SQLite DB '{db_name}': {e}", "ERROR")
+
     # Initialize a git repo so Claude Code discovers skills in .claude/skills/
     subprocess.run(["git", "init"], cwd=str(work_dir), capture_output=True)
 
@@ -183,8 +209,19 @@ Use SignalPilot MCP tools to explore and query the database:
     schema_dir = work_dir / "schema"
     if schema_dir.exists():
         content += "\n## Database Schema\n"
-        content += "Schema definition files are available in the `schema/` directory. "
-        content += "Read these files to understand the database structure before querying.\n"
+        content += "Schema definition files are in the `schema/` directory.\n"
+        content += "- `DDL.csv` — CREATE TABLE statements for all tables\n"
+        content += "- `{table_name}.json` — column names, types, descriptions, and sample rows\n"
+        content += "Read the JSON files for column descriptions and sample data BEFORE calling MCP tools.\n"
+        content += "This saves tool calls — you already have the schema locally.\n"
+
+    # Add SQLite database section if a .sqlite file was built into work_dir
+    sqlite_files = list(work_dir.glob("*.sqlite"))
+    if sqlite_files:
+        db_file_name = sqlite_files[0].name
+        content += "\n## SQLite Database\n"
+        content += f"The SQLite database file is at `{db_file_name}` in this directory.\n"
+        content += f"However, do NOT query it directly — use the MCP tools with connection_name=\"{connection_name}\".\n"
 
     content += """
 ## Key Rules

@@ -48,3 +48,62 @@
 3. **COUNT(DISTINCT) vs COUNT(*)**: Agent defaulted to COUNT(*) for "how many X" questions. Fixed by adding semantic COUNT guidance.
 4. **Column naming**: Agent used generic names (count, drug_name) instead of matching gold format (zero_value_indicator_count, medication).
 5. **Schema discovery**: Most Snowflake databases have data in non-PUBLIC schemas. Agent must use fully qualified table names.
+
+## Round 2 Infrastructure Changes
+1. Created `benchmark/core/sqlite_builder.py` — builds SQLite DBs from DDL.csv + JSON (fallback)
+2. Downloaded real `.sqlite` files from Spider2 Google Drive (30 databases, 457MB)
+3. Updated `workdir.py` to prefer pre-built SQLite files over JSON-constructed ones
+4. Fixed BigQuery connection registration to use `spider2-public-data` as default project
+5. Added aggregation level guidance and gold-format alignment check to SQL prompts
+6. Changed default max_turns from 100 to 50
+
+## Benchmark Runs — Round 2 Re-runs
+
+### Previously Failed Tasks (with improved prompts)
+
+| # | Task ID | Database | Result | Notes |
+|---|---------|----------|--------|-------|
+| 1 | sf_bq327 | WORLD_BANK | **PASS** ✓ | Was FAIL in R1 (COUNT semantic fix worked) |
+| 2 | sf_bq234 | CMS_DATA | TIMEOUT | Agent hung >15min, no result. Large DB. |
+| 3 | sf_local022 | IPL | **PASS** ✓ | Was FAIL in R1 (anti-debugging rules worked) |
+
+### New Snowflake Tasks
+
+| # | Task ID | Database | Result | Notes |
+|---|---------|----------|--------|-------|
+| 4 | sf_bq396 | NHTSA_TRAFFIC_FATALITIES | FAIL | Close — 2/3 states match, CA rainy count off by 17 |
+| 5 | sf_bq305 | STACKOVERFLOW | TIMEOUT | Complex multi-condition query, >11min |
+| 6 | sf_local041 | MODERN_DATA | **PASS** ✓ | Tree health percentage, exact match |
+| 7 | sf_local230 | IMDB_MOVIES | **PASS** ✓ | Top genres/directors rated >8, exact match |
+| 8 | sf_local335 | F1 | FAIL | Close — Williams match, Toro Rosso off by 1 |
+
+### Spider2-Lite (SQLite) Tasks
+
+| # | Task ID | Database | Backend | Result | Notes |
+|---|---------|----------|---------|--------|-------|
+| 1 | local038 | Pagila | SQLite | **PASS** ✓ | Actor in children's G/PG films |
+| 2 | local058 | education_business | SQLite | **PASS** ✓ | Hardware segments by product count (extra column) |
+| 3 | local032 | Brazilian_E_Commerce | SQLite | **PASS** ✓ | Top sellers by 4 categories |
+| 4 | local067 | complex_oracle | SQLite | TIMEOUT | NTILE query, >11min |
+
+### Spider2-Lite (BigQuery) Tasks
+
+| # | Task ID | Database | Backend | Result | Notes |
+|---|---------|----------|---------|--------|-------|
+| 1 | bq300 | stackoverflow | BigQuery | FAIL | Python 2 max answers: got 43 vs gold 26 |
+
+### Round 2 Running Totals (Including R1 results)
+
+| Suite | Tasks Run | Pass | Fail | Timeout | Pass Rate |
+|-------|-----------|------|------|---------|-----------|
+| Spider2-Snowflake | 18 | 12 | 3 | 3 | 66.7% (excl timeout: 80.0%) |
+| Spider2-Lite SQLite | 4 | 3 | 0 | 1 | 75.0% (excl timeout: 100%) |
+| Spider2-Lite BigQuery | 1 | 0 | 1 | 0 | 0% |
+| Spider2-DBT | 0 | 0 | 0 | 0 | - |
+
+### Key Round 2 Findings
+1. **Prompt improvements fixed 2/3 R1 failures**: sf_bq327 (COUNT semantic) and sf_local022 (anti-debugging) now pass. sf_bq234 still times out (CMS_DATA is huge).
+2. **SQLite Lite tasks work well**: 3/3 pass (excl timeout). Pre-downloaded .sqlite files are critical — sample rows from JSON are insufficient.
+3. **BigQuery needs work**: bq300 failed with wrong value (43 vs 26). May need better BQ-specific prompt guidance.
+4. **Timeout is a major issue**: 4 tasks timed out (>10 min). These are mostly complex multi-step queries on large databases. May need to increase max_turns or optimize schema discovery.
+5. **Skills and MCP always load correctly**: Every task successfully loaded skills and MCP tools.

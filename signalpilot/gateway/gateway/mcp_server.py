@@ -245,10 +245,12 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         # Use pool manager for connection reuse (MED-06 fix)
         from .connectors.pool_manager import pool_manager
         from .connectors.health_monitor import health_monitor
+        from .store import get_credential_extras as _get_extras
 
+        extras = _get_extras(connection_name)
         start = time.monotonic()
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 rows = await connector.execute(safe_sql)
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
@@ -493,8 +495,9 @@ async def list_tables(connection_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
+        from .store import get_credential_extras as _get_extras
         try:
-            extras = {}
+            extras = _get_extras(connection_name)
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:

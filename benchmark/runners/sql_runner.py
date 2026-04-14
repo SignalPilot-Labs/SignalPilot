@@ -140,14 +140,15 @@ def _register_connection(
 ) -> bool:
     """Register the appropriate DB connection for the task."""
     if backend == DBBackend.SNOWFLAKE:
-        database: str = task.get("db", task.get("database", ""))
+        database: str = task.get("db_id", task.get("db", task.get("database", "")))
         schema: str = task.get("schema", task.get("schema_name", "PUBLIC"))
         if not database:
-            log(f"Task '{instance_id}' missing 'db'/'database' field for Snowflake", "WARN")
+            log(f"Task '{instance_id}' missing 'db_id'/'db'/'database' field for Snowflake", "WARN")
         # Register both locally (for list_tables/query_database) and via HTTP
         # (for schema_overview and other gateway-API-backed MCP tools).
-        register_snowflake_connection(instance_id, database, schema)
-        return _register_snowflake_http(instance_id, database, schema)
+        local_ok = register_snowflake_connection(instance_id, database, schema)
+        http_ok = _register_snowflake_http(instance_id, database, schema)
+        return local_ok or http_ok  # local is sufficient when gateway isn't running
 
     if backend == DBBackend.SQLITE:
         db_id: str = task.get("db_id", "")

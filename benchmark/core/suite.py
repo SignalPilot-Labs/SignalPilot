@@ -63,7 +63,7 @@ def get_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
         return SuiteConfig(
             suite=suite,
             data_dir=data_dir,
-            task_jsonl=data_dir / "spider2-snowflake.jsonl",
+            task_jsonl=data_dir / "spider2-snow.jsonl",
             eval_jsonl=data_dir / "evaluation_suite" / "gold" / "spider2snow_eval.jsonl",
             gold_dir=data_dir / "evaluation_suite" / "gold",
             work_dir=SQL_WORK_DIR / "snowflake",

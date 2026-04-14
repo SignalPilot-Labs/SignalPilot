@@ -16,6 +16,7 @@ from .core.audit import (
     ResultAlreadyExistsError,
     RunMetadata,
     TaskResult,
+    archive_workdir,
     copy_gateway_audit,
     finalize_run,
     init_run,
@@ -23,7 +24,7 @@ from .core.audit import (
     save_task_transcript,
 )
 from .core.logging import close_log_file, log, set_log_file
-from .core.paths import AUDIT_BASE
+from .core.paths import AUDIT_BASE, SQL_WORK_DIR, WORK_DIR
 from .core.suite import BenchmarkSuite
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -274,6 +275,23 @@ async def run_task_async(
             copy_gateway_audit(run_id, instance_id, connection_name=f"{connection_prefix}{instance_id}")
         except Exception as e:
             log(f"Failed to copy gateway audit for '{instance_id}': {e}", "WARN")
+
+        # Archive the agent's workdir (SQL models, DuckDB output, etc.)
+        # Without this, work products are lost when the container stops.
+        try:
+            if suite == "spider2-dbt":
+                task_work_dir = WORK_DIR / instance_id
+            else:
+                # SQL suites use backend-specific subdirs
+                suite_enum = BenchmarkSuite(suite)
+                task_work_dir = SQL_WORK_DIR / suite_enum.value.split("-")[-1] / instance_id
+            archived = archive_workdir(run_id, instance_id, task_work_dir)
+            if archived:
+                log(f"Archived workdir to {archived}")
+            else:
+                log(f"Workdir archive skipped (not found: {task_work_dir})", "WARN")
+        except Exception as e:
+            log(f"Failed to archive workdir for '{instance_id}': {e}", "WARN")
 
         close_log_file(log_token)
         return task_result

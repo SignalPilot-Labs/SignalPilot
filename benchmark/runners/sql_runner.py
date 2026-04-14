@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import functools
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -39,7 +40,7 @@ ensure_local_bin_on_path()
 
 _SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "system_general.md").read_text()
 
-_GATEWAY_HTTP = "http://localhost:3300"
+_GATEWAY_HTTP = os.environ.get("SP_GATEWAY_URL", "http://172.25.0.4:3300")
 
 
 def _register_snowflake_http(instance_id: str, database: str, schema: str) -> bool:

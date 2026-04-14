@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 
 # Benchmark
+benchmark-audit/
 benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json

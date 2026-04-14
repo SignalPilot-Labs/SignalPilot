@@ -159,3 +159,56 @@
 5. **NHTSA large DB burns turns on column case**: Agent tried lowercase then uppercase column names
 6. **DBT runner functional**: chinook001 ran end-to-end but dbt compilation failed with type errors
 7. **Salary/value interpretation differences**: local253 failed due to different cleaning methodology
+
+---
+
+## Round 4 Infrastructure Changes
+1. Downloaded pre-built SQLite databases from Spider2 Google Drive (31 .sqlite files, 457MB) — extracted to `spider2-localdb/`
+2. Fixed gateway IP in all config files (172.25.0.3 → 172.25.0.4)
+3. Fixed `_GATEWAY_HTTP` hardcoded to localhost in `sql_runner.py` — now uses `SP_GATEWAY_URL` env var
+4. Set `BENCHMARK_AUDIT_DIR=/home/agentuser/repo/benchmark-audit` for persistent audit storage
+5. Batch strategy: prioritize Tier 1 (small gold, clean schemas) before harder tasks
+
+## Benchmark Runs — Round 4
+
+### Snowflake Batch 1 (Quick Wins)
+
+| # | Task ID | Database | Result | Turns | Time | Notes |
+|---|---------|----------|--------|-------|------|-------|
+| 1 | sf_local198 | CHINOOK | **PASS** | 28 | 121s | Median total sales = 249.53, exact match |
+| 2 | sf_local081 | NORTHWIND | **PASS** | 38 | 174s | 4 spending groups with counts/percentages |
+| 3 | sf_local049 | MODERN_DATA | FAIL | ~30 | 170s | Got 59.67, gold wants 60.33 or 57.67. Wrong industry or year calc. |
+
+### Snowflake Batch 2 (DB Breadth)
+
+| # | Task ID | Database | Result | Turns | Time | Notes |
+|---|---------|----------|--------|-------|------|-------|
+| 1 | sf_local221 | EU_SOCCER | **PASS** | 24 | 62s | Top 10 teams by total wins |
+| 2 | sf_local054 | CHINOOK | **PASS** | 20 | 61s | Customers spending <$1 on best-selling artist |
+| 3 | sf_local055 | CHINOOK | **PASS** | 32 | 111s | Artist high/low sales diff = 4.143, matched _b gold |
+
+### Spider2-Lite SQLite Batch 1 (All Pre-built DBs)
+
+| # | Task ID | Database | Result | Turns | Time | Notes |
+|---|---------|----------|--------|-------|------|-------|
+| 1 | local054 | chinook | **PASS** | 16 | 43s | Customers <$1 on best-selling artist |
+| 2 | local085 | northwind | **PASS** | 22 | 51s | Top 3 employees by late order % |
+| 3 | local081 | northwind | **PASS** | 24 | 68s | 4 spending groups with counts/percentages |
+| 4 | local329 | log | **PASS** | 22 | 49s | Unique sessions /regist/input→/regist/confirm = 1 |
+| 5 | local358 | log | **PASS** | 27 | 72s | Users per age bucket, matched _b gold |
+
+### Round 4 Running Totals (Cumulative All Rounds)
+
+| Suite | Tasks Run | Pass | Fail | Timeout | Pass Rate |
+|-------|-----------|------|------|---------|-----------|
+| Spider2-Snowflake | 27 | 17 | 7 | 3 | 63.0% (excl timeout: 70.8%) |
+| Spider2-Lite SQLite | 11 | 8 | 1 | 2 | 72.7% (excl timeout: 88.9%) |
+| Spider2-Lite BigQuery | 1 | 0 | 1 | 0 | 0% |
+| Spider2-DBT | 1 | 0 | 1 | 0 | 0% |
+
+### Key Round 4 Findings
+1. **Pre-built SQLite databases critical**: 5/5 Lite tasks passed with real .sqlite files (vs 3/6 with JSON-built)
+2. **Batch strategy working**: Tier 1 tasks pass at 90%+ rate. Small gold answers on clean schemas are reliable.
+3. **CHINOOK is a strong DB**: 3/3 Snowflake CHINOOK tasks passed (sf_local198, sf_local054, sf_local055)
+4. **Agent speed improved**: Most tasks complete in <30 turns, <120s (vs 50+ turns in earlier rounds)
+5. **Gold variant coverage**: sf_local055 and local358 matched _b variants — having alternates is important

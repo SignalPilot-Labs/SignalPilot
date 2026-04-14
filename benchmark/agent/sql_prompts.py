@@ -15,7 +15,11 @@ _BACKEND_TIPS: dict[DBBackend, str] = {
         "- Date arithmetic: DATEADD(day, N, col), DATEDIFF(day, start, end)\n"
         "- Semi-structured: col:field for VARIANT, PARSE_JSON for JSON strings\n"
         "- String functions: SPLIT_PART, REGEXP_SUBSTR, TRIM, UPPER/LOWER\n"
-        "- Null-safe equality: col IS NOT DISTINCT FROM other_col"
+        "- Null-safe equality: col IS NOT DISTINCT FROM other_col\n"
+        "- CASE SENSITIVITY: Snowflake column names are UPPERCASE by default unless the table was created\n"
+        "  with double-quoted identifiers. When describe_table shows a column as 'CUSTOMER_ID', reference\n"
+        "  it as CUSTOMER_ID (unquoted) or \"CUSTOMER_ID\" (double-quoted). If a query errors on a column\n"
+        "  name, try UPPER(column_name) or wrap the identifier in double quotes."
     ),
     DBBackend.BIGQUERY: (
         "BIGQUERY-SPECIFIC TIPS:\n"
@@ -29,6 +33,11 @@ _BACKEND_TIPS: dict[DBBackend, str] = {
         "- Default project for Spider2 tasks: `spider2-public-data`\n"
         "- Dataset reference: `spider2-public-data.{dataset}.{table}` or just `{dataset}.{table}` if default project is set\n"
         "- For StackOverflow data: tags are stored as pipe-delimited strings (e.g., 'python|python-2.7'). Use REGEXP_CONTAINS or LIKE with wildcards.\n"
+        "- TAG FILTERING — version-specific tag logic:\n"
+        "  * Python 2 tags are 'python-2.x' variants: python-2.7, python-2.6, etc. 'python' alone is NOT version-specific.\n"
+        "  * A 'Python 2 specific question' means the post has a python-2.x tag AND does NOT have 'python' or python-3.x as its primary tag.\n"
+        "  * Python 3 tags are 'python-3.x' variants: python-3.x, python-3.6, python-3.7, etc.\n"
+        "  * Always call explore_column on the tags column before writing any tag-based filter logic.\n"
         "- INFORMATION_SCHEMA: Use `{dataset}.INFORMATION_SCHEMA.COLUMNS` to discover table schemas when MCP tools are slow\n"
         "- Always verify filter conditions against actual column values using explore_column before assuming value formats"
     ),
@@ -130,6 +139,14 @@ WORKFLOW — follow these steps in order:
       "the name and the count", your CSV must have exactly 2 columns with descriptive names.
       If it asks for "top 5 by revenue", your CSV must have at most 5 rows.
       Count your columns and rows — if they do not match the question, fix the query.
+   h2. COLUMN NAME FINAL CHECK: Write out each output column name explicitly and cross-check
+      it against the question wording.
+      - Column names must be descriptive snake_case that mirrors the question language.
+        Example: question asks "total revenue by region" → columns are `region, total_revenue`,
+        NOT `REGION, SUM(REVENUE)` or `r, s`.
+      - Every computed column (aggregate, expression, CASE) must have an AS alias.
+        Never leave a column named COUNT(*), SUM(...), or any raw SQL expression.
+      - If your SELECT uses `AS alias`, that alias becomes the CSV header — verify it now.
    i. INTERPRETATION CHECK — before saving, verify these in a SQL comment:
       - What EXACTLY is the question asking? Restate it in your own words.
       - Are there implicit filters? ("Python 2 specific" = tags containing 'python-2.x' AND NOT 'python-3.x')
@@ -151,6 +168,11 @@ WORKFLOW — follow these steps in order:
 7. SAVE — write both output files to: {work_dir}
    - result.sql: your final SQL query
    - result.csv: the query result as CSV with header row
+   SAVE EARLY: As soon as you have a query that produces plausible results and passes basic
+   verification (row count sane, no obvious NULLs, columns match the question), save result.sql
+   and result.csv IMMEDIATELY. You can always overwrite them later if you find improvements.
+   Do NOT wait until every verification step is perfect before doing the first save — a saved
+   approximate answer beats a perfect unsaved one.
 
 RULES:
 - Use {db_backend.value}-compatible SQL syntax only

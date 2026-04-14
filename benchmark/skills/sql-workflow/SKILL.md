@@ -8,6 +8,10 @@ type: skill
 
 ## 1. Schema Exploration — Do This First
 
+**MANDATORY FIRST STEP: Before ANY MCP call, run `ls schema/` and read `schema/DDL.csv` if it
+exists. This is free (no tool calls) and saves 2-3 MCP turns. Only call `list_tables` if no
+`schema/` directory exists or the local files do not contain what you need.**
+
 Before writing any SQL, understand the data:
 
 0. **Read local schema files first** (if schema/ directory exists in workdir):

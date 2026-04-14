@@ -1,4 +1,5 @@
 """Entry point for python -m benchmark."""
-from .run import main
+
+from benchmark.run_direct import main
 
 main()

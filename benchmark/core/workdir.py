@@ -7,9 +7,13 @@ import shutil
 import stat
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .logging import log
 from .paths import EXAMPLES_DIR, PROJECT_ROOT, SKILLS_SRC, WORK_DIR
+
+if TYPE_CHECKING:
+    from .suite import DBBackend, SuiteConfig
 
 
 def force_rmtree(path: Path) -> None:
@@ -22,9 +26,10 @@ def force_rmtree(path: Path) -> None:
     shutil.rmtree(path, onerror=on_error)
 
 
-def prepare_workdir(instance_id: str) -> Path:
+def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
     """Copy the task's dbt project into a fresh working directory under _dbt_workdir/."""
-    src = EXAMPLES_DIR / instance_id
+    examples = (data_dir / "examples") if data_dir else EXAMPLES_DIR
+    src = examples / instance_id
     dst = WORK_DIR / instance_id
     if dst.exists():
         force_rmtree(dst)
@@ -55,6 +60,142 @@ def prepare_workdir(instance_id: str) -> Path:
     subprocess.run(["git", "init"], cwd=str(dst), capture_output=True)
 
     return dst
+
+
+def prepare_sql_workdir(instance_id: str, config: "SuiteConfig", task: dict) -> Path:
+    """Create a fresh SQL working directory for the given task.
+
+    Unlike prepare_workdir (DBT), no project template is copied — the directory starts empty.
+    Files placed: .mcp.json, .claude/skills/<skill>/, optional external knowledge docs,
+    optional schema files. CLAUDE.md is written separately by write_sql_claude_md.
+    """
+    from .suite import BenchmarkSuite
+
+    work_dir = config.work_dir / instance_id
+    if work_dir.exists():
+        force_rmtree(work_dir)
+    work_dir.mkdir(parents=True)
+    log(f"Created SQL workdir: {work_dir}")
+
+    # Copy .mcp.json so Claude Code discovers SignalPilot MCP tools
+    mcp_json_src = PROJECT_ROOT / ".mcp.json"
+    if mcp_json_src.exists():
+        shutil.copy2(mcp_json_src, work_dir / ".mcp.json")
+        log("Copied .mcp.json for MCP tool discovery")
+
+    # Copy only the requested skills into .claude/skills/
+    skills_dst = work_dir / ".claude" / "skills"
+    skills_dst.mkdir(parents=True, exist_ok=True)
+    for skill_name in config.skills:
+        skill_src = SKILLS_SRC / skill_name
+        if skill_src.exists():
+            shutil.copytree(
+                skill_src,
+                skills_dst / skill_name,
+                dirs_exist_ok=True,
+            )
+            log(f"Copied skill '{skill_name}' -> {skills_dst / skill_name}")
+        else:
+            log(f"Skill directory not found: {skill_src}", "WARN")
+
+    # Copy external knowledge document if present
+    external_knowledge = task.get("external_knowledge")
+    if external_knowledge:
+        doc_src = config.data_dir / "resource" / "documents" / external_knowledge
+        if doc_src.exists():
+            shutil.copy2(doc_src, work_dir / external_knowledge)
+            log(f"Copied external knowledge: {doc_src.name}")
+        else:
+            log(f"External knowledge document not found: {doc_src}", "WARN")
+
+    # Copy database schema files
+    resource_db_dir = config.data_dir / "resource" / "databases"
+    schema_dst = work_dir / "schema"
+
+    if config.suite == BenchmarkSuite.SNOWFLAKE:
+        db_id = task.get("db_id", "")
+        if db_id:
+            db_schema_src = resource_db_dir / db_id
+            if db_schema_src.exists():
+                schema_dst.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(db_schema_src, schema_dst, dirs_exist_ok=True)
+                log(f"Copied schema files for '{db_id}' -> {schema_dst}")
+    else:
+        # Spider2-Lite: check sqlite/snowflake/bigquery subdirs for task's db name
+        db_name = task.get("db", "")
+        if db_name:
+            for db_type in ("sqlite", "snowflake", "bigquery"):
+                type_dir = resource_db_dir / db_type
+                db_schema_src = type_dir / db_name
+                if db_schema_src.exists():
+                    schema_dst.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(db_schema_src, schema_dst, dirs_exist_ok=True)
+                    log(f"Copied schema files for '{db_name}' ({db_type}) -> {schema_dst}")
+                    break
+
+    # Initialize a git repo so Claude Code discovers skills in .claude/skills/
+    subprocess.run(["git", "init"], cwd=str(work_dir), capture_output=True)
+
+    return work_dir
+
+
+def write_sql_claude_md(
+    work_dir: Path,
+    instance_id: str,
+    instruction: str,
+    backend: "DBBackend",
+    connection_name: str,
+) -> None:
+    """Write CLAUDE.md with task instructions for SQL benchmark tasks."""
+    content = f"""# Spider2 SQL Benchmark Task: {instance_id}
+
+## Your Task
+{instruction}
+
+## Database Access
+The database is registered in SignalPilot as connection `{connection_name}`.
+Database type: `{backend.value}`
+
+Use SignalPilot MCP tools to explore and query the database:
+- `mcp__signalpilot__list_tables` — list all tables
+- `mcp__signalpilot__describe_table` — column details for a table
+- `mcp__signalpilot__explore_table` — deep-dive with sample values
+- `mcp__signalpilot__query_database` — run SQL queries (read-only)
+- `mcp__signalpilot__schema_overview` — quick overview of the whole database
+- `mcp__signalpilot__schema_ddl` — full schema as DDL (CREATE TABLE statements)
+- `mcp__signalpilot__schema_link` — find tables relevant to a question
+- `mcp__signalpilot__find_join_path` — find how to join two tables
+- `mcp__signalpilot__explore_column` — distinct values for a column
+- `mcp__signalpilot__validate_sql` — check SQL syntax without executing
+- `mcp__signalpilot__debug_cte_query` — test CTE steps independently
+- `mcp__signalpilot__explain_query` — get execution plan
+"""
+
+    # Add external knowledge section if non-CLAUDE.md .md files exist
+    md_docs = [f for f in work_dir.glob("*.md") if f.name != "CLAUDE.md"]
+    if md_docs:
+        content += "\n## External Knowledge\n"
+        content += "Read the following files in this directory for domain context:\n"
+        for doc in md_docs:
+            content += f"- `{doc.name}`\n"
+
+    # Add schema section if schema/ directory exists
+    schema_dir = work_dir / "schema"
+    if schema_dir.exists():
+        content += "\n## Database Schema\n"
+        content += "Schema definition files are available in the `schema/` directory. "
+        content += "Read these files to understand the database structure before querying.\n"
+
+    content += """
+## Key Rules
+- This is a READ-ONLY task — do NOT insert, update, delete, or create objects
+- Write your final SQL query to `result.sql` in this directory
+- Write your final result as a CSV to `result.csv` in this directory
+- Use the connection name shown above for all MCP tool calls
+"""
+
+    (work_dir / "CLAUDE.md").write_text(content)
+    log(f"Wrote CLAUDE.md to {work_dir}")
 
 
 def write_claude_md(work_dir: Path, instance_id: str, instruction: str) -> None:

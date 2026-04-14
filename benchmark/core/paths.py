@@ -21,6 +21,16 @@ GOLD_DIR = SPIDER2_DBT_DIR / "evaluation_suite" / "gold"
 EVAL_JSONL = GOLD_DIR / "spider2_eval.jsonl"
 TASK_JSONL = EXAMPLES_DIR / "spider2-dbt.jsonl"
 
+SPIDER2_SNOWFLAKE_DIR = Path(
+    os.environ.get("SPIDER2_SNOWFLAKE_DIR", os.path.expanduser("~/spider2-repo/spider2-snow"))
+)
+SPIDER2_LITE_DIR = Path(
+    os.environ.get("SPIDER2_LITE_DIR", os.path.expanduser("~/spider2-repo/spider2-lite"))
+)
+SQL_WORK_DIR = BENCHMARK_DIR / "_sql_workdir"
+SNOWFLAKE_ENV_FILE = PROJECT_ROOT / ".env"
+BIGQUERY_SA_FILE = PROJECT_ROOT / "gcp-service-account.json"
+
 WORK_DIR = BENCHMARK_DIR / "_dbt_workdir"
 TEST_ENV = BENCHMARK_DIR / "test-env"
 SKILLS_SRC = BENCHMARK_DIR / "skills"

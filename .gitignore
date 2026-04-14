@@ -26,6 +26,7 @@ self-improve/monitor-web/audit/test-results/
 *.key
 *.pfx
 id_rsa*
+gcp-service-account.json
 
 # Docker volumes / runtime
 *.log

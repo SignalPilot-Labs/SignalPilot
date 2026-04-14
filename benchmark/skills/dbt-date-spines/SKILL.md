@@ -12,13 +12,7 @@ type: skill
 These are pre-shipped model SQL files in `models/` — you have direct write access.
 For general date spine syntax, see `duckdb-sql` skill section 2.
 
-## Automated Fix (preferred)
-
-Call `mcp__signalpilot__fix_date_spine_hazards(project_dir="...", connection_name="...")`.
-This handles everything: reads package SQL, creates local overrides, replaces current_date
-with a literal date from the source data. One call fixes all hazards.
-
-## Manual Fix (fallback if auto-fix produces wrong results)
+## Fix Pattern
 
 Edit the model SQL directly. Replace `current_date`/`current_timestamp`/`now()` with a data-driven endpoint — a subquery from the primary fact table:
 

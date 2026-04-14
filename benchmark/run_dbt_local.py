@@ -43,7 +43,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # ── Paths (override via env or edit here) ────────────────────
 SPIDER2_DBT_DIR = Path(os.environ.get(
     "SPIDER2_DBT_DIR",
-    os.path.expanduser("~/spider2-repo/spider2-dbt"),
+    "C:/Users/kiwi0/Desktop/what/spider2-repo/spider2-dbt",
 ))
 EXAMPLES_DIR = SPIDER2_DBT_DIR / "examples"
 GOLD_DIR = SPIDER2_DBT_DIR / "evaluation_suite" / "gold"
@@ -359,7 +359,7 @@ def run_dbt(project_dir: Path) -> tuple[bool, str]:
 
 
 # ── Evaluate ─────────────────────────────────────────────────
-from .evaluation.comparator import evaluate  # noqa: E402
+from .evaluation.local_comparator import evaluate  # noqa: E402
 
 
 # ── Main ─────────────────────────────────────────────────────

@@ -63,20 +63,24 @@ anything else. This single call tells you:
 
 The work order at the bottom is your plan.
 
-If the output contains a "WARNING: Models use current_date" section, you MUST
-immediately call `mcp__signalpilot__fix_date_spine_hazards project_dir="${work_dir}" connection_name="${instance_id}"`.
-This is MANDATORY — do NOT try to fix date spine issues manually. The tool auto-fixes
-ALL flagged files in one call (creating local overrides for package models and editing
-project models in-place). Then run `dbt run --select <model_names from output>` to verify.
-Do NOT use current_date, current_timestamp, or now() anywhere in your SQL — always use
-the date from get_date_boundaries or the date the auto-fix tool provided.
-If the tool fails, see the dbt-date-spines skill for the manual procedure.
+If the output contains a "WARNING: Models use current_date" section, fix every
+flagged file before writing new SQL:
+1. Call `mcp__signalpilot__get_date_boundaries connection_name="${instance_id}"`
+2. Find the column and table marked "USE THIS" in the output
+3. Replace `current_date`/`current_timestamp`/`now()` with
+   `(SELECT MAX(<column>) FROM {{ ref('<table>') }})` using values from step 2
+4. If the file is marked "PACKAGE MODEL": read it, create models/<name>.sql,
+   paste the full SQL, replace current_date with the subquery from step 3,
+   add `{{ config(materialized='table') }}` at top.
+5. Run `dbt run --select <model_name>` to verify each fix.
 
-If the output contains a "WARNING: Pre-shipped models use ROW_NUMBER" section, you MUST
-immediately call `mcp__signalpilot__fix_nondeterminism_hazards project_dir="${work_dir}" connection_name="${instance_id}"`.
-This is MANDATORY — do NOT try to fix non-determinism issues manually. The tool auto-fixes
-ALL flagged files in one call (appending a tiebreaker column to ambiguous ORDER BY clauses).
-Then run `dbt run --select <model_names from output>` to verify.
+If the output contains a "WARNING: Pre-shipped models use ROW_NUMBER" section,
+fix each flagged file (project: edit in-place; package: create override as above):
+1. Find every ROW_NUMBER()/RANK()/DENSE_RANK() OVER(...)
+2. Run `explore_table` or `SELECT COUNT(*), COUNT(DISTINCT <col>)` to check
+   if ORDER BY columns are unique within each partition
+3. If not unique, append the primary key to the ORDER BY
+4. Run `dbt run --select <model_name>` to verify.
 
 Cross-check the result against the Task instruction above — if the task
 mentions a model or table that does NOT appear in the project map, the task
@@ -107,23 +111,11 @@ For each missing model (in dependency order):
 - Use `{{ ref('model_name') }}` for other models, `{{ source('schema', 'table') }}` for raw tables
 - Use DuckDB syntax (no DATEADD, no ::date on non-ISO strings, INTERVAL '1' DAY not +1)
 - Add `{{ config(materialized='table') }}` at the top
-- Default to LEFT JOIN for ALL joins. INNER JOIN is almost never correct in reporting
-  models. Use INNER JOIN ONLY when the task description explicitly says "only matching",
-  "exclude", "filter out", or "where X exists". If in doubt, use LEFT JOIN.
-- MANDATORY: After writing any model where you chose INNER JOIN, call
-  `mcp__signalpilot__compare_join_types connection_name="${instance_id}"
-  left_table="<left>" right_table="<right>" join_keys="<keys>"`.
-  If the tool shows that LEFT JOIN produces more rows than INNER JOIN, switch to LEFT JOIN
-  unless the task explicitly requires filtering.
-- When LEFT JOINing a date spine or dimension table to fact/aggregate tables:
-  - COUNT columns: COALESCE(col, 0) — zero orders on inactive days
-  - SUM columns: COALESCE(col, 0) — zero revenue on inactive days
-  - AVG columns: leave as NULL — average is undefined when there are no observations
-  - MIN/MAX columns: leave as NULL — no meaningful min/max with zero observations
-  - Ratio columns (e.g., avg_discount, conversion_rate): leave as NULL
-  IMPORTANT: If a column name contains "avg", "average", "mean", "rate", "ratio",
-  "percent", or "pct", it MUST be NULL when there is no underlying data, not 0.
-  COALESCE to 0 for these columns is ALWAYS WRONG.
+- Default to LEFT JOIN for all joins. Use INNER JOIN only when the task explicitly
+  says "only matching", "exclude", or filters non-matching rows. After writing any
+  model with JOINs, call `mcp__signalpilot__compare_join_types connection_name="${instance_id}"
+  left_table="<left>" right_table="<right>" join_keys="<keys>"` to verify no rows
+  are silently dropped.
 
 ### Step 4 — Run and fix
 Run: `${dbt_bin} run` (skip `dbt deps` unless `dbt_project_validate` told you to).
@@ -150,12 +142,6 @@ Also check for too-many-rows:
 - Do NOT modify `.yml` files unless fixing a missing `schema:` in a source definition
 - Do NOT use PostgreSQL/MySQL syntax
 - Do NOT guess column names — use the YAML `columns:` list as the source of truth
-- Do NOT use `current_date`, `current_timestamp`, `now()`, or `getdate()` in any SQL you write.
-- When combining results from multiple CTEs or subqueries, prefer UNION (deduplicating) over
-  UNION ALL unless you specifically need duplicates. Check if the gold output has unique rows.
-  These functions return today's date which is years after the source data and will produce
-  wrong row counts. Always use the replacement date from `fix_date_spine_hazards` or
-  `get_date_boundaries`.
 
 ## Critical Warning — do NOT create passthrough models for raw tables
 

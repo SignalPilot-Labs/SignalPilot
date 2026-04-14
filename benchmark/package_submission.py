@@ -131,6 +131,19 @@ def _build_archive(run_id: str, run_dir: Path, audit_base: Path) -> Path:
         for query_file in sorted(queries_dir.glob("*.jsonl")):
             tar.add(query_file, arcname=f"{archive_root}/queries/{query_file.name}")
 
+        # projects/{instance_id}/ — agent-generated work products (SQL models, DuckDB, etc.)
+        projects_dir = run_dir / "projects"
+        if projects_dir.exists():
+            for project_dir in sorted(projects_dir.iterdir()):
+                if project_dir.is_dir():
+                    tar.add(project_dir, arcname=f"{archive_root}/projects/{project_dir.name}")
+
+        # logs/{instance_id}.log — per-task console logs
+        logs_dir = run_dir / "logs"
+        if logs_dir.exists():
+            for log_file in sorted(logs_dir.glob("*.log")):
+                tar.add(log_file, arcname=f"{archive_root}/logs/{log_file.name}")
+
     return archive_path
 
 

@@ -11,11 +11,15 @@ from pathlib import Path
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    RateLimitEvent,
     ResultMessage,
+    StreamEvent,
+    SystemMessage,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     query,
 )
 from claude_agent_sdk._errors import ClaudeSDKError, ProcessError
@@ -133,19 +137,110 @@ async def run_sdk_agent(
                                 "type": "tool_result",
                                 "turn": turn_count,
                                 "timestamp": now_ts,
+                                "tool_use_id": getattr(block, "tool_use_id", None),
+                                "is_error": getattr(block, "is_error", None),
                                 "content": result_str,
                             })
+
+                elif isinstance(message, UserMessage):
+                    # UserMessage carries tool results back to the model.
+                    # content can be a string or list of content blocks.
+                    log(f"[user_message] ({elapsed:.1f}s)")
+                    content = message.content
+                    if isinstance(content, str):
+                        transcript.append({
+                            "type": "user_message",
+                            "turn": turn_count,
+                            "timestamp": now_ts,
+                            "content": content,
+                        })
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, ToolResultBlock):
+                                result_str = str(block.content) if hasattr(block, "content") else str(block)
+                                truncated = result_str[:2000] + "..." if len(result_str) > 2000 else result_str
+                                log(f"[tool_result] id={getattr(block, 'tool_use_id', '?')} err={getattr(block, 'is_error', False)}")
+                                transcript.append({
+                                    "type": "tool_result",
+                                    "turn": turn_count,
+                                    "timestamp": now_ts,
+                                    "tool_use_id": getattr(block, "tool_use_id", None),
+                                    "is_error": getattr(block, "is_error", None),
+                                    "content": result_str,
+                                })
+                            elif isinstance(block, TextBlock):
+                                transcript.append({
+                                    "type": "user_text",
+                                    "turn": turn_count,
+                                    "timestamp": now_ts,
+                                    "content": block.text,
+                                })
+                            else:
+                                transcript.append({
+                                    "type": "user_block",
+                                    "turn": turn_count,
+                                    "timestamp": now_ts,
+                                    "content": str(block),
+                                })
+                    # Also capture tool_use_result dict if present
+                    if message.tool_use_result:
+                        transcript.append({
+                            "type": "tool_use_result",
+                            "turn": turn_count,
+                            "timestamp": now_ts,
+                            "content": message.tool_use_result,
+                        })
+
+                elif isinstance(message, SystemMessage):
+                    log(f"[system] {message.subtype}")
+                    transcript.append({
+                        "type": "system",
+                        "turn": turn_count,
+                        "timestamp": now_ts,
+                        "subtype": message.subtype,
+                        "data": message.data,
+                    })
 
                 elif isinstance(message, ResultMessage):
                     elapsed = time.monotonic() - start_time
                     log(f"AGENT FINISHED after {turn_count} turns, {elapsed:.1f}s")
-                    if hasattr(message, "cost_usd"):
-                        cost_usd = getattr(message, "cost_usd", None)
+                    cost_usd = getattr(message, "total_cost_usd", None)
+                    if cost_usd is not None:
                         log(f"  Cost: ${cost_usd!r}")
-                    if hasattr(message, "usage"):
-                        usage = getattr(message, "usage", None)
+                    usage = getattr(message, "usage", None)
+                    if usage is not None:
                         log(f"  Usage: {usage!r}")
-                    success = True
+                    transcript.append({
+                        "type": "result",
+                        "turn": turn_count,
+                        "timestamp": now_ts,
+                        "num_turns": getattr(message, "num_turns", None),
+                        "stop_reason": getattr(message, "stop_reason", None),
+                        "total_cost_usd": cost_usd,
+                        "duration_ms": getattr(message, "duration_ms", None),
+                        "duration_api_ms": getattr(message, "duration_api_ms", None),
+                        "is_error": getattr(message, "is_error", None),
+                        "usage": usage,
+                    })
+                    success = not getattr(message, "is_error", False)
+
+                elif isinstance(message, RateLimitEvent):
+                    log(f"[rate_limit] {message.rate_limit_info}", "WARN")
+                    transcript.append({
+                        "type": "rate_limit",
+                        "turn": turn_count,
+                        "timestamp": now_ts,
+                        "info": str(message.rate_limit_info),
+                    })
+
+                elif isinstance(message, StreamEvent):
+                    # Low-level stream events (hooks, etc.)
+                    transcript.append({
+                        "type": "stream_event",
+                        "turn": turn_count,
+                        "timestamp": now_ts,
+                        "event": message.event,
+                    })
 
         except (ProcessError, ClaudeSDKError) as e:
             err_str = str(e)

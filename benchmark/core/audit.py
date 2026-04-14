@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,7 +74,7 @@ def init_run(
     run_dir = _run_dir(run_id)
 
     try:
-        for subdir in ("tasks", "traces", "queries"):
+        for subdir in ("tasks", "traces", "queries", "projects"):
             (run_dir / subdir).mkdir(parents=True, exist_ok=True)
     except OSError as e:
         raise RuntimeError(
@@ -156,3 +157,35 @@ def copy_gateway_audit(run_id: str, instance_id: str, connection_name: str) -> N
                 continue
 
     dest_path.write_text("\n".join(matching_lines) + ("\n" if matching_lines else ""))
+
+
+def archive_workdir(run_id: str, instance_id: str, work_dir: Path) -> Path | None:
+    """Copy the agent's workdir to the audit volume for post-run evaluation.
+
+    Copies the full project (SQL models, DuckDB output, dbt_project.yml, etc.)
+    to AUDIT_BASE/runs/{run_id}/projects/{instance_id}/. Without this, the
+    work products are lost when Docker containers stop.
+
+    Skips files that are unlikely to matter for submission/re-evaluation:
+    - dbt_packages/ (large, deterministic from packages.yml)
+    - .dbt/ (internal dbt state)
+    - __pycache__/
+
+    Returns the destination path, or None if the copy failed.
+    """
+    if not work_dir.exists():
+        return None
+
+    dest = _run_dir(run_id) / "projects" / instance_id
+    skip_dirs = {"dbt_packages", ".dbt", "__pycache__", "node_modules", "target"}
+
+    def _ignore(directory: str, contents: list[str]) -> set[str]:
+        return {c for c in contents if c in skip_dirs}
+
+    try:
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(work_dir, dest, ignore=_ignore)
+        return dest
+    except Exception:
+        return None

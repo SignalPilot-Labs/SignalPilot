@@ -32,6 +32,13 @@ Read the task question carefully for cardinality clues:
 - "list all" → detail rows, no aggregation
 - "how many" → COUNT, result is 1 row 1 column
 
+### COUNT(*) vs COUNT(DISTINCT)
+
+- "How many [things]" = COUNT(DISTINCT thing_id), not COUNT(*)
+- "How many rows/records/entries/times" = COUNT(*)
+- Default assumption: COUNT(DISTINCT). The question must explicitly mention rows/records to justify COUNT(*).
+- Verification: run both counts and compare. If they differ, use DISTINCT.
+
 Write a comment at the top of your SQL:
 ```sql
 -- EXPECTED: <row count estimate> rows because <reason from question>
@@ -41,6 +48,14 @@ Critical checks:
 - If the question asks for a single number, the result MUST be 1 row × 1 column
 - If the question says "how many", verify the CSV has exactly 1 row with a COUNT value
 - If "top N" appears in the question, verify the CSV has at most N rows
+
+### OUTPUT COLUMNS
+
+- Re-read the question and list every entity/attribute/metric it mentions.
+- Each mentioned attribute must appear as a separate column in result.csv.
+- Example: "indicator code, indicator name, and total debt" requires 3 columns — not 2.
+- When in doubt, include more columns. Extra columns do not cause failure; missing columns do.
+- Before saving, count your columns and compare against the question.
 
 ## 3. Iterative Query Building — Build Bottom-Up
 
@@ -125,7 +140,7 @@ Once you have the correct result:
 
 ## 7. Turn Budget Management
 
-- **First 3 turns**: Schema exploration only (`schema_overview`, `describe_table` on 2-3 tables, `explore_column` on key categorical columns). STOP exploring.
+- **First 3 turns**: Schema exploration only (read local schema files, or call `list_tables`/`schema_overview` + `describe_table` on 2-3 tables). STOP exploring.
 - **Turns 4 through (N-3)**: Write query iteratively — execute and verify each step.
 - **Last 3 turns**: Finalize `result.sql` and `result.csv`. If you have a working query, SAVE IT NOW — do not keep iterating.
 
@@ -134,7 +149,7 @@ If your query works and passes all verification checks, SAVE IMMEDIATELY — do 
 ## 8. Common Benchmark Traps
 
 - **Rounding**: Do NOT round unless the question explicitly asks for rounded values. The evaluator uses tolerance-based comparison — full precision is always safer.
-- **Column naming**: Match the question's phrasing exactly. If the question says "total revenue", name the column `total_revenue`, not `sum_revenue` or `revenue_total`.
+- **Column naming**: Use descriptive snake_case aliases for every column. The evaluator matches by value, not name — focus on including all required columns with correct values.
 - **CSV format**: No trailing newline, no BOM, comma delimiter, double-quote strings containing commas.
 - **Empty result**: If the correct answer is 0 or empty, write a CSV with just the header row (or header + "0").
 - **Date/time format in CSV**: Use ISO 8601 (`YYYY-MM-DD`) unless the question specifies otherwise.

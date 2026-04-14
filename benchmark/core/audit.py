@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -54,3 +55,28 @@ def copy_result_csv(audit_dir: Path, work_dir: Path) -> None:
     src = work_dir / "result.csv"
     if src.exists():
         shutil.copy2(src, audit_dir / "result.csv")
+
+
+def sync_to_docker_volume(audit_dir: Path) -> None:
+    """Best-effort sync of audit_dir into the benchmark-audit-logs Docker volume.
+
+    Uses a short-lived alpine container to copy files into the named volume.
+    Never raises — failures are printed but do not block exit.
+    Do NOT call log() here: the log file is already closed when this runs.
+    """
+    cmd = [
+        "docker", "run", "--rm",
+        "-v", "benchmark-audit-logs:/data",
+        "-v", f"{str(audit_dir)}:/src:ro",
+        "alpine",
+        "cp", "-r", "/src/.", f"/data/{audit_dir.name}/",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+        if result.returncode == 0:
+            print(f"[audit-sync] OK: {audit_dir.name} synced to docker volume")
+        else:
+            stderr = result.stderr.decode(errors="replace").strip()
+            print(f"[audit-sync] FAILED (rc={result.returncode}): {stderr}")
+    except Exception as exc:
+        print(f"[audit-sync] ERROR: {exc}")

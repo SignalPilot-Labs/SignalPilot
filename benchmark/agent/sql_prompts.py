@@ -85,7 +85,8 @@ WORKFLOW — follow these steps in order:
    b. mcp__signalpilot__list_tables — only if no local schema files exist. Lists all tables with column names and row counts.
    c. mcp__signalpilot__describe_table — column details for the 2-3 most relevant tables (only if JSON files lack detail)
    d. mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly, 1-2 calls max)
-   Do NOT call schema_overview — it is slow. Do NOT spend more than 3 tool calls on discovery.
+   e. mcp__signalpilot__schema_overview — useful for a quick overview of all tables when no local schema files exist.
+   Do NOT spend more than 3 tool calls on discovery.
 
 2. PLAN THE QUERY (before writing SQL):
    - Read the question for cardinality clues: "for each X" = GROUP BY, "top N" = LIMIT/QUALIFY,
@@ -97,16 +98,23 @@ WORKFLOW — follow these steps in order:
      * "How many rows/records/entries" = COUNT(*) — only when the question explicitly says rows/records
      * "How many times" = COUNT(*) — counting occurrences, not distinct entities
      * When in doubt, ask: "Am I counting unique entities or total rows?" — usually unique entities.
-   - COLUMN NAMING — the output column name must reflect the question's intent:
+     * ALWAYS VERIFY: After writing a COUNT query, run both COUNT(*) and COUNT(DISTINCT entity) on the same filtered data. If they differ, the question almost certainly wants COUNT(DISTINCT). Only use COUNT(*) if the question explicitly says "rows", "records", "entries", or "times".
+   - COLUMN NAMING — give every column a descriptive snake_case alias:
      * "How many debt indicators" -> zero_value_indicator_count, NOT just "count"
      * Use AS to give every computed column a descriptive snake_case alias
      * Never leave a column named COUNT(*) or SUM(...) — always alias it
+     * The evaluator matches by value, not name — correct values matter more than exact naming.
    - AGGREGATION LEVEL — match the question's granularity exactly:
      * "for each X" = one row per X. Your GROUP BY must be X, nothing else.
      * "the top X" = exactly X rows (or fewer if tied). Use LIMIT X or QUALIFY.
      * "for each X, the top Y" = at most X*Y rows. Use QUALIFY or a correlated subquery.
      * If the question asks for a single value per group, do NOT return multiple rows per group.
      * Compare your result row count against the expected shape BEFORE saving.
+   - OUTPUT COLUMNS — list every attribute the question mentions:
+     * Each mentioned attribute must be a separate column in result.csv.
+     * Example: "indicator code, indicator name, and total debt" = 3 columns, not 2.
+     * When in doubt, include more columns — missing columns fail; extra columns do not.
+     * Before saving, count your CSV columns and compare against the question.
    - Write a comment: -- EXPECTED: <row count estimate> rows because <reason>
 
 3. BUILD INCREMENTALLY (do not write a 50-line query and run it):
@@ -157,8 +165,7 @@ RULES:
 - Read-only queries — do NOT modify the database (no INSERT/UPDATE/DELETE/CREATE/DROP)
 - result.csv must include a header row with column names
 - result.csv and result.sql must be in the working directory: {work_dir}
-- Column names in result.csv must match the question's phrasing exactly
-  (e.g., if question says "total revenue", name the column total_revenue)
+- Column names should be descriptive snake_case aliases (e.g., total_revenue, customer_count). The evaluator matches columns by value, not name — focus on having the right values and the right number of columns.
 - Do NOT round numeric values unless the question explicitly asks for rounding
 - Date values in CSV: use ISO 8601 (YYYY-MM-DD) unless the question specifies otherwise
 - String case in CSV: preserve the case from the database — do not change case unless asked

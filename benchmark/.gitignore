@@ -1,0 +1,30 @@
+# Credential files — never commit these
+.env.snowflake
+service_account.json
+.env
+.env.*
+
+# Workdirs — large, generated, not source
+_dbt_workdir/
+_sql_workdir/
+test_tasks/_workdir/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

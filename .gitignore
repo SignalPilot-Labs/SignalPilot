@@ -10,6 +10,8 @@ __pycache__/
 benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json
+benchmark/_sql_workdir/
+benchmark/test_tasks/_workdir/
 
 # Self-improve build artifacts
 self-improve/monitor-web/.next/
@@ -26,6 +28,7 @@ self-improve/monitor-web/audit/test-results/
 *.key
 *.pfx
 id_rsa*
+gcp-service-account.json
 
 # Docker volumes / runtime
 *.log

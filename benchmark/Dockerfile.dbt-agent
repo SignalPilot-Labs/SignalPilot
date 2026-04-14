@@ -1,0 +1,50 @@
+FROM python:3.12-slim
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential libpq-dev libssl-dev libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js (required for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Python: dbt-duckdb + data tools + Claude Agent SDK + MCP + gateway deps
+RUN pip install --no-cache-dir \
+    dbt-duckdb \
+    duckdb \
+    pandas \
+    pyarrow \
+    claude-agent-sdk \
+    httpx \
+    "mcp[cli]" \
+    aiofiles \
+    pydantic \
+    sqlglot
+
+# Non-root user (Claude CLI requires this)
+RUN useradd -m agentuser \
+    && mkdir -p /home/agentuser/.claude /workspace \
+    && echo '{}' > /home/agentuser/.claude.json \
+    && chown -R agentuser:agentuser /home/agentuser /workspace
+
+USER agentuser
+
+RUN git config --global user.name "Benchmark Agent" \
+    && git config --global user.email "benchmark@noreply.com" \
+    && git config --global --add safe.directory '*'
+
+WORKDIR /workspace
+
+COPY --chown=agentuser:agentuser dbt_agent_entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=agentuser:agentuser dbt_agent_runner.py /app/dbt_agent_runner.py
+
+USER root
+RUN chmod +x /usr/local/bin/entrypoint.sh && \
+    apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

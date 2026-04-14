@@ -1,0 +1,19 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: main
+    tables:
+      - name: raw_customers
+        columns:
+          - name: id
+          - name: name
+          - name: city
+
+models:
+  - name: customer_summary
+    description: "Summary of all customers from raw_customers"
+    columns:
+      - name: id
+      - name: name
+      - name: city

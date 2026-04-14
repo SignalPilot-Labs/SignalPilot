@@ -125,13 +125,7 @@ def register_snowflake_connection(instance_id: str, database: str, schema: str) 
                 description=f"Spider2-Snowflake benchmark: {instance_id}",
             )
         )
-        # PAT tokens need OAuth authenticator, not password auth.
-        # Inject oauth_access_token into credential_extras so the Snowflake
-        # connector uses authenticator=oauth with the token.
-        from gateway.store import _credential_extras
-        if instance_id in _credential_extras:
-            _credential_extras[instance_id]["oauth_access_token"] = token
-            _credential_extras[instance_id]["auth_method"] = "oauth"
+        # Snowflake PAT tokens work as passwords — password auth is correct.
         log(f"Registered Snowflake connection '{instance_id}' -> {database}.{schema}")
         return True
     except Exception as e:

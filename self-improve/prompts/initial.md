@@ -1,1 +1,0 @@
-Begin your self-improvement pass on the codebase. Start by exploring the project structure, reading key files, and identifying the highest-impact improvements you can make. Then implement them one by one, committing each change separately. Take your time and be thorough.

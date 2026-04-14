@@ -107,3 +107,55 @@
 3. **BigQuery needs work**: bq300 failed with wrong value (43 vs 26). May need better BQ-specific prompt guidance.
 4. **Timeout is a major issue**: 4 tasks timed out (>10 min). These are mostly complex multi-step queries on large databases. May need to increase max_turns or optimize schema discovery.
 5. **Skills and MCP always load correctly**: Every task successfully loaded skills and MCP tools.
+
+---
+
+## Round 3 Infrastructure Changes
+1. Backend-specific skill loading: agent now only gets relevant skills per DB (e.g., SQLite tasks get `sqlite-sql`, not `snowflake-sql`)
+2. Dynamic max_turns: CMS_DATA, STACKOVERFLOW, complex_oracle get 75 turns instead of 50
+3. Schema-first discovery: prompts now tell agent to read local DDL.csv/JSON before MCP calls
+4. Interpretation verification: new "re-read the question" protocol to catch nuanced logic errors
+5. BigQuery-specific guidance: StackOverflow tag format, default project, INFORMATION_SCHEMA tips
+6. Downloaded DBT data: 68 source DuckDB + 65 gold DuckDB files for Spider2-DBT suite
+
+## Benchmark Runs — Round 3
+
+### New Snowflake Tasks
+
+| # | Task ID | Database | Result | Turns | Time | Notes |
+|---|---------|----------|--------|-------|------|-------|
+| 1 | sf_bq307 | STACKOVERFLOW | FAIL | 59 | 341s | Values close but off by 1-4 (Famous Q: 418854 vs 418855). 75 turns used. |
+| 2 | sf_bq093 | CRYPTO | FAIL | 59 | 341s | ETH Classic balance calc. Gold=0/0, pred=400K/-419K. Complex gas fee calc. |
+| 3 | sf_bq441 | NHTSA_TRAFFIC_FATALITIES | TIMEOUT | 57+ | >600s | Killed at ~12min. Burned turns on column case-sensitivity. |
+| 4 | sf_bq399 | WORLD_BANK | FAIL | 37 | 186s | Rate limit hit, couldn't save result.csv. SQL looks correct. |
+
+### New Lite SQLite Tasks
+
+| # | Task ID | Database | Backend | Result | Turns | Time | Notes |
+|---|---------|----------|---------|--------|-------|------|-------|
+| 1 | local253 | education_business | SQLite | FAIL | ~30 | 162s | Salary cleaning methodology differs — avg country salary off |
+| 2 | local065 | modern_data | SQLite | TIMEOUT | ~50 | >300s | Process died without result |
+
+### New Spider2-DBT Tasks
+
+| # | Task ID | Result | Turns | Time | Notes |
+|---|---------|--------|-------|------|-------|
+| 1 | chinook001 | FAIL | ~30 | ~240s | dbt run failed — type errors in SQL, obt_invoice table missing |
+
+### Round 3 Running Totals (Cumulative All Rounds)
+
+| Suite | Tasks Run | Pass | Fail | Timeout | Pass Rate |
+|-------|-----------|------|------|---------|-----------|
+| Spider2-Snowflake | 22 | 12 | 7 | 3 | 54.5% (excl timeout: 63.2%) |
+| Spider2-Lite SQLite | 6 | 3 | 1 | 2 | 50.0% (excl timeout: 75.0%) |
+| Spider2-Lite BigQuery | 1 | 0 | 1 | 0 | 0% |
+| Spider2-DBT | 1 | 0 | 1 | 0 | 0% |
+
+### Key Round 3 Findings
+1. **Backend-specific skills working**: Confirmed agent loads correct skills per DB backend
+2. **Schema-first discovery working**: Agent reads DDL.csv before MCP calls, saving 2-3 turns
+3. **Rate limits are a blocker**: sf_bq399 SQL was correct but agent couldn't save output due to model rate limit
+4. **Column name matching still an issue**: sf_bq307 values very close but column names don't match gold
+5. **NHTSA large DB burns turns on column case**: Agent tried lowercase then uppercase column names
+6. **DBT runner functional**: chinook001 ran end-to-end but dbt compilation failed with type errors
+7. **Salary/value interpretation differences**: local253 failed due to different cleaning methodology

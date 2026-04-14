@@ -63,7 +63,11 @@ def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
 
 
 def prepare_sql_workdir(
-    instance_id: str, config: "SuiteConfig", task: dict, backend: "DBBackend | None" = None
+    instance_id: str,
+    config: "SuiteConfig",
+    task: dict,
+    backend: "DBBackend | None" = None,
+    skill_names: "tuple[str, ...] | None" = None,
 ) -> Path:
     """Create a fresh SQL working directory for the given task.
 
@@ -86,9 +90,17 @@ def prepare_sql_workdir(
         log("Copied .mcp.json for MCP tool discovery")
 
     # Copy only the requested skills into .claude/skills/
+    # skill_names parameter takes precedence over config.skills (backend-specific override).
+    # config.skills is the fallback for backward compatibility.
     skills_dst = work_dir / ".claude" / "skills"
     skills_dst.mkdir(parents=True, exist_ok=True)
-    for skill_name in config.skills:
+    skills_to_copy: tuple[str, ...] | list[str]
+    if skill_names is not None:
+        skills_to_copy = skill_names
+        log(f"Using backend-specific skills: {list(skill_names)}")
+    else:
+        skills_to_copy = config.skills
+    for skill_name in skills_to_copy:
         skill_src = SKILLS_SRC / skill_name
         if skill_src.exists():
             shutil.copytree(

@@ -90,10 +90,38 @@ def _register_snowflake_http(instance_id: str, database: str, schema: str) -> bo
         log(f"HTTP registration failed for '{instance_id}': {e}", "WARN")
         return False
 
-_SUITE_SKILL_NAMES: dict[BenchmarkSuite, tuple[str, ...]] = {
-    BenchmarkSuite.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),
-    BenchmarkSuite.LITE: ("sql-workflow", "snowflake-sql", "bigquery-sql", "sqlite-sql"),
+_LARGE_DB_MAX_TURNS: dict[str, int] = {
+    "CMS_DATA": 75,
+    "STACKOVERFLOW": 75,
+    "complex_oracle": 75,
 }
+
+
+def _get_skill_names(suite: BenchmarkSuite, backend: DBBackend) -> tuple[str, ...]:
+    """Return backend-specific skill names for the given suite and DB backend.
+
+    For Snowflake suite, always return the Snowflake skill pair.
+    For Lite suite, select the dialect-appropriate skill so the agent only sees
+    relevant syntax guidance instead of all dialects at once.
+    """
+    _BACKEND_SKILLS: dict[DBBackend, tuple[str, ...]] = {
+        DBBackend.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),
+        DBBackend.BIGQUERY: ("sql-workflow", "bigquery-sql"),
+        DBBackend.SQLITE: ("sql-workflow", "sqlite-sql"),
+        DBBackend.DUCKDB: ("sql-workflow", "duckdb-sql"),
+    }
+    return _BACKEND_SKILLS.get(backend, ("sql-workflow",))
+
+
+def _get_max_turns(backend: DBBackend, task: dict, default: int) -> int:
+    """Return a higher turn limit for known-large databases that risk timeout.
+
+    Only applies when the user has not passed an explicit --max-turns value
+    (i.e., when default is used as the sentinel). The mapping is intentionally
+    hardcoded from empirical timeout data — not a heuristic.
+    """
+    db_id = task.get("db_id") or task.get("db", "")
+    return _LARGE_DB_MAX_TURNS.get(db_id, default)
 
 
 def _determine_backend(suite: BenchmarkSuite, task: dict, config: SuiteConfig) -> DBBackend:
@@ -201,7 +229,7 @@ async def _run_agent(
         .replace("${connection_name}", connection_name)
     )
 
-    skill_names = _SUITE_SKILL_NAMES.get(suite)
+    skill_names = _get_skill_names(suite, db_backend)
 
     result = await run_sdk_agent(
         prompt=prompt,
@@ -234,19 +262,22 @@ def main(suite: BenchmarkSuite) -> None:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=50,
-        help="Safety cap on agent turns. Default 50.",
+        default=None,
+        help="Safety cap on agent turns. Default 50 (auto-increased to 75 for known-large databases).",
     )
     parser.add_argument("--skip-agent", action="store_true", help="Skip agent, only evaluate existing results")
     args = parser.parse_args()
 
     instance_id: str = args.instance_id
     model: str = args.model
-    max_turns: int = args.max_turns
+    # args.max_turns is None when user did not pass --max-turns (sentinel).
+    # The actual value is resolved after loading the task so _get_max_turns can
+    # inspect the db_id.  We store the user-supplied value separately so we can
+    # distinguish "user said nothing" from "user said 50".
+    user_max_turns: int | None = args.max_turns
 
     log_separator(f"{suite.value} Direct Benchmark: {instance_id}")
     log(f"Model:     {model}")
-    log(f"Max turns: {max_turns}")
 
     # ── Load suite config ──────────────────────────────────────────────────────
     config = get_suite_config(suite)
@@ -265,13 +296,24 @@ def main(suite: BenchmarkSuite) -> None:
     backend = _determine_backend(suite, task, config)
     log(f"DB backend: {backend.value}")
 
+    # ── Resolve max_turns (after task loaded so db_id is available) ───────────
+    if user_max_turns is not None:
+        max_turns: int = user_max_turns
+        log(f"Max turns: {max_turns} (user-specified)")
+    else:
+        max_turns = _get_max_turns(backend, task, default=50)
+        log(f"Max turns: {max_turns}")
+
     work_dir = config.work_dir / instance_id
 
     if not args.skip_agent:
         # ── Prepare workdir ────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 1: Prepare SQL workdir")
-        work_dir = prepare_sql_workdir(instance_id, config, task, backend=backend)
+        workdir_skill_names = _get_skill_names(suite, backend)
+        work_dir = prepare_sql_workdir(
+            instance_id, config, task, backend=backend, skill_names=workdir_skill_names
+        )
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
         # ── Write CLAUDE.md ────────────────────────────────────────────────────

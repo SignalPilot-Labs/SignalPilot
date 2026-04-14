@@ -25,7 +25,12 @@ _BACKEND_TIPS: dict[DBBackend, str] = {
         "- EXCEPT DISTINCT / UNION DISTINCT remove duplicates automatically\n"
         "- SELECT * EXCEPT (col1) or SELECT * REPLACE (expr AS col1)\n"
         "- STRUCT constructor: STRUCT(val1, val2) or STRUCT(val AS name)\n"
-        "- Approximate aggregation: APPROX_COUNT_DISTINCT for large cardinality"
+        "- Approximate aggregation: APPROX_COUNT_DISTINCT for large cardinality\n"
+        "- Default project for Spider2 tasks: `spider2-public-data`\n"
+        "- Dataset reference: `spider2-public-data.{dataset}.{table}` or just `{dataset}.{table}` if default project is set\n"
+        "- For StackOverflow data: tags are stored as pipe-delimited strings (e.g., 'python|python-2.7'). Use REGEXP_CONTAINS or LIKE with wildcards.\n"
+        "- INFORMATION_SCHEMA: Use `{dataset}.INFORMATION_SCHEMA.COLUMNS` to discover table schemas when MCP tools are slow\n"
+        "- Always verify filter conditions against actual column values using explore_column before assuming value formats"
     ),
     DBBackend.SQLITE: (
         "SQLITE-SPECIFIC TIPS:\n"
@@ -72,11 +77,15 @@ DATABASE: SignalPilot connection '{connection_name}' (backend: {db_backend.value
 
 WORKFLOW — follow these steps in order:
 
-1. SCHEMA DISCOVERY (at most 3-5 tool calls):
-   - mcp__signalpilot__list_tables — START HERE. Lists all tables with column names and row counts.
-   - mcp__signalpilot__describe_table — column details for the 2-3 most relevant tables
-   - mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly)
-   Do NOT call schema_overview — it is slow in this environment. list_tables gives you what you need.
+1. SCHEMA DISCOVERY (minimize MCP calls):
+   a. READ LOCAL SCHEMA FILES FIRST — if a schema/ directory and DDL.csv exist in your workdir:
+      - Read DDL.csv for CREATE TABLE statements (gives you all table names + columns)
+      - Read {{table_name}}.json files for column descriptions, types, and sample data
+      This is FREE (no tool calls) and gives you 80% of what you need.
+   b. mcp__signalpilot__list_tables — only if no local schema files exist. Lists all tables with column names and row counts.
+   c. mcp__signalpilot__describe_table — column details for the 2-3 most relevant tables (only if JSON files lack detail)
+   d. mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly, 1-2 calls max)
+   Do NOT call schema_overview — it is slow. Do NOT spend more than 3 tool calls on discovery.
 
 2. PLAN THE QUERY (before writing SQL):
    - Read the question for cardinality clues: "for each X" = GROUP BY, "top N" = LIMIT/QUALIFY,
@@ -121,6 +130,13 @@ WORKFLOW — follow these steps in order:
       "the name and the count", your CSV must have exactly 2 columns with descriptive names.
       If it asks for "top 5 by revenue", your CSV must have at most 5 rows.
       Count your columns and rows — if they do not match the question, fix the query.
+   i. INTERPRETATION CHECK — before saving, verify these in a SQL comment:
+      - What EXACTLY is the question asking? Restate it in your own words.
+      - Are there implicit filters? ("Python 2 specific" = tags containing 'python-2.x' AND NOT 'python-3.x')
+      - Are there domain-specific terms? ("rainy weather" = specific weather_condition values, check with explore_column)
+      - Does "excluding" mean WHERE NOT or EXCEPT?
+      - If the question mentions a specific metric (e.g., "scored points"), verify your calculation matches the domain definition.
+      Write a SQL comment: -- INTERPRETATION: <your restatement>
 
 5. ERROR RECOVERY — diagnose, do not just retry:
    - Syntax error: use validate_sql to catch errors before burning a query turn

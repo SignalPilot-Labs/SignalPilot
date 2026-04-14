@@ -10,8 +10,13 @@ type: skill
 
 Before writing any SQL, understand the data:
 
-1. Call `schema_overview` to get a list of all schemas and tables
-2. Call `describe_table` on the tables that seem relevant to the question
+0. **Read local schema files first** (if schema/ directory exists in workdir):
+   - `schema/DDL.csv` — all CREATE TABLE statements (if it exists)
+   - `schema/{table_name}.json` — column names, types, descriptions, sample values
+   Reading these files costs zero tool calls and gives you table structure + sample data.
+   Only call MCP tools for information not in the local files (e.g., row counts, live data exploration).
+1. Call `list_tables` to get all schemas and tables — only if no local schema files exist or you need row counts.
+2. Call `describe_table` on the tables that seem relevant to the question (only if JSON files lack detail)
 3. Call `explore_column` on categorical columns to see distinct values (for filtering/grouping)
 4. Call `find_join_path` if you need to join tables and the relationship is unclear
 
@@ -138,3 +143,7 @@ If your query works and passes all verification checks, SAVE IMMEDIATELY — do 
 - **Wrong NULL handling**: Use `IS NULL` / `IS NOT NULL`, not `= NULL`
 - **Date format mismatch**: Check the actual format stored in the column with `explore_column`
 - **Case sensitivity**: Use the correct case-insensitive function for your backend
+- **Interpretation errors**: Before saving, re-read the original question. Verify:
+  * Filter conditions match domain values (check with explore_column if unsure)
+  * "Excluding X" means the right thing (NOT IN vs EXCEPT vs WHERE NOT)
+  * Metrics match domain definitions (e.g., "scored points" in F1 = points > 0, not just participated)

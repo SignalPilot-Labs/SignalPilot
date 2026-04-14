@@ -18,7 +18,9 @@ import json
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
+from typing import NoReturn
 
 from ..agent.prompts import build_agent_prompt, build_value_verify_prompt
 from ..agent.sdk_runner import (
@@ -27,7 +29,14 @@ from ..agent.sdk_runner import (
     run_sdk_agent,
     run_value_verify_agent,
 )
-from ..core.logging import log, log_separator
+from ..core.audit import (
+    copy_agent_transcript,
+    copy_result_csv,
+    create_audit_dir,
+    save_audit_record,
+    setup_file_logger,
+)
+from ..core.logging import close_log_file, log, log_separator
 from ..core.mcp import delete_local_connection, register_local_connection
 from ..core.paths import GOLD_DIR, MCP_CONFIG, PROMPTS_DIR, WORK_DIR, ensure_local_bin_on_path
 from ..core.tasks import load_eval_config, load_task
@@ -385,6 +394,18 @@ def _flush_and_release(work_dir: Path, instance_id: str) -> None:
     time.sleep(2)
 
 
+def _load_agent_counts(work_dir: Path) -> tuple[int, int]:
+    """Return (tool_calls_count, turns_count) from agent_output.json, or (0, 0)."""
+    transcript = work_dir / "agent_output.json"
+    if not transcript.exists():
+        return 0, 0
+    try:
+        data = json.loads(transcript.read_text(encoding="utf-8"))
+        return len(data.get("tool_calls", [])), data.get("turns", 0)
+    except Exception:
+        return 0, 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run a Spider2-DBT task directly (no Docker) using Claude Agent SDK + MCP"
@@ -404,6 +425,32 @@ def main() -> None:
     instance_id: str = args.instance_id
     model: str = args.model
     max_turns: int = args.max_turns
+
+    # ── Audit setup ───────────────────────────────────────────────────────────
+    audit_dir = create_audit_dir(instance_id)
+    setup_file_logger(audit_dir)
+    start_time = time.time()
+
+    def _save_and_exit(result_label: str, work_dir: Path, exit_code: int) -> NoReturn:
+        end_time = time.time()
+        tool_calls_count, turns_count = _load_agent_counts(work_dir)
+        record = {
+            "instance_id": instance_id,
+            "suite": "spider2-dbt",
+            "model": model,
+            "max_turns": max_turns,
+            "start_time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(start_time)),
+            "end_time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(end_time)),
+            "elapsed_seconds": round(end_time - start_time, 2),
+            "result": result_label,
+            "tool_calls_count": tool_calls_count,
+            "turns_count": turns_count,
+        }
+        save_audit_record(audit_dir, record)
+        copy_agent_transcript(audit_dir, work_dir)
+        copy_result_csv(audit_dir, work_dir)
+        close_log_file()
+        sys.exit(exit_code)
 
     log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")
     log(f"Model:     {model}")
@@ -514,16 +561,15 @@ def main() -> None:
     if not work_dir.exists():
         log(f"Work dir not found: {work_dir}", "ERROR")
         log("Run without --skip-agent first to generate results.")
-        sys.exit(1)
+        _save_and_exit("error", work_dir, 1)
 
     try:
         passed, details = evaluate(work_dir, instance_id)
     except Exception as e:
-        import traceback
         log(f"Evaluation error: {e}", "ERROR")
         traceback.print_exc()
         log_separator("RESULT: ERROR")
-        sys.exit(1)
+        _save_and_exit("error", work_dir, 1)
 
     log(f"Evaluation finished in {time.monotonic()-t0:.2f}s")
     print(details)
@@ -533,7 +579,7 @@ def main() -> None:
     if delete_local_connection(instance_id):
         log(f"Cleaned up connection '{instance_id}'")
 
-    sys.exit(0 if passed else 1)
+    _save_and_exit("pass" if passed else "fail", work_dir, 0 if passed else 1)
 
 
 if __name__ == "__main__":

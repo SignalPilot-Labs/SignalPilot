@@ -15,11 +15,20 @@ import asyncio
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
+from typing import NoReturn
 
 from ..agent.sdk_runner import run_sdk_agent
 from ..agent.sql_prompts import build_sql_agent_prompt
-from ..core.logging import log, log_separator
+from ..core.audit import (
+    copy_agent_transcript,
+    copy_result_csv,
+    create_audit_dir,
+    save_audit_record,
+    setup_file_logger,
+)
+from ..core.logging import close_log_file, log, log_separator
 from ..core.mcp import (
     delete_local_connection,
     register_bigquery_connection,
@@ -252,6 +261,18 @@ async def _run_agent(
     return result["success"]
 
 
+def _load_agent_counts(work_dir: Path) -> tuple[int, int]:
+    """Return (tool_calls_count, turns_count) from agent_output.json, or (0, 0)."""
+    transcript = work_dir / "agent_output.json"
+    if not transcript.exists():
+        return 0, 0
+    try:
+        data = json.loads(transcript.read_text(encoding="utf-8"))
+        return len(data.get("tool_calls", [])), data.get("turns", 0)
+    except Exception:
+        return 0, 0
+
+
 def main(suite: BenchmarkSuite) -> None:
     """Entry point for SQL runner, called from run_direct.py with suite routing."""
     parser = argparse.ArgumentParser(
@@ -276,6 +297,32 @@ def main(suite: BenchmarkSuite) -> None:
     # distinguish "user said nothing" from "user said 50".
     user_max_turns: int | None = args.max_turns
 
+    # ── Audit setup ───────────────────────────────────────────────────────────
+    audit_dir = create_audit_dir(instance_id)
+    setup_file_logger(audit_dir)
+    start_time = time.time()
+
+    def _save_and_exit(result_label: str, work_dir: Path, max_turns_val: int, exit_code: int) -> NoReturn:
+        end_time = time.time()
+        tool_calls_count, turns_count = _load_agent_counts(work_dir)
+        record = {
+            "instance_id": instance_id,
+            "suite": suite.value,
+            "model": model,
+            "max_turns": max_turns_val,
+            "start_time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(start_time)),
+            "end_time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(end_time)),
+            "elapsed_seconds": round(end_time - start_time, 2),
+            "result": result_label,
+            "tool_calls_count": tool_calls_count,
+            "turns_count": turns_count,
+        }
+        save_audit_record(audit_dir, record)
+        copy_agent_transcript(audit_dir, work_dir)
+        copy_result_csv(audit_dir, work_dir)
+        close_log_file()
+        sys.exit(exit_code)
+
     log_separator(f"{suite.value} Direct Benchmark: {instance_id}")
     log(f"Model:     {model}")
 
@@ -288,7 +335,7 @@ def main(suite: BenchmarkSuite) -> None:
     instruction: str = task.get("instruction") or task.get("question", "")
     if not instruction:
         log(f"Task '{instance_id}' has no 'instruction' or 'question' field", "ERROR")
-        sys.exit(1)
+        _save_and_exit("error", config.work_dir / instance_id, user_max_turns or 50, 1)
     log(f"Task loaded in {time.monotonic()-t0:.2f}s")
     log(f"Instruction: {instruction}")
 
@@ -361,7 +408,7 @@ def main(suite: BenchmarkSuite) -> None:
             # Delete connection before exiting
             if delete_local_connection(instance_id):
                 log(f"Cleaned up connection '{instance_id}'")
-            sys.exit(1)
+            _save_and_exit("error", work_dir, max_turns, 1)
 
         # ── Delete connection (cleanup, prevent cross-task leakage) ───────────
         if delete_local_connection(instance_id):
@@ -374,7 +421,7 @@ def main(suite: BenchmarkSuite) -> None:
     if not work_dir.exists():
         log(f"Work dir not found: {work_dir}", "ERROR")
         log("Run without --skip-agent first to generate results.")
-        sys.exit(1)
+        _save_and_exit("error", work_dir, max_turns, 1)
 
     result_csv = work_dir / "result.csv"
     if not result_csv.exists():
@@ -383,22 +430,21 @@ def main(suite: BenchmarkSuite) -> None:
             "Run without --skip-agent to generate results.",
             "ERROR",
         )
-        sys.exit(1)
+        _save_and_exit("error", work_dir, max_turns, 1)
 
     try:
         passed, details = evaluate_sql(work_dir, instance_id, config)
     except Exception as e:
-        import traceback
         log(f"Evaluation error: {e}", "ERROR")
         traceback.print_exc()
         log_separator("RESULT: ERROR")
-        sys.exit(1)
+        _save_and_exit("error", work_dir, max_turns, 1)
 
     log(f"Evaluation finished in {time.monotonic()-t0:.2f}s")
     print(details)
     log_separator(f"RESULT: {'PASS' if passed else 'FAIL'}")
 
-    sys.exit(0 if passed else 1)
+    _save_and_exit("pass" if passed else "fail", work_dir, max_turns, 0 if passed else 1)
 
 
 if __name__ == "__main__":

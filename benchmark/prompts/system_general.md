@@ -50,6 +50,7 @@ All queries are **read-only** — you may not INSERT, UPDATE, DELETE, or CREATE.
 
 ## Key Rules
 
+- **NEVER connect to the database directly.** Do NOT read .env files, install database drivers, or open database connections yourself. ALL database access MUST go through `mcp__signalpilot__*` tools. The connection is already registered — just use `connection_name="${connection_name}"`.
 - Use the skill files in `.claude/skills/` for backend-specific syntax guidance
 - Never guess column names — use `describe_table` or `schema_ddl` to confirm them
 - Do NOT use `= NULL`; always use `IS NULL` / `IS NOT NULL`

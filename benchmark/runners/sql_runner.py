@@ -25,7 +25,9 @@ from ..core.mcp import (
     register_bigquery_connection,
     register_snowflake_connection,
     register_sqlite_connection,
+    _load_dotenv_file,
 )
+from ..core.paths import SNOWFLAKE_ENV_FILE
 from ..core.paths import PROMPTS_DIR, ensure_local_bin_on_path
 from ..core.suite import BenchmarkSuite, DBBackend, SuiteConfig, get_suite_config
 from ..core.tasks import load_task_for_suite
@@ -36,27 +38,97 @@ ensure_local_bin_on_path()
 
 _SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "system_general.md").read_text()
 
+_GATEWAY_HTTP = "http://localhost:3300"
+
+
+def _register_snowflake_http(instance_id: str, database: str, schema: str) -> bool:
+    """Register a Snowflake connection via the gateway HTTP API.
+
+    MCP tools like schema_overview hit the gateway's HTTP endpoints, so the
+    connection must exist in the gateway's DB, not just the local store file.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        env_vars = _load_dotenv_file(SNOWFLAKE_ENV_FILE)
+    except FileNotFoundError:
+        log(f"Snowflake env file not found: {SNOWFLAKE_ENV_FILE}", "ERROR")
+        return False
+
+    # Delete existing (ignore errors)
+    try:
+        req = urllib.request.Request(f"{_GATEWAY_HTTP}/api/connections/{instance_id}", method="DELETE")
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+    payload = json.dumps({
+        "name": instance_id,
+        "db_type": "snowflake",
+        "account": env_vars["SNOWFLAKE_ACCOUNT"],
+        "username": env_vars["SNOWFLAKE_USER"],
+        "password": env_vars["SNOWFLAKE_TOKEN"],
+        "database": database,
+        "warehouse": env_vars.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH_PARTICIPANT"),
+        "role": env_vars.get("SNOWFLAKE_ROLE", "PARTICIPANT"),
+        "schema_name": schema,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            f"{_GATEWAY_HTTP}/api/connections",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+        log(f"Registered Snowflake connection '{instance_id}' via HTTP gateway")
+        return True
+    except Exception as e:
+        log(f"HTTP registration failed for '{instance_id}': {e}", "WARN")
+        return False
+
 _SUITE_SKILL_NAMES: dict[BenchmarkSuite, tuple[str, ...]] = {
     BenchmarkSuite.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),
     BenchmarkSuite.LITE: ("sql-workflow", "snowflake-sql", "bigquery-sql", "sqlite-sql"),
 }
 
 
-def _determine_backend(suite: BenchmarkSuite, task: dict) -> DBBackend:
+def _determine_backend(suite: BenchmarkSuite, task: dict, config: SuiteConfig) -> DBBackend:
     """Determine the DB backend for a task."""
     if suite == BenchmarkSuite.SNOWFLAKE:
         return DBBackend.SNOWFLAKE
 
-    task_type = task.get("type", "sqlite")
-    mapping: dict[str, DBBackend] = {
-        "sqlite": DBBackend.SQLITE,
-        "snowflake": DBBackend.SNOWFLAKE,
-        "bigquery": DBBackend.BIGQUERY,
-    }
-    backend = mapping.get(task_type)
-    if backend is None:
-        raise ValueError(f"Unknown task type '{task_type}' — expected sqlite/snowflake/bigquery")
-    return backend
+    # If the task has an explicit type field, use it
+    task_type = task.get("type")
+    if task_type:
+        mapping: dict[str, DBBackend] = {
+            "sqlite": DBBackend.SQLITE,
+            "snowflake": DBBackend.SNOWFLAKE,
+            "bigquery": DBBackend.BIGQUERY,
+        }
+        backend = mapping.get(task_type)
+        if backend is None:
+            raise ValueError(f"Unknown task type '{task_type}' — expected sqlite/snowflake/bigquery")
+        return backend
+
+    # Infer from which resource/databases/<type>/ directory contains the db name
+    db_name = task.get("db", "")
+    resource_dir = config.data_dir / "resource" / "databases"
+    for db_type, backend in [
+        ("snowflake", DBBackend.SNOWFLAKE),
+        ("bigquery", DBBackend.BIGQUERY),
+        ("sqlite", DBBackend.SQLITE),
+    ]:
+        type_dir = resource_dir / db_type
+        if type_dir.exists() and (type_dir / db_name).exists():
+            return backend
+
+    # Default to sqlite for backwards compat
+    log(f"Could not infer backend for db='{db_name}', defaulting to sqlite", "WARN")
+    return DBBackend.SQLITE
 
 
 def _register_connection(
@@ -72,7 +144,10 @@ def _register_connection(
         schema: str = task.get("schema", task.get("schema_name", "PUBLIC"))
         if not database:
             log(f"Task '{instance_id}' missing 'db'/'database' field for Snowflake", "WARN")
-        return register_snowflake_connection(instance_id, database, schema)
+        # Register both locally (for list_tables/query_database) and via HTTP
+        # (for schema_overview and other gateway-API-backed MCP tools).
+        register_snowflake_connection(instance_id, database, schema)
+        return _register_snowflake_http(instance_id, database, schema)
 
     if backend == DBBackend.SQLITE:
         db_id: str = task.get("db_id", "")
@@ -173,12 +248,15 @@ def main(suite: BenchmarkSuite) -> None:
     # ── Load task ──────────────────────────────────────────────────────────────
     t0 = time.monotonic()
     task = load_task_for_suite(instance_id, config)
-    instruction: str = task["instruction"]
+    instruction: str = task.get("instruction") or task.get("question", "")
+    if not instruction:
+        log(f"Task '{instance_id}' has no 'instruction' or 'question' field", "ERROR")
+        sys.exit(1)
     log(f"Task loaded in {time.monotonic()-t0:.2f}s")
     log(f"Instruction: {instruction}")
 
     # ── Determine DB backend ───────────────────────────────────────────────────
-    backend = _determine_backend(suite, task)
+    backend = _determine_backend(suite, task, config)
     log(f"DB backend: {backend.value}")
 
     work_dir = config.work_dir / instance_id

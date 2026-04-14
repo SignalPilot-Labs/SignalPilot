@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -19,7 +21,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk._errors import ClaudeSDKError, ProcessError
 
 from ..core.logging import log, log_separator
-from ..core.mcp import load_mcp_servers
+from ..core.paths import GATEWAY_SRC, GATEWAY_URL
 
 DEFAULT_SKILL_NAMES = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
 
@@ -47,12 +49,33 @@ async def run_sdk_agent(
     """
     active_skill_names = skill_names if skill_names is not None else DEFAULT_SKILL_NAMES
 
+    # Build MCP config inline (same pattern as run_dbt_local.py).
+    # mcp_test_config.json has Docker/Linux paths that don't work on Windows.
+    # We use sys.executable + PYTHONPATH injection so the MCP subprocess can
+    # find the gateway package and inherit all installed connectors (snowflake, etc).
+    local_gateway_url = GATEWAY_URL.replace("host.docker.internal", "localhost")
+    child_env = {
+        **os.environ,
+        "SP_GATEWAY_URL": local_gateway_url,
+        "PYTHONPATH": (
+            str(GATEWAY_SRC) + os.pathsep + os.environ.get("PYTHONPATH", "")
+        ).rstrip(os.pathsep),
+    }
+    mcp_config = {
+        "signalpilot": {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "gateway.mcp_server"],
+            "env": child_env,
+        }
+    }
+
     options_kwargs: dict = {
         "model": model,
         "max_turns": max_turns,
         "permission_mode": "bypassPermissions",
         "cwd": str(work_dir),
-        "mcp_servers": load_mcp_servers(),
+        "mcp_servers": mcp_config,
         "debug_stderr": True,
     }
     if system_prompt is not None:

@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .logging import log
-from .paths import EXAMPLES_DIR, PROJECT_ROOT, SKILLS_SRC, SPIDER2_LITE_DIR, WORK_DIR
+from .paths import EXAMPLES_DIR, GATEWAY_SRC, GATEWAY_URL, PROJECT_ROOT, SKILLS_SRC, SPIDER2_LITE_DIR, WORK_DIR
 
 if TYPE_CHECKING:
     from .suite import DBBackend, SuiteConfig
@@ -39,11 +41,8 @@ def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
     shutil.copytree(src, dst)
     log(f"Copied task files: {src} -> {dst}")
 
-    # Copy .mcp.json so Claude Code discovers SignalPilot MCP tools
-    mcp_json_src = PROJECT_ROOT / ".mcp.json"
-    if mcp_json_src.exists():
-        shutil.copy2(mcp_json_src, dst / ".mcp.json")
-        log("Copied .mcp.json for MCP tool discovery")
+    # Write .mcp.json with correct local paths
+    _write_local_mcp_json(dst)
 
     # Copy skills into .claude/skills/ so Claude Code loads them natively
     skills_dst = dst / ".claude" / "skills"
@@ -133,13 +132,9 @@ def prepare_sql_workdir(
     dst.mkdir(parents=True, exist_ok=True)
     log(f"Created SQL workdir: {dst}")
 
-    # Copy .mcp.json for MCP tool discovery
-    mcp_json_src = PROJECT_ROOT / ".mcp.json"
-    if mcp_json_src.exists():
-        shutil.copy2(mcp_json_src, dst / ".mcp.json")
-        log("Copied .mcp.json for MCP tool discovery")
-    else:
-        log(f".mcp.json not found at {mcp_json_src}", "WARN")
+    # Write .mcp.json with correct local paths (the repo root .mcp.json has
+    # Docker/Linux paths that don't work on the host).
+    _write_local_mcp_json(dst)
 
     # Copy only the suite-specific skills into .claude/skills/
     skills_dst = dst / ".claude" / "skills"
@@ -234,6 +229,8 @@ def write_sql_claude_md(
 The database is registered in SignalPilot as connection `{connection_name}`.
 Backend: **{db_backend.value}**
 
+**IMPORTANT: NEVER connect to the database directly. Do NOT read .env files, install drivers, or open connections yourself. ALL database access MUST go through `mcp__signalpilot__*` tools below.**
+
 Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__schema_overview` — quick overview of all schemas and tables
 - `mcp__signalpilot__schema_ddl` — full schema as DDL (CREATE TABLE statements)
@@ -265,3 +262,27 @@ Use SignalPilot MCP tools to explore and query the database:
 """
     (work_dir / "CLAUDE.md").write_text(content)
     log(f"Wrote SQL CLAUDE.md to {work_dir}")
+
+
+def _write_local_mcp_json(dst: Path) -> None:
+    """Write .mcp.json with local Python and PYTHONPATH so Claude Code spawns
+    the MCP server correctly on the host (not with Docker/Linux paths)."""
+    # Always use localhost for the MCP subprocess — host.docker.internal
+    # from .env is for containers, not for host-spawned subprocesses.
+    local_gateway_url = GATEWAY_URL.replace("host.docker.internal", "localhost")
+    child_env = {
+        "SP_GATEWAY_URL": local_gateway_url,
+        "PYTHONPATH": str(GATEWAY_SRC),
+    }
+    mcp_config = {
+        "mcpServers": {
+            "signalpilot": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "gateway.mcp_server"],
+                "env": child_env,
+            }
+        }
+    }
+    (dst / ".mcp.json").write_text(json.dumps(mcp_config, indent=2))
+    log("Wrote .mcp.json with local MCP config")

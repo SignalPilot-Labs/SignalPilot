@@ -8,7 +8,8 @@ COPY gateway/ gateway/
 
 # Install core dependencies + commonly used optional connectors
 RUN pip install --no-cache-dir -e . && \
-    pip install --no-cache-dir duckdb clickhouse-driver clickhouse-connect sshtunnel cryptography
+    pip install --no-cache-dir duckdb clickhouse-driver clickhouse-connect sshtunnel cryptography \
+    snowflake-connector-python google-cloud-bigquery
 
 EXPOSE 3300
 CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]

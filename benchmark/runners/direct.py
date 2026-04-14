@@ -35,6 +35,7 @@ from ..core.audit import (
     create_audit_dir,
     save_audit_record,
     setup_file_logger,
+    sync_to_docker_volume,
 )
 from ..core.logging import close_log_file, log, log_separator
 from ..core.mcp import delete_local_connection, register_local_connection
@@ -450,6 +451,10 @@ def main() -> None:
         copy_agent_transcript(audit_dir, work_dir)
         copy_result_csv(audit_dir, work_dir)
         close_log_file()
+        try:
+            sync_to_docker_volume(audit_dir)
+        except Exception:
+            pass
         sys.exit(exit_code)
 
     log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")

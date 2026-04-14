@@ -13,6 +13,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
+    ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
     query,
@@ -71,6 +72,9 @@ async def run_sdk_agent(
     for attempt in range(1, max_retries + 1):
         messages: list[str] = []
         tool_calls: list[dict] = []
+        # Ordered transcript: every event (thinking, text, tool_use, tool_result)
+        # in chronological order with timestamps for leaderboard submission.
+        transcript: list[dict] = []
         turn_count = 0
         start_time = time.monotonic()
         success = False
@@ -78,21 +82,44 @@ async def run_sdk_agent(
         try:
             async for message in query(prompt=prompt, options=options):
                 elapsed = time.monotonic() - start_time
+                now_ts = time.time()
 
                 if isinstance(message, AssistantMessage):
                     turn_count += 1
                     log(f"─── Turn {turn_count} ({elapsed:.1f}s) ───")
                     for block in message.content:
-                        if isinstance(block, TextBlock):
+                        if isinstance(block, ThinkingBlock):
+                            log(f"[thinking] ({len(block.thinking)} chars)")
+                            transcript.append({
+                                "type": "thinking",
+                                "turn": turn_count,
+                                "timestamp": now_ts,
+                                "content": block.thinking,
+                            })
+                        elif isinstance(block, TextBlock):
                             for line in block.text.split("\n"):
                                 log(f"[agent] {line}")
                             messages.append(block.text)
+                            transcript.append({
+                                "type": "text",
+                                "turn": turn_count,
+                                "timestamp": now_ts,
+                                "content": block.text,
+                            })
                         elif isinstance(block, ToolUseBlock):
                             tool_input_str = json.dumps(block.input, ensure_ascii=False)
                             truncated = tool_input_str[:500] + "..." if len(tool_input_str) > 500 else tool_input_str
                             log(f"[tool_use] {block.name}")
                             log(f"  input: {truncated}")
-                            tool_calls.append({"name": block.name, "input": block.input, "turn": turn_count, "timestamp": time.time()})
+                            tool_call_entry = {"name": block.name, "input": block.input, "turn": turn_count, "timestamp": now_ts}
+                            tool_calls.append(tool_call_entry)
+                            transcript.append({
+                                "type": "tool_use",
+                                "turn": turn_count,
+                                "timestamp": now_ts,
+                                "name": block.name,
+                                "input": block.input,
+                            })
                             if block.name in SKILL_TOOL_NAMES:
                                 log(f"[skill] Agent invoked /{block.name}")
                             elif block.name == "Skill" and isinstance(block.input, dict):
@@ -102,6 +129,12 @@ async def run_sdk_agent(
                             result_str = str(block.content) if hasattr(block, "content") else str(block)
                             truncated = result_str[:1000] + "..." if len(result_str) > 1000 else result_str
                             log(f"[tool_result] {truncated}")
+                            transcript.append({
+                                "type": "tool_result",
+                                "turn": turn_count,
+                                "timestamp": now_ts,
+                                "content": result_str,
+                            })
 
                 elif isinstance(message, ResultMessage):
                     elapsed = time.monotonic() - start_time
@@ -133,6 +166,7 @@ async def run_sdk_agent(
                 log(f"Agent error ({label}): {e}", "ERROR")
             return {
                 "success": False, "messages": messages, "tool_calls": tool_calls,
+                "transcript": transcript,
                 "turns": turn_count, "elapsed": time.monotonic() - start_time,
                 "cost_usd": cost_usd, "usage": usage, "started_at": start_iso,
             }
@@ -154,6 +188,7 @@ async def run_sdk_agent(
                 log(f"Agent error ({label}): {e}", "ERROR")
                 return {
                     "success": False, "messages": messages, "tool_calls": tool_calls,
+                    "transcript": transcript,
                     "turns": turn_count, "elapsed": time.monotonic() - start_time,
                     "cost_usd": cost_usd, "usage": usage, "started_at": start_iso,
                 }
@@ -161,12 +196,14 @@ async def run_sdk_agent(
         elapsed = time.monotonic() - start_time
         return {
             "success": success, "messages": messages, "tool_calls": tool_calls,
+            "transcript": transcript,
             "turns": turn_count, "elapsed": elapsed,
             "cost_usd": cost_usd, "usage": usage, "started_at": start_iso,
         }
 
     return {
-        "success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0,
+        "success": False, "messages": [], "tool_calls": [], "transcript": [],
+        "turns": 0, "elapsed": 0.0,
         "cost_usd": None, "usage": None, "started_at": start_iso,
     }
 

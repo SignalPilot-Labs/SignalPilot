@@ -260,6 +260,7 @@ async def run_task_async(
         # Save transcript
         try:
             save_task_transcript(run_id, instance_id, {
+                "transcript": agent_result.get("transcript", []),
                 "tool_calls": agent_result.get("tool_calls", []),
                 "messages": agent_result.get("messages", []),
                 "turns": agent_result.get("turns", 0),

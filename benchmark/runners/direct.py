@@ -88,6 +88,7 @@ async def run_agent(
 
     transcript_path = work_dir / "agent_output.json"
     transcript_path.write_text(json.dumps({
+        "transcript": result["transcript"],
         "tool_calls": result["tool_calls"],
         "messages": result["messages"],
         "turns": result["turns"],
@@ -685,6 +686,7 @@ async def execute_dbt_task(
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({
+                "transcript": agent_result["transcript"],
                 "tool_calls": agent_result["tool_calls"],
                 "messages": agent_result["messages"],
                 "turns": agent_result["turns"],

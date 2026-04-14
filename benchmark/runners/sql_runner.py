@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 import sys
 import time
@@ -244,12 +245,222 @@ async def _run_agent(
 
     transcript_path = work_dir / "agent_output.json"
     transcript_path.write_text(json.dumps({
+        "transcript": result["transcript"],
         "tool_calls": result["tool_calls"],
         "messages": result["messages"],
         "turns": result["turns"],
     }))
 
     return result["success"]
+
+
+async def _register_snowflake_http_async(
+    connection_name: str,
+    database: str,
+    schema: str,
+) -> bool:
+    """Async non-blocking version of _register_snowflake_http.
+
+    Wraps blocking urllib calls with run_in_executor so the event loop is not stalled
+    when multiple tasks register connections concurrently.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_register_snowflake_http, connection_name, database, schema),
+    )
+
+
+async def _register_connection_async(
+    connection_name: str,
+    backend: DBBackend,
+    task: dict,
+    work_dir: Path,
+    config: SuiteConfig,
+) -> bool:
+    """Async version of _register_connection.
+
+    For Snowflake, wraps the blocking HTTP call with run_in_executor.
+    Other backends use the sync registration functions (they only write to a local file).
+    """
+    if backend == DBBackend.SNOWFLAKE:
+        database: str = task.get("db_id", task.get("db", task.get("database", "")))
+        schema: str = task.get("schema", task.get("schema_name", "PUBLIC"))
+        if not database:
+            log(f"Task '{connection_name}' missing 'db_id'/'db'/'database' field for Snowflake", "WARN")
+        local_ok = register_snowflake_connection(connection_name, database, schema)
+        http_ok = await _register_snowflake_http_async(connection_name, database, schema)
+        return local_ok or http_ok
+
+    # For local-only backends, delegate to the sync function (no blocking I/O beyond local file)
+    return _register_connection(connection_name, backend, task, work_dir, config)
+
+
+async def _delete_connection_http_async(connection_name: str) -> None:
+    """Delete an HTTP-registered gateway connection asynchronously."""
+    import urllib.request
+
+    loop = asyncio.get_event_loop()
+
+    def _delete() -> None:
+        try:
+            req = urllib.request.Request(
+                f"{_GATEWAY_HTTP}/api/connections/{connection_name}", method="DELETE"
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            pass
+
+    await loop.run_in_executor(None, _delete)
+
+
+async def execute_sql_task(
+    instance_id: str,
+    suite: BenchmarkSuite,
+    model: str,
+    max_turns: int | None,
+    connection_prefix: str,
+    skip_agent: bool = False,
+) -> tuple[bool, dict]:
+    """Execute a single SQL task in-process for parallel mode.
+
+    Returns (passed, agent_result_dict). The connection_prefix is prepended to
+    instance_id to form a unique connection name, preventing collisions when
+    multiple tasks run concurrently.
+    """
+    connection_name = f"{connection_prefix}{instance_id}" if connection_prefix else instance_id
+
+    log_separator(f"{suite.value} Direct Benchmark: {instance_id}")
+    log(f"Model:     {model}")
+    log(f"Connection name: {connection_name}")
+
+    config = get_suite_config(suite)
+
+    t0 = time.monotonic()
+    task = load_task_for_suite(instance_id, config)
+    instruction: str = task.get("instruction") or task.get("question", "")
+    if not instruction:
+        log(f"Task '{instance_id}' has no 'instruction' or 'question' field", "ERROR")
+        return False, {"success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0, "cost_usd": None, "usage": None, "started_at": ""}
+    log(f"Task loaded in {time.monotonic()-t0:.2f}s")
+
+    backend = _determine_backend(suite, task, config)
+    log(f"DB backend: {backend.value}")
+
+    resolved_max_turns: int = (
+        max_turns if max_turns is not None
+        else _get_max_turns(backend, task, default=50)
+    )
+    log(f"Max turns: {resolved_max_turns}")
+
+    work_dir = config.work_dir / instance_id
+
+    agent_result: dict = {
+        "success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0,
+        "cost_usd": None, "usage": None, "started_at": "",
+    }
+
+    if not skip_agent:
+        # Step 1: Prepare workdir
+        log_separator("Step 1: Prepare SQL workdir")
+        t0 = time.monotonic()
+        workdir_skill_names = _get_skill_names(suite, backend)
+        work_dir = prepare_sql_workdir(instance_id, config, task, backend=backend, skill_names=workdir_skill_names)
+        log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
+
+        # Step 2: Write CLAUDE.md (use connection_name so agent references prefixed name)
+        log_separator("Step 2: Write CLAUDE.md")
+        t0 = time.monotonic()
+        write_sql_claude_md(work_dir, instance_id, instruction, backend, connection_name=connection_name)
+        log(f"CLAUDE.md written in {time.monotonic()-t0:.2f}s")
+
+        # Step 3: Register connection (async to avoid blocking event loop on HTTP calls)
+        log_separator("Step 3: Register DB connection")
+        t0 = time.monotonic()
+        conn_ok = await _register_connection_async(connection_name, backend, task, work_dir, config)
+        if not conn_ok:
+            log(f"Connection registration failed for '{connection_name}' ({backend.value})", "WARN")
+        log(f"Connection registration in {time.monotonic()-t0:.2f}s")
+
+        # Step 4: Run agent
+        log_separator("Step 4: Run Claude SQL agent")
+        t0 = time.monotonic()
+        try:
+            agent_result = await run_sdk_agent(
+                prompt=build_sql_agent_prompt(
+                    instance_id=instance_id,
+                    instruction=instruction,
+                    work_dir=work_dir,
+                    db_backend=backend,
+                    connection_name=connection_name,
+                    max_turns=resolved_max_turns,
+                ),
+                work_dir=work_dir,
+                model=model,
+                max_turns=resolved_max_turns,
+                timeout=900,
+                label="sql-agent",
+                skill_names=_get_skill_names(suite, backend),
+                system_prompt=(
+                    _SYSTEM_PROMPT_TEMPLATE
+                    .replace("${work_dir}", str(work_dir))
+                    .replace("${instance_id}", instance_id)
+                    .replace("${connection_name}", connection_name)
+                ),
+            )
+            transcript_path = work_dir / "agent_output.json"
+            transcript_path.write_text(json.dumps({
+                "transcript": agent_result["transcript"],
+                "tool_calls": agent_result["tool_calls"],
+                "messages": agent_result["messages"],
+                "turns": agent_result["turns"],
+            }))
+        except Exception as e:
+            log(f"Agent SDK error: {e}", "ERROR")
+        elapsed_agent = time.monotonic() - t0
+        log(f"Agent finished in {elapsed_agent:.1f}s")
+
+        # Check for result.csv
+        result_csv = work_dir / "result.csv"
+        if not result_csv.exists():
+            log(
+                f"result.csv not found in {work_dir} — agent did not save output.",
+                "ERROR",
+            )
+            # Clean up connection and bail
+            delete_local_connection(connection_name)
+            if backend == DBBackend.SNOWFLAKE:
+                await _delete_connection_http_async(connection_name)
+            return False, agent_result
+
+        # Clean up connection
+        delete_local_connection(connection_name)
+        if backend == DBBackend.SNOWFLAKE:
+            await _delete_connection_http_async(connection_name)
+
+    # Step 5: Evaluate
+    log_separator("Step 5: Evaluate against gold standard")
+    t0 = time.monotonic()
+
+    if not work_dir.exists():
+        log(f"Work dir not found: {work_dir}", "ERROR")
+        return False, agent_result
+
+    result_csv = work_dir / "result.csv"
+    if not result_csv.exists():
+        log(f"result.csv not found in {work_dir}.", "ERROR")
+        return False, agent_result
+
+    passed = False
+    try:
+        passed, details = evaluate_sql(work_dir, instance_id, config)
+        log(f"Evaluation finished in {time.monotonic()-t0:.2f}s")
+        log(f"Evaluation details: {details}")
+    except Exception as e:
+        log(f"Evaluation error: {e}", "ERROR")
+
+    log_separator(f"RESULT: {'PASS' if passed else 'FAIL'}")
+    return passed, agent_result
 
 
 def main(suite: BenchmarkSuite) -> None:

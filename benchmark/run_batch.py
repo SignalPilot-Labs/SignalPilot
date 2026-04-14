@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -10,6 +11,20 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from .core.audit import (
+    ResultAlreadyExistsError,
+    RunMetadata,
+    TaskResult,
+    copy_gateway_audit,
+    finalize_run,
+    init_run,
+    save_task_result,
+    save_task_transcript,
+)
+from .core.logging import close_log_file, log, set_log_file
+from .core.paths import AUDIT_BASE
+from .core.suite import BenchmarkSuite
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
@@ -94,7 +109,7 @@ def run_task(
     suite: str,
     no_reset: bool = False,
 ) -> tuple[bool, float]:
-    """Run a single task. Returns (passed, elapsed_seconds)."""
+    """Run a single task via subprocess. Returns (passed, elapsed_seconds)."""
     env = os.environ.copy()
     env["SPIDER2_DBT_DIR"] = str(SPIDER2_DBT_DIR)
 
@@ -130,7 +145,141 @@ def run_task(
         return False, elapsed
 
 
-def main():
+def _build_task_result(
+    instance_id: str,
+    run_id: str,
+    suite: str,
+    model: str,
+    passed: bool,
+    elapsed: float,
+    agent_result: dict,
+    timestamps: dict[str, float],
+    error: str | None,
+) -> TaskResult:
+    """Build a TaskResult dataclass from runner output."""
+    return TaskResult(
+        instance_id=instance_id,
+        run_id=run_id,
+        suite=suite,
+        passed=passed,
+        elapsed_seconds=elapsed,
+        turns=agent_result.get("turns", 0),
+        tool_call_count=len(agent_result.get("tool_calls", [])),
+        cost_usd=agent_result.get("cost_usd"),
+        usage=agent_result.get("usage"),
+        model=model,
+        error=error,
+        timestamps=timestamps,
+        agent_transcript_path=f"traces/{instance_id}.json",
+    )
+
+
+async def run_task_async(
+    instance_id: str,
+    suite: str,
+    model: str,
+    max_turns: int,
+    no_reset: bool,
+    run_id: str,
+    semaphore: asyncio.Semaphore,
+    eval_only: bool,
+) -> TaskResult:
+    """Run a single task asynchronously with semaphore-based concurrency limiting.
+
+    Handles per-task log file, audit writes, and transcript saves.
+    Catches ResultAlreadyExistsError to support resumable runs.
+    """
+    # Import here to avoid circular imports at module level
+    from .runners.direct import execute_dbt_task
+    from .runners.sql_runner import execute_sql_task
+
+    connection_prefix = f"{run_id[:8]}_"
+
+    async with semaphore:
+        log_dir = AUDIT_BASE / "runs" / run_id / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_token = set_log_file(log_dir / f"{instance_id}.log")
+
+        timestamps: dict[str, float] = {}
+        error: str | None = None
+        passed = False
+        agent_result: dict = {
+            "success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0,
+            "cost_usd": None, "usage": None, "started_at": "",
+        }
+        t_total = time.monotonic()
+
+        try:
+            if suite == "spider2-dbt":
+                t0 = time.monotonic()
+                passed, agent_result = await execute_dbt_task(
+                    instance_id=instance_id,
+                    model=model,
+                    max_turns=max_turns,
+                    no_reset=no_reset,
+                    connection_prefix=connection_prefix,
+                    skip_agent=eval_only,
+                )
+                timestamps["total"] = time.monotonic() - t0
+            else:
+                suite_enum = BenchmarkSuite(suite)
+                t0 = time.monotonic()
+                passed, agent_result = await execute_sql_task(
+                    instance_id=instance_id,
+                    suite=suite_enum,
+                    model=model,
+                    max_turns=max_turns if max_turns != 200 else None,
+                    connection_prefix=connection_prefix,
+                    skip_agent=eval_only,
+                )
+                timestamps["total"] = time.monotonic() - t0
+
+        except Exception as e:
+            error = str(e)
+            log(f"Task '{instance_id}' failed with unhandled error: {e}", "ERROR")
+
+        elapsed = time.monotonic() - t_total
+        task_result = _build_task_result(
+            instance_id=instance_id,
+            run_id=run_id,
+            suite=suite,
+            model=model,
+            passed=passed,
+            elapsed=elapsed,
+            agent_result=agent_result,
+            timestamps=timestamps,
+            error=error,
+        )
+
+        # Save result (immutable — skip if already exists for resumable runs)
+        try:
+            save_task_result(task_result)
+        except ResultAlreadyExistsError:
+            log(f"Task '{instance_id}' already has a result — skipping (resume mode)", "WARN")
+
+        # Save transcript
+        try:
+            save_task_transcript(run_id, instance_id, {
+                "transcript": agent_result.get("transcript", []),
+                "tool_calls": agent_result.get("tool_calls", []),
+                "messages": agent_result.get("messages", []),
+                "turns": agent_result.get("turns", 0),
+                "started_at": agent_result.get("started_at", ""),
+            })
+        except Exception as e:
+            log(f"Failed to save transcript for '{instance_id}': {e}", "WARN")
+
+        # Copy gateway audit entries (filter by prefixed connection name)
+        try:
+            copy_gateway_audit(run_id, instance_id, connection_name=f"{connection_prefix}{instance_id}")
+        except Exception as e:
+            log(f"Failed to copy gateway audit for '{instance_id}': {e}", "WARN")
+
+        close_log_file(log_token)
+        return task_result
+
+
+def main() -> None:
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="spider2-dbt",
@@ -138,12 +287,16 @@ def main():
                         help="Which benchmark suite to run (default: spider2-dbt)")
     parser.add_argument("--model", default="claude-sonnet-4-6")
     parser.add_argument("--max-turns", type=int, default=200)
-    parser.add_argument("--timeout", type=int, default=900, help="Timeout per task in seconds")
+    parser.add_argument("--timeout", type=int, default=900, help="Timeout per task in seconds (sequential mode)")
     parser.add_argument("--tasks", nargs="*", help="Specific task IDs to run")
     parser.add_argument("--skip", nargs="*", default=[], help="Task IDs to skip")
     parser.add_argument("--eval-only", action="store_true", help="Only evaluate existing results")
     parser.add_argument("--results-file", default="/tmp/benchmark_results.json")
     parser.add_argument("--no-reset", action="store_true", help="Don't reset workdir between runs (DBT only)")
+    parser.add_argument("--parallel", type=int, default=0,
+                        help="Concurrency level for parallel mode (0 = sequential/legacy, default)")
+    parser.add_argument("--run-id", default=None,
+                        help="Explicit run ID (UUID4) for resuming a previous run")
     args = parser.parse_args()
 
     suite: str = args.suite
@@ -161,10 +314,56 @@ def main():
     passed_count = 0
     total = len(tasks)
 
+    if args.parallel > 0:
+        _run_parallel(args, suite, tasks, total, results)
+        passed_count = sum(1 for r in results.values() if r["passed"])
+    else:
+        _run_sequential(args, suite, tasks, total, results)
+        passed_count = sum(1 for r in results.values() if r["passed"])
+
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"RESULTS [{suite}]: {passed_count}/{total} passed ({100*passed_count/total:.1f}%)" if total else "No tasks.")
+    print(f"{'='*60}")
+
+    # Save results (legacy format)
+    with open(args.results_file, "w") as f:
+        json.dump({"suite": suite, "total": total, "passed": passed_count, "tasks": results}, f, indent=2)
+    print(f"Results saved to {args.results_file}")
+
+    # Print failures
+    failures = [t for t, r in sorted(results.items()) if not r["passed"]]
+    if failures:
+        print(f"\nFailed tasks ({len(failures)}):")
+        for t in failures:
+            print(f"  {t}")
+
+
+def _run_sequential(
+    args: object,
+    suite: str,
+    tasks: list[str],
+    total: int,
+    results: dict[str, dict],
+) -> None:
+    """Sequential (subprocess-based) execution — original behavior preserved."""
+    # We still integrate audit: init_run, save results, finalize_run
+    run_metadata: RunMetadata | None = None
+    try:
+        run_metadata = init_run(
+            suite=suite,
+            model=getattr(args, "model"),
+            concurrency=0,
+            task_ids=list(tasks),
+        )
+        print(f"Audit run ID: {run_metadata.run_id}")
+    except Exception as e:
+        print(f"WARN: Could not init audit run: {e}", file=sys.stderr)
+
     for i, task_id in enumerate(sorted(tasks)):
         print(f"\n[{i+1}/{total}] {task_id}...", end=" ", flush=True)
 
-        if args.eval_only:
+        if getattr(args, "eval_only"):
             env = os.environ.copy()
             env["SPIDER2_DBT_DIR"] = str(SPIDER2_DBT_DIR)
             result = subprocess.run(
@@ -177,32 +376,129 @@ def main():
             elapsed = 0.0
         else:
             passed, elapsed = run_task(
-                task_id, args.model, args.max_turns, args.timeout,
-                suite=suite, no_reset=args.no_reset,
+                task_id, getattr(args, "model"), getattr(args, "max_turns"),
+                getattr(args, "timeout"), suite=suite, no_reset=getattr(args, "no_reset"),
             )
 
         status = "PASS" if passed else "FAIL"
         print(f"{status} ({elapsed:.0f}s)")
         results[task_id] = {"passed": passed, "elapsed": elapsed}
-        if passed:
+
+        if run_metadata is not None:
+            try:
+                task_result = TaskResult(
+                    instance_id=task_id,
+                    run_id=run_metadata.run_id,
+                    suite=suite,
+                    passed=passed,
+                    elapsed_seconds=elapsed,
+                    turns=0,
+                    tool_call_count=0,
+                    cost_usd=None,
+                    usage=None,
+                    model=getattr(args, "model"),
+                    error=None,
+                    timestamps={},
+                    agent_transcript_path=f"traces/{task_id}.json",
+                )
+                save_task_result(task_result)
+            except ResultAlreadyExistsError:
+                pass
+            except Exception as e:
+                print(f"WARN: Could not save task result: {e}", file=sys.stderr)
+
+    if run_metadata is not None:
+        passed_count = sum(1 for r in results.values() if r["passed"])
+        try:
+            finalize_run(run_metadata.run_id, passed_count)
+        except Exception as e:
+            print(f"WARN: Could not finalize run: {e}", file=sys.stderr)
+
+
+def _run_parallel(
+    args: object,
+    suite: str,
+    tasks: list[str],
+    total: int,
+    results: dict[str, dict],
+) -> None:
+    """Parallel (asyncio-based) execution."""
+    concurrency: int = getattr(args, "parallel")
+    run_id_arg: str | None = getattr(args, "run_id")
+
+    try:
+        run_metadata = init_run(
+            suite=suite,
+            model=getattr(args, "model"),
+            concurrency=concurrency,
+            task_ids=list(tasks),
+        )
+    except Exception as e:
+        print(f"ERROR: Could not init audit run: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # If a run_id was provided (resume mode), we'd need to load existing metadata.
+    # For now, use the newly created run_id; the --run-id arg is reserved for future resumption.
+    if run_id_arg is not None:
+        print(f"Note: --run-id {run_id_arg!r} provided but resumption uses the new run_id "
+              f"{run_metadata.run_id!r}. Full resume support is a future enhancement.")
+
+    print(f"Audit run ID: {run_metadata.run_id}")
+    print(f"Parallel mode: concurrency={concurrency}")
+
+    task_results = asyncio.run(_gather_tasks(
+        tasks=sorted(tasks),
+        suite=suite,
+        model=getattr(args, "model"),
+        max_turns=getattr(args, "max_turns"),
+        no_reset=getattr(args, "no_reset"),
+        run_id=run_metadata.run_id,
+        concurrency=concurrency,
+        eval_only=getattr(args, "eval_only"),
+    ))
+
+    passed_count = 0
+    for tr in task_results:
+        results[tr.instance_id] = {"passed": tr.passed, "elapsed": tr.elapsed_seconds}
+        if tr.passed:
             passed_count += 1
+        status = "PASS" if tr.passed else "FAIL"
+        print(f"  {tr.instance_id}: {status} ({tr.elapsed_seconds:.0f}s)")
 
-    # Summary
-    print(f"\n{'='*60}")
-    print(f"RESULTS [{suite}]: {passed_count}/{total} passed ({100*passed_count/total:.1f}%)")
-    print(f"{'='*60}")
+    try:
+        finalize_run(run_metadata.run_id, passed_count)
+    except Exception as e:
+        print(f"WARN: Could not finalize run: {e}", file=sys.stderr)
 
-    # Save results
-    with open(args.results_file, "w") as f:
-        json.dump({"suite": suite, "total": total, "passed": passed_count, "tasks": results}, f, indent=2)
-    print(f"Results saved to {args.results_file}")
+    print(f"Audit data written to: {AUDIT_BASE / 'runs' / run_metadata.run_id}")
 
-    # Print failures
-    failures = [t for t, r in sorted(results.items()) if not r["passed"]]
-    if failures:
-        print(f"\nFailed tasks ({len(failures)}):")
-        for t in failures:
-            print(f"  {t}")
+
+async def _gather_tasks(
+    tasks: list[str],
+    suite: str,
+    model: str,
+    max_turns: int,
+    no_reset: bool,
+    run_id: str,
+    concurrency: int,
+    eval_only: bool,
+) -> list[TaskResult]:
+    """Run all tasks concurrently under a semaphore."""
+    semaphore = asyncio.Semaphore(concurrency)
+    coroutines = [
+        run_task_async(
+            instance_id=task_id,
+            suite=suite,
+            model=model,
+            max_turns=max_turns,
+            no_reset=no_reset,
+            run_id=run_id,
+            semaphore=semaphore,
+            eval_only=eval_only,
+        )
+        for task_id in tasks
+    ]
+    return list(await asyncio.gather(*coroutines))
 
 
 if __name__ == "__main__":

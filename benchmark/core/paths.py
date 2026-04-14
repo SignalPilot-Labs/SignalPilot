@@ -40,6 +40,11 @@ MCP_CONFIG = BENCHMARK_DIR / "mcp_test_config.json"
 GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 
 
+AUDIT_BASE = Path(os.environ.get("BENCHMARK_AUDIT_DIR", "/data/benchmark-audit"))
+# Note: if running in Docker, mount the sp-benchmark-audit volume at /data/benchmark-audit.
+# The Python code does not create Docker volumes.
+
+
 def ensure_local_bin_on_path() -> None:
     """Ensure pip-installed CLIs (like dbt) are on PATH for subprocess children."""
     local_bin = os.path.expanduser("~/.local/bin")

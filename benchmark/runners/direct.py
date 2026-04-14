@@ -88,6 +88,7 @@ async def run_agent(
 
     transcript_path = work_dir / "agent_output.json"
     transcript_path.write_text(json.dumps({
+        "transcript": result["transcript"],
         "tool_calls": result["tool_calls"],
         "messages": result["messages"],
         "turns": result["turns"],
@@ -383,6 +384,346 @@ def _flush_and_release(work_dir: Path, instance_id: str) -> None:
     if delete_local_connection(instance_id):
         log(f"Released MCP connection '{instance_id}' before evaluation")
     time.sleep(2)
+
+
+# ── Async helpers for parallel mode ──────────────────────────────────────────
+# These wrap blocking subprocess calls so they don't stall the event loop when
+# multiple tasks run concurrently under asyncio.gather.
+
+async def _async_subprocess_run(
+    args: list[str],
+    cwd: str,
+    timeout: int = 120,
+) -> subprocess.CompletedProcess[str]:
+    """Non-blocking subprocess wrapper using asyncio.create_subprocess_exec."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise subprocess.TimeoutExpired(args, timeout)
+    return subprocess.CompletedProcess(
+        args=args,
+        returncode=proc.returncode if proc.returncode is not None else -1,
+        stdout=stdout_b.decode(errors="replace"),
+        stderr=stderr_b.decode(errors="replace"),
+    )
+
+
+async def _run_dbt_selective_async(
+    work_dir: Path,
+    eval_critical_models: set[str],
+    timeout: int = 120,
+) -> subprocess.CompletedProcess[str]:
+    """Async version of _run_dbt_selective."""
+    select_args = (
+        [DBT_BIN, "run", "--select"]
+        + [f"+{m}" for m in sorted(eval_critical_models)]
+    )
+    return await _async_subprocess_run(select_args, cwd=str(work_dir), timeout=timeout)
+
+
+async def _post_agent_dbt_run_async(
+    work_dir: Path,
+    instruction: str,
+    eval_critical_models: set[str],
+    model: str,
+) -> None:
+    """Async version of _post_agent_dbt_run for use in parallel execution."""
+    t0 = time.monotonic()
+    log_separator("Step 4b: Final dbt deps + dbt run (post-agent safety net)")
+
+    if (work_dir / "packages.yml").exists():
+        await _async_subprocess_run(
+            [DBT_BIN, "deps"],
+            cwd=str(work_dir),
+            timeout=120,
+        )
+
+    created_stubs_post = create_ephemeral_stubs(work_dir)
+    if created_stubs_post:
+        log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
+
+    run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
+
+    if eval_critical_models:
+        dbt_result = await _run_dbt_selective_async(work_dir, eval_critical_models)
+        if dbt_result.returncode == 0:
+            log(f"Selective dbt run (eval-critical) PASSED in {time.monotonic()-t0:.1f}s")
+        else:
+            log(f"Selective dbt run (eval-critical) FAILED in {time.monotonic()-t0:.1f}s")
+            for line in (dbt_result.stdout + dbt_result.stderr).strip().splitlines()[-20:]:
+                log(f"  dbt: {line}")
+    else:
+        dbt_result = await _async_subprocess_run(
+            [DBT_BIN, "run"],
+            cwd=str(work_dir),
+            timeout=120,
+        )
+        if dbt_result.returncode == 0:
+            log(f"Final dbt run PASSED in {time.monotonic()-t0:.1f}s")
+        else:
+            log(f"Final dbt run FAILED in {time.monotonic()-t0:.1f}s")
+            for line in (dbt_result.stdout + dbt_result.stderr).strip().splitlines()[-20:]:
+                log(f"  dbt: {line}")
+
+    if eval_critical_models and dbt_result.returncode != 0:
+        error_output = (dbt_result.stdout + dbt_result.stderr).strip()[-2000:]
+        fix_prompt = _build_fix_prompt(work_dir, instruction, error_output, eval_critical_models)
+        try:
+            await run_quick_fix_agent(fix_prompt, work_dir, model)
+        except Exception as e:
+            log(f"Quick-fix agent failed: {e}", "WARN")
+
+    # Best-effort full run
+    if eval_critical_models:
+        await _async_subprocess_run(
+            [DBT_BIN, "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
+            cwd=str(work_dir),
+            timeout=300,
+        )
+    await _async_subprocess_run(
+        [DBT_BIN, "run", "--no-fail-fast"],
+        cwd=str(work_dir),
+        timeout=300,
+    )
+
+
+async def _run_value_verify_stage_async(
+    work_dir: Path,
+    instance_id: str,
+    instruction: str,
+    eval_critical_models: set[str],
+    model: str,
+) -> None:
+    """Async version of _run_value_verify_stage for use in parallel execution."""
+    _result_db = find_result_db(work_dir)
+    if not (eval_critical_models and _result_db):
+        return
+
+    verify_prompt = build_value_verify_prompt(
+        work_dir, instance_id, eval_critical_models, instruction,
+        extract_model_columns(work_dir),
+    )
+    try:
+        await run_value_verify_agent(verify_prompt, work_dir, model)
+    except Exception as e:
+        log(f"Value-verify agent failed: {e}", "WARN")
+
+    await _async_subprocess_run(
+        [DBT_BIN, "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
+        cwd=str(work_dir),
+        timeout=180,
+    )
+
+
+async def _run_name_fix_stage_async(
+    work_dir: Path,
+    instance_id: str,
+    instruction: str,
+    eval_critical_models: set[str],
+    model: str,
+) -> None:
+    """Async version of _run_name_fix_stage for use in parallel execution."""
+    if not eval_critical_models:
+        return
+
+    _result_db = find_result_db(work_dir)
+    if not _result_db:
+        return
+
+    try:
+        import duckdb as _ddb
+        _con = _ddb.connect(str(_result_db), read_only=True)
+        existing_tables = set(r[0] for r in _con.execute("SHOW TABLES").fetchall())
+        _con.close()
+    except Exception as e:
+        log(f"Post-eval table check failed: {e}", "WARN")
+        return
+
+    missing_eval_tables = eval_critical_models - existing_tables
+    if not missing_eval_tables:
+        return
+
+    log(f"POST-EVAL CHECK: Missing eval-critical tables: {sorted(missing_eval_tables)}", "WARN")
+    name_fix_prompt = _build_name_fix_prompt(work_dir, instruction, missing_eval_tables, existing_tables)
+
+    name_fix_ok = False
+    try:
+        name_fix_ok = await run_name_fix_agent(name_fix_prompt, work_dir, model)
+    except Exception as e:
+        log(f"Name-fix agent failed: {e}", "WARN")
+
+    if name_fix_ok:
+        await _async_subprocess_run(
+            [DBT_BIN, "run", "--select"] + list(sorted(missing_eval_tables)),
+            cwd=str(work_dir),
+            timeout=180,
+        )
+
+
+async def _flush_and_release_async(work_dir: Path, connection_name: str) -> None:
+    """Async version of _flush_and_release."""
+    _result_db = find_result_db(work_dir)
+    if _result_db:
+        try:
+            import duckdb as _ddb
+            _flush_con = _ddb.connect(database=str(_result_db))
+            _flush_con.execute("CHECKPOINT")
+            _flush_con.close()
+            log("Flushed DuckDB WAL via CHECKPOINT")
+        except Exception as e:
+            log(f"WAL flush failed (non-fatal): {e}", "WARN")
+
+    if delete_local_connection(connection_name):
+        log(f"Released MCP connection '{connection_name}' before evaluation")
+    await asyncio.sleep(2)
+
+
+async def execute_dbt_task(
+    instance_id: str,
+    model: str,
+    max_turns: int,
+    no_reset: bool,
+    connection_prefix: str,
+    skip_agent: bool = False,
+) -> tuple[bool, dict]:
+    """Execute a single DBT task in-process for parallel mode.
+
+    Returns (passed, agent_result_dict) where agent_result_dict contains
+    tool_calls, messages, turns, cost_usd, usage, started_at, and elapsed.
+
+    The connection_prefix is prepended to the instance_id to form a unique
+    connection name, preventing collisions when multiple tasks run concurrently.
+    """
+    connection_name = f"{connection_prefix}{instance_id}" if connection_prefix else instance_id
+
+    log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")
+    log(f"Model:     {model}")
+    log(f"Max turns: {max_turns}")
+    log(f"Connection name: {connection_name}")
+
+    task = load_task(instance_id)
+    instruction: str = task["instruction"]
+
+    work_dir = WORK_DIR / instance_id
+
+    eval_config = load_eval_config(instance_id)
+    eval_critical_models: set[str] = set()
+    if eval_config is not None:
+        params = eval_config.get("evaluation", {}).get("parameters", {})
+        condition_tabs = params.get("condition_tabs") or []
+        eval_critical_models = set(condition_tabs)
+        log(f"Eval-critical models: {sorted(eval_critical_models)}")
+    else:
+        log(f"No eval config found for '{instance_id}' — treating all models as equal", "WARN")
+
+    agent_result: dict = {
+        "success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0,
+        "cost_usd": None, "usage": None, "started_at": "",
+    }
+
+    if not skip_agent:
+        # Step 1: Prepare workdir
+        log_separator("Step 1: Prepare workdir")
+        if no_reset and work_dir.exists():
+            log(f"Reusing existing workdir (--no-reset): {work_dir}")
+        else:
+            work_dir = prepare_workdir(instance_id)
+
+        # Step 2: Write CLAUDE.md
+        log_separator("Step 2: Write CLAUDE.md")
+        write_claude_md(work_dir, instance_id, instruction)
+
+        # Step 3: Register connection
+        log_separator("Step 3: Register DuckDB connection")
+        _db = find_result_db(work_dir)
+        if _db:
+            register_local_connection(connection_name, str(_db))
+        else:
+            log(f"No .duckdb files in {work_dir}", "WARN")
+
+        _auto_scale_max_turns(work_dir, eval_critical_models, max_turns)
+
+        for w in check_package_availability(work_dir):
+            log(w, "WARN")
+
+        created_templates = create_sql_templates(work_dir, eval_critical_models)
+        if created_templates:
+            log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
+
+        created_stubs = create_ephemeral_stubs(work_dir)
+        if created_stubs:
+            log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
+
+        # Step 4: Run agent
+        log_separator("Step 4: Run Claude agent")
+        t_agent = time.monotonic()
+        try:
+            prompt = build_agent_prompt(instance_id, instruction, work_dir, eval_critical_models, max_turns=max_turns)
+            system_prompt = (
+                _DBT_SYSTEM_PROMPT_TEMPLATE
+                .replace("${work_dir}", str(work_dir))
+                .replace("${instance_id}", instance_id)
+                .replace("${instruction}", instruction)
+                .replace("${dbt_bin}", DBT_BIN)
+            )
+            agent_result = await run_sdk_agent(
+                prompt,
+                work_dir,
+                model,
+                max_turns,
+                timeout=900,
+                label="main-agent",
+                skill_names=_DBT_SKILL_NAMES,
+                system_prompt=system_prompt,
+            )
+            transcript_path = work_dir / "agent_output.json"
+            transcript_path.write_text(json.dumps({
+                "transcript": agent_result["transcript"],
+                "tool_calls": agent_result["tool_calls"],
+                "messages": agent_result["messages"],
+                "turns": agent_result["turns"],
+            }))
+        except Exception as e:
+            log(f"Agent SDK error: {e}", "ERROR")
+        elapsed_agent = time.monotonic() - t_agent
+        log(f"Agent finished in {elapsed_agent:.1f}s")
+
+        await _post_agent_dbt_run_async(work_dir, instruction, eval_critical_models, model)
+        await _run_value_verify_stage_async(work_dir, instance_id, instruction, eval_critical_models, model)
+        await _run_name_fix_stage_async(work_dir, instance_id, instruction, eval_critical_models, model)
+
+    # Post-processing (always runs, even with skip_agent)
+    _result_db_path = find_result_db(work_dir)
+    dedup_eval_tables(work_dir, eval_critical_models, _result_db_path)
+    add_missing_columns(work_dir, eval_critical_models, _result_db_path)
+
+    await _flush_and_release_async(work_dir, connection_name)
+
+    # Evaluate
+    log_separator("Step 5: Evaluate against gold standard")
+    passed = False
+    if work_dir.exists():
+        try:
+            passed, details = evaluate(work_dir, instance_id)
+            log(f"Evaluation details: {details}")
+        except Exception as e:
+            log(f"Evaluation error: {e}", "ERROR")
+    else:
+        log(f"Work dir not found: {work_dir}", "ERROR")
+
+    # Clean up connection (best effort)
+    delete_local_connection(connection_name)
+
+    log_separator(f"RESULT: {'PASS' if passed else 'FAIL'}")
+    return passed, agent_result
 
 
 def main() -> None:

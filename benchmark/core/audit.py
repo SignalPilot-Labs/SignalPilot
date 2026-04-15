@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .paths import AUDIT_BASE
+
+_log = logging.getLogger(__name__)
 
 
 class ResultAlreadyExistsError(Exception):
@@ -189,3 +193,105 @@ def archive_workdir(run_id: str, instance_id: str, work_dir: Path) -> Path | Non
         return dest
     except Exception:
         return None
+
+
+def save_single_task_run(
+    instance_id: str,
+    suite: str,
+    model: str,
+    passed: bool,
+    elapsed_seconds: float,
+    work_dir: Path,
+    agent_output: dict[str, Any] | None = None,
+) -> str:
+    """All-in-one audit saver for individual task runs (not run_batch).
+
+    Creates a single-task run directory with all audit artifacts:
+    run_metadata, task result, transcript, gateway queries, and project archive.
+
+    Returns the run_id so callers can log it.
+    """
+    run_id = f"single-{instance_id}-{int(time.time())}"
+    run_dir = _run_dir(run_id)
+
+    try:
+        for subdir in ("tasks", "traces", "queries", "projects"):
+            (run_dir / subdir).mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        _log.warning("Cannot create audit dir '%s': %s", run_dir, e)
+        return run_id
+
+    now = _iso_now()
+
+    if agent_output is None:
+        # Try loading from workdir
+        ao_path = work_dir / "agent_output.json"
+        if ao_path.exists():
+            try:
+                agent_output = json.loads(ao_path.read_text())
+            except Exception:
+                agent_output = {}
+        else:
+            agent_output = {}
+
+    # run_metadata.json
+    metadata = RunMetadata(
+        run_id=run_id,
+        suite=suite,
+        model=model,
+        model_version=model,
+        started_at=agent_output.get("started_at", now),
+        finished_at=now,
+        concurrency=0,
+        total_tasks=1,
+        passed_tasks=1 if passed else 0,
+        task_ids=[instance_id],
+    )
+    _write_run_metadata(run_dir, metadata)
+
+    # tasks/{id}.json
+    result = TaskResult(
+        instance_id=instance_id,
+        run_id=run_id,
+        suite=suite,
+        passed=passed,
+        elapsed_seconds=elapsed_seconds,
+        turns=agent_output.get("turns", 0),
+        tool_call_count=len(agent_output.get("tool_calls", [])),
+        cost_usd=agent_output.get("cost_usd"),
+        usage=agent_output.get("usage"),
+        model=model,
+        error=None,
+        timestamps={"total": elapsed_seconds},
+        agent_transcript_path=f"traces/{instance_id}.json",
+    )
+    try:
+        save_task_result(result)
+    except ResultAlreadyExistsError:
+        pass
+
+    # traces/{id}.json
+    try:
+        save_task_transcript(run_id, instance_id, {
+            "transcript": agent_output.get("transcript", []),
+            "tool_calls": agent_output.get("tool_calls", []),
+            "messages": agent_output.get("messages", []),
+            "turns": agent_output.get("turns", 0),
+            "started_at": agent_output.get("started_at", ""),
+        })
+    except Exception as e:
+        _log.warning("Failed to save transcript: %s", e)
+
+    # queries/{id}.jsonl
+    try:
+        copy_gateway_audit(run_id, instance_id, connection_name=instance_id)
+    except Exception as e:
+        _log.warning("Failed to copy gateway audit: %s", e)
+
+    # projects/{id}/
+    try:
+        archive_workdir(run_id, instance_id, work_dir)
+    except Exception as e:
+        _log.warning("Failed to archive workdir: %s", e)
+
+    return run_id

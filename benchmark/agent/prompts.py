@@ -111,6 +111,11 @@ TASK: {instruction}
 
 DATABASE: SignalPilot connection '{instance_id}' (DuckDB). Use mcp__signalpilot__* tools.
 
+FORBIDDEN: NEVER access, read, or query gold/evaluation databases or files.
+Do NOT open any DuckDB file outside this work directory. Do NOT search for
+paths containing 'gold', 'evaluation_suite', or 'spider2-repo'. Do NOT read
+evaluation scripts to find expected outputs. Build models from source data ONLY.
+
 MISSING SQL MODELS — PRIORITY (evaluated, must complete): {priority_str}
 MISSING SQL MODELS — OTHER (write if time permits): {other_missing_str}
 INCOMPLETE SQL (stubs — must rewrite): {stubs_str}

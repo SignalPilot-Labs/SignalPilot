@@ -284,6 +284,13 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__dbt_error_parser` — parse dbt error text into fix suggestions
 - `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
 
+## FORBIDDEN — Gold Data Access
+- NEVER access, read, or query any file under `evaluation_suite/gold/`, `spider2-repo/`, or any path containing `gold`.
+- NEVER open any DuckDB file other than the one in THIS work directory (`{db_path}`).
+- NEVER search for gold databases, gold CSVs, evaluation results, or expected outputs.
+- Your job is to build correct dbt models from the source data and task description ONLY.
+- Accessing gold data is cheating and invalidates the benchmark result.
+
 ## Key Rules
 - Always use `{{ config(materialized='table') }}` at the top of every model
 - Column names in YML are exact — copy them into SELECT aliases character-for-character

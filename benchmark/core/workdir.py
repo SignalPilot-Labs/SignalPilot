@@ -16,6 +16,69 @@ if TYPE_CHECKING:
     from .suite import DBBackend, SuiteConfig
 
 
+def write_workdir_env(work_dir: Path, backend: "DBBackend", task: dict) -> None:
+    """Write a metadata-only .env into the agent workdir.
+
+    Contains DB type and connection metadata so the agent can reference them.
+    Never writes credentials (tokens, passwords, service account content).
+    """
+    from .suite import DBBackend as _DBBackend
+
+    try:
+        lines: list[str] = []
+
+        if backend == _DBBackend.SQLITE:
+            db_name: str = task.get("db", task.get("db_id", ""))
+            if not db_name:
+                log("write_workdir_env: missing 'db'/'db_id' for SQLite task", "WARN")
+                return
+            db_path = str(work_dir / f"{db_name}.sqlite")
+            lines = [
+                "DB_TYPE=sqlite",
+                f"DB_PATH={db_path}",
+                f"DATABASE_URL=sqlite:///{db_path}",
+            ]
+
+        elif backend == _DBBackend.SNOWFLAKE:
+            database: str = task.get("db_id", task.get("db", task.get("database", "")))
+            schema: str = task.get("schema", task.get("schema_name", "PUBLIC"))
+            if not database:
+                log("write_workdir_env: missing 'db_id'/'db'/'database' for Snowflake task", "WARN")
+                return
+            lines = [
+                "DB_TYPE=snowflake",
+                f"DATABASE_NAME={database}",
+                f"SCHEMA_NAME={schema}",
+            ]
+
+        elif backend == _DBBackend.BIGQUERY:
+            project: str = task.get("project_id", task.get("project", ""))
+            dataset: str = task.get("dataset", task.get("schema", ""))
+            if not project:
+                project = "spider2-public-data"
+            if not dataset:
+                dataset = task.get("db", "")
+            if not dataset:
+                log("write_workdir_env: missing dataset for BigQuery task", "WARN")
+                return
+            lines = [
+                "DB_TYPE=bigquery",
+                f"DATABASE_NAME={project}",
+                f"SCHEMA_NAME={dataset}",
+            ]
+
+        else:
+            log(f"write_workdir_env: unsupported backend '{backend}'", "WARN")
+            return
+
+        env_path = work_dir / ".env"
+        env_path.write_text("\n".join(lines) + "\n")
+        log(f"Wrote metadata .env to {env_path}")
+
+    except Exception as e:
+        log(f"write_workdir_env failed (non-fatal): {e}", "WARN")
+
+
 def force_rmtree(path: Path) -> None:
     """Remove a directory tree, handling Windows read-only permission errors."""
 
@@ -232,10 +295,17 @@ Use SignalPilot MCP tools to explore and query the database:
     if sqlite_files:
         db_file_name = sqlite_files[0].name
         content += "\n## SQLite Database\n"
-        content += f"The SQLite database file is at `{db_file_name}` in this directory.\n"
-        content += f"However, do NOT query it directly — use the MCP tools with connection_name=\"{connection_name}\".\n"
+        content += f"The SQLite database file `{db_file_name}` is available for direct local access.\n"
+        content += "For queries returning more than 50 rows, query the local file directly using Python sqlite3 or the sqlite3 CLI, then save results to result.csv.\n"
+        content += f"- CLI: `sqlite3 {db_file_name} \"SELECT ...\"` or `sqlite3 {db_file_name}` for interactive mode\n"
+        content += f"- Python: `import sqlite3; conn = sqlite3.connect('{db_file_name}'); ...`\n"
+        content += f"For smaller queries and schema discovery, use MCP tools with connection_name=\"{connection_name}\".\n"
 
     content += """
+## Environment Metadata
+A `.env` file in this directory contains DB metadata (type, database name, schema) for reference.
+Use MCP tools listed above for schema discovery and validation.
+
 ## Key Rules
 - This is a READ-ONLY task — do NOT insert, update, delete, or create objects
 - Write your final SQL query to `result.sql` in this directory

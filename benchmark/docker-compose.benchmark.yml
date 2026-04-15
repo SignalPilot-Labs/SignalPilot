@@ -1,0 +1,16 @@
+version: "3.9"
+
+volumes:
+  sp-benchmark-audit:
+    name: sp-benchmark-audit
+
+services:
+  benchmark-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbt-agent
+    environment:
+      - BENCHMARK_AUDIT_DIR=/data/benchmark-audit
+      - SP_GATEWAY_URL=${SP_GATEWAY_URL:-http://localhost:3300}
+    volumes:
+      - sp-benchmark-audit:/data/benchmark-audit

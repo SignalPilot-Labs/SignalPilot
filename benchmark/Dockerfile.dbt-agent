@@ -47,4 +47,6 @@ USER root
 RUN chmod +x /usr/local/bin/entrypoint.sh && \
     apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /data/benchmark-audit && chown agentuser:agentuser /data/benchmark-audit
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

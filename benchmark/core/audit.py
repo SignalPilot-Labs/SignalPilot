@@ -178,9 +178,10 @@ def archive_workdir(run_id: str, instance_id: str, work_dir: Path) -> Path | Non
 
     dest = _run_dir(run_id) / "projects" / instance_id
     skip_dirs = {"dbt_packages", ".dbt", "__pycache__", "node_modules", "target"}
+    skip_files = {".env", "gcp-service-account.json"}
 
     def _ignore(directory: str, contents: list[str]) -> set[str]:
-        return {c for c in contents if c in skip_dirs}
+        return {c for c in contents if c in skip_dirs or c in skip_files}
 
     try:
         if dest.exists():

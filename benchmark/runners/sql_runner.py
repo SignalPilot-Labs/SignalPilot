@@ -14,8 +14,11 @@ import argparse
 import asyncio
 import functools
 import json
+import os
 import sys
 import time
+import traceback
+import urllib.request
 from pathlib import Path
 
 from ..agent.sdk_runner import run_sdk_agent
@@ -23,23 +26,24 @@ from ..agent.sql_prompts import build_sql_agent_prompt
 from ..core.logging import log, log_separator
 from ..core.mcp import (
     delete_local_connection,
+    load_dotenv_file,
     register_bigquery_connection,
     register_snowflake_connection,
     register_sqlite_connection,
-    _load_dotenv_file,
 )
-from ..core.paths import SNOWFLAKE_ENV_FILE
+from ..core.audit import archive_workdir
+from ..core.paths import AUDIT_BASE, SNOWFLAKE_ENV_FILE
 from ..core.paths import PROMPTS_DIR, ensure_local_bin_on_path
 from ..core.suite import BenchmarkSuite, DBBackend, SuiteConfig, get_suite_config
 from ..core.tasks import load_task_for_suite
-from ..core.workdir import prepare_sql_workdir, write_sql_claude_md
+from ..core.workdir import prepare_sql_workdir, write_sql_claude_md, write_workdir_env
 from ..evaluation.sql_comparator import evaluate_sql
 
 ensure_local_bin_on_path()
 
 _SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "system_general.md").read_text()
 
-_GATEWAY_HTTP = "http://localhost:3300"
+_GATEWAY_HTTP = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 
 
 def _register_snowflake_http(instance_id: str, database: str, schema: str) -> bool:
@@ -48,12 +52,8 @@ def _register_snowflake_http(instance_id: str, database: str, schema: str) -> bo
     MCP tools like schema_overview hit the gateway's HTTP endpoints, so the
     connection must exist in the gateway's DB, not just the local store file.
     """
-    import json
-    import urllib.error
-    import urllib.request
-
     try:
-        env_vars = _load_dotenv_file(SNOWFLAKE_ENV_FILE)
+        env_vars = load_dotenv_file(SNOWFLAKE_ENV_FILE)
     except FileNotFoundError:
         log(f"Snowflake env file not found: {SNOWFLAKE_ENV_FILE}", "ERROR")
         return False
@@ -95,6 +95,9 @@ _LARGE_DB_MAX_TURNS: dict[str, int] = {
     "CMS_DATA": 75,
     "STACKOVERFLOW": 75,
     "complex_oracle": 75,
+    "NHTSA_TRAFFIC_FATALITIES": 75,
+    "WORLD_BANK": 65,
+    "PATENTS": 65,
 }
 
 
@@ -232,12 +235,13 @@ async def _run_agent(
 
     skill_names = _get_skill_names(suite, db_backend)
 
+    task_timeout = 1200 if max_turns > 50 else 900
     result = await run_sdk_agent(
         prompt=prompt,
         work_dir=work_dir,
         model=model,
         max_turns=max_turns,
-        timeout=900,
+        timeout=task_timeout,
         label="sql-agent",
         skill_names=skill_names,
         system_prompt=system_prompt,
@@ -298,8 +302,6 @@ async def _register_connection_async(
 
 async def _delete_connection_http_async(connection_name: str) -> None:
     """Delete an HTTP-registered gateway connection asynchronously."""
-    import urllib.request
-
     loop = asyncio.get_event_loop()
 
     def _delete() -> None:
@@ -381,10 +383,12 @@ async def execute_sql_task(
         if not conn_ok:
             log(f"Connection registration failed for '{connection_name}' ({backend.value})", "WARN")
         log(f"Connection registration in {time.monotonic()-t0:.2f}s")
+        write_workdir_env(work_dir, backend, task)
 
         # Step 4: Run agent
         log_separator("Step 4: Run Claude SQL agent")
         t0 = time.monotonic()
+        task_timeout = 1200 if resolved_max_turns > 50 else 900
         try:
             agent_result = await run_sdk_agent(
                 prompt=build_sql_agent_prompt(
@@ -398,7 +402,7 @@ async def execute_sql_task(
                 work_dir=work_dir,
                 model=model,
                 max_turns=resolved_max_turns,
-                timeout=900,
+                timeout=task_timeout,
                 label="sql-agent",
                 skill_names=_get_skill_names(suite, backend),
                 system_prompt=(
@@ -540,6 +544,7 @@ def main(suite: BenchmarkSuite) -> None:
         if not conn_ok:
             log(f"Connection registration failed for '{instance_id}' ({backend.value})", "WARN")
         log(f"Connection registration in {time.monotonic()-t0:.2f}s")
+        write_workdir_env(work_dir, backend, task)
 
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()
@@ -560,6 +565,13 @@ def main(suite: BenchmarkSuite) -> None:
             agent_ok = False
         elapsed = time.monotonic() - t0
         log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
+
+        # ── Archive workdir to audit volume ───────────────────────────────────
+        run_id = f"single-{instance_id}-{int(time.time())}"
+        (AUDIT_BASE / "runs" / run_id / "projects").mkdir(parents=True, exist_ok=True)
+        archived = archive_workdir(run_id, instance_id, work_dir)
+        if archived:
+            log(f"Archived workdir to {archived}")
 
         # ── Fail fast if result.csv is missing ────────────────────────────────
         result_csv = work_dir / "result.csv"
@@ -599,7 +611,6 @@ def main(suite: BenchmarkSuite) -> None:
     try:
         passed, details = evaluate_sql(work_dir, instance_id, config)
     except Exception as e:
-        import traceback
         log(f"Evaluation error: {e}", "ERROR")
         traceback.print_exc()
         log_separator("RESULT: ERROR")

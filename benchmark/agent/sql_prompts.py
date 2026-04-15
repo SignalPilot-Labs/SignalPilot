@@ -28,7 +28,7 @@ _BACKEND_TIPS: dict[DBBackend, str] = {
         "- Approximate aggregation: APPROX_COUNT_DISTINCT for large cardinality\n"
         "- Default project for Spider2 tasks: `spider2-public-data`\n"
         "- Dataset reference: `spider2-public-data.{dataset}.{table}` or just `{dataset}.{table}` if default project is set\n"
-        "- For StackOverflow data: tags are stored as pipe-delimited strings (e.g., 'python|python-2.7'). Use REGEXP_CONTAINS or LIKE with wildcards.\n"
+        "- String columns often contain exact categorical values. Always check actual values with explore_column before using LIKE or REGEXP.\n"
         "- INFORMATION_SCHEMA: Use `{dataset}.INFORMATION_SCHEMA.COLUMNS` to discover table schemas when MCP tools are slow\n"
         "- Always verify filter conditions against actual column values using explore_column before assuming value formats"
     ),
@@ -41,7 +41,9 @@ _BACKEND_TIPS: dict[DBBackend, str] = {
         "- No ILIKE — use LIKE or LOWER(col) LIKE LOWER(pattern)\n"
         "- No FULL OUTER JOIN — use UNION of LEFT JOINs\n"
         "- Date functions: date(), datetime(), strftime() for formatting\n"
-        "- Type casting: CAST(col AS INTEGER), CAST(col AS REAL)"
+        "- Type casting: CAST(col AS INTEGER), CAST(col AS REAL)\n"
+        "- LARGE RESULTS: If MCP returns >50 rows, query the .sqlite file directly:\n"
+        "  CLI: sqlite3 <db_file>.sqlite \"SELECT ...\" or use Python import sqlite3"
     ),
     DBBackend.DUCKDB: (
         "DUCKDB-SPECIFIC TIPS:\n"
@@ -86,6 +88,7 @@ WORKFLOW — follow these steps in order:
    c. mcp__signalpilot__describe_table — column details for the 2-3 most relevant tables (only if JSON files lack detail)
    d. mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly, 1-2 calls max)
    Do NOT call schema_overview — it is slow. Do NOT spend more than 3 tool calls on discovery.
+   If schema discovery takes more than 3 turns, STOP exploring and start writing SQL with what you know.
 
 2. PLAN THE QUERY (before writing SQL):
    - Read the question for cardinality clues: "for each X" = GROUP BY, "top N" = LIMIT/QUALIFY,
@@ -151,6 +154,7 @@ WORKFLOW — follow these steps in order:
 7. SAVE — write both output files to: {work_dir}
    - result.sql: your final SQL query
    - result.csv: the query result as CSV with header row
+   Column headers ARE the answer — if the question says 'the indicator name', the column must be named indicator_name. Re-read the gold-format alignment check (step 4h) before saving.
 
 RULES:
 - Use {db_backend.value}-compatible SQL syntax only
@@ -179,6 +183,14 @@ TURN BUDGET: You have {max_turns} turns.
 - Spend the last 20% on verification and saving result files.
 - If your query works and passes all verification checks, SAVE IMMEDIATELY.
 - Do not keep iterating once you have a correct-looking result.
+
+LOCAL DATABASE FALLBACK:
+If an MCP query returns more than 50 rows (the display limit) and you need ALL rows for your result:
+- Read the .env file in your workdir for DATABASE_URL
+- For SQLite: use Python sqlite3 module or sqlite3 CLI to query the local .sqlite file directly
+- Write results directly to result.csv using Python
+- Do NOT batch MCP queries in groups of 50 — use direct access instead.
+MCP tools remain preferred for schema discovery, validation, and exploratory queries (<50 rows).
 
 {backend_tips}
 """

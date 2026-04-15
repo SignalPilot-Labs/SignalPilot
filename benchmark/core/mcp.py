@@ -64,7 +64,7 @@ def delete_local_connection(instance_id: str) -> bool:
         return False
 
 
-def _load_dotenv_file(path: Path) -> dict[str, str]:
+def load_dotenv_file(path: Path) -> dict[str, str]:
     """Parse a .env file and return key/value pairs as a dict.
 
     Skips blank lines and lines starting with '#'. Strips surrounding quotes from values.
@@ -95,7 +95,7 @@ def register_snowflake_connection(instance_id: str, database: str, schema: str) 
     Reads credentials from SNOWFLAKE_ENV_FILE. Deletes and re-creates to ensure freshness.
     """
     try:
-        env_vars = _load_dotenv_file(SNOWFLAKE_ENV_FILE)
+        env_vars = load_dotenv_file(SNOWFLAKE_ENV_FILE)
     except FileNotFoundError as e:
         log(f"Snowflake env file not found: {e}", "WARN")
         return False

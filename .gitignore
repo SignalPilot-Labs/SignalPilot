@@ -35,3 +35,6 @@ gcp-service-account.json
 .gstack/
 autocode-auth/.next/
 autocode-auth/node_modules/
+
+# Benchmark audit data (large, persisted separately)
+benchmark-audit/

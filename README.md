@@ -1,157 +1,187 @@
-# SP Research
+# SignalPilot
 
-Autonomous self-improvement agent powered by the Claude Agent SDK. A CEO/Worker loop continuously improves a target codebase on a branch, supervised by a real-time monitor UI.
+AI-powered data engineering agent with governed database access, benchmarked on Spider 2.0.
 
-## Quick Start
+## Components
+
+| Directory | Description |
+|-----------|-------------|
+| `signalpilot/` | Core gateway + web UI — governed MCP server for AI database access |
+| `benchmark/` | Spider 2.0 benchmark suite (DBT, Snowflake, Lite) with Claude Agent SDK |
+| `sp-firecracker-vm/` | Firecracker/gVisor sandboxed code execution |
+| `testing/` | Data generation and integration test infrastructure |
+
+---
+
+## Benchmark
+
+Run Spider 2.0 tasks using the Claude Agent SDK with SignalPilot MCP tools for schema discovery, SQL execution, and dbt project management.
+
+### Supported Suites
+
+| Suite | Backend | Tasks |
+|-------|---------|-------|
+| `spider2-dbt` | DuckDB (local) | 65 dbt projects |
+| `spider2-snowflake` | Snowflake | SQL generation |
+| `spider2-lite` | SQLite, BigQuery, Snowflake | SQL generation |
+
+### Running Benchmarks
 
 ```bash
-# 1. Copy .env and fill in tokens (or configure via the UI)
-cp self-improve/.env.example .env
-# Optional: GIT_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, GITHUB_REPO
-# Credentials can also be configured at http://localhost:3400 (Settings / onboarding)
+# Single task (individual runner)
+python -m benchmark.run_direct chinook001
+python -m benchmark.run_direct --suite spider2-snowflake sf_local041
 
-# 2. Start the stack
-cd self-improve
-docker compose up --build -d
+# Batch (sequential)
+python -m benchmark.run_batch --suite spider2-dbt --model claude-sonnet-4-6
+
+# Batch (parallel, 4 concurrent)
+python -m benchmark.run_batch --suite spider2-dbt --parallel 4
+
+# Specific tasks
+python -m benchmark.run_batch --suite spider2-dbt --tasks chinook001 f1001 shopify001
+
+# Evaluate only (skip agent, re-score existing results)
+python -m benchmark.run_batch --suite spider2-dbt --eval-only
 ```
 
-**URLs after startup:**
+### Docker
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| Monitor UI | http://localhost:3400 | Agent run feed, controls (pause/stop/inject), cost tracking |
-| Monitor API | http://localhost:3401 | SSE event stream, run history, control signals |
+```bash
+# Build the benchmark agent image
+docker build -f benchmark/Dockerfile.dbt-agent -t signalpilot/dbt-agent .
+
+# Run with audit volume
+docker run \
+  -v sp-benchmark-audit:/data/benchmark-audit \
+  -e ANTHROPIC_API_KEY=... \
+  signalpilot/dbt-agent chinook001
+```
+
+The audit volume must be mounted at `/data/benchmark-audit` (or set `BENCHMARK_AUDIT_DIR`).
 
 ---
 
-## Architecture
+## Audit Volume (`sp-benchmark-audit`)
+
+Every benchmark run — whether via `run_batch.py` (batch) or individual runners — persists a full audit trail to the `sp-benchmark-audit` Docker volume.
+
+### Directory Structure
 
 ```
-           Browser
-              |
-       localhost:3400
-       Monitor Web
-       (Next.js 16)
-              |
-       localhost:3401
-       Monitor API
-       (FastAPI)
-              |
-        +-----+-----+
-        |           |
-     Audit DB    Agent
-     (SQLite)   :8500
-               (Claude SDK)
+/data/benchmark-audit/
+├── runs/
+│   ├── {run_id}/                          # Batch: UUID, Individual: single-{id}-{timestamp}
+│   │   ├── run_metadata.json              # Suite, model, timestamps, concurrency, pass count
+│   │   ├── tasks/
+│   │   │   └── {instance_id}.json         # Per-task result: passed, elapsed, turns, cost, usage
+│   │   ├── traces/
+│   │   │   └── {instance_id}.json         # Full conversation transcript (see below)
+│   │   ├── queries/
+│   │   │   └── {instance_id}.jsonl        # Gateway SQL audit entries for this task
+│   │   ├── logs/
+│   │   │   └── {instance_id}.log          # Console output (parallel mode)
+│   │   └── projects/
+│   │       └── {instance_id}/             # Agent-generated work products
+│   │           ├── models/*.sql           # SQL models the agent wrote
+│   │           ├── *.duckdb               # Output database (evaluation target)
+│   │           ├── dbt_project.yml        # Project config
+│   │           ├── result.csv / result.sql # Query results
+│   │           └── agent_output.json      # Local transcript copy
+│   └── ...
+└── submissions/
+    └── submission_{run_id}.tar.gz         # Packaged archive for leaderboard
+```
+
+### Transcript Format
+
+Each `traces/{instance_id}.json` contains a chronologically ordered `transcript` array. Every entry has `type`, `turn`, and `timestamp` (Unix epoch). Event types:
+
+| Type | Description | Key Fields |
+|------|-------------|------------|
+| `thinking` | Agent's internal reasoning | `content` |
+| `text` | Agent's visible output | `content` |
+| `tool_use` | Tool invocation | `name`, `input` |
+| `tool_result` | Tool execution result | `content`, `tool_use_id`, `is_error` |
+| `tool_use_result` | Structured result dict | `content` |
+| `user_message` | User-side content | `content` |
+| `system` | System events (init, config) | `subtype`, `data` |
+| `result` | Run completion summary | `total_cost_usd`, `duration_ms`, `stop_reason`, `usage` |
+| `rate_limit` | Rate limit warnings | `info` |
+| `stream_event` | Low-level SDK events | `event` |
+
+### Task Result Format (`tasks/{instance_id}.json`)
+
+```json
+{
+  "instance_id": "chinook001",
+  "run_id": "single-chinook001-1776204010",
+  "suite": "spider2-dbt",
+  "passed": true,
+  "elapsed_seconds": 142.5,
+  "turns": 27,
+  "tool_call_count": 14,
+  "cost_usd": 0.42,
+  "usage": { "input_tokens": 50000, "output_tokens": 12000 },
+  "model": "claude-sonnet-4-6",
+  "error": null,
+  "timestamps": { "total": 142.5 },
+  "agent_transcript_path": "traces/chinook001.json"
+}
 ```
 
 ---
 
-## Docker Containers
+## Spider 2.0 Submission
 
-### Self-Improve (`self-improve/docker-compose.yml`)
+### Packaging
 
-| Container | Image | Port | Purpose |
-|-----------|-------|------|---------|
-| `improve-monitor` | `python:3.12-slim` + `node:22` | 3400, 3401 | Next.js monitor dashboard (3400) + FastAPI backend (3401) |
-| `improve-agent` | `python:3.12-slim` | 8500 | Claude Agent SDK runner with CEO/Worker loop, git, Docker CLI, Playwright |
-| `improve-tunnel` | `cloudflare/cloudflared` | — | Cloudflare tunnel for remote access to monitor UI |
+After a benchmark run completes:
 
----
-
-## Directory Structure
-
-```
-self-improve/
-  agent/                    # Python agent package
-    main.py                 # HTTP server (:8500) + agent run loop
-    runner.py               # Agent execution engine (parallel slot runner)
-    run_manager.py          # Run lifecycle management
-    endpoints.py            # FastAPI endpoint definitions
-    db.py                   # SQLite: runs, tool_calls, audit_log writes
-    git_ops.py              # Branch creation, push, PR creation via gh CLI
-    hooks.py                # PreToolUse/PostToolUse hooks: audit every tool call
-    permissions.py          # Tool permission gating (block dangerous ops)
-    prompt.py               # System/initial/continuation/CEO prompt builders
-    session_gate.py         # MCP tool: time-lock enforcement + end_session
-    signals.py              # Control signal handling (pause/resume/inject/stop)
-    subagents.py            # Sub-agent orchestration
-    tests/                  # pytest suite (unit + integration)
-  monitor/                  # FastAPI backend
-    app.py                  # REST + SSE: runs, tool_calls, control signals
-    models.py               # Pydantic models
-  monitor-web/              # Next.js 16 dashboard
-    app/page.tsx            # Main monitor view
-    components/
-      controls/             # Start/stop/pause/resume/inject buttons
-      feed/                 # Real-time SSE event feed + LLM output viewer
-      sidebar/              # Run list with status badges
-      stats/                # Cost, tokens, tool call counters
-      parallel/             # Parallel run slots UI
-      mobile/               # Mobile-responsive components
-    hooks/                  # useRuns, useSSE, useParallelRuns
-    lib/api.ts              # API client to :3401
-  prompts/                  # Markdown prompt templates
-    system.md               # Agent system prompt
-    initial.md              # First-round task prompt
-    ceo-continuation.md     # CEO review + next-task assignment template
-    session-gate.md         # Time-lock rules
-    stop.md                 # Graceful stop instructions
-    agent-*.md              # Sub-agent role prompts (researcher, reviewer, QA, etc.)
-    continuation-*.md       # Phase-specific continuations
-  .claude/skills/           # Agent skill definitions (copied into work dir)
-  .env.example              # Env var reference
-  Dockerfile.agent          # Agent image (Python + Node + Docker CLI + gh + Playwright)
-  Dockerfile.monitor        # Monitor image (Python + Node multi-stage)
-  docker-compose.yml        # Full self-improve stack
-  monitor-entrypoint.sh     # Starts FastAPI + Next.js in one container
+```bash
+python -m benchmark.package_submission --run-id <run_id>
 ```
 
-### CEO/Worker Loop (timed sessions)
+This creates `submissions/submission_{run_id}.tar.gz` containing:
+- `run_metadata.json` — run-level info (model, suite, timestamps)
+- `scores.json` — `{instance_id: {passed, elapsed}}` for all tasks
+- `results/{instance_id}.json` — per-task details
+- `traces/{instance_id}.json` — full reasoning traces with timestamps
+- `queries/{instance_id}.jsonl` — SQL audit trail from gateway
+- `projects/{instance_id}/` — agent work products (models, output DBs)
+- `logs/{instance_id}.log` — console output
 
-When a run has a duration lock (e.g. 4 hours), the agent operates in a two-role loop:
+### Submission Guidelines
 
-1. **Worker** executes the assigned task, then stops
-2. **CEO (Product Director)** reviews what was done, sees the original prompt, assigns the next task
-3. Repeat until time expires or operator sends `unlock`
+Per the [Spider 2.0 evaluation rules](https://spider2-sql.github.io/):
 
-Without a duration lock, it's single-shot: one round, then done.
+- **One result per task** — enforced by immutable result storage (`ResultAlreadyExistsError`)
+- **Timestamped logs** — every transcript event has a Unix timestamp
+- **Reasoning traces** — full thinking + tool use + tool results chain
+- **No cherry-picking** — if running multiple experiments, the agent must autonomously select the final result (e.g., majority voting)
+
+Submit the archive and a method description to `lfy79001@gmail.com`.
+
+### Suites
+
+| Suite | What to Submit | Gold Format |
+|-------|----------------|-------------|
+| Spider 2.0-DBT | Log files + scores | DuckDB tables vs gold DuckDB |
+| Spider 2.0-Lite | `{id}.sql` + `{id}.csv` + traces | CSV comparison |
+| Spider 2.0-Snow | `{id}.sql` + `{id}.csv` + traces | CSV comparison |
 
 ---
 
 ## Environment Variables
 
-Configured in `.env` at the project root (or via the monitor UI Settings page):
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GIT_TOKEN` | No | GitHub PAT with repo scope |
-| `CLAUDE_CODE_OAUTH_TOKEN` | No | Claude Code OAuth token (authenticates CLI + SDK) |
-| `GITHUB_REPO` | No | Target repo slug (e.g. `your-org/SignalPilot`) |
-| `MAX_BUDGET_USD` | No | Max budget per agent run in USD (default: `50`) |
-| `SP_BENCHMARK_DIR` | No | Host path for benchmark data |
-
-All credentials can be configured via the onboarding flow at `http://localhost:3400`.
-
----
-
-## Monitor API Reference
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/runs` | List all runs |
-| GET | `/api/runs/{id}` | Run details (cost, tokens, status) |
-| GET | `/api/runs/{id}/tools` | Tool call history |
-| GET | `/api/runs/{id}/audit` | Audit event log |
-| POST | `/api/runs/{id}/pause` | Pause agent |
-| POST | `/api/runs/{id}/resume` | Resume agent |
-| POST | `/api/runs/{id}/inject` | Inject prompt into running agent |
-| POST | `/api/runs/{id}/stop` | Graceful stop (agent commits + creates PR) |
-| POST | `/api/runs/{id}/unlock` | End time-lock after current round |
-| POST | `/api/agent/start` | Start new improvement run |
-| POST | `/api/agent/stop` | Instant stop via in-process queue |
-| POST | `/api/agent/kill` | Immediate cancel, no cleanup |
-| GET | `/api/agent/health` | Agent container status |
-| GET | `/api/stream/{id}` | SSE real-time event stream |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | — | API key for Claude |
+| `BENCHMARK_AUDIT_DIR` | `/data/benchmark-audit` | Audit storage path (mount Docker volume here) |
+| `SP_GATEWAY_URL` | `http://localhost:3300` | SignalPilot gateway URL |
+| `SPIDER2_DBT_DIR` | `~/spider2-repo/spider2-dbt` | Path to Spider 2.0-DBT dataset |
+| `SPIDER2_SNOWFLAKE_DIR` | `~/spider2-repo/spider2-snow` | Path to Spider 2.0-Snow dataset |
+| `SPIDER2_LITE_DIR` | `~/spider2-repo/spider2-lite` | Path to Spider 2.0-Lite dataset |
 
 ---
 

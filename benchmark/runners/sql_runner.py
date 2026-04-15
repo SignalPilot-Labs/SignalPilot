@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ..agent.sdk_runner import run_sdk_agent
 from ..agent.sql_prompts import build_sql_agent_prompt
+from ..core.audit import save_single_task_run
 from ..core.logging import log, log_separator
 from ..core.mcp import (
     delete_local_connection,
@@ -481,6 +482,7 @@ def main(suite: BenchmarkSuite) -> None:
 
     instance_id: str = args.instance_id
     model: str = args.model
+    _main_start = time.monotonic()
     # args.max_turns is None when user did not pass --max-turns (sentinel).
     # The actual value is resolved after loading the task so _get_max_turns can
     # inspect the db_id.  We store the user-supplied value separately so we can
@@ -608,6 +610,21 @@ def main(suite: BenchmarkSuite) -> None:
     log(f"Evaluation finished in {time.monotonic()-t0:.2f}s")
     print(details)
     log_separator(f"RESULT: {'PASS' if passed else 'FAIL'}")
+
+    # Save audit trail to AUDIT_BASE volume
+    try:
+        total_elapsed = time.monotonic() - _main_start
+        run_id = save_single_task_run(
+            instance_id=instance_id,
+            suite=suite.value,
+            model=model,
+            passed=passed,
+            elapsed_seconds=total_elapsed,
+            work_dir=work_dir,
+        )
+        log(f"Audit saved: {run_id}")
+    except Exception as e:
+        log(f"Audit save failed: {e}", "WARN")
 
     sys.exit(0 if passed else 1)
 

@@ -27,6 +27,7 @@ from ..agent.sdk_runner import (
     run_sdk_agent,
     run_value_verify_agent,
 )
+from ..core.audit import save_single_task_run
 from ..core.logging import log, log_separator
 from ..core.mcp import delete_local_connection, register_local_connection
 from ..core.paths import GOLD_DIR, MCP_CONFIG, PROMPTS_DIR, WORK_DIR, ensure_local_bin_on_path
@@ -745,6 +746,7 @@ def main() -> None:
     instance_id: str = args.instance_id
     model: str = args.model
     max_turns: int = args.max_turns
+    _main_start = time.monotonic()
 
     log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")
     log(f"Model:     {model}")
@@ -873,6 +875,21 @@ def main() -> None:
     # Clean up connection to prevent cross-task leakage
     if delete_local_connection(instance_id):
         log(f"Cleaned up connection '{instance_id}'")
+
+    # Save audit trail to AUDIT_BASE volume
+    try:
+        total_elapsed = time.monotonic() - _main_start
+        run_id = save_single_task_run(
+            instance_id=instance_id,
+            suite="spider2-dbt",
+            model=model,
+            passed=passed,
+            elapsed_seconds=total_elapsed,
+            work_dir=work_dir,
+        )
+        log(f"Audit saved: {run_id}")
+    except Exception as e:
+        log(f"Audit save failed: {e}", "WARN")
 
     sys.exit(0 if passed else 1)
 

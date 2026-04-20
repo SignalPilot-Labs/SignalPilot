@@ -36,7 +36,7 @@ TEST_ENV = BENCHMARK_DIR / "tests" / "env"
 SKILLS_SRC = BENCHMARK_DIR / "skills"
 PROMPTS_DIR = BENCHMARK_DIR / "prompts"
 GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
-MCP_CONFIG = BENCHMARK_DIR / "mcp_test_config.json"
+MCP_CONFIG = BENCHMARK_DIR / "mcp_config.json"
 GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 
 

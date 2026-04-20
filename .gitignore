@@ -1,5 +1,6 @@
 /research/
 .mcp.json
+CLAUDE.md
 /.claude/
 .idea
 .env

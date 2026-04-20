@@ -35,8 +35,6 @@ from ..core.mcp import clear_all_connections, delete_local_connection, register_
 from ..core.paths import GOLD_DIR, MCP_CONFIG, PROMPTS_DIR, WORK_DIR, ensure_local_bin_on_path
 from ..core.tasks import load_eval_config, load_task
 from ..core.workdir import prepare_workdir, write_claude_md
-from ..dbt_tools.fixes import run_post_agent_sql_fixes
-from ..dbt_tools.postprocess import add_missing_columns, dedup_eval_tables
 from ..dbt_tools.scanner import (
     check_package_availability,
     classify_sql_models,
@@ -359,9 +357,6 @@ def _post_agent_dbt_run(
     if created_stubs_post:
         log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
 
-    # Post-agent SQL fixes disabled — the automatic INNER→LEFT JOIN rewrite
-    # overrides correct agent decisions and can introduce floating point artifacts.
-    # run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
 
     if eval_critical_models:
         dbt_result = _run_dbt_selective(work_dir, eval_critical_models)
@@ -527,9 +522,6 @@ async def _post_agent_dbt_run_async(
     if created_stubs_post:
         log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
 
-    # Post-agent SQL fixes disabled — the automatic INNER→LEFT JOIN rewrite
-    # overrides correct agent decisions and can introduce floating point artifacts.
-    # run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
 
     if eval_critical_models:
         dbt_result = await _run_dbt_selective_async(work_dir, eval_critical_models)

@@ -26,19 +26,26 @@ That's it. Claude Code now has governed access to your databases.
 
 ## What It Does
 
-```mermaid
-graph TD
-    A["Your AI Agent<br/>(Claude Code, Agent SDK, any MCP client)"]
-    A -->|MCP Protocol| B
-
-    B["SignalPilot Gateway"]
-    B --- C["Governance<br/>• LIMIT injection<br/>• DDL/DML blocking<br/>• Audit logging"]
-    B --- D["Schema Discovery<br/>• DDL & explore<br/>• Join paths<br/>• Value distributions"]
-    B --- E["dbt Intelligence<br/>• Map & validate<br/>• Model verification<br/>• Date boundaries"]
-
-    B --> F["DuckDB"]
-    B --> G["PostgreSQL"]
-    B --> H["Snowflake"]
+```
+┌───────────────────────────────────────────────────────────┐
+│  Your AI Agent (Claude Code, Agent SDK, any MCP client)   │
+└─────────────────────────────┬─────────────────────────────┘
+                              │ MCP Protocol
+┌─────────────────────────────▼────────────────────────────┐
+│ SignalPilot Gateway                                       │
+│ ┌────────────┐  ┌──────────────┐  ┌───────────────────┐ │
+│ │ Governance │  │ Schema       │  │ dbt Project       │ │
+│ │ . LIMIT    │  │ . DDL        │  │ . Map / Validate  │ │
+│ │ . DDL block│  │ . Explore    │  │ . Model verify    │ │
+│ │ . Audit    │  │ . Join paths │  │ . Date bounds     │ │
+│ └────────────┘  └──────────────┘  └───────────────────┘ │
+└─────────────────────────────┬────────────────────────────┘
+                              │
+         ┌────────────────────┼────────────────────┐
+         ▼                    ▼                    ▼
+  ┌──────────┐         ┌──────────┐         ┌──────────┐
+  │  DuckDB  │         │ Postgres │         │Snowflake │
+  └──────────┘         └──────────┘         └──────────┘
 ```
 
 **Governance** — Every query is read-only, LIMIT-injected, DDL/DML-blocked, and audit-logged. Your AI agent cannot drop tables, modify data, or run unbounded queries.

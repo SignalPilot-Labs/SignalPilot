@@ -14,6 +14,7 @@ benchmark/results/
 benchmark/skills/improvements_*.json
 benchmark/_sql_workdir/
 benchmark/test_tasks/_workdir/
+benchmark/gold_build_dates.json
 
 # Self-improve build artifacts
 self-improve/monitor-web/.next/

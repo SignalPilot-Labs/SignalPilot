@@ -13,11 +13,11 @@ benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json
 benchmark/_sql_workdir/
-benchmark/test_tasks/_workdir/
+benchmark/tests/tasks/_workdir/
+benchmark/tests/env/
 benchmark/gold_build_dates.json
 benchmark/ref/
 benchmark/docs/
-benchmark/test-env/
 
 # Self-improve build artifacts
 self-improve/monitor-web/.next/

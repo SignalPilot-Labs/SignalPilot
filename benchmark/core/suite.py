@@ -18,7 +18,7 @@ from .paths import (
     WORK_DIR,
 )
 
-TEST_TASKS_DIR = BENCHMARK_DIR / "test_tasks"
+TEST_TASKS_DIR = BENCHMARK_DIR / "tests" / "tasks"
 
 
 class BenchmarkSuite(str, Enum):
@@ -86,7 +86,7 @@ def get_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
 
 
 def get_test_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
-    """Like get_suite_config but uses synthetic test data from test_tasks/."""
+    """Like get_suite_config but uses synthetic test data from tests/tasks/."""
     if suite == BenchmarkSuite.DBT:
         return SuiteConfig(
             suite=suite,

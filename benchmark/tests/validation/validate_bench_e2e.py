@@ -11,8 +11,8 @@ After all tasks complete, prints two summary sections:
 2. Numeric summary — total PASS/FAIL/SKIP counts across all 45 checks.
 
 Usage:
-    python -m benchmark.validate_bench_e2e
-    python -m benchmark.validate_bench_e2e --verbose
+    python -m benchmark.tests.validation.validate_bench_e2e
+    python -m benchmark.tests.validation.validate_bench_e2e --verbose
 """
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .core.mcp import (
+from ...core.mcp import (
     delete_local_connection,
     register_bigquery_connection,
     register_local_connection,
     register_snowflake_connection,
     register_sqlite_connection,
 )
-from .core.paths import (
+from ...core.paths import (
     BIGQUERY_SA_FILE,
     GATEWAY_SRC,
     PROMPTS_DIR,
@@ -43,10 +43,10 @@ from .core.paths import (
     SNOWFLAKE_ENV_FILE,
     WORK_DIR,
 )
-from .agent.prompts import build_agent_prompt as build_dbt_agent_prompt
-from .agent.sql_prompts import build_sql_agent_prompt
-from .core.suite import BenchmarkSuite, DBBackend, get_suite_config
-from .core.workdir import force_rmtree, prepare_sql_workdir, write_claude_md, write_sql_claude_md
+from ...agent.prompts import build_agent_prompt as build_dbt_agent_prompt
+from ...agent.sql_prompts import build_sql_agent_prompt
+from ...core.suite import BenchmarkSuite, DBBackend, get_suite_config
+from ...core.workdir import force_rmtree, prepare_sql_workdir, write_claude_md, write_sql_claude_md
 
 # ANSI color codes
 _GREEN = "\033[92m"

@@ -4,7 +4,7 @@ Runs all 5 synthetic test tasks without invoking the agent — writes known-corr
 result.csv/duckdb files to verify the full evaluation pipeline works end-to-end.
 
 Usage:
-    python -m benchmark.test_tasks.runner
+    python -m benchmark.tests.tasks.runner
 """
 
 from __future__ import annotations
@@ -15,19 +15,19 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
-from ..core.logging import log, log_separator
-from ..core.mcp import (
+from ...core.logging import log, log_separator
+from ...core.mcp import (
     delete_local_connection,
     register_bigquery_connection,
     register_local_connection,
     register_snowflake_connection,
     register_sqlite_connection,
 )
-from ..core.suite import BenchmarkSuite, DBBackend, SuiteConfig, TEST_TASKS_DIR, get_test_suite_config
-from ..core.tasks import load_task_for_suite
-from ..core.workdir import prepare_sql_workdir, prepare_workdir, write_claude_md, write_sql_claude_md
-from ..evaluation.comparator import evaluate
-from ..evaluation.sql_comparator import evaluate_sql
+from ...core.suite import BenchmarkSuite, DBBackend, SuiteConfig, TEST_TASKS_DIR, get_test_suite_config
+from ...core.tasks import load_task_for_suite
+from ...core.workdir import prepare_sql_workdir, prepare_workdir, write_claude_md, write_sql_claude_md
+from ...evaluation.comparator import evaluate
+from ...evaluation.sql_comparator import evaluate_sql
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -196,7 +196,7 @@ def _write_correct_result_csv(
     work_dir: Path,
 ) -> None:
     """Copy the gold CSV to result.csv to simulate a correct agent answer."""
-    from ..evaluation.sql_comparator import _find_gold_csv
+    from ...evaluation.sql_comparator import _find_gold_csv
 
     gold_csv = _find_gold_csv(instance_id, config)
     if gold_csv is None or not gold_csv.exists():
@@ -214,7 +214,7 @@ def _write_correct_dbt_result(
     work_dir: Path,
 ) -> None:
     """Copy the gold DuckDB into the workdir to simulate correct dbt output."""
-    from ..core.tasks import load_eval_config_for_suite
+    from ...core.tasks import load_eval_config_for_suite
 
     eval_entry = load_eval_config_for_suite(instance_id, config)
     if not eval_entry:

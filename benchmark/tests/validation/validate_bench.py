@@ -1,9 +1,9 @@
 """Validation script for benchmark suites.
 
 Run as:
-    python -m benchmark.validate_bench --suite spider2-lite
-    python -m benchmark.validate_bench --suite spider2-snowflake
-    python -m benchmark.validate_bench --suite spider2-dbt
+    python -m benchmark.tests.validation.validate_bench --suite spider2-lite
+    python -m benchmark.tests.validation.validate_bench --suite spider2-snowflake
+    python -m benchmark.tests.validation.validate_bench --suite spider2-dbt
 
 Runs 6 checks and prints a colorized pass/fail summary.
 Exits 0 if all checks pass (or skip), 1 if any check fails.
@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .core.mcp import (
+from ...core.mcp import (
     delete_local_connection,
     load_mcp_servers,
     register_bigquery_connection,
@@ -25,15 +25,15 @@ from .core.mcp import (
     register_snowflake_connection,
     register_sqlite_connection,
 )
-from .core.paths import (
+from ...core.paths import (
     BIGQUERY_SA_FILE,
     GATEWAY_SRC,
     PROMPTS_DIR,
     SKILLS_SRC,
     SNOWFLAKE_ENV_FILE,
 )
-from .core.suite import BenchmarkSuite, get_suite_config
-from .core.workdir import force_rmtree, prepare_sql_workdir, prepare_workdir
+from ...core.suite import BenchmarkSuite, get_suite_config
+from ...core.workdir import force_rmtree, prepare_sql_workdir, prepare_workdir
 
 # ANSI color codes
 _GREEN = "\033[92m"

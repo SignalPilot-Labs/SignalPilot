@@ -5,7 +5,7 @@ can see whether MCP tools reach the agent and what happens when it tries to
 call them.
 
 Run from repo root:
-    python benchmark/_verify_mcp_sdk.py
+    python -m benchmark.tests.validation._verify_mcp_sdk
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from claude_agent_sdk import (
     query,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"

@@ -14,7 +14,7 @@ For each backend (Snowflake, BigQuery, SQLite, DuckDB):
   5. Clean up any temp DB files
 
 Usage:
-    python -m benchmark.validate_live_mcp
+    python -m benchmark.tests.validation.validate_live_mcp
 """
 
 from __future__ import annotations
@@ -25,14 +25,14 @@ import sqlite3
 import sys
 import tempfile
 
-from .core.mcp import (
+from ...core.mcp import (
     delete_local_connection,
     register_bigquery_connection,
     register_local_connection,
     register_snowflake_connection,
     register_sqlite_connection,
 )
-from .core.paths import BIGQUERY_SA_FILE, GATEWAY_SRC, SNOWFLAKE_ENV_FILE
+from ...core.paths import BIGQUERY_SA_FILE, GATEWAY_SRC, SNOWFLAKE_ENV_FILE
 
 # ANSI color codes
 _GREEN = "\033[92m"

@@ -32,7 +32,7 @@ SNOWFLAKE_ENV_FILE = PROJECT_ROOT / ".env"
 BIGQUERY_SA_FILE = PROJECT_ROOT / "gcp-service-account.json"
 
 WORK_DIR = Path(os.environ.get("BENCHMARK_WORK_DIR", str(BENCHMARK_DIR / "_dbt_workdir")))
-TEST_ENV = BENCHMARK_DIR / "test-env"
+TEST_ENV = BENCHMARK_DIR / "tests" / "env"
 SKILLS_SRC = BENCHMARK_DIR / "skills"
 PROMPTS_DIR = BENCHMARK_DIR / "prompts"
 GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"

@@ -685,11 +685,6 @@ async def execute_dbt_task(
         else:
             work_dir = prepare_workdir(instance_id)
 
-        # Fix date-dependent tables in the starting DB
-        from ..fix_starting_dbs import fix_task_db
-        if fix_task_db(instance_id, work_dir):
-            log(f"Fixed date-dependent tables for {instance_id}")
-
         # Step 2: Write CLAUDE.md
         log_separator("Step 2: Write CLAUDE.md")
         write_claude_md(work_dir, instance_id, instruction)
@@ -766,12 +761,6 @@ async def execute_dbt_task(
         log(f"Agent finished in {elapsed_agent:.1f}s")
 
     await _flush_and_release_async(work_dir, connection_name)
-
-    # Re-fix date-dependent tables after flush — the MCP connection is released,
-    # so fix_task_db has exclusive write access to the DuckDB file.
-    from ..fix_starting_dbs import fix_task_db
-    if fix_task_db(instance_id, work_dir):
-        log(f"Re-fixed date-dependent tables for {instance_id}")
 
     # Evaluate
     log_separator("Step 5: Evaluate against gold standard")
@@ -855,11 +844,6 @@ def main() -> None:
             work_dir = prepare_workdir(instance_id)
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
-        # Fix date-dependent tables in the starting DB
-        from ..fix_starting_dbs import fix_task_db
-        if fix_task_db(instance_id, work_dir):
-            log(f"Fixed date-dependent tables for {instance_id}")
-
         # ── Write CLAUDE.md ────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 2: Write CLAUDE.md")
@@ -912,12 +896,6 @@ def main() -> None:
         log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
 
     _flush_and_release(work_dir, instance_id)
-
-    # Re-fix date-dependent tables AFTER flush — MCP connection is released,
-    # so fix_task_db has exclusive write access to the DuckDB file.
-    from ..fix_starting_dbs import fix_task_db
-    if fix_task_db(instance_id, work_dir):
-        log(f"Re-fixed date-dependent tables for {instance_id}")
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     t0 = time.monotonic()

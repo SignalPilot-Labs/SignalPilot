@@ -1,187 +1,164 @@
 # SignalPilot
 
-AI-powered data engineering agent with governed database access, benchmarked on Spider 2.0.
+Governed AI database access. Connect any database, get schema discovery + read-only SQL execution + dbt project management — all through a single MCP server that any AI agent can use.
 
-## Components
+```bash
+# Start SignalPilot
+git clone https://github.com/SignalPilot-Labs/signalpilot.git
+cd signalpilot
+docker compose up -d
 
-| Directory | Description |
-|-----------|-------------|
-| `signalpilot/` | Core gateway + web UI — governed MCP server for AI database access |
-| `benchmark/` | Spider 2.0 benchmark suite (DBT, Snowflake, Lite) with Claude Agent SDK |
-| `sp-firecracker-vm/` | Firecracker/gVisor sandboxed code execution |
-| `testing/` | Data generation and integration test infrastructure |
+# Add to Claude Code
+claude plugin install github:SignalPilot-Labs/signalpilot
+# → SignalPilot URL: http://localhost:8080
+# → API token: (leave blank for local)
+```
+
+That's it. Claude Code now has governed access to your databases.
 
 ---
 
-## Benchmark
+## What It Does
 
-Run Spider 2.0 tasks using the Claude Agent SDK with SignalPilot MCP tools for schema discovery, SQL execution, and dbt project management.
-
-### Supported Suites
-
-| Suite | Backend | Tasks |
-|-------|---------|-------|
-| `spider2-dbt` | DuckDB (local) | 65 dbt projects |
-| `spider2-snowflake` | Snowflake | SQL generation |
-| `spider2-lite` | SQLite, BigQuery, Snowflake | SQL generation |
-
-### Running Benchmarks
-
-```bash
-# Single task (individual runner)
-python -m benchmark.run_direct chinook001
-python -m benchmark.run_direct --suite spider2-snowflake sf_local041
-
-# Batch (sequential)
-python -m benchmark.run_batch --suite spider2-dbt --model claude-sonnet-4-6
-
-# Batch (parallel, 4 concurrent)
-python -m benchmark.run_batch --suite spider2-dbt --parallel 4
-
-# Specific tasks
-python -m benchmark.run_batch --suite spider2-dbt --tasks chinook001 f1001 shopify001
-
-# Evaluate only (skip agent, re-score existing results)
-python -m benchmark.run_batch --suite spider2-dbt --eval-only
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Your AI Agent (Claude Code, Agent SDK, any MCP client)     │
+└────────────────────────────┬────────────────────────────────┘
+                             │ MCP Protocol
+┌────────────────────────────▼────────────────────────────────┐
+│  SignalPilot Gateway                                         │
+│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │
+│  │ Governance │ │ Schema       │ │ dbt Project           │ │
+│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │
+│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │
+│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │
+│  └────────────┘ └──────────────┘ └───────────────────────┘ │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+   ┌─────────┐        ┌──────────┐        ┌──────────┐
+   │ DuckDB  │        │ Postgres │        │Snowflake │
+   └─────────┘        └──────────┘        └──────────┘
 ```
 
-### Docker
+**Governance** — Every query is read-only, LIMIT-injected, DDL/DML-blocked, and audit-logged. Your AI agent cannot drop tables, modify data, or run unbounded queries.
 
-```bash
-# Build the benchmark agent image
-docker build -f benchmark/Dockerfile.dbt-agent -t signalpilot/dbt-agent .
+**Schema Discovery** — 10+ tools for exploring databases without writing SQL: table lists, column types, sample data, join path discovery, value distributions.
 
-# Run with audit volume
-docker run \
-  -v sp-benchmark-audit:/data/benchmark-audit \
-  -e ANTHROPIC_API_KEY=... \
-  signalpilot/dbt-agent chinook001
-```
-
-The audit volume must be mounted at `/data/benchmark-audit` (or set `BENCHMARK_AUDIT_DIR`).
+**dbt Intelligence** — Project mapping, parse validation, model schema checking, fan-out detection, cardinality auditing, date boundary analysis.
 
 ---
 
-## Audit Volume (`sp-benchmark-audit`)
+## Use With Claude Code (Plugin)
 
-Every benchmark run — whether via `run_batch.py` (batch) or individual runners — persists a full audit trail to the `sp-benchmark-audit` Docker volume.
+The [`plugin/`](plugin/) directory is a Claude Code plugin that adds all SignalPilot tools + battle-tested dbt skills to your normal Claude Code session.
 
-### Directory Structure
+```bash
+# Install from local clone
+claude plugin add ./plugin
 
-```
-/data/benchmark-audit/
-├── runs/
-│   ├── {run_id}/                          # Batch: UUID, Individual: single-{id}-{timestamp}
-│   │   ├── run_metadata.json              # Suite, model, timestamps, concurrency, pass count
-│   │   ├── tasks/
-│   │   │   └── {instance_id}.json         # Per-task result: passed, elapsed, turns, cost, usage
-│   │   ├── traces/
-│   │   │   └── {instance_id}.json         # Full conversation transcript (see below)
-│   │   ├── queries/
-│   │   │   └── {instance_id}.jsonl        # Gateway SQL audit entries for this task
-│   │   ├── logs/
-│   │   │   └── {instance_id}.log          # Console output (parallel mode)
-│   │   └── projects/
-│   │       └── {instance_id}/             # Agent-generated work products
-│   │           ├── models/*.sql           # SQL models the agent wrote
-│   │           ├── *.duckdb               # Output database (evaluation target)
-│   │           ├── dbt_project.yml        # Project config
-│   │           ├── result.csv / result.sql # Query results
-│   │           └── agent_output.json      # Local transcript copy
-│   └── ...
-└── submissions/
-    └── submission_{run_id}.tar.gz         # Packaged archive for leaderboard
+# Or from GitHub
+claude plugin install github:SignalPilot-Labs/signalpilot
 ```
 
-### Transcript Format
+See [`plugin/README.md`](plugin/README.md) for full details on included skills and agents.
 
-Each `traces/{instance_id}.json` contains a chronologically ordered `transcript` array. Every entry has `type`, `turn`, and `timestamp` (Unix epoch). Event types:
+---
 
-| Type | Description | Key Fields |
-|------|-------------|------------|
-| `thinking` | Agent's internal reasoning | `content` |
-| `text` | Agent's visible output | `content` |
-| `tool_use` | Tool invocation | `name`, `input` |
-| `tool_result` | Tool execution result | `content`, `tool_use_id`, `is_error` |
-| `tool_use_result` | Structured result dict | `content` |
-| `user_message` | User-side content | `content` |
-| `system` | System events (init, config) | `subtype`, `data` |
-| `result` | Run completion summary | `total_cost_usd`, `duration_ms`, `stop_reason`, `usage` |
-| `rate_limit` | Rate limit warnings | `info` |
-| `stream_event` | Low-level SDK events | `event` |
+## Use With Any MCP Client
 
-### Task Result Format (`tasks/{instance_id}.json`)
+SignalPilot exposes a standard MCP server. Add it to any client that supports MCP:
 
 ```json
 {
-  "instance_id": "chinook001",
-  "run_id": "single-chinook001-1776204010",
-  "suite": "spider2-dbt",
-  "passed": true,
-  "elapsed_seconds": 142.5,
-  "turns": 27,
-  "tool_call_count": 14,
-  "cost_usd": 0.42,
-  "usage": { "input_tokens": 50000, "output_tokens": 12000 },
-  "model": "claude-sonnet-4-6",
-  "error": null,
-  "timestamps": { "total": 142.5 },
-  "agent_transcript_path": "traces/chinook001.json"
+  "mcpServers": {
+    "signalpilot": {
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+Or via stdio (for SDK-based agents):
+
+```json
+{
+  "mcpServers": {
+    "signalpilot": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-m", "gateway.mcp_server"],
+      "cwd": "./signalpilot/gateway",
+      "env": { "PYTHONPATH": "./signalpilot/gateway" }
+    }
+  }
 }
 ```
 
 ---
 
-## Spider 2.0 Submission
+## Connect a Database
 
-### Packaging
-
-After a benchmark run completes:
+Via the web UI at `http://localhost:8080`, or via API:
 
 ```bash
-python -m benchmark.package_submission --run-id <run_id>
+curl -X POST http://localhost:8080/api/connections \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-warehouse",
+    "db_type": "duckdb",
+    "database": "/path/to/warehouse.duckdb"
+  }'
 ```
 
-This creates `submissions/submission_{run_id}.tar.gz` containing:
-- `run_metadata.json` — run-level info (model, suite, timestamps)
-- `scores.json` — `{instance_id: {passed, elapsed}}` for all tasks
-- `results/{instance_id}.json` — per-task details
-- `traces/{instance_id}.json` — full reasoning traces with timestamps
-- `queries/{instance_id}.jsonl` — SQL audit trail from gateway
-- `projects/{instance_id}/` — agent work products (models, output DBs)
-- `logs/{instance_id}.log` — console output
-
-### Submission Guidelines
-
-Per the [Spider 2.0 evaluation rules](https://spider2-sql.github.io/):
-
-- **One result per task** — enforced by immutable result storage (`ResultAlreadyExistsError`)
-- **Timestamped logs** — every transcript event has a Unix timestamp
-- **Reasoning traces** — full thinking + tool use + tool results chain
-- **No cherry-picking** — if running multiple experiments, the agent must autonomously select the final result (e.g., majority voting)
-
-Submit the archive and a method description to `lfy79001@gmail.com`.
-
-### Suites
-
-| Suite | What to Submit | Gold Format |
-|-------|----------------|-------------|
-| Spider 2.0-DBT | Log files + scores | DuckDB tables vs gold DuckDB |
-| Spider 2.0-Lite | `{id}.sql` + `{id}.csv` + traces | CSV comparison |
-| Spider 2.0-Snow | `{id}.sql` + `{id}.csv` + traces | CSV comparison |
+Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 
 ---
 
-## Environment Variables
+## MCP Tools
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | API key for Claude |
-| `BENCHMARK_AUDIT_DIR` | `/data/benchmark-audit` | Audit storage path (mount Docker volume here) |
-| `SP_GATEWAY_URL` | `http://localhost:3300` | SignalPilot gateway URL |
-| `SPIDER2_DBT_DIR` | `~/spider2-repo/spider2-dbt` | Path to Spider 2.0-DBT dataset |
-| `SPIDER2_SNOWFLAKE_DIR` | `~/spider2-repo/spider2-snow` | Path to Spider 2.0-Snow dataset |
-| `SPIDER2_LITE_DIR` | `~/spider2-repo/spider2-lite` | Path to Spider 2.0-Lite dataset |
+| Tool | Description |
+|------|-------------|
+| `query_database` | Governed read-only SQL execution |
+| `list_tables` | All tables with row counts |
+| `schema_overview` | Full schema summary |
+| `schema_ddl` | CREATE TABLE statements |
+| `describe_table` | Column names, types, constraints |
+| `explore_table` | Sample rows + value distributions |
+| `explore_column` | Distinct values for a column |
+| `find_join_path` | Discover join paths between tables |
+| `compare_join_types` | Row count comparison for each JOIN type |
+| `validate_sql` | Syntax-check without executing |
+| `debug_cte_query` | Run each CTE step independently |
+| `explain_query` | Execution plan |
+| `schema_link` | Find tables relevant to a question |
+| `dbt_project_map` | Project overview: models, contracts, build order |
+| `dbt_project_validate` | Run dbt parse, surface errors |
+| `check_model_schema` | Compare materialized vs YML columns |
+| `validate_model_output` | Row count + fan-out checks |
+| `audit_model_sources` | Cardinality audit of upstream sources |
+| `get_date_boundaries` | Date ranges across all tables |
+| `analyze_grain` | Detect table grain from data |
+| `get_relationships` | Foreign key and inferred relationships |
+
+---
+
+## Project Structure
+
+| Directory | Description |
+|-----------|-------------|
+| `signalpilot/` | Core gateway + web UI — the MCP server |
+| `plugin/` | Claude Code plugin (skills, agents, MCP config) |
+| `sp-firecracker-vm/` | Firecracker/gVisor sandboxed code execution |
+| `benchmark/` | Spider 2.0 benchmark suite — see [`benchmark/`](benchmark/) |
+
+---
+
+## Benchmarks
+
+SignalPilot is benchmarked on [Spider 2.0](https://spider2-sql.github.io/) (dbt, Snowflake, SQLite/BigQuery). See [`benchmark/`](benchmark/) for the full harness, results, and reproduction instructions.
 
 ---
 

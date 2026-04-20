@@ -472,6 +472,7 @@ The E2E validator (criterion C3) verifies that all four variables resolve with n
 |----------|-------------|-------------|
 | `CLAUDE_CODE_OAUTH_TOKEN` | All suites | Claude Code OAuth token |
 | `SPIDER2_DBT_DIR` | spider2-dbt | Path to spider2-dbt data directory |
+| `SPIDER2_REPO_DIR` | setup_dbt.py | Path to root spider2 repo clone (default: project root) |
 | `SPIDER2_SNOWFLAKE_DIR` | spider2-snowflake | Path to spider2-snowflake data directory |
 | `SPIDER2_LITE_DIR` | spider2-lite | Path to spider2-lite data directory |
 | `SP_GATEWAY_URL` | All suites | SignalPilot gateway URL (default: http://localhost:3300) |

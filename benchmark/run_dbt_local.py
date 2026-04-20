@@ -43,7 +43,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # ── Paths (override via env or edit here) ────────────────────
 SPIDER2_DBT_DIR = Path(os.environ.get(
     "SPIDER2_DBT_DIR",
-    "C:/Users/kiwi0/Desktop/what/spider2-repo/spider2-dbt",
+    str(PROJECT_ROOT / "benchmark" / "test-env"),
 ))
 EXAMPLES_DIR = SPIDER2_DBT_DIR / "examples"
 GOLD_DIR = SPIDER2_DBT_DIR / "evaluation_suite" / "gold"

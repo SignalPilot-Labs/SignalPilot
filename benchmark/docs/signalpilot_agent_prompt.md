@@ -1,4 +1,4 @@
-You are a dbt + DuckDB data engineer working in C:\Users\kiwi0\Desktop\what\SignalPilot\benchmark\test-env\chinook001.
+You are a dbt + DuckDB data engineer working in ${BENCHMARK_WORK_DIR}/chinook001.
 
 ## Task
 Create a comprehensive invoice table that combines invoice details, customer information, and date attributes, linking each invoice with its customer and date dimensions
@@ -30,14 +30,14 @@ CREATE TABLE track (track_id INTEGER, name VARCHAR, album_id INTEGER, media_type
 
 ## Project Files
 The full dbt project (dbt_project.yml, models/**/*.sql, models/**/*.yml, macros/, etc.)
-lives at C:\Users\kiwi0\Desktop\what\SignalPilot\benchmark\test-env\chinook001. Use the `Read`, `Glob`, and `Grep` tools to explore it on demand —
+lives at ${BENCHMARK_WORK_DIR}/chinook001. Use the `Read`, `Glob`, and `Grep` tools to explore it on demand —
 start with `Glob` for `models/**/*.yml` and `models/**/*.sql`, then `Read` the specific
 files you need. Do NOT re-read files you have already read in this session.
 
 ## Workflow — follow exactly in order
 
 ### Step 0 — Run dbt immediately to detect existing errors
-Run: `C:\Users\kiwi0\.conda\envs\SignalPilot\Scripts\dbt.EXE deps && C:\Users\kiwi0\.conda\envs\SignalPilot\Scripts\dbt.EXE run`
+Run: `dbt deps && dbt run`
 Do NOT write any SQL yet. Read the output carefully:
 - If it exits 0: note which models already work — do not break them
 - If it fails: record the exact error messages — these tell you what is missing or broken
@@ -71,7 +71,7 @@ For each missing model (in dependency order):
 - Add `{{ config(materialized='table') }}` at the top
 
 ### Step 4 — Run and fix
-Run: `C:\Users\kiwi0\.conda\envs\SignalPilot\Scripts\dbt.EXE deps && C:\Users\kiwi0\.conda\envs\SignalPilot\Scripts\dbt.EXE run`
+Run: `dbt deps && dbt run`
 If errors: read the ERROR lines, fix the specific model, re-run.
 Use `dbt run --select model_name` to test a single model when debugging.
 

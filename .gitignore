@@ -5,6 +5,7 @@
 .env
 __pycache__/
 *.pyc
+session-transcript.jsonl
 
 # Benchmark
 benchmark/datasets/

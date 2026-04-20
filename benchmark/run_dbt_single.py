@@ -35,14 +35,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 # Paths
-SPIDER2_DBT_DIR = Path("C:/Users/kiwi0/Desktop/what/spider2-repo/spider2-dbt")
+SPIDER2_DBT_DIR = Path(os.environ.get("SPIDER2_DBT_DIR", str(PROJECT_ROOT / "benchmark" / "test-env")))
 EXAMPLES_DIR = SPIDER2_DBT_DIR / "examples"
 GOLD_DIR = SPIDER2_DBT_DIR / "evaluation_suite" / "gold"
 EVAL_JSONL = GOLD_DIR / "spider2_eval.jsonl"
-WORK_DIR = Path("C:/Users/kiwi0/Desktop/what/SignalPilot/benchmark/_dbt_workdir")
-BENCHMARK_DIR = Path("C:/Users/kiwi0/Desktop/what/SignalPilot/benchmark")
-SKILLS_SRC = Path("C:/Users/kiwi0/Desktop/what/SignalPilot/benchmark/skills")
-GATEWAY_SRC = Path("C:/Users/kiwi0/Desktop/what/SignalPilot/signalpilot/gateway")
+BENCHMARK_DIR = Path(__file__).resolve().parent
+WORK_DIR = BENCHMARK_DIR / "_dbt_workdir"
+SKILLS_SRC = BENCHMARK_DIR / "skills"
+GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
 
 IMAGE_NAME = "sp-dbt-benchmark-agent"
 CONTAINER_NAME = "sp-dbt-benchmark"

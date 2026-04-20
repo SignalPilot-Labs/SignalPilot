@@ -45,7 +45,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # ── Paths (same as run_dbt_local.py) ─────────────────────────
 SPIDER2_DBT_DIR = Path(os.environ.get(
     "SPIDER2_DBT_DIR",
-    "C:/Users/kiwi0/Desktop/what/spider2-repo/spider2-dbt",
+    os.environ.get("SPIDER2_DBT_DIR", str(Path(__file__).resolve().parent / "test-env")),
 ))
 EXAMPLES_DIR = SPIDER2_DBT_DIR / "examples"
 GOLD_DIR = SPIDER2_DBT_DIR / "evaluation_suite" / "gold"
@@ -57,7 +57,7 @@ GATEWAY_SRC = PROJECT_ROOT / "signalpilot" / "gateway"
 GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 DBT_BIN = shutil.which("dbt") or str(Path.home() / ".local" / "bin" / "dbt")
 
-SKILL_NAMES = ["dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql", "dbt-date-spines"]
+SKILL_NAMES = ["dbt-workflow", "dbt-debugging", "duckdb-sql", "dbt-date-spines"]
 
 
 # ── Helpers (identical to run_dbt_local.py) ───────────────────
@@ -190,11 +190,10 @@ def build_skills_system_prompt(instruction: str, instance_id: str, dbt_bin: str)
     bootstrap = f"""\
 ## BOOTSTRAP — Execute these steps FIRST, before any task work
 
-You have 5 skills and a SignalPilot MCP server available. Load them all now.
+You have 4 skills and a SignalPilot MCP server available. Load them all now.
 
-### Step 1: Load all skills (call the Skill tool 5 times)
+### Step 1: Load all skills (call the Skill tool 4 times)
 - `Skill({{"skill": "dbt-workflow"}})`
-- `Skill({{"skill": "dbt-verification"}})`
 - `Skill({{"skill": "dbt-debugging"}})`
 - `Skill({{"skill": "duckdb-sql"}})`
 - `Skill({{"skill": "dbt-date-spines"}})`

@@ -177,7 +177,7 @@ which dbt && dbt --version
 
 **Working**: prints a path and shows dbt-core 1.x + dbt-duckdb 1.x. Example:
 ```
-/c/Users/kiwi0/.conda/envs/SignalPilot/Scripts/dbt
+/usr/local/bin/dbt
 Core:
   - installed: 1.11.7
   ...
@@ -707,7 +707,7 @@ These are low-priority until A and B are done.
 
 ### 3.1 Running a single task
 ```bash
-cd C:/Users/kiwi0/Desktop/what/SignalPilot
+cd $PROJECT_ROOT  # e.g. /path/to/SignalPilot
 python -m benchmark.run_dbt_local <task_id> --model claude-sonnet-4-6
 ```
 

@@ -17,6 +17,7 @@ benchmark/test_tasks/_workdir/
 benchmark/gold_build_dates.json
 benchmark/ref/
 benchmark/docs/
+benchmark/test-env/
 
 # Self-improve build artifacts
 self-improve/monitor-web/.next/

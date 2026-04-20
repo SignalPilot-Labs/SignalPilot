@@ -1,6 +1,17 @@
-# SignalPilot
+```
+   _____ _                   _ ____  _ _       _
+  / ____(_)                 | |  __ \(_) |     | |
+ | (___  _  __ _ _ __   __ _| | |__) || | | ___| |_
+  \___ \| |/ _` | '_ \ / _` | |  ___/ | | |/ _ \ __|
+  ____) | | (_| | | | | (_| | | |   | | | | (_) | |_
+ |_____/|_|\__, |_| |_|\__,_|_|_|   |_|_|_|\___/ \__|
+            __/ |
+           |___/
 
-Governed AI database access. Connect any database, get schema discovery + read-only SQL execution + dbt project management — all through a single MCP server that any AI agent can use.
+        ✦  Governed AI Database Access  ✦
+```
+
+Connect any database, get schema discovery + read-only SQL execution + dbt project management — all through a single MCP server that any AI agent can use.
 
 ```bash
 # Start SignalPilot

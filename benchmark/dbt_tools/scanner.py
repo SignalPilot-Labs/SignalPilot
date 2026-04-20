@@ -66,6 +66,8 @@ def classify_sql_models(work_dir: Path) -> tuple[set[str], set[str]]:
             or content.endswith(",")
             or content.endswith("(")
             or (content.count("(") > content.count(")"))
+            or "SELECT_REPLACE_THIS_ENTIRE_FILE" in content
+            or "-- TODO:" in content
         )
         if is_stub:
             stubs.add(sql_file.stem)
@@ -117,38 +119,6 @@ def extract_model_columns(work_dir: Path) -> dict[str, list[str]]:
                 pass
     return result
 
-
-def extract_unique_keys(work_dir: Path) -> dict[str, str]:
-    """Extract the first unique-tested column per model from YML definitions."""
-    import yaml
-
-    result: dict[str, str] = {}
-    for ext in ("*.yml", "*.yaml"):
-        for yml_file in work_dir.rglob(ext):
-            if any(skip in str(yml_file) for skip in (".claude", "dbt_packages", "target")):
-                continue
-            try:
-                data = yaml.safe_load(yml_file.read_text())
-                if data and "models" in data:
-                    for model in data["models"]:
-                        name = model.get("name")
-                        if not name or name in result:
-                            continue
-                        for col in model.get("columns", []):
-                            col_name = col.get("name")
-                            if not col_name:
-                                continue
-                            tests = col.get("tests", [])
-                            has_unique = any(
-                                t == "unique" or (isinstance(t, dict) and "unique" in t)
-                                for t in tests
-                            )
-                            if has_unique:
-                                result[name] = col_name
-                                break
-            except Exception:
-                pass
-    return result
 
 
 def extract_model_descriptions(work_dir: Path) -> dict[str, str]:

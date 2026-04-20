@@ -22,6 +22,7 @@ from ..agent.sdk_runner import run_sdk_agent
 from ..agent.sql_prompts import build_sql_agent_prompt
 from ..core.audit import save_single_task_run
 from ..core.logging import log, log_separator
+from ..core.mcp import clear_all_connections
 from ..core.mcp import (
     delete_local_connection,
     register_bigquery_connection,
@@ -483,6 +484,7 @@ def main(suite: BenchmarkSuite) -> None:
     instance_id: str = args.instance_id
     model: str = args.model
     _main_start = time.monotonic()
+    clear_all_connections()
     # args.max_turns is None when user did not pass --max-turns (sentinel).
     # The actual value is resolved after loading the task so _get_max_turns can
     # inspect the db_id.  We store the user-supplied value separately so we can

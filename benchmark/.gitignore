@@ -7,7 +7,7 @@ service_account.json
 # Workdirs — large, generated, not source
 _dbt_workdir/
 _sql_workdir/
-test_tasks/_workdir/
+tests/tasks/_workdir/
 
 # Python cache
 __pycache__/

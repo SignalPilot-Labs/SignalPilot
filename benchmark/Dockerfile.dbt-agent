@@ -45,6 +45,18 @@ COPY --chown=agentuser:agentuser dbt_agent_runner.py /app/dbt_agent_runner.py
 
 USER root
 RUN chmod +x /usr/local/bin/entrypoint.sh && \
-    apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get install -y --no-install-recommends gosu libfaketime && rm -rf /var/lib/apt/lists/*
+
+# libfaketime installed but NOT globally enabled (breaks TLS certificate validation).
+# Wrap the dbt binary so ALL dbt commands see 2024-09-08 as current_date.
+# This is non-discriminate: every task gets the same date for date_spine/current_timestamp.
+ENV FAKETIME="2024-09-08 12:00:00"
+# Wrap dbt: faketime for correct current_date, DO_NOT_TRACK to disable telemetry.
+# Without DO_NOT_TRACK, dbt makes HTTPS calls on exit that hang forever under
+# faketime (TLS certificates appear "not yet valid" with a 2024-09-08 clock).
+RUN DBT_REAL=$(which dbt) && \
+    mv "$DBT_REAL" "${DBT_REAL}.real" && \
+    printf '#!/bin/bash\n# Only apply faketime to commands that execute SQL (run/compile/build).\n# deps/parse/version need real network + real clock for SSL.\ncase "$1" in\n  run|compile|build|run-operation|seed|snapshot|test)\n    exec env LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 FAKETIME="${FAKETIME:-2024-09-08 12:00:00}" FAKETIME_DONT_FAKE_MONOTONIC=1 FAKETIME_NO_CACHE=1 DO_NOT_TRACK=1 DBT_NO_VERSION_CHECK=1 "${0}.real" "$@"\n    ;;\n  *)\n    exec env DO_NOT_TRACK=1 DBT_NO_VERSION_CHECK=1 "${0}.real" "$@"\n    ;;\nesac\n' > "$DBT_REAL" && \
+    chmod +x "$DBT_REAL"
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

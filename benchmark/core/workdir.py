@@ -287,7 +287,7 @@ Use SignalPilot MCP tools to explore and query the database:
 ## Key Rules
 - Always use `{{ config(materialized='table') }}` at the top of every model
 - Column names in YML are exact — copy them into SELECT aliases character-for-character
-- LEFT JOIN is the default; use INNER JOIN only when the task says "with" or "due to" (entities explicitly excluded)
+- When a sibling model exists, copy its JOIN types exactly (see dbt-write skill)
 """
     (work_dir / "CLAUDE.md").write_text(content)
     log(f"Wrote CLAUDE.md to {work_dir}")

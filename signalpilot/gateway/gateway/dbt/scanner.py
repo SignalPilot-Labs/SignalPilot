@@ -71,7 +71,8 @@ _RE_TRIVIAL_SELECT = re.compile(
 # When used as spine endpoints in pre-shipped model files, they cause row-count
 # inflation when the project is run years after the source data was collected.
 _RE_DATE_HAZARD = re.compile(
-    r"\b(current_date|current_timestamp|now\(\)|getdate\(\)|sysdate)\b",
+    r"(dbt\.current_timestamp_backcompat\(\)|dbt\.current_timestamp\(\)"
+    r"|\b(?:current_date|current_timestamp|now\(\)|getdate\(\)|sysdate)\b)",
     re.IGNORECASE,
 )
 

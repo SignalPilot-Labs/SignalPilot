@@ -43,11 +43,19 @@ def _official_compare(pred_df, gold_df, cols, ignore_order):
                 pass
         return None
 
+    def _sort_key(x):
+        """Sort NULLs first, then numbers numerically, then strings."""
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            return (0, 0.0, '')
+        if isinstance(x, (int, float)):
+            return (1, float(x), '')
+        return (2, 0.0, str(x))
+
     def vectors_match(v1, v2):
         try:
             if ignore_order:
-                v1 = sorted(v1, key=lambda x: (x is None, str(x), isinstance(x, (int, float))))
-                v2 = sorted(v2, key=lambda x: (x is None, str(x), isinstance(x, (int, float))))
+                v1 = sorted(v1, key=_sort_key)
+                v2 = sorted(v2, key=_sort_key)
             if len(v1) != len(v2):
                 return False
             for a, b in zip(v1, v2):
@@ -71,6 +79,24 @@ def _official_compare(pred_df, gold_df, cols, ignore_order):
             return False, f"gold column index error: {e}"
     else:
         gold_sub = gold_df
+
+    # Normalize nullable dtypes (StringDtype, Int64, etc.) to plain python types
+    # to ensure consistent comparison between gold and pred DataFrames.
+    def _to_plain_df(df):
+        import numpy as np
+        for col in df.columns:
+            if hasattr(df[col], 'astype'):
+                try:
+                    if pd.api.types.is_string_dtype(df[col]):
+                        df[col] = df[col].astype(object).where(df[col].notna(), None)
+                    elif pd.api.types.is_integer_dtype(df[col]) and df[col].dtype.name != 'int64':
+                        df[col] = df[col].astype('int64')
+                except Exception:
+                    pass
+        return df
+
+    gold_sub = _to_plain_df(gold_sub.copy())
+    pred_df = _to_plain_df(pred_df.copy())
 
     t_gold_list = gold_sub.transpose().values.tolist()
     t_pred_list = pred_df.transpose().values.tolist()
@@ -130,9 +156,33 @@ def evaluate(
     log(f"Gold tables:   {gold_tables}")
     log(f"Result tables: {result_tables}")
 
-    effective_tabs = condition_tabs if condition_tabs is not None else gold_tables
-    effective_orders = ignore_orders if ignore_orders is not None else [False] * len(effective_tabs)
-    effective_cols = condition_cols if condition_cols is not None else [[]] * len(effective_tabs)
+    raw_tabs = condition_tabs if condition_tabs is not None else gold_tables
+    effective_orders = ignore_orders if ignore_orders is not None else [False] * len(raw_tabs)
+    effective_cols = condition_cols if condition_cols is not None else [[]] * len(raw_tabs)
+
+    # Resolve eval config table names against actual gold tables.
+    # Spider2 eval configs sometimes use different prefixes (e.g. fct_ vs fact_).
+    effective_tabs: list[str] = []
+    for tab in raw_tabs:
+        if tab in gold_tables:
+            effective_tabs.append(tab)
+        else:
+            # Try common prefix swaps: fct_↔fact_, dim_↔dimension_, etc.
+            resolved = None
+            tab_lower = tab.lower()
+            for gt in gold_tables:
+                gt_lower = gt.lower()
+                # Check if they share most of the name (differ only in prefix)
+                if tab_lower.replace("fct_", "fact_") == gt_lower or \
+                   tab_lower.replace("fact_", "fct_") == gt_lower or \
+                   tab_lower == gt_lower:
+                    resolved = gt
+                    break
+            if resolved:
+                log(f"Resolved eval table '{tab}' -> gold table '{resolved}'")
+                effective_tabs.append(resolved)
+            else:
+                effective_tabs.append(tab)  # keep original, will fail gracefully
 
     all_match = True
     details: list[str] = []
@@ -140,7 +190,18 @@ def evaluate(
     for i, tab in enumerate(effective_tabs):
         log(f"Checking table: {tab}")
 
+        # Resolve result table name (same prefix swap logic)
+        result_tab = tab
         if tab not in result_tables:
+            for rt in result_tables:
+                if tab.lower().replace("fct_", "fact_") == rt.lower() or \
+                   tab.lower().replace("fact_", "fct_") == rt.lower() or \
+                   tab.lower() == rt.lower():
+                    log(f"  Resolved result table '{tab}' -> '{rt}'")
+                    result_tab = rt
+                    break
+
+        if result_tab not in result_tables:
             msg = f"  {tab}: FAIL — table not in result DB (have: {result_tables})"
             details.append(msg)
             log(msg)
@@ -149,7 +210,7 @@ def evaluate(
 
         try:
             gold_df = get_table_df(gold_con, tab)
-            pred_df = get_table_df(result_con, tab)
+            pred_df = get_table_df(result_con, result_tab)
         except Exception as e:
             msg = f"  {tab}: ERROR reading table — {e}"
             details.append(msg)

@@ -15,21 +15,23 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from ..agent.prompts import build_agent_prompt, build_value_verify_prompt
+from claude_agent_sdk.types import AgentDefinition
+
+from ..agent.prompts import build_agent_prompt
 from ..agent.sdk_runner import (
     run_name_fix_agent,
     run_quick_fix_agent,
     run_sdk_agent,
-    run_value_verify_agent,
 )
 from ..core.audit import save_single_task_run
 from ..core.logging import log, log_separator
-from ..core.mcp import delete_local_connection, register_local_connection
+from ..core.mcp import clear_all_connections, delete_local_connection, register_local_connection
 from ..core.paths import GOLD_DIR, MCP_CONFIG, PROMPTS_DIR, WORK_DIR, ensure_local_bin_on_path
 from ..core.tasks import load_eval_config, load_task
 from ..core.workdir import prepare_workdir, write_claude_md
@@ -47,11 +49,92 @@ from ..evaluation.db_utils import find_result_db, get_table_row_counts
 
 ensure_local_bin_on_path()
 
-DBT_BIN = "/home/agentuser/.local/bin/dbt"
+DBT_BIN = shutil.which("dbt") or "/home/agentuser/.local/bin/dbt"
 
 _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_text()
 
-_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-verification", "dbt-debugging", "duckdb-sql")
+_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-debugging", "duckdb-sql")
+
+
+def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
+    """Snapshot model tables that exist in the DB before the agent rebuilds them.
+
+    Only snapshots tables where: (1) a model SQL file exists AND is a stub, and
+    (2) the table already exists in the database (pre-computed reference data).
+    Raw source tables and complete models are excluded.
+    """
+    if not db_path or not db_path.exists():
+        return
+
+    import duckdb as _ddb
+
+    complete, stub_models = classify_sql_models(work_dir)
+    log(f"Snapshot: found {len(stub_models)} stubs: {sorted(stub_models)[:5]}")
+    if not stub_models:
+        return
+
+    try:
+        con = _ddb.connect(str(db_path), read_only=True)
+        db_tables = set(r[0] for r in con.execute("SHOW TABLES").fetchall())
+    except Exception as e:
+        log(f"Snapshot: cannot open DB: {e}", "WARN")
+        return
+
+    # Snapshot stubs that exist as pre-computed tables, plus complete sibling
+    # models in the same directories (their sample data helps the verifier
+    # catch NULL vs 0 and expression mismatches).
+    stub_dirs = set()
+    for sql_file in work_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in ("dbt_packages", "target", ".claude")):
+            continue
+        if sql_file.stem in stub_models:
+            stub_dirs.add(sql_file.parent)
+    sibling_models = set()
+    for d in stub_dirs:
+        for sql_file in d.glob("*.sql"):
+            if sql_file.stem in complete and sql_file.stem in db_tables:
+                sibling_models.add(sql_file.stem)
+    to_snapshot = sorted((stub_models & db_tables) | sibling_models)
+    if not to_snapshot:
+        con.close()
+        log("Snapshot: no stub models have pre-existing tables — skipping")
+        return
+
+    lines = ["# Reference Table Snapshot\n"]
+    for table in to_snapshot:
+        try:
+            row_count = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            cols = con.execute(
+                f"SELECT column_name, data_type FROM information_schema.columns "
+                f"WHERE table_name = '{table}' ORDER BY ordinal_position"
+            ).fetchall()
+            sample_rows = con.execute(f'SELECT * FROM "{table}" LIMIT 3').fetchall()
+            col_names = [c[0] for c in cols]
+
+            lines.append(f"## {table} ({row_count:,} rows)")
+            lines.append("| Column | Type |")
+            lines.append("|--------|------|")
+            for col_name, col_type in cols:
+                lines.append(f"| {col_name} | {col_type} |")
+            lines.append("")
+            if sample_rows:
+                lines.append("Sample:")
+                lines.append("| " + " | ".join(col_names) + " |")
+                lines.append("|" + "|".join("---" for _ in col_names) + "|")
+                for row in sample_rows:
+                    lines.append("| " + " | ".join(str(v) for v in row) + " |")
+            lines.append("")
+        except Exception as e:
+            lines.append(f"## {table} (ERROR: {e})\n")
+
+    con.close()
+
+    try:
+        snapshot_path = work_dir / "reference_snapshot.md"
+        snapshot_path.write_text("\n".join(lines))
+        log(f"Snapshot: captured {len(to_snapshot)} reference table(s): {to_snapshot}")
+    except Exception as e:
+        log(f"Snapshot: failed to write file: {e}", "WARN")
 
 
 async def run_agent(
@@ -67,6 +150,9 @@ async def run_agent(
 
     prompt = build_agent_prompt(instance_id, instruction, work_dir, eval_critical_models, max_turns=max_turns)
     log(f"Prompt length: {len(prompt)} chars")
+    print("--- USER PROMPT START ---", flush=True)
+    print(prompt, flush=True)
+    print("--- USER PROMPT END ---", flush=True)
 
     system_prompt = (
         _DBT_SYSTEM_PROMPT_TEMPLATE
@@ -74,6 +160,23 @@ async def run_agent(
         .replace("${instance_id}", instance_id)
         .replace("${instruction}", instruction)
         .replace("${dbt_bin}", DBT_BIN)
+    )
+    print("--- SYSTEM PROMPT START ---", flush=True)
+    print(system_prompt, flush=True)
+    print("--- SYSTEM PROMPT END ---", flush=True)
+
+    verify_prompt_template = (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
+    verify_prompt_text = (
+        verify_prompt_template
+        .replace("${work_dir}", str(work_dir))
+        .replace("${instance_id}", instance_id)
+        .replace("${dbt_bin}", DBT_BIN)
+    )
+    verify_agent = AgentDefinition(
+        description="Verification agent that checks dbt model output for correctness after the build is complete.",
+        prompt=verify_prompt_text,
+        model="claude-sonnet-4-6",
+        maxTurns=80,
     )
 
     result = await run_sdk_agent(
@@ -85,6 +188,7 @@ async def run_agent(
         label="main-agent",
         skill_names=_DBT_SKILL_NAMES,
         system_prompt=system_prompt,
+        agents={"verifier": verify_agent},
     )
 
     transcript_path = work_dir / "agent_output.json"
@@ -120,10 +224,10 @@ def _auto_scale_max_turns(work_dir: Path, eval_critical_models: set[str], defaul
 
 
 def _run_dbt_selective(work_dir: Path, eval_critical_models: set[str], timeout: int = 120) -> subprocess.CompletedProcess:
-    """Run `dbt run --select +<model>...` for eval-critical models."""
+    """Run `dbt run --select <model>...` for eval-critical models (no upstream deps)."""
     select_args = (
         [DBT_BIN, "run", "--select"]
-        + [f"+{m}" for m in sorted(eval_critical_models)]
+        + list(sorted(eval_critical_models))
     )
     return subprocess.run(select_args, cwd=str(work_dir), capture_output=True, text=True, timeout=timeout)
 
@@ -255,7 +359,9 @@ def _post_agent_dbt_run(
     if created_stubs_post:
         log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
 
-    run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
+    # Post-agent SQL fixes disabled — the automatic INNER→LEFT JOIN rewrite
+    # overrides correct agent decisions and can introduce floating point artifacts.
+    # run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
 
     if eval_critical_models:
         dbt_result = _run_dbt_selective(work_dir, eval_critical_models)
@@ -285,44 +391,14 @@ def _post_agent_dbt_run(
         except Exception as e:
             log(f"Quick-fix agent failed: {e}", "WARN")
 
-    # Best-effort full run
+    # Best-effort selective run (eval-critical only — do NOT run a full rebuild
+    # as it overwrites pre-existing dimension tables with non-deterministic ordering)
     if eval_critical_models:
         subprocess.run(
-            [DBT_BIN, "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
+            [DBT_BIN, "run", "--select"] + list(sorted(eval_critical_models)),
             cwd=str(work_dir), capture_output=True, text=True, timeout=300,
         )
-    subprocess.run(
-        [DBT_BIN, "run", "--no-fail-fast"],
-        cwd=str(work_dir), capture_output=True, text=True, timeout=300,
-    )
 
-
-def _run_value_verify_stage(
-    work_dir: Path,
-    instance_id: str,
-    instruction: str,
-    eval_critical_models: set[str],
-    model: str,
-) -> None:
-    """Post-success value-verification agent."""
-    _result_db = find_result_db(work_dir)
-    if not (eval_critical_models and _result_db):
-        return
-
-    verify_prompt = build_value_verify_prompt(
-        work_dir, instance_id, eval_critical_models, instruction,
-        extract_model_columns(work_dir),
-    )
-    try:
-        asyncio.run(run_value_verify_agent(verify_prompt, work_dir, model))
-    except Exception as e:
-        log(f"Value-verify agent failed: {e}", "WARN")
-
-    # Re-run dbt to materialize any fixes
-    subprocess.run(
-        [DBT_BIN, "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
-        cwd=str(work_dir), capture_output=True, text=True, timeout=180,
-    )
 
 
 def _run_name_fix_stage(
@@ -425,7 +501,7 @@ async def _run_dbt_selective_async(
     """Async version of _run_dbt_selective."""
     select_args = (
         [DBT_BIN, "run", "--select"]
-        + [f"+{m}" for m in sorted(eval_critical_models)]
+        + list(sorted(eval_critical_models))
     )
     return await _async_subprocess_run(select_args, cwd=str(work_dir), timeout=timeout)
 
@@ -451,7 +527,9 @@ async def _post_agent_dbt_run_async(
     if created_stubs_post:
         log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
 
-    run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
+    # Post-agent SQL fixes disabled — the automatic INNER→LEFT JOIN rewrite
+    # overrides correct agent decisions and can introduce floating point artifacts.
+    # run_post_agent_sql_fixes(work_dir, instruction, eval_critical_models)
 
     if eval_critical_models:
         dbt_result = await _run_dbt_selective_async(work_dir, eval_critical_models)
@@ -482,46 +560,15 @@ async def _post_agent_dbt_run_async(
         except Exception as e:
             log(f"Quick-fix agent failed: {e}", "WARN")
 
-    # Best-effort full run
+    # Best-effort selective run (eval-critical only — do NOT run a full rebuild
+    # as it overwrites pre-existing dimension tables with non-deterministic ordering)
     if eval_critical_models:
         await _async_subprocess_run(
-            [DBT_BIN, "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
+            [DBT_BIN, "run", "--select"] + list(sorted(eval_critical_models)),
             cwd=str(work_dir),
             timeout=300,
         )
-    await _async_subprocess_run(
-        [DBT_BIN, "run", "--no-fail-fast"],
-        cwd=str(work_dir),
-        timeout=300,
-    )
 
-
-async def _run_value_verify_stage_async(
-    work_dir: Path,
-    instance_id: str,
-    instruction: str,
-    eval_critical_models: set[str],
-    model: str,
-) -> None:
-    """Async version of _run_value_verify_stage for use in parallel execution."""
-    _result_db = find_result_db(work_dir)
-    if not (eval_critical_models and _result_db):
-        return
-
-    verify_prompt = build_value_verify_prompt(
-        work_dir, instance_id, eval_critical_models, instruction,
-        extract_model_columns(work_dir),
-    )
-    try:
-        await run_value_verify_agent(verify_prompt, work_dir, model)
-    except Exception as e:
-        log(f"Value-verify agent failed: {e}", "WARN")
-
-    await _async_subprocess_run(
-        [DBT_BIN, "run", "--select"] + [f"+{m}" for m in sorted(eval_critical_models)],
-        cwd=str(work_dir),
-        timeout=180,
-    )
 
 
 async def _run_name_fix_stage_async(
@@ -638,6 +685,11 @@ async def execute_dbt_task(
         else:
             work_dir = prepare_workdir(instance_id)
 
+        # Fix date-dependent tables in the starting DB
+        from ..fix_starting_dbs import fix_task_db
+        if fix_task_db(instance_id, work_dir):
+            log(f"Fixed date-dependent tables for {instance_id}")
+
         # Step 2: Write CLAUDE.md
         log_separator("Step 2: Write CLAUDE.md")
         write_claude_md(work_dir, instance_id, instruction)
@@ -663,6 +715,8 @@ async def execute_dbt_task(
         if created_stubs:
             log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
 
+        _snapshot_reference_tables(work_dir, _db)
+
         # Step 4: Run agent
         log_separator("Step 4: Run Claude agent")
         t_agent = time.monotonic()
@@ -675,6 +729,19 @@ async def execute_dbt_task(
                 .replace("${instruction}", instruction)
                 .replace("${dbt_bin}", DBT_BIN)
             )
+            verify_prompt_template = (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
+            verify_prompt_text = (
+                verify_prompt_template
+                .replace("${work_dir}", str(work_dir))
+                .replace("${instance_id}", instance_id)
+                .replace("${dbt_bin}", DBT_BIN)
+            )
+            verify_agent = AgentDefinition(
+                description="Verification agent that checks dbt model output for correctness after the build is complete.",
+                prompt=verify_prompt_text,
+                model="claude-sonnet-4-6",
+                maxTurns=80,
+            )
             agent_result = await run_sdk_agent(
                 prompt,
                 work_dir,
@@ -684,6 +751,7 @@ async def execute_dbt_task(
                 label="main-agent",
                 skill_names=_DBT_SKILL_NAMES,
                 system_prompt=system_prompt,
+                agents={"verifier": verify_agent},
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({
@@ -697,16 +765,13 @@ async def execute_dbt_task(
         elapsed_agent = time.monotonic() - t_agent
         log(f"Agent finished in {elapsed_agent:.1f}s")
 
-        await _post_agent_dbt_run_async(work_dir, instruction, eval_critical_models, model)
-        await _run_value_verify_stage_async(work_dir, instance_id, instruction, eval_critical_models, model)
-        await _run_name_fix_stage_async(work_dir, instance_id, instruction, eval_critical_models, model)
-
-    # Post-processing (always runs, even with skip_agent)
-    _result_db_path = find_result_db(work_dir)
-    dedup_eval_tables(work_dir, eval_critical_models, _result_db_path)
-    add_missing_columns(work_dir, eval_critical_models, _result_db_path)
-
     await _flush_and_release_async(work_dir, connection_name)
+
+    # Re-fix date-dependent tables after flush — the MCP connection is released,
+    # so fix_task_db has exclusive write access to the DuckDB file.
+    from ..fix_starting_dbs import fix_task_db
+    if fix_task_db(instance_id, work_dir):
+        log(f"Re-fixed date-dependent tables for {instance_id}")
 
     # Evaluate
     log_separator("Step 5: Evaluate against gold standard")
@@ -749,6 +814,7 @@ def main() -> None:
     _main_start = time.monotonic()
 
     log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")
+    clear_all_connections()
     log(f"Model:     {model}")
     log(f"Max turns: {max_turns}")
     log(f"MCP config: {MCP_CONFIG}")
@@ -789,6 +855,11 @@ def main() -> None:
             work_dir = prepare_workdir(instance_id)
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
+        # Fix date-dependent tables in the starting DB
+        from ..fix_starting_dbs import fix_task_db
+        if fix_task_db(instance_id, work_dir):
+            log(f"Fixed date-dependent tables for {instance_id}")
+
         # ── Write CLAUDE.md ────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 2: Write CLAUDE.md")
@@ -820,6 +891,8 @@ def main() -> None:
         if created_stubs:
             log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
 
+        _snapshot_reference_tables(work_dir, _db)
+
         # ── Run agent ──────────────────────────────────────────────────────────
         t0 = time.monotonic()
         log_separator("Step 4: Run Claude agent")
@@ -838,17 +911,13 @@ def main() -> None:
         elapsed = time.monotonic() - t0
         log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
 
-    if not args.skip_agent:
-        _post_agent_dbt_run(work_dir, instruction, eval_critical_models, model)
-        _run_value_verify_stage(work_dir, instance_id, instruction, eval_critical_models, model)
-        _run_name_fix_stage(work_dir, instance_id, instruction, eval_critical_models, model)
-
-    # ── Post-processing: dedup + missing columns (always runs, even with --skip-agent) ──
-    _result_db_path = find_result_db(work_dir)
-    dedup_eval_tables(work_dir, eval_critical_models, _result_db_path)
-    add_missing_columns(work_dir, eval_critical_models, _result_db_path)
-
     _flush_and_release(work_dir, instance_id)
+
+    # Re-fix date-dependent tables AFTER flush — MCP connection is released,
+    # so fix_task_db has exclusive write access to the DuckDB file.
+    from ..fix_starting_dbs import fix_task_db
+    if fix_task_db(instance_id, work_dir):
+        log(f"Re-fixed date-dependent tables for {instance_id}")
 
     # ── Evaluate ───────────────────────────────────────────────────────────────
     t0 = time.monotonic()

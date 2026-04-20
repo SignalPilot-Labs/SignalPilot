@@ -55,7 +55,7 @@ def get_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
             eval_jsonl=EVAL_JSONL,
             gold_dir=GOLD_DIR,
             work_dir=WORK_DIR,
-            skills=["dbt-workflow", "dbt-verification", "dbt-debugging", "dbt-date-spines", "duckdb-sql"],
+            skills=["dbt-workflow", "dbt-debugging", "dbt-date-spines", "duckdb-sql"],
         )
 
     if suite == BenchmarkSuite.SNOWFLAKE:
@@ -95,7 +95,7 @@ def get_test_suite_config(suite: BenchmarkSuite) -> SuiteConfig:
             eval_jsonl=TEST_TASKS_DIR / "eval" / "dbt" / "spider2_eval.jsonl",
             gold_dir=TEST_TASKS_DIR / "gold" / "dbt",
             work_dir=TEST_TASKS_DIR / "_workdir" / "dbt",
-            skills=["dbt-workflow", "dbt-verification", "dbt-debugging", "dbt-date-spines", "duckdb-sql"],
+            skills=["dbt-workflow", "dbt-debugging", "dbt-date-spines", "duckdb-sql"],
         )
 
     if suite == BenchmarkSuite.SNOWFLAKE:

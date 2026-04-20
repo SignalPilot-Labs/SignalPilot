@@ -26,6 +26,12 @@ CONFIG_BLOCK = "{{ config(materialized='table') }}\n"
 # Negative lookbehind (?<!\.) prevents matching inside Jinja method calls
 # like dbt.current_timestamp() which would produce broken syntax.
 _REPLACEMENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Jinja macro wrappers — must come BEFORE the bare-word patterns so they match first.
+    # These resolve to current_timestamp at compile time and are equally hazardous.
+    (re.compile(r"dbt\.current_timestamp_backcompat\(\)", re.IGNORECASE), "__DATE__"),
+    (re.compile(r"dbt\.current_timestamp\(\)", re.IGNORECASE), "__DATE__"),
+    # Bare SQL patterns — negative lookbehind (?<!\.) prevents matching inside
+    # Jinja method calls like dbt.current_timestamp() (handled above).
     (re.compile(r"(?<!\.)\bcurrent_timestamp\b", re.IGNORECASE), "__DATE__"),
     (re.compile(r"(?<!\.)\bcurrent_date\b", re.IGNORECASE), "__DATE__"),
     (re.compile(r"(?<!\.)\bnow\(\)", re.IGNORECASE), "__DATE__"),

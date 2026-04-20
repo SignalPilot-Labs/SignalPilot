@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,13 +12,30 @@ from .paths import BIGQUERY_SA_FILE, GATEWAY_SRC, MCP_CONFIG, SNOWFLAKE_ENV_FILE
 
 
 def load_mcp_servers() -> dict:
-    """Load MCP server configs from mcp_test_config.json, stripping unsupported 'cwd' key."""
+    """Load MCP server configs from mcp_test_config.json.
+
+    - Strips 'cwd' (not supported by SDK) and converts it to a cd+exec wrapper.
+    - Injects SP_GATEWAY_URL from the process environment so the MCP subprocess
+      can reach the gateway.
+    """
     with open(MCP_CONFIG) as f:
         raw = json.load(f)
     servers = raw.get("mcpServers", {})
+    gateway_url = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
     result: dict = {}
     for name, config in servers.items():
-        entry = {k: v for k, v in config.items() if k != "cwd"}
+        entry = dict(config)
+        # Inject gateway URL into env
+        env = dict(entry.get("env", {}))
+        env["SP_GATEWAY_URL"] = gateway_url
+        entry["env"] = env
+        # Convert cwd to a shell wrapper since SDK doesn't support cwd
+        cwd = entry.pop("cwd", None)
+        if cwd and entry.get("type", "stdio") == "stdio":
+            orig_cmd = entry["command"]
+            orig_args = entry.get("args", [])
+            entry["command"] = "bash"
+            entry["args"] = ["-c", f"cd {cwd} && exec {orig_cmd} {' '.join(orig_args)}"]
         result[name] = entry
     return result
 
@@ -62,6 +80,27 @@ def delete_local_connection(instance_id: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def clear_all_connections() -> int:
+    """Delete ALL registered connections. Call at task start to ensure a clean slate.
+
+    Returns the number of connections deleted.
+    """
+    try:
+        sys.path.insert(0, str(GATEWAY_SRC))
+        from gateway.store import list_connections, delete_connection
+
+        conns = list_connections()
+        for conn in conns:
+            name = conn.name if hasattr(conn, "name") else conn.get("name", "")
+            if name:
+                delete_connection(name)
+                log(f"Cleared stale connection '{name}'")
+        return len(conns)
+    except Exception as e:
+        log(f"Failed to clear connections: {e}", "WARN")
+        return 0
 
 
 def _load_dotenv_file(path: Path) -> dict[str, str]:

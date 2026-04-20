@@ -66,6 +66,8 @@ def classify_sql_models(work_dir: Path) -> tuple[set[str], set[str]]:
             or content.endswith(",")
             or content.endswith("(")
             or (content.count("(") > content.count(")"))
+            or "SELECT_REPLACE_THIS_ENTIRE_FILE" in content
+            or "-- TODO:" in content
         )
         if is_stub:
             stubs.add(sql_file.stem)

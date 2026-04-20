@@ -9,22 +9,26 @@ from ..core.logging import log
 from .scanner import SKIP_DIRS, classify_sql_models, extract_model_columns
 
 
-def create_sql_templates(work_dir: Path, eval_critical_models: set[str]) -> list[str]:
-    """Pre-populate starter SQL files for eval-critical models with no existing SQL file.
+def create_sql_templates(work_dir: Path, _eval_critical_models: set[str] | None = None) -> list[str]:
+    """Pre-populate starter SQL files for YML-defined models with no existing SQL file.
 
     Only creates files for models with no SQL file at all — does not overwrite
     stubs or complete models. Returns a list of model names for which templates
     were created.
     """
+    from .scanner import scan_yml_models
     complete_sql_models, stub_sql_models = classify_sql_models(work_dir)
     column_map = extract_model_columns(work_dir)
     already_have_sql = complete_sql_models | stub_sql_models
+
+    yml_models = scan_yml_models(work_dir)
+    models_to_template = yml_models - already_have_sql
 
     models_dir = work_dir / "models"
     target_dir = models_dir if models_dir.exists() else work_dir
 
     created: list[str] = []
-    for model_name in eval_critical_models:
+    for model_name in models_to_template:
         if model_name in already_have_sql:
             continue
         try:

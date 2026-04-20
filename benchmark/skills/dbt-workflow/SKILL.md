@@ -1,133 +1,109 @@
 ---
 name: dbt-workflow
-description: "Use this skill before writing any dbt SQL model. Covers: how to read YML to extract column contracts and output shape (entity+qualifier, top-N cutoff, rolling window vs point-in-time), dependency build order, JOIN type selection (LEFT vs INNER, which table drives), pre-JOIN cardinality checks to prevent fan-out, wide aggregation CASE WHEN pattern, ephemeral stubs for missing ref() targets, and column naming rules."
+description: "Load at Step 1 before exploring the project. Covers output shape inference, incremental model handling, and what to trust in YML."
 type: skill
 ---
 
-# dbt Workflow Skill
+# dbt Workflow Skill — Explore and Plan
 
-## 1. Output Shape Inference — Read YML description Before Writing SQL
+## 1. Output Shape — Read YML Description BEFORE Writing SQL
 
 Extract from `description:` field:
-- **ENTITY**: "for each customer/driver/order" → one output row per qualifying entity
-- **QUALIFIER**: "due to returned items" / "with at least one order" → filter, INNER JOIN not all entities
-- **RANK CONSTRAINT**: "top N" / "ranks the top N" → `QUALIFY DENSE_RANK() OVER (...) <= N` is mandatory
-- **TEMPORAL SCOPE**: "rolling window" + `unique_key` on date×entity → ONE output date (latest), not all historical dates. Fix: `WHERE date_col = (SELECT MAX(date_col) FROM source)`
+- **ENTITY**: "for each customer/driver/order" → one row per qualifying entity
+- **QUALIFIER**: "due to returned items" / "with at least one order" → filter or INNER JOIN
+- **RANK CONSTRAINT**: "top N" / "ranks the top N" → exactly N output rows. Filter
+  with `ROW_NUMBER() ... <= N` using a deterministic tiebreaker (add primary key to
+  ORDER BY). Do NOT use DENSE_RANK for filtering — it can return more than N rows.
+- **TEMPORAL SCOPE**: "rolling window", "MoM", "WoW", or "month-over-month" in the
+  description → ONE output date (latest), not all historical dates. Filter with
+  `WHERE date_col = (SELECT MAX(date_col) FROM source)`.
+- **PERIOD-OVER-PERIOD**: If the description mentions MoM, WoW, YoY comparisons
+  AND you are writing this model from scratch (stub/missing), the comparison column
+  must be `CAST(NULL AS DOUBLE)` — see rule below.
 
-Write a comment at top of SQL body:
-```sql
--- EXPECTED SHAPE: <inferred row count or cardinality formula>
--- REASON: <quote from description>
-```
+**How to read YML descriptions:** Descriptions tell you what the data MEANS, not
+what code to write. Use them to:
+- Identify which source columns to use (e.g. "starting from first position on
+  the grid" → use the `grid` column, not qualifying position)
+- Understand the business meaning of each column
+- Pick the right aggregation logic
 
-Critical signals:
-- "rolling window" + unique_key = date×entity → output has ONE date, not all historical dates
-- "top N" or "ranks the top N" → `QUALIFY DENSE_RANK() OVER (...) <= N` is mandatory
-- "for each X" + "with/due to criterion" → INNER JOIN or subquery, not all entities
+But do NOT treat descriptions as literal computation instructions. They may
+describe steady-state behavior that doesn't apply on first build, or use
+imprecise language. After reading the description, always verify your logic
+against the actual source data — query the source tables to confirm which
+columns and values produce the expected result.
 
-## 2. Dependency Build Order
+Write at top of SQL: `-- EXPECTED SHAPE: <row count or formula> — REASON: <quote>`
 
-Before writing any model:
-1. List all `.yml` files with model definitions
-2. For each model, note its `refs:` dependencies
-3. Draw the topological order: sources → staging → core → marts
-4. Write and run models in this order — write dependencies first
+## 1b. Snapshot Reference Tables BEFORE Building
 
-Also scan the task instruction for model names not in any YML — they need `.sql` files too.
-
-Scan `macros/` directory before writing any model. Call macros with `{{ macro_name() }}` rather than re-implementing logic inline.
-
-## 3. YML-to-SQL Contract
-
-- `columns:` names are exact. Copy them into SELECT aliases character-for-character.
-- Check `.md` files in `models/` for `{% docs %}` blocks — they contain exact string literals for CASE WHEN that **override** any defaults.
-- The `refs:` section lists upstream model dependencies — use these as the primary guide for writing SQL.
-
-## 4. JOIN Type Selection
-
-- **DEFAULT: LEFT JOIN for all JOINs.** Start FROM the table that defines all output entities (all customers, all dates, all admins) and LEFT JOIN everything else to it. This is the correct choice for the vast majority of reporting models.
-- **INNER JOIN: exception only.** Use INNER JOIN only when the task description explicitly excludes non-matching rows (e.g., "customers WITH orders", "only users who have", "exclude rows without"). Phrases like "based on", "for each X in Y", "calculates X from Y" describe calculation scope — keep LEFT JOIN. When considering INNER JOIN, call `compare_join_types` first:
-  ```
-  mcp__signalpilot__compare_join_types(connection_name="<id>", left_table="table_a", right_table="table_b", join_keys="a.key = b.key")
-  ```
-- `LEFT JOIN + WHERE right.col IS NOT NULL` silently becomes INNER JOIN — avoid.
-
-## 5. Pre-JOIN Cardinality Check
-
-Run before every JOIN on the right-side table:
-```sql
-SELECT COUNT(*), COUNT(DISTINCT join_key) FROM right_table;
-```
-If `COUNT(*) > COUNT(DISTINCT join_key)`: pre-aggregate or deduplicate before joining — your model will fan-out silently otherwise.
-
-For UNION models: count each branch separately, verify sum equals expected total.
-
-## 6. Wide Aggregation Pattern
-
-Before writing CASE WHEN:
-```sql
-SELECT DISTINCT category_col FROM table ORDER BY 1;
-```
-Map each distinct value to exact YML column name. Use `SUM(CASE WHEN col = 'value' THEN 1 ELSE 0 END)`. Never guess string literals. Any value not matching a named column goes into the catch-all column.
-
-## 7. Materialization Rules
-
-Always `{{ config(materialized='table') }}`. Never `incremental` or `is_incremental()` — incremental models return all rows on first run, producing wrong row counts. Ephemeral only for stub models that satisfy a `ref()` without creating a database object.
-
-## 8. Ephemeral Stubs — Resolving Missing ref() Targets
-
-When existing SQL uses `{{ ref('raw_table') }}` but no `raw_table.sql` exists:
-1. Check: `SELECT table_name FROM information_schema.tables WHERE table_name = 'raw_table'`
-2. If found, create `models/raw_table.sql`:
-   ```sql
-   {{ config(materialized='ephemeral') }}
-   select * from main.raw_table
-   ```
-Ephemeral models inline as CTEs — they do NOT create a database object and will NOT shadow source data. Never create a `materialized='table'` passthrough for a raw table name — it overwrites source data.
-
-## 9. Column Value Mapping
-
-When joining to a lookup table, use source values directly unless the lookup provides a new enrichment column. Do not replace source column values with remapped lookup values — the evaluator expects original source values.
-
-## 10. NULL and Precision Policy
-
-- Do NOT use `COALESCE(col, '')` unless YML explicitly requires empty string.
-- Do NOT use `ROUND()` unless YML requires it (evaluator uses abs_tol=0.01 — full precision is safer).
-- Do NOT use `SELECT DISTINCT` on fact tables — use `ROW_NUMBER()`.
-- Do NOT use `COALESCE(numeric_col, 0)` in aggregates unless YML says "treat nulls as zero".
-- ID columns: check source type with `explore_table` — VARCHAR `_id` must stay VARCHAR (`'100063' != 100063`).
-- Do NOT add WHERE/HAVING filters that are not in the task description or YML. Table/column names like "actor_rating" do NOT mean you should filter `role='ACTOR'`. Only filter when the task says "exclude", "only", "where", or YML docs blocks specify a filter condition.
-
-## 11. dbt Syntax Essentials
+The starting database contains pre-computed reference tables with correct output.
+`dbt run` will overwrite them. **Before your first `dbt run`**, for each target
+model that already exists as a table in the database:
 
 ```sql
-{{ config(materialized='table') }}          -- at top of every model file
-SELECT * FROM {{ ref('stg_customers') }}    -- reference another model
-SELECT * FROM {{ source('raw', 'orders') }} -- reference a raw source table
+SELECT COUNT(*) FROM <model_name>
 ```
 
-Naming conventions: `stg_*` staging, `dim_*` dimension, `fct_*` fact, `obt_*` one-big-table.
+Record the row count in your `-- EXPECTED SHAPE` comment. If your rebuilt model's
+row count doesn't match after `dbt run`, you MUST diff against this reference to
+find which rows differ.
 
-Use `dbt.*` macros (e.g., `{{ dbt.date_trunc('month', 'date_col') }}`) only if existing SQL already uses the `dbt.` namespace.
+## 2. Incremental Models and Period-Over-Period Columns
 
-## 12. Turn Budget Management
+When a dbt project uses `materialized="incremental"` models, the project is
+designed to accumulate state over multiple runs. On a **first run** (full refresh,
+no prior state), incremental models build from scratch.
 
-Over-exploration is the #1 cause of missing models. Follow this discipline:
-- **First 25% of turns**: Explore (list_tables, explore 2 source tables, read YMLs). STOP exploring.
-- **Middle 50% of turns**: Write ALL priority model .sql files and run `dbt run`. A wrong-but-present model can be fixed; a missing model scores zero.
-- **Last 25% of turns**: Fix errors, write non-priority models, run /dbt-verification.
+**If you are writing a new model that includes period-over-period metrics
+(MoM, WoW, YoY) and the project has not been run incrementally before**:
+1. Output rows for the **latest date only**: `WHERE date_col = (SELECT MAX(date_col) FROM source)`
+2. Period-over-period columns must be `CAST(NULL AS DOUBLE)` — there is no prior
+   aggregated state to compare against. Computing these from raw historical data
+   would produce values that don't match the expected first-run output.
 
-If halfway through your budget any priority model lacks a .sql file, STOP everything else and write it immediately — even a minimal version.
+**If the model SQL already exists** (not a stub):
+- Read the `{% if is_incremental() %}` block to understand the filter logic.
+- The code outside that block runs on full refresh.
 
-## 13. Non-Deterministic Window Functions
+## 3. What to Trust in YML
 
-If `dbt_project_map` warns about ROW_NUMBER/RANK/DENSE_RANK in pre-shipped models, review each flagged file:
-1. Open the file and find every `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` (or RANK/DENSE_RANK)
-2. Run `explore_table` or a COUNT DISTINCT query to verify whether the ORDER BY columns uniquely identify rows within each partition:
-   ```sql
-   SELECT COUNT(*), COUNT(DISTINCT <order_by_col>) FROM <table>;
-   ```
-3. If not unique, add a tiebreaker: append the table's primary key or a unique ID column to the ORDER BY
-4. Run `dbt run --select <model>` and verify row counts match expectations
+**Trust YML for**: column names (exact match required), column descriptions (what
+each column represents), ref dependencies (what tables to join).
 
-Common pattern: `ROW_NUMBER() OVER (ORDER BY patient_id)` — if patient_id repeats across rows, add a secondary sort like `ORDER BY patient_id, encounter_id`.
+**YML `not_null` tests on key/dimension columns** (IDs, names, dates, categories)
+imply a `WHERE col IS NOT NULL` filter on input data. Do NOT implement this as an
+INNER JOIN — use an explicit WHERE clause. `not_null` on metric/aggregate columns
+(counts, averages, totals) just asserts the output shouldn't be NULL — don't filter
+inputs for those, fix the aggregation instead.
+
+**Do NOT trust YML for**: grain/row count. YML `unique` and `not_null` tests are
+assertions that may be aspirational or wrong. Do NOT use `not_null` tests to decide
+join type.
+
+Derive the grain from these signals (in priority order):
+
+1. **Unique key structure**: If the YML defines a unique key or surrogate key column,
+   examine what it's composed of. A key like `concat(ticker, timestamp)` means the
+   grain is (ticker, timestamp) — not (ticker, date). The key tells you exactly
+   what combination of values identifies one row.
+
+2. **Column list**: The columns themselves reveal the grain. If a model has both
+   a header-level key AND a detail-level key as separate columns, the grain is
+   at the detail level.
+
+3. **Upstream model grain**: Check existing upstream models that feed into yours.
+   If `bar_executions` produces one row per (ticker, timestamp), your model that
+   depends on it likely has the same or coarser grain — not finer.
+
+4. **Source cardinality**: Before writing SQL, query the source tables to check
+   how many rows your model should produce:
+   `SELECT COUNT(DISTINCT key_col) FROM source_table`
+   If your model produces dramatically fewer rows than upstream, your GROUP BY
+   is too coarse.
+
+5. **Sibling model row counts**: Check complete models at the same level.
+
+Do NOT deduplicate with ROW_NUMBER to force a `unique` test to pass — if the
+data naturally has multiple rows per key, keep them all.

@@ -27,9 +27,17 @@ from claude_agent_sdk._errors import ClaudeSDKError, ProcessError
 from ..core.logging import log, log_separator
 from ..core.mcp import load_mcp_servers
 
+_LOG_PREVIEW = 150  # chars to show in console for each event
+
+
+def _preview(text: str, limit: int = _LOG_PREVIEW) -> str:
+    """First N chars of text, single-lined."""
+    flat = text.replace("\n", " ").strip()
+    return flat[:limit] + ("..." if len(flat) > limit else "")
+
+
 SKILL_TOOL_NAMES = (
     "dbt-workflow",
-    "dbt-verification",
     "dbt-debugging",
     "duckdb-sql",
     "sql-workflow",
@@ -49,6 +57,7 @@ async def run_sdk_agent(
     max_retries: int = 3,
     skill_names: tuple[str, ...] | None = None,
     system_prompt: str | None = None,
+    agents: dict | None = None,
 ) -> dict:
     """Run the Claude Agent SDK with retry on 529/overload errors."""
     if skill_names:
@@ -61,9 +70,12 @@ async def run_sdk_agent(
         "cwd": str(work_dir),
         "mcp_servers": load_mcp_servers(),
         "debug_stderr": True,
+        "thinking": {"type": "enabled", "budget_tokens": 20_000},
     }
     if system_prompt is not None:
         agent_options_kwargs["system_prompt"] = system_prompt
+    if agents is not None:
+        agent_options_kwargs["agents"] = agents
 
     options = ClaudeAgentOptions(**agent_options_kwargs)
 
@@ -93,7 +105,7 @@ async def run_sdk_agent(
                     log(f"─── Turn {turn_count} ({elapsed:.1f}s) ───")
                     for block in message.content:
                         if isinstance(block, ThinkingBlock):
-                            log(f"[thinking] ({len(block.thinking)} chars)")
+                            log(f"[thinking] {_preview(block.thinking)}")
                             transcript.append({
                                 "type": "thinking",
                                 "turn": turn_count,
@@ -131,8 +143,7 @@ async def run_sdk_agent(
                                 log(f"[skill] Agent invoked /{skill_name}")
                         elif isinstance(block, ToolResultBlock):
                             result_str = str(block.content) if hasattr(block, "content") else str(block)
-                            truncated = result_str[:1000] + "..." if len(result_str) > 1000 else result_str
-                            log(f"[tool_result] {truncated}")
+                            log(f"[tool_result] {_preview(result_str)}")
                             transcript.append({
                                 "type": "tool_result",
                                 "turn": turn_count,
@@ -145,9 +156,9 @@ async def run_sdk_agent(
                 elif isinstance(message, UserMessage):
                     # UserMessage carries tool results back to the model.
                     # content can be a string or list of content blocks.
-                    log(f"[user_message] ({elapsed:.1f}s)")
                     content = message.content
                     if isinstance(content, str):
+                        log(f"[user_message] {_preview(content)}")
                         transcript.append({
                             "type": "user_message",
                             "turn": turn_count,
@@ -158,8 +169,7 @@ async def run_sdk_agent(
                         for block in content:
                             if isinstance(block, ToolResultBlock):
                                 result_str = str(block.content) if hasattr(block, "content") else str(block)
-                                truncated = result_str[:2000] + "..." if len(result_str) > 2000 else result_str
-                                log(f"[tool_result] id={getattr(block, 'tool_use_id', '?')} err={getattr(block, 'is_error', False)}")
+                                log(f"[tool_result] {_preview(result_str)}")
                                 transcript.append({
                                     "type": "tool_result",
                                     "turn": turn_count,
@@ -169,6 +179,7 @@ async def run_sdk_agent(
                                     "content": result_str,
                                 })
                             elif isinstance(block, TextBlock):
+                                log(f"[user_text] {_preview(block.text)}")
                                 transcript.append({
                                     "type": "user_text",
                                     "turn": turn_count,
@@ -176,6 +187,7 @@ async def run_sdk_agent(
                                     "content": block.text,
                                 })
                             else:
+                                log(f"[user_block] {_preview(str(block))}")
                                 transcript.append({
                                     "type": "user_block",
                                     "turn": turn_count,
@@ -184,6 +196,7 @@ async def run_sdk_agent(
                                 })
                     # Also capture tool_use_result dict if present
                     if message.tool_use_result:
+                        log(f"[tool_use_result] {_preview(json.dumps(message.tool_use_result, default=str))}")
                         transcript.append({
                             "type": "tool_use_result",
                             "turn": turn_count,
@@ -192,7 +205,7 @@ async def run_sdk_agent(
                         })
 
                 elif isinstance(message, SystemMessage):
-                    log(f"[system] {message.subtype}")
+                    log(f"[system] {message.subtype}: {_preview(json.dumps(message.data, default=str))}")
                     transcript.append({
                         "type": "system",
                         "turn": turn_count,
@@ -312,9 +325,9 @@ async def run_quick_fix_agent(fix_prompt: str, work_dir: Path, model: str) -> bo
 
 
 async def run_value_verify_agent(verify_prompt: str, work_dir: Path, model: str) -> bool:
-    """Run a value-verification agent. Safety cap only — no budget."""
-    log("Running value-verification agent...")
-    result = await run_sdk_agent(verify_prompt, work_dir, model, max_turns=200, timeout=1800, label="value-verify")
+    """Run a value-verification agent. Uses Opus for deeper reasoning."""
+    log("Running value-verification agent (claude-opus-4-6)...")
+    result = await run_sdk_agent(verify_prompt, work_dir, "claude-opus-4-6", max_turns=200, timeout=1800, label="value-verify")
     log("Value-verify agent completed")
     return result["success"]
 
@@ -325,3 +338,5 @@ async def run_name_fix_agent(name_fix_prompt: str, work_dir: Path, model: str) -
     result = await run_sdk_agent(name_fix_prompt, work_dir, model, max_turns=200, timeout=1200, label="name-fix")
     log("Name-fix agent completed" if result["success"] else "Name-fix agent failed")
     return result["success"]
+
+

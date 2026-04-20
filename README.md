@@ -1,6 +1,12 @@
-# SignalPilot
+<div align="center">
 
-Governed AI database access. Connect any database, get schema discovery + read-only SQL execution + dbt project management — all through a single MCP server that any AI agent can use.
+# ⚡ SignalPilot
+
+**Governed AI Database Access**
+
+</div>
+
+Connect any database, get schema discovery + read-only SQL execution + dbt project management — all through a single MCP server that any AI agent can use.
 
 ```bash
 # Start SignalPilot

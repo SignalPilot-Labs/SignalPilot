@@ -27,25 +27,25 @@ That's it. Claude Code now has governed access to your databases.
 ## What It Does
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│  Your AI Agent (Claude Code, Agent SDK, any MCP client)   │
-└─────────────────────────────┬─────────────────────────────┘
-                              │ MCP Protocol
-┌─────────────────────────────▼────────────────────────────┐
-│ SignalPilot Gateway                                       │
-│ ┌────────────┐  ┌──────────────┐  ┌───────────────────┐ │
-│ │ Governance │  │ Schema       │  │ dbt Project       │ │
-│ │ . LIMIT    │  │ . DDL        │  │ . Map / Validate  │ │
-│ │ . DDL block│  │ . Explore    │  │ . Model verify    │ │
-│ │ . Audit    │  │ . Join paths │  │ . Date bounds     │ │
-│ └────────────┘  └──────────────┘  └───────────────────┘ │
-└─────────────────────────────┬────────────────────────────┘
-                              │
-         ┌────────────────────┼────────────────────┐
-         ▼                    ▼                    ▼
-  ┌──────────┐         ┌──────────┐         ┌──────────┐
-  │  DuckDB  │         │ Postgres │         │Snowflake │
-  └──────────┘         └──────────┘         └──────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Your AI Agent (Claude Code, Agent SDK, any MCP client)     │
+└────────────────────────────┬────────────────────────────────┘
+                             │ MCP Protocol
+┌────────────────────────────▼────────────────────────────────┐
+│  SignalPilot Gateway                                         │
+│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │
+│  │ Governance │ │ Schema       │ │ dbt Project           │ │
+│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │
+│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │
+│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │
+│  └────────────┘ └──────────────┘ └───────────────────────┘ │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+   ┌─────────┐        ┌──────────┐        ┌──────────┐
+   │ DuckDB  │        │ Postgres │        │Snowflake │
+   └─────────┘        └──────────┘        └──────────┘
 ```
 
 **Governance** — Every query is read-only, LIMIT-injected, DDL/DML-blocked, and audit-logged. Your AI agent cannot drop tables, modify data, or run unbounded queries.

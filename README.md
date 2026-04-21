@@ -2,11 +2,13 @@
 
 # ⚡ SignalPilot Data Agent
 
-### 🏆 #1 on Spider 2.0 dbt Bench — 33/64 (51.6%)
+### 🏆 #1 on Spider 2.0 dbt Bench — 33/68 (48.5%)*
 
 **Governed AI agents with connector suites and access to your data stack (db, dbt and more), optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).**
 
 [📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [🚀 Try SignalPilot](#use-with-claude-code-plugin) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📊 See benchmarks](benchmark/)
+
+<sub>\* 4 of the 68 Spider 2.0 dbt tasks were missing gold labels at the time of scoring. We'll update this number once ground truth is published.</sub>
 
 </div>
 

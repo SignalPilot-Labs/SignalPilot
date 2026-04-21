@@ -296,7 +296,7 @@ async def explore_column_values(
 
     db_type = info.db_type
     # Build exploration query with dialect-aware quoting
-    quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino") else '`'
+    quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino", "duckdb", "sqlite") else '`'
     if db_type == "mssql":
         quote = '['
         close_quote = ']'
@@ -3274,7 +3274,7 @@ async def explore_columns_deep(name: str, body: dict):
                 for c in num_cols[:15]:
                     cn = c["name"]
                     q = (
-                        '"' if db_type in ("postgres", "redshift", "snowflake", "duckdb", "trino")
+                        '"' if db_type in ("postgres", "redshift", "snowflake", "duckdb", "sqlite", "trino")
                         else '`' if db_type in ("mysql", "clickhouse", "databricks")
                         else '['
                     )

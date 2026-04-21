@@ -1,7 +1,8 @@
 ---
 name: dbt-workflow
-description: "Load FIRST before any dbt project work. Covers the full 5-step dbt workflow: project mapping, validation, contract understanding, SQL writing, and verification. Also covers output shape inference, incremental model handling, and what to trust in YML."
+description: "Load FIRST before any dbt project work. Covers the full 5-step dbt workflow: project scanning, mapping, validation, contract understanding, SQL writing, and verification. Also covers output shape inference, incremental model handling, and what to trust in YML."
 disable-model-invocation: false
+allowed-tools: Bash(dbt *) Bash(python3 *)
 ---
 
 # dbt Workflow Skill — Full Project Lifecycle
@@ -11,13 +12,21 @@ disable-model-invocation: false
 This skill orchestrates the complete dbt project workflow. Load it FIRST whenever
 working on a dbt project — it contains rules that affect how you interpret everything.
 
+## Project Scan (auto-generated)
+
+```!
+python3 "${CLAUDE_SKILL_DIR}/scan_project.py" 2>/dev/null || echo "(project scan unavailable — run manually)"
+```
+
 ## The 5-Step Workflow
 
 ### Step 1 — Map the project
 Call `mcp__signalpilot__dbt_project_map project_dir="<your_project_dir>"`.
-The work order at the bottom is your plan. Identify:
+The work order at the bottom is your plan. Use the project scan above to identify:
 - STUBS TO REWRITE (models with placeholder SQL)
 - MODELS TO BUILD (models defined in YML but missing SQL)
+- DEPENDENCIES (build order)
+- REQUIRED COLUMNS (exact match from YML contracts)
 
 Before mapping, snapshot reference tables using the Agent tool with
 `subagent_type="explorer"` — this preserves pre-existing row counts and sample

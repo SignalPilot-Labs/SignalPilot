@@ -1,5 +1,6 @@
 ---
 name: dbt-date-spines
+description: "Fix current_date/now() hazards in dbt date spine models. Replaces nondeterministic date references with data-driven boundaries from get_date_boundaries."
 type: skill
 ---
 

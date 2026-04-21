@@ -30,6 +30,12 @@ _MAX_SQL_LENGTH = 100_000
 _MAX_CODE_LENGTH = 1_000_000
 
 
+def _quote_table(name: str) -> str:
+    """Quote a table name for SQL, handling schema-qualified names like main.track."""
+    parts = name.split(".")
+    return ".".join(f'"{p}"' for p in parts)
+
+
 def _validate_connection_name(name: str) -> str | None:
     """Validate connection name. Returns error message or None if valid."""
     if not name or not _CONN_NAME_RE.match(name):
@@ -74,6 +80,18 @@ def _gateway_url() -> str:
     return os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 
 
+import os as _os
+
+# Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
+_allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
+_extra_hosts = _os.environ.get("SP_MCP_ALLOWED_HOSTS", "")
+if _extra_hosts:
+    _allowed_hosts.extend(h.strip() for h in _extra_hosts.split(",") if h.strip())
+# Include hosts with port numbers
+_allowed_hosts_with_ports = list(_allowed_hosts)
+for h in _allowed_hosts:
+    _allowed_hosts_with_ports.append(f"{h}:3300")
+
 mcp = FastMCP(
     "SignalPilot",
     instructions=(
@@ -82,6 +100,9 @@ mcp = FastMCP(
         "Use query_database for read-only SQL with automatic governance (LIMIT injection, "
         "DDL/DML blocking, audit logging). Use list_connections to see available databases."
     ),
+    transport_security={
+        "allowed_hosts": _allowed_hosts_with_ports,
+    },
 )
 
 
@@ -2329,8 +2350,8 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     """
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
-    if not model_name or not re.match(r"^[a-zA-Z0-9_]{1,128}$", model_name):
-        return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores (1-128 chars)."
+    if not model_name or not _MODEL_NAME_RE.match(model_name):
+        return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
     if not yml_columns or not yml_columns.strip():
         return "Error: yml_columns cannot be empty."
 
@@ -2555,7 +2576,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     extras = _get_extras(connection_name)
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM "{table_name}"')
+            count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}')
     except Exception as e:
         return f"Error: {e}"
 
@@ -2592,7 +2613,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 for key in keys:
                     try:
-                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM "{table_name}"')
+                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM {_quote_table(table_name)}')
                         distinct_count: int = dist_rows[0].get("distinct_count", 0) if dist_rows else 0
                         if distinct_count == total_rows:
                             lines.append(f"    {key}: {distinct_count:,} distinct (UNIQUE - this is likely the grain)")
@@ -2659,7 +2680,7 @@ async def validate_model_output(
     extras = _get_extras(connection_name)
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
+            model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
         return f"Error: {e}"
 
@@ -2672,7 +2693,7 @@ async def validate_model_output(
             return f"Error: Invalid source_table name '{source_table}'."
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{source_table}"')
+                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
             source_error = str(e)
@@ -2756,7 +2777,7 @@ async def audit_model_sources(
     # Step 1: Get model row count.
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{model_name}"')
+            model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
         return f"Error: could not query model '{model_name}': {e}"
 
@@ -2777,7 +2798,7 @@ async def audit_model_sources(
             continue
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM "{src}"')
+                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(src)}')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
             source_lines.append(f"  {src}:  ERROR: {e}")
@@ -2833,7 +2854,7 @@ async def audit_model_sources(
                         col_result = await connector.execute(
                             f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
                             f'COUNT(DISTINCT "{col}") as dist '
-                            f'FROM "{model_name}"'
+                            f'FROM {_quote_table(model_name)}'
                         )
                     null_count: int = col_result[0].get("nulls", 0) if col_result else 0
                     dist_count: int = col_result[0].get("dist", 0) if col_result else 0
@@ -2953,36 +2974,39 @@ async def compare_join_types(
 
     where_part = f"WHERE {where_clause}" if where_clause and where_clause.strip() else ""
 
+    _qt_left = _quote_table(left_table)
+    _qt_right = _quote_table(right_table)
+
     sql = f"""
 WITH
-left_count AS (SELECT COUNT(*) AS cnt FROM "{left_table}"),
-right_count AS (SELECT COUNT(*) AS cnt FROM "{right_table}"),
+left_count AS (SELECT COUNT(*) AS cnt FROM {_qt_left}),
+right_count AS (SELECT COUNT(*) AS cnt FROM {_qt_right}),
 inner_join AS (
     SELECT COUNT(*) AS cnt
-    FROM "{left_table}" a
-    INNER JOIN "{right_table}" b ON {join_keys}
+    FROM {_qt_left} a
+    INNER JOIN {_qt_right} b ON {join_keys}
     {where_part}
 ),
 left_join AS (
     SELECT COUNT(*) AS cnt,
            COUNT({right_col}) AS matched,
            COUNT(*) - COUNT({right_col}) AS unmatched
-    FROM "{left_table}" a
-    LEFT JOIN "{right_table}" b ON {join_keys}
+    FROM {_qt_left} a
+    LEFT JOIN {_qt_right} b ON {join_keys}
     {where_part}
 ),
 right_join AS (
     SELECT COUNT(*) AS cnt,
            COUNT({left_col}) AS matched,
            COUNT(*) - COUNT({left_col}) AS unmatched
-    FROM "{left_table}" a
-    RIGHT JOIN "{right_table}" b ON {join_keys}
+    FROM {_qt_left} a
+    RIGHT JOIN {_qt_right} b ON {join_keys}
     {where_part}
 ),
 full_join AS (
     SELECT COUNT(*) AS cnt
-    FROM "{left_table}" a
-    FULL OUTER JOIN "{right_table}" b ON {join_keys}
+    FROM {_qt_left} a
+    FULL OUTER JOIN {_qt_right} b ON {join_keys}
     {where_part}
 )
 SELECT

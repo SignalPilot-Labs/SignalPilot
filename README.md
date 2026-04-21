@@ -6,9 +6,22 @@
 
 **Governed AI agents with connector suites and access to your data stack (db, dbt and more), optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).**
 
-[📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro) · [🚀 Try SignalPilot](#use-with-claude-code-plugin) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📊 See benchmarks](benchmark/)
+[📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [🚀 Try SignalPilot](#use-with-claude-code-plugin) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📊 See benchmarks](benchmark/)
 
 </div>
+
+---
+
+## For Data & Platform Teams
+
+We partner with data, analytics, and platform teams who want to put AI agents to work on real warehouse workloads — safely.
+
+- **Governed production access** — bring SignalPilot into your Snowflake / BigQuery / Postgres / dbt stack with enterprise guardrails (read-only, LIMIT-injected, DDL/DML-blocked, fully audit-logged).
+- **Harness & agent optimization with AutoFyn** — we tune your agent harness, prompts, skills, and retrieval to hit production accuracy targets on *your* data, not a leaderboard.
+- **Benchmark-driven evaluation** — we bring the same eval rigor that got us #1 on Spider 2.0 dbt into your environment: custom task suites, regression tracking, and measurable lift.
+- **Enterprise support** — SSO, private deployments, SLAs, and hands-on engineering support.
+
+**Talk to us** about your data, dbt, or agent harness optimization workload: [cal.com/fahimaziz/autofyn-intro](https://cal.com/fahimaziz/autofyn-intro) · Learn more at [signalpilot.ai](https://www.signalpilot.ai/).
 
 ---
 

@@ -25,6 +25,8 @@ We partner with data, analytics, and platform teams who want to put AI agents to
 
 ---
 
+## Try SignalPilot Data Agent
+
 **Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
 
 ```bash

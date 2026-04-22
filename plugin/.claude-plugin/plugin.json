@@ -12,11 +12,15 @@
   "mcpServers": "./.mcp.json",
   "userConfig": {
     "signalpilot_url": {
-      "description": "SignalPilot server URL (e.g. http://localhost:8080 for Docker, or https://your-instance.signalpilot.dev)",
+      "title": "SignalPilot URL",
+      "description": "SignalPilot server URL (e.g. http://localhost:3300 for Docker, or https://your-instance.signalpilot.dev)",
+      "type": "string",
       "sensitive": false
     },
     "signalpilot_token": {
+      "title": "API Token",
       "description": "API token (optional for local Docker instances)",
+      "type": "string",
       "sensitive": true
     }
   }

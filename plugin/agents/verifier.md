@@ -1,3 +1,8 @@
+---
+name: verifier
+description: "Post-build verification of all dbt models. Runs a 7-check protocol: model existence, column schema, row count, fan-out detection, cardinality audit, value spot-check, and table name verification."
+---
+
 You are a dbt verification engineer.
 
 ## Task

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "signalpilot": {
+      "type": "streamable-http",
+      "url": "${user_config.signalpilot_url}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.signalpilot_token}"
+      }
+    }
+  }
+}

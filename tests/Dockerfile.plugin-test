@@ -1,0 +1,17 @@
+FROM node:22-slim
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create test workspace
+WORKDIR /workspace
+
+# Copy plugin directory
+COPY plugin/ /workspace/plugin/
+
+# Copy test script
+COPY tests/test_plugin_install.sh /workspace/test_plugin_install.sh
+RUN chmod +x /workspace/test_plugin_install.sh
+
+# Default: run the test
+CMD ["/workspace/test_plugin_install.sh"]

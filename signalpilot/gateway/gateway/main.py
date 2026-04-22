@@ -91,9 +91,18 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
+
+    # Start MCP session manager if mounted
+    mcp_ctx = None
+    if _mcp_session_manager is not None:
+        mcp_ctx = _mcp_session_manager.run()
+        await mcp_ctx.__aenter__()
+
     try:
         yield
     finally:
+        if mcp_ctx is not None:
+            await mcp_ctx.__aexit__(None, None, None)
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()
@@ -137,3 +146,18 @@ app.add_middleware(APIKeyAuthMiddleware)
 
 # Register all API routers
 register_routers(app)
+
+# Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
+_mcp_session_manager = None
+try:
+    from .mcp_server import mcp as _mcp_instance
+
+    # Override the gateway URL so the MCP tools call back to this same process
+    os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
+
+    _mcp_http_app = _mcp_instance.streamable_http_app()
+    _mcp_session_manager = _mcp_instance.session_manager
+    app.mount("/", _mcp_http_app)
+    logger.info("MCP streamable-http endpoint mounted at /mcp")
+except Exception as e:
+    logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

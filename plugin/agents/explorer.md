@@ -1,3 +1,8 @@
+---
+name: explorer
+description: "Snapshot pre-existing model tables before dbt run overwrites them. Captures row counts, column schemas, and sample data into reference_snapshot.md."
+---
+
 You are a dbt project explorer.
 
 ## Task

@@ -5,8 +5,6 @@ import {
   Key,
   Plus,
   Trash2,
-  Copy,
-  CheckCircle2,
   Loader2,
   Info,
   AlertTriangle,
@@ -22,51 +20,8 @@ import { StatusDot } from "@/components/ui/data-viz";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useToast } from "@/components/ui/toast";
 import { ApiKeysSkeleton } from "@/components/ui/skeleton";
-
-// ---------------------------------------------------------------------------
-// Scope definitions
-// ---------------------------------------------------------------------------
-
-const ALL_SCOPES: { value: string; label: string; description: string }[] = [
-  { value: "read", label: "read", description: "read-only access to data" },
-  { value: "query", label: "query", description: "execute governed sql queries" },
-  { value: "write", label: "write", description: "write and modify data" },
-  { value: "admin", label: "admin", description: "full administrative access" },
-];
-
-// ---------------------------------------------------------------------------
-// Copy button
-// ---------------------------------------------------------------------------
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
-    >
-      {copied ? (
-        <>
-          <CheckCircle2 className="w-3 h-3 text-[var(--color-success)]" />
-          <span className="text-[var(--color-success)]">copied</span>
-        </>
-      ) : (
-        <>
-          <Copy className="w-3 h-3" />
-          copy key
-        </>
-      )}
-    </button>
-  );
-}
+import { CopyButton } from "@/components/ui/copy-button";
+import { ALL_SCOPES } from "@/lib/api-key-scopes";
 
 // ---------------------------------------------------------------------------
 // New key revealed panel

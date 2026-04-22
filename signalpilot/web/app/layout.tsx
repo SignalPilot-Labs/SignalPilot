@@ -63,7 +63,7 @@ export default async function RootLayout({
             signInUrl="/sign-in"
             signUpUrl="/sign-up"
             signInFallbackRedirectUrl="/dashboard"
-            signUpFallbackRedirectUrl="/dashboard"
+            signUpFallbackRedirectUrl="/onboarding"
             afterSignOutUrl="/"
             appearance={clerkAppearance}
           >

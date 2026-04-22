@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Terminal,
@@ -32,6 +33,8 @@ import { SystemDiagram } from "@/components/ui/system-diagram";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { useToast } from "@/components/ui/toast";
+import { DashboardSkeleton } from "@/components/ui/skeleton";
+import { useOnboardingStatus } from "@/lib/onboarding";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -250,7 +253,39 @@ function UserGreeting() {
   );
 }
 
-export default function DashboardPage() {
+/* ── DashboardOnboardingCheck — only rendered when isCloudMode is true ── */
+function DashboardOnboardingCheck() {
+  const router = useRouter();
+  const { isComplete, isLoading } = useOnboardingStatus();
+
+  if (isLoading || isComplete === null) {
+    return <DashboardSkeleton />;
+  }
+
+  if (isComplete === false) {
+    router.push("/onboarding");
+    return <DashboardSkeleton />;
+  }
+
+  return <DashboardContent />;
+}
+
+/* ── DashboardGate — new default export ── */
+export default function DashboardGate() {
+  const { isCloudMode, isLoaded } = useAppAuth();
+
+  if (!isLoaded) {
+    return <DashboardSkeleton />;
+  }
+
+  if (isCloudMode) {
+    return <DashboardOnboardingCheck />;
+  }
+
+  return <DashboardContent />;
+}
+
+function DashboardContent() {
   const { toast } = useToast();
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);

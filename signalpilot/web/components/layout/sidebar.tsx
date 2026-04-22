@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
-import { KeyRound, CreditCard, Plug } from "lucide-react";
+import { KeyRound, CreditCard, Plug, BarChart3 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 
@@ -292,6 +292,30 @@ function BillingNavLink({ pathname }: { pathname: string }) {
   );
 }
 
+/** Usage nav link — only rendered in cloud mode, nested under /settings */
+function UsageNavLink({ pathname }: { pathname: string }) {
+  const { isCloudMode } = useAppAuth();
+
+  if (!isCloudMode) return null;
+
+  const active = pathname.startsWith("/settings/usage");
+
+  return (
+    <Link
+      href="/settings/usage"
+      aria-label="view usage analytics"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <BarChart3 size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">usage</span>
+    </Link>
+  );
+}
+
 /** MCP Connect nav link — only rendered in cloud mode, nested under /settings */
 function McpConnectNavLink({ pathname }: { pathname: string }) {
   const { isCloudMode } = useAppAuth();
@@ -437,6 +461,8 @@ export default function Sidebar() {
         })}
         {/* API Keys sub-link — cloud mode only */}
         <ApiKeysNavLink pathname={pathname} />
+        {/* Usage sub-link — cloud mode only */}
+        <UsageNavLink pathname={pathname} />
         {/* Billing sub-link — cloud mode only */}
         <BillingNavLink pathname={pathname} />
         {/* MCP Connect sub-link — cloud mode only */}

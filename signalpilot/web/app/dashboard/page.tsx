@@ -25,6 +25,8 @@ import { useConnection } from "@/lib/connection-context";
 import { useAppAuth } from "@/lib/auth-context";
 import { useSubscription } from "@/lib/subscription-context";
 import { useBackendClient } from "@/lib/backend-client";
+import type { ApiKeyResponse } from "@/lib/backend-client";
+import { generateDailyUsage, generateKeyUsage } from "@/lib/mock-usage";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -99,24 +101,10 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
 
 /* ── Cloud status section ── */
 
-/** Inner content — safe to call useBackendClient() here since this component
- *  is only rendered when isCloudMode is true (gate is CloudStatusSection). */
-function CloudStatusContent() {
+/** Inner content for the subscription/keys/MCP grid.
+ *  Receives keyCount as a prop — no internal fetch needed. */
+function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
   const { planTier, status, maxApiKeys } = useSubscription();
-  const client = useBackendClient();
-  const [keyCount, setKeyCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    client.getApiKeys()
-      .then((keys) => {
-        if (!cancelled) setKeyCount(keys.length);
-      })
-      .catch(() => {
-        if (!cancelled) setKeyCount(-1); // sentinel: error
-      });
-    return () => { cancelled = true; };
-  }, [client]);
 
   const tierColorMap: Record<string, string> = {
     free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
@@ -229,12 +217,143 @@ function CloudStatusContent() {
   );
 }
 
-/** Gate — calls useAppAuth() and conditionally renders CloudStatusContent.
- *  useBackendClient() is NEVER called here; it lives only in CloudStatusContent. */
+/** Usage analytics card — receives keys as prop, no fetch of its own. */
+function UsageAnalyticsContent({ keys }: { keys: ApiKeyResponse[] | null }) {
+  const dailyData = keys ? generateDailyUsage(keys, 7) : [];
+  const last7DaysTotal = dailyData.reduce((sum, d) => sum + d.requests, 0);
+
+  const keyStats = keys ? keys.map((k) => generateKeyUsage(k)) : [];
+  const activeKeys = keyStats.filter((s) => s.last7Days > 0).length;
+
+  const sparkValues = dailyData.map((d) => d.requests);
+
+  // Most recent lastUsedAt across all keys
+  const latestActivity = keyStats.reduce<string | null>((latest, s) => {
+    if (!latest) return s.lastUsedAt;
+    return s.lastUsedAt > latest ? s.lastUsedAt : latest;
+  }, null);
+
+  return (
+    <div className="mb-4">
+      <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+        {/* Card 1: Total requests (7d) */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <BarChart3 className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+              requests (7d)
+            </span>
+          </div>
+          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
+            {keys === null ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
+            ) : last7DaysTotal.toLocaleString()}
+          </p>
+          {sparkValues.length >= 2 && (
+            <div className="mt-2">
+              <Sparkline
+                values={sparkValues}
+                width={80}
+                height={20}
+                color="var(--color-success)"
+                fillOpacity={0.1}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Card 2: Active keys */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+              active keys
+            </span>
+          </div>
+          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
+            {keys === null ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
+            ) : activeKeys}
+          </p>
+          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+            {keys === null ? "" : `of ${keys.length} total`}
+          </p>
+        </div>
+
+        {/* Card 3: Last activity */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+              last activity
+            </span>
+          </div>
+          {keys === null ? (
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
+          ) : latestActivity ? (
+            <TimeAgo
+              timestamp={new Date(latestActivity).getTime()}
+              className="text-lg font-light text-[var(--color-text)] tracking-wider"
+            />
+          ) : (
+            <p className="text-lg font-light text-[var(--color-text-dim)] tracking-wider">—</p>
+          )}
+        </div>
+      </div>
+
+      {/* View details link */}
+      <div className="flex justify-end mt-2">
+        <Link
+          href="/settings/usage"
+          aria-label="view full usage analytics"
+          className="inline-flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        >
+          view details <ArrowRight className="w-3 h-3" />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/** Shared content component that fetches keys once and passes them to both
+ *  CloudStatusContent and UsageAnalyticsContent — no duplicate API calls. */
+function CloudAndUsageContent() {
+  const client = useBackendClient();
+  const [keys, setKeys] = useState<ApiKeyResponse[] | null>(null);
+  const [keyCount, setKeyCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    client.getApiKeys()
+      .then((data) => {
+        if (!cancelled) {
+          setKeys(data);
+          setKeyCount(data.length);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setKeys([]);
+          setKeyCount(-1); // sentinel: error
+        }
+      });
+    return () => { cancelled = true; };
+  }, [client]);
+
+  return (
+    <>
+      <CloudStatusContent keyCount={keyCount} />
+      <UsageAnalyticsContent keys={keys} />
+    </>
+  );
+}
+
+/** Gate — calls useAppAuth() and conditionally renders CloudAndUsageContent.
+ *  useBackendClient() is NEVER called here; it lives only in CloudAndUsageContent. */
 function CloudStatusSection() {
   const { isCloudMode } = useAppAuth();
   if (!isCloudMode) return null;
-  return <CloudStatusContent />;
+  return <CloudAndUsageContent />;
 }
 
 /* ── Signed-in user greeting ── */

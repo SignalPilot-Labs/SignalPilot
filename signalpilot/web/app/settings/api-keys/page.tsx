@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/toast";
 import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
+import { generateKeyUsage } from "@/lib/mock-usage";
 
 // ---------------------------------------------------------------------------
 // New key revealed panel
@@ -240,6 +241,8 @@ function KeyRow({
       })
     : "never";
 
+  const usageStats = generateKeyUsage(apiKey);
+
   return (
     <div className="flex items-center gap-4 px-5 py-3 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors group">
       {/* Name */}
@@ -276,9 +279,15 @@ function KeyRow({
         {lastUsed}
       </span>
 
+      {/* Requests */}
+      <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider w-20 flex-shrink-0 tabular-nums">
+        {usageStats.totalRequests.toLocaleString()}
+      </span>
+
       {/* Delete */}
       <button
         onClick={() => onDelete(apiKey.id)}
+        aria-label={`delete api key ${apiKey.name}`}
         className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/20 hover:bg-[var(--color-error)]/5 hover:border-[var(--color-error)]/40 transition-all tracking-wider uppercase"
       >
         <Trash2 className="w-3 h-3" />
@@ -310,6 +319,9 @@ function TableHeader() {
       <span className="w-24 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
         last used
       </span>
+      <span className="w-20 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+        requests
+      </span>
       <span className="w-16 flex-shrink-0" />
     </div>
   );
@@ -332,7 +344,7 @@ export default function ApiKeysPage() {
 
   if (!isCloudMode) {
     return (
-      <div className="p-8 max-w-3xl animate-fade-in">
+      <div className="p-8 max-w-4xl animate-fade-in">
         <PageHeader
           title="api keys"
           subtitle="auth"
@@ -437,7 +449,7 @@ function ApiKeysContent() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="p-8 max-w-3xl animate-fade-in">
+    <div className="p-8 max-w-4xl animate-fade-in">
       <PageHeader
         title="api keys"
         subtitle="auth"

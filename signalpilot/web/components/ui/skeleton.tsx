@@ -123,10 +123,11 @@ export function DashboardSkeleton() {
 /**
  * API Keys page loading skeleton.
  * Matches the PageHeader + TerminalBar + section header + key rows layout.
+ * Uses max-w-4xl to accommodate the extra "requests" column.
  */
 export function ApiKeysSkeleton() {
   return (
-    <div className="p-8 max-w-3xl animate-fade-in">
+    <div className="p-8 max-w-4xl animate-fade-in">
       <PageHeaderSkeleton />
       <TerminalBarSkeleton />
 
@@ -148,6 +149,7 @@ export function ApiKeysSkeleton() {
           <Skeleton className="w-44 h-2 flex-shrink-0" />
           <Skeleton className="w-28 h-2 flex-shrink-0" />
           <Skeleton className="w-24 h-2 flex-shrink-0" />
+          <Skeleton className="w-20 h-2 flex-shrink-0" />
           <Skeleton className="w-16 h-2 flex-shrink-0" />
         </div>
         {/* Key rows */}
@@ -161,7 +163,69 @@ export function ApiKeysSkeleton() {
             </div>
             <Skeleton className="w-28 h-2.5 flex-shrink-0" />
             <Skeleton className="w-24 h-2.5 flex-shrink-0" />
+            <Skeleton className="w-20 h-2.5 flex-shrink-0" />
             <Skeleton className="w-16 h-6 flex-shrink-0" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Usage page loading skeleton.
+ * Matches PageHeader + TerminalBar + rate-limit card + chart + per-key table.
+ */
+export function UsageSkeleton() {
+  return (
+    <div className="p-8 max-w-4xl animate-fade-in" aria-busy="true">
+      <PageHeaderSkeleton />
+      <TerminalBarSkeleton />
+
+      {/* Rate limit card skeleton */}
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <Skeleton className="w-3.5 h-3.5" />
+          <Skeleton className="h-2.5 w-32" />
+        </div>
+        <Skeleton className="h-2 w-full mb-2" />
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-2 w-16" />
+          <Skeleton className="h-2 w-24" />
+        </div>
+      </div>
+
+      {/* Chart area skeleton */}
+      <div className="flex items-center gap-2 mb-3">
+        <Skeleton className="w-3.5 h-3.5" />
+        <Skeleton className="h-2.5 w-28" />
+      </div>
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 mb-6">
+        <Skeleton className="h-[200px] w-full" />
+      </div>
+
+      {/* Per-key breakdown table skeleton */}
+      <div className="flex items-center gap-2 mb-3">
+        <Skeleton className="w-3.5 h-3.5" />
+        <Skeleton className="h-2.5 w-28" />
+      </div>
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+        {/* Header row */}
+        <div className="flex items-center gap-4 px-5 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+          <Skeleton className="flex-1 h-2" />
+          <Skeleton className="w-28 h-2 flex-shrink-0" />
+          <Skeleton className="w-24 h-2 flex-shrink-0" />
+          <Skeleton className="w-20 h-2 flex-shrink-0" />
+          <Skeleton className="w-28 h-2 flex-shrink-0" />
+        </div>
+        {/* Row skeletons — flex layout matching actual KeyUsageRow */}
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="flex items-center gap-4 px-5 py-3 border-b border-[var(--color-border)]">
+            <Skeleton className="flex-1 h-2.5" />
+            <Skeleton className="w-28 h-2.5 flex-shrink-0" />
+            <Skeleton className="w-24 h-2.5 flex-shrink-0" />
+            <Skeleton className="w-20 h-2.5 flex-shrink-0" />
+            <Skeleton className="w-28 h-2.5 flex-shrink-0" />
           </div>
         ))}
       </div>

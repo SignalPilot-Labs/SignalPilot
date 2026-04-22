@@ -38,9 +38,8 @@ cd signalpilot
 docker compose up -d
 
 # Add to Claude Code
-claude plugin install github:SignalPilot-Labs/signalpilot
-# → SignalPilot URL: http://localhost:8080
-# → API token: (leave blank for local)
+/plugin marketplace add ./plugin
+/plugin install signalpilot-dbt@signalpilot
 ```
 
 That's it. Claude Code now has governed access to your databases.
@@ -84,11 +83,23 @@ That's it. Claude Code now has governed access to your databases.
 The [`plugin/`](plugin/) directory is a Claude Code plugin that adds all SignalPilot tools + battle-tested dbt skills to your normal Claude Code session.
 
 ```bash
-# Install from local clone
-claude plugin add ./plugin
+# Add the marketplace and install
+/plugin marketplace add ./plugin
+/plugin install signalpilot-dbt@signalpilot
+/reload-plugins
+```
 
-# Or from GitHub
-claude plugin install github:SignalPilot-Labs/signalpilot
+Then add a `.mcp.json` to your project root to connect the MCP server:
+
+```json
+{
+  "mcpServers": {
+    "signalpilot": {
+      "type": "http",
+      "url": "http://localhost:3300/mcp"
+    }
+  }
+}
 ```
 
 See [`plugin/README.md`](plugin/README.md) for full details on included skills and agents.
@@ -103,8 +114,8 @@ SignalPilot exposes a standard MCP server. Add it to any client that supports MC
 {
   "mcpServers": {
     "signalpilot": {
-      "type": "streamable-http",
-      "url": "http://localhost:8080/mcp"
+      "type": "http",
+      "url": "http://localhost:3300/mcp"
     }
   }
 }
@@ -130,10 +141,10 @@ Or via stdio (for SDK-based agents):
 
 ## Connect a Database
 
-Via the web UI at `http://localhost:8080`, or via API:
+Via the web UI at `http://localhost:3300`, or via API:
 
 ```bash
-curl -X POST http://localhost:8080/api/connections \
+curl -X POST http://localhost:3300/api/connections \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-warehouse",

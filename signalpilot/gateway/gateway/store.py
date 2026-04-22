@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import stat
 import time
 import uuid
@@ -45,6 +46,10 @@ from .models import (
     ConnectionUpdate,
     DBType,
     GatewaySettings,
+    ProjectCreate,
+    ProjectInfo,
+    ProjectStorage,
+    ProjectUpdate,
     SandboxInfo,
     SSHTunnelConfig,
     SSLConfig,
@@ -58,6 +63,7 @@ CREDENTIALS_FILE = DATA_DIR / "credentials.enc"
 SANDBOXES_FILE = DATA_DIR / "sandboxes.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 AUDIT_FILE = DATA_DIR / "audit.jsonl"
+PROJECTS_FILE = DATA_DIR / "projects.json"
 SCHEMA_ENDORSEMENTS_FILE = DATA_DIR / "schema_endorsements.json"
 
 # In-memory vault for raw credentials (cache — authoritative source is encrypted file)
@@ -535,6 +541,266 @@ def get_credential_extras(name: str) -> dict:
     if name not in _credential_extras:
         reload_credentials()
     return _credential_extras.get(name, {})
+
+
+# ─── Projects ─────────────────────────────────────────────────────────────────
+
+_DBT_PROJECT_YML_TEMPLATE = """\
+name: '{name}'
+version: '1.0.0'
+config-version: 2
+profile: '{name}'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+"""
+
+_PACKAGES_YML_TEMPLATE = """\
+packages: []
+"""
+
+_PROFILES_DUCKDB = """\
+{name}:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: '{database}'
+"""
+
+_PROFILES_POSTGRES = """\
+{name}:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: '{host}'
+      port: {port}
+      user: '{username}'
+      dbname: '{database}'
+      schema: public
+"""
+
+_PROFILES_SNOWFLAKE = """\
+{name}:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: '{account}'
+      user: '{username}'
+      database: '{database}'
+      warehouse: '{warehouse}'
+      schema: public
+      role: '{role}'
+"""
+
+_PROFILES_BIGQUERY = """\
+{name}:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: '{project}'
+      dataset: '{dataset}'
+      location: '{location}'
+"""
+
+_PROFILES_PLACEHOLDER = """\
+# TODO: Configure profile for {db_type}
+# See https://docs.getdbt.com/docs/core/connect-data-platform
+{name}:
+  target: dev
+  outputs:
+    dev:
+      type: '{db_type}'
+"""
+
+_SCAFFOLD_DIRS = [
+    "models/staging",
+    "models/marts",
+    "analyses",
+    "tests",
+    "seeds",
+    "macros",
+    "snapshots",
+]
+
+_GITKEEP_DIRS = [
+    "models/staging",
+    "models/marts",
+]
+
+
+def _generate_dbt_project_yml(project_name: str) -> str:
+    """Return dbt_project.yml content for a new project."""
+    return _DBT_PROJECT_YML_TEMPLATE.format(name=project_name)
+
+
+def _generate_profiles_yml(project_name: str, connection: ConnectionInfo) -> str:
+    """Return profiles.yml content based on the connection's db_type."""
+    db = connection.db_type
+    if db == "duckdb":
+        return _PROFILES_DUCKDB.format(
+            name=project_name,
+            database=connection.database or ":memory:",
+        )
+    if db == "postgres":
+        return _PROFILES_POSTGRES.format(
+            name=project_name,
+            host=connection.host or "localhost",
+            port=connection.port or 5432,
+            username=connection.username or "",
+            database=connection.database or "",
+        )
+    if db == "snowflake":
+        return _PROFILES_SNOWFLAKE.format(
+            name=project_name,
+            account=connection.account or "",
+            username=connection.username or "",
+            database=connection.database or "",
+            warehouse=connection.warehouse or "",
+            role=connection.role or "",
+        )
+    if db == "bigquery":
+        return _PROFILES_BIGQUERY.format(
+            name=project_name,
+            project=connection.project or "",
+            dataset=connection.dataset or "",
+            location=connection.location or "US",
+        )
+    return _PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
+
+
+def _scaffold_project(project_dir: Path, project_name: str, connection: ConnectionInfo) -> None:
+    """Create directory structure and config files for a new dbt project."""
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for d in _SCAFFOLD_DIRS:
+        (project_dir / d).mkdir(parents=True, exist_ok=True)
+    for d in _GITKEEP_DIRS:
+        (project_dir / d / ".gitkeep").touch()
+    (project_dir / "dbt_project.yml").write_text(_generate_dbt_project_yml(project_name))
+    (project_dir / "profiles.yml").write_text(_generate_profiles_yml(project_name, connection))
+    (project_dir / "packages.yml").write_text(_PACKAGES_YML_TEMPLATE)
+
+
+def list_projects() -> list[ProjectInfo]:
+    """Return all registered dbt projects."""
+    data = _load_json(PROJECTS_FILE, {})
+    return [ProjectInfo(**v) for v in data.values()]
+
+
+def get_project(name: str) -> ProjectInfo | None:
+    """Return a project by name, or None if not found."""
+    data = _load_json(PROJECTS_FILE, {})
+    raw = data.get(name)
+    return ProjectInfo(**raw) if raw else None
+
+
+def create_project(proj: ProjectCreate) -> ProjectInfo:
+    """Create and persist a new dbt project."""
+    data = _load_json(PROJECTS_FILE, {})
+    if proj.name in data:
+        raise ValueError(f"Project '{proj.name}' already exists")
+
+    connection = get_connection(proj.connection_name)
+    if connection is None:
+        raise ValueError(f"Connection '{proj.connection_name}' not found")
+
+    if proj.source.value == "local":
+        return _create_local_project(proj, connection, data)
+    return _create_new_project(proj, connection, data)
+
+
+def _create_new_project(
+    proj: ProjectCreate, connection: ConnectionInfo, data: dict
+) -> ProjectInfo:
+    """Handle source='new': scaffold a fresh dbt project."""
+    project_dir = DATA_DIR / "projects" / proj.name
+    _scaffold_project(project_dir, proj.name, connection)
+    info = ProjectInfo(
+        id=str(uuid.uuid4()),
+        name=proj.name,
+        connection_name=proj.connection_name,
+        project_dir=str(project_dir),
+        storage=ProjectStorage.managed,
+        source=proj.source,
+        db_type=connection.db_type,
+        description=proj.description,
+        tags=proj.tags,
+    )
+    data[proj.name] = info.model_dump()
+    _save_json(PROJECTS_FILE, data)
+    return info
+
+
+def _create_local_project(
+    proj: ProjectCreate, connection: ConnectionInfo, data: dict
+) -> ProjectInfo:
+    """Handle source='local': link or copy an existing dbt project."""
+    local = Path(proj.local_path or "")
+    if not local.exists() or not (local / "dbt_project.yml").exists():
+        raise ValueError(f"Path '{local}' does not exist or lacks dbt_project.yml")
+
+    if proj.link_mode == "copy":
+        project_dir = DATA_DIR / "projects" / proj.name
+        shutil.copytree(str(local), str(project_dir), dirs_exist_ok=True)
+        storage = ProjectStorage.managed
+    else:
+        project_dir = local
+        storage = ProjectStorage.linked
+
+    info = ProjectInfo(
+        id=str(uuid.uuid4()),
+        name=proj.name,
+        connection_name=proj.connection_name,
+        project_dir=str(project_dir),
+        storage=storage,
+        source=proj.source,
+        db_type=connection.db_type,
+        description=proj.description,
+        tags=proj.tags,
+    )
+    data[proj.name] = info.model_dump()
+    _save_json(PROJECTS_FILE, data)
+    return info
+
+
+def update_project(name: str, update: ProjectUpdate) -> ProjectInfo | None:
+    """Apply a partial update to an existing project."""
+    data = _load_json(PROJECTS_FILE, {})
+    if name not in data:
+        return None
+    existing = data[name]
+    for key, value in update.model_dump(exclude_none=True).items():
+        existing[key] = value
+    data[name] = existing
+    _save_json(PROJECTS_FILE, data)
+    return ProjectInfo(**existing)
+
+
+def delete_project(name: str) -> bool:
+    """Remove a project. If managed, also delete the project directory."""
+    data = _load_json(PROJECTS_FILE, {})
+    if name not in data:
+        return False
+    info = ProjectInfo(**data[name])
+    if info.storage == ProjectStorage.managed:
+        project_dir = Path(info.project_dir)
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+    del data[name]
+    _save_json(PROJECTS_FILE, data)
+    return True
 
 
 # ─── Sandboxes ───────────────────────────────────────────────────────────────

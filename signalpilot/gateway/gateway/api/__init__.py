@@ -12,6 +12,7 @@ from .audit import router as audit_router
 from .budget import router as budget_router
 from .cache import router as cache_router
 from .metrics import router as metrics_router
+from .projects import router as projects_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -26,3 +27,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(budget_router)
     app.include_router(cache_router)
     app.include_router(metrics_router)
+    app.include_router(projects_router)

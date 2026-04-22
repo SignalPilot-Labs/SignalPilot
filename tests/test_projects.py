@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -198,6 +198,52 @@ class TestCreateProject:
         assert proj.project_dir != str(local_dir)
         assert Path(proj.project_dir).exists()
         shutil.rmtree(local_dir)
+
+    def test_create_github_project(self):
+        conn = _make_connection("pg", "postgres")
+        mock_run = MagicMock(returncode=0, stderr="", stdout="")
+        with patch("signalpilot.gateway.gateway.store.get_connection", return_value=conn), \
+             patch("subprocess.run", return_value=mock_run) as mock_sub:
+            # Pre-create the dir with dbt_project.yml to simulate clone
+            project_dir = Path(_test_dir) / "projects" / "gh-proj"
+            project_dir.mkdir(parents=True, exist_ok=True)
+            (project_dir / "dbt_project.yml").write_text("name: test")
+            proj = create_project(ProjectCreate(
+                name="gh-proj",
+                connection_name="pg",
+                source=ProjectSource.github,
+                git_url="https://github.com/org/repo.git",
+                git_branch="develop",
+            ))
+        assert proj.storage == ProjectStorage.managed
+        assert proj.source == ProjectSource.github
+        assert proj.git_remote == "https://github.com/org/repo.git"
+        assert proj.git_branch == "develop"
+        mock_sub.assert_called_once()
+        assert "--branch" in mock_sub.call_args[0][0]
+
+    def test_create_github_missing_url_raises(self):
+        conn = _make_connection("pg", "postgres")
+        with patch("signalpilot.gateway.gateway.store.get_connection", return_value=conn):
+            with pytest.raises(ValueError, match="git_url is required"):
+                create_project(ProjectCreate(
+                    name="no-url",
+                    connection_name="pg",
+                    source=ProjectSource.github,
+                ))
+
+    def test_create_github_clone_failure_raises(self):
+        conn = _make_connection("pg", "postgres")
+        mock_run = MagicMock(returncode=128, stderr="fatal: repo not found", stdout="")
+        with patch("signalpilot.gateway.gateway.store.get_connection", return_value=conn), \
+             patch("subprocess.run", return_value=mock_run):
+            with pytest.raises(ValueError, match="git clone failed"):
+                create_project(ProjectCreate(
+                    name="bad-clone",
+                    connection_name="pg",
+                    source=ProjectSource.github,
+                    git_url="https://github.com/org/nope.git",
+                ))
 
     def test_create_local_missing_path_raises(self):
         conn = _make_connection("pg", "postgres")

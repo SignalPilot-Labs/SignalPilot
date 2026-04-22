@@ -718,6 +718,8 @@ def create_project(proj: ProjectCreate) -> ProjectInfo:
 
     if proj.source.value == "local":
         return _create_local_project(proj, connection, data)
+    if proj.source.value == "github":
+        return _create_github_project(proj, connection, data)
     return _create_new_project(proj, connection, data)
 
 
@@ -767,6 +769,54 @@ def _create_local_project(
         storage=storage,
         source=proj.source,
         db_type=connection.db_type,
+        description=proj.description,
+        tags=proj.tags,
+    )
+    data[proj.name] = info.model_dump()
+    _save_json(PROJECTS_FILE, data)
+    return info
+
+
+def _create_github_project(
+    proj: ProjectCreate, connection: ConnectionInfo, data: dict
+) -> ProjectInfo:
+    """Handle source='github': clone a repo into a managed project."""
+    import subprocess
+
+    if not proj.git_url:
+        raise ValueError("git_url is required for GitHub import")
+
+    branch = proj.git_branch or "main"
+    project_dir = DATA_DIR / "projects" / proj.name
+
+    result = subprocess.run(
+        ["git", "clone", "--branch", branch, "--depth", "1", proj.git_url, str(project_dir)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"git clone failed: {result.stderr.strip()}")
+
+    if not (project_dir / "dbt_project.yml").exists():
+        shutil.rmtree(project_dir)
+        raise ValueError("Cloned repo does not contain dbt_project.yml")
+
+    # Generate profiles.yml wired to the connection
+    (project_dir / "profiles.yml").write_text(
+        _generate_profiles_yml(proj.name, connection)
+    )
+
+    info = ProjectInfo(
+        id=str(uuid.uuid4()),
+        name=proj.name,
+        connection_name=proj.connection_name,
+        project_dir=str(project_dir),
+        storage=ProjectStorage.managed,
+        source=proj.source,
+        db_type=connection.db_type,
+        git_remote=proj.git_url,
+        git_branch=branch,
         description=proj.description,
         tags=proj.tags,
     )

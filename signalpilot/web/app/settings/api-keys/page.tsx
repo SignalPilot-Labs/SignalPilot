@@ -20,6 +20,8 @@ import { EmptyState, EmptyList } from "@/components/ui/empty-states";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { StatusDot } from "@/components/ui/data-viz";
 import { SectionHeader } from "@/components/ui/section-header";
+import { useToast } from "@/components/ui/toast";
+import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 
 // ---------------------------------------------------------------------------
 // Scope definitions
@@ -370,11 +372,7 @@ export default function ApiKeysPage() {
   const { isCloudMode, isLoaded } = useAppAuth();
 
   if (!isLoaded) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <ApiKeysSkeleton />;
   }
 
   if (!isCloudMode) {
@@ -415,6 +413,7 @@ function ApiKeysContent() {
   const { isLoaded } = useAppAuth();
   const client = useBackendClient();
   const { maxApiKeys, canCreateKey } = useSubscription();
+  const { toast } = useToast();
 
   const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -447,11 +446,7 @@ function ApiKeysContent() {
   // ---------------------------------------------------------------------------
 
   if (!isLoaded || loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <ApiKeysSkeleton />;
   }
 
   // ---------------------------------------------------------------------------
@@ -465,6 +460,7 @@ function ApiKeysContent() {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { raw_key: _raw, ...keyData } = created;
     setKeys((prev) => [keyData, ...prev]);
+    toast("api key created", "success");
   }
 
   async function handleDelete(id: string) {
@@ -472,9 +468,9 @@ function ApiKeysContent() {
     try {
       await client.deleteApiKey(id);
       setKeys((prev) => prev.filter((k) => k.id !== id));
+      toast("api key deleted", "success");
     } catch (e) {
-      // Surface delete error — do not silently swallow
-      setLoadError(`delete failed: ${String(e)}`);
+      toast("failed to delete key", "error");
     } finally {
       setDeleting(false);
       setDeleteTarget(null);

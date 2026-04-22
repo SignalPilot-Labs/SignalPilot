@@ -121,6 +121,124 @@ export function DashboardSkeleton() {
 }
 
 /**
+ * API Keys page loading skeleton.
+ * Matches the PageHeader + TerminalBar + section header + key rows layout.
+ */
+export function ApiKeysSkeleton() {
+  return (
+    <div className="p-8 max-w-3xl animate-fade-in">
+      <PageHeaderSkeleton />
+      <TerminalBarSkeleton />
+
+      {/* Section header row with create button */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Skeleton className="w-3.5 h-3.5" />
+          <Skeleton className="h-2.5 w-20" />
+        </div>
+        <Skeleton className="h-7 w-28" />
+      </div>
+
+      {/* Keys table */}
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+        {/* Table header */}
+        <div className="flex items-center gap-4 px-5 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+          <Skeleton className="flex-1 h-2" />
+          <Skeleton className="w-28 h-2 flex-shrink-0" />
+          <Skeleton className="w-44 h-2 flex-shrink-0" />
+          <Skeleton className="w-28 h-2 flex-shrink-0" />
+          <Skeleton className="w-24 h-2 flex-shrink-0" />
+          <Skeleton className="w-16 h-2 flex-shrink-0" />
+        </div>
+        {/* Key rows */}
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="flex items-center gap-4 px-5 py-3 border-b border-[var(--color-border)]">
+            <Skeleton className="flex-1 h-2.5" />
+            <Skeleton className="w-28 h-2.5 flex-shrink-0" />
+            <div className="w-44 flex-shrink-0 flex gap-1.5">
+              <Skeleton className="h-5 w-12" />
+              <Skeleton className="h-5 w-12" />
+            </div>
+            <Skeleton className="w-28 h-2.5 flex-shrink-0" />
+            <Skeleton className="w-24 h-2.5 flex-shrink-0" />
+            <Skeleton className="w-16 h-6 flex-shrink-0" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Billing page loading skeleton.
+ * Matches the PageHeader + TerminalBar + current plan card + two upgrade plan cards layout.
+ */
+export function BillingSkeleton() {
+  return (
+    <div className="p-8 max-w-3xl animate-fade-in">
+      <PageHeaderSkeleton />
+      <TerminalBarSkeleton />
+
+      {/* Current plan section header */}
+      <div className="flex items-center gap-2 mb-4">
+        <Skeleton className="w-3.5 h-3.5" />
+        <Skeleton className="h-2.5 w-24" />
+      </div>
+
+      {/* Current plan card */}
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-8">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-5 w-12" />
+            <div className="space-y-1.5">
+              <Skeleton className="h-2.5 w-32" />
+              <Skeleton className="h-2 w-24" />
+            </div>
+          </div>
+          <Skeleton className="h-8 w-36" />
+        </div>
+      </div>
+
+      {/* Upgrade section header */}
+      <div className="flex items-center gap-2 mb-4">
+        <Skeleton className="w-3.5 h-3.5" />
+        <Skeleton className="h-2.5 w-24" />
+      </div>
+
+      {/* Two upgrade plan cards side by side */}
+      <div className="flex gap-4">
+        {Array.from({ length: 2 }, (_, i) => (
+          <div key={i} className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
+            {/* Plan header */}
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="w-3.5 h-3.5" />
+                <Skeleton className="h-2.5 w-16" />
+              </div>
+              <Skeleton className="h-5 w-12" />
+            </div>
+            {/* Description */}
+            <Skeleton className="h-2 w-full mb-1" />
+            <Skeleton className="h-2 w-3/4 mb-4" />
+            {/* Feature list */}
+            <div className="space-y-2 mb-5">
+              {Array.from({ length: 4 }, (_, j) => (
+                <div key={j} className="flex items-center gap-2">
+                  <Skeleton className="w-3 h-3 flex-shrink-0" />
+                  <Skeleton className="h-2 w-32" />
+                </div>
+              ))}
+            </div>
+            {/* Upgrade button */}
+            <Skeleton className="h-8 w-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Connection list skeleton.
  */
 export function ConnectionsSkeleton() {

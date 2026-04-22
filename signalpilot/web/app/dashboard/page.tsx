@@ -31,6 +31,7 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SystemDiagram } from "@/components/ui/system-diagram";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
+import { useToast } from "@/components/ui/toast";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -250,6 +251,7 @@ function UserGreeting() {
 }
 
 export default function DashboardPage() {
+  const { toast } = useToast();
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
   const [budgetData, setBudgetData] = useState<{
@@ -288,10 +290,10 @@ export default function DashboardPage() {
         }
         setAuditStats(stats);
       })
-      .catch(() => {});
+      .catch((e) => toast(String(e), "error"));
 
-    getBudgets().then(setBudgetData).catch(() => {});
-    getCacheStats().then(setCacheStats).catch(() => {});
+    getBudgets().then(setBudgetData).catch((e) => toast(String(e), "error"));
+    getCacheStats().then(setCacheStats).catch((e) => toast(String(e), "error"));
     getConnectionsHealth()
       .then((res) => {
         const map: Record<string, ConnectionHealthStats> = {};
@@ -300,10 +302,10 @@ export default function DashboardPage() {
         }
         setConnHealth(map);
       })
-      .catch(() => {});
+      .catch((e) => toast(String(e), "error"));
 
     return unsub;
-  }, []);
+  }, [toast]);
 
   const latencyValues = recentAudit
     .filter(e => e.duration_ms != null)

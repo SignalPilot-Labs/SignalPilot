@@ -20,6 +20,8 @@ import { useSubscription } from "@/lib/subscription-context";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { SectionHeader } from "@/components/ui/section-header";
+import { useToast } from "@/components/ui/toast";
+import { BillingSkeleton } from "@/components/ui/skeleton";
 
 // ---------------------------------------------------------------------------
 // Plan definitions
@@ -186,11 +188,7 @@ export default function BillingPage() {
   const { isCloudMode, isLoaded } = useAppAuth();
 
   if (!isLoaded) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <BillingSkeleton />;
   }
 
   if (!isCloudMode) {
@@ -232,6 +230,7 @@ function BillingContent() {
   const client = useBackendClient();
   const { planTier, status, maxApiKeys, isLoaded, refetch } = useSubscription();
   const searchParams = useSearchParams();
+  const { toast } = useToast();
 
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [managingPortal, setManagingPortal] = useState(false);
@@ -263,10 +262,11 @@ function BillingContent() {
         window.location.href = checkout_url;
       } catch (e) {
         setActionError(String(e));
+        toast("failed to start checkout", "error");
         setUpgrading(null);
       }
     },
-    [client],
+    [client, toast],
   );
 
   const handleManagePortal = useCallback(async () => {
@@ -278,20 +278,17 @@ function BillingContent() {
       window.location.href = portal_url;
     } catch (e) {
       setActionError(String(e));
+      toast("failed to open billing portal", "error");
       setManagingPortal(false);
     }
-  }, [client]);
+  }, [client, toast]);
 
   // ---------------------------------------------------------------------------
   // Loading
   // ---------------------------------------------------------------------------
 
   if (!isLoaded) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <BillingSkeleton />;
   }
 
   // ---------------------------------------------------------------------------

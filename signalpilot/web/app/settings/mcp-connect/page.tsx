@@ -8,7 +8,6 @@ import {
   Terminal,
   Copy,
   CheckCircle2,
-  Loader2,
   Info,
   ExternalLink,
 } from "lucide-react";
@@ -19,6 +18,8 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { CodeBlock } from "@/components/ui/code-block";
 import { StatusDot } from "@/components/ui/data-viz";
 import { SectionHeader } from "@/components/ui/section-header";
+import { useToast } from "@/components/ui/toast";
+import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 
 // ---------------------------------------------------------------------------
 // MCP URL derivation
@@ -139,11 +140,7 @@ export default function McpConnectPage() {
   const { isCloudMode, isLoaded } = useAppAuth();
 
   if (!isLoaded) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <ApiKeysSkeleton />;
   }
 
   if (!isCloudMode) {
@@ -184,6 +181,7 @@ function McpConnectContent() {
   const { isLoaded } = useAppAuth();
   const client = useBackendClient();
   const mcpUrl = getMcpUrl();
+  const { toast } = useToast();
 
   const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
   const [keysLoading, setKeysLoading] = useState(true);
@@ -197,10 +195,11 @@ function McpConnectContent() {
       setKeys(data);
     } catch (e) {
       setKeysError(String(e));
+      toast("failed to load api keys", "error");
     } finally {
       setKeysLoading(false);
     }
-  }, [client]);
+  }, [client, toast]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -213,11 +212,7 @@ function McpConnectContent() {
   // ---------------------------------------------------------------------------
 
   if (!isLoaded || keysLoading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <ApiKeysSkeleton />;
   }
 
   // ---------------------------------------------------------------------------

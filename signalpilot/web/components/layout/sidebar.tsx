@@ -34,6 +34,14 @@ function NavIconSchema({ active }: { active: boolean }) {
     </svg>
   );
 }
+function NavIconProject({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M1 3L1 12H13V3H7L5 1H1V3Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="miter" fill="none" />
+      {active && <rect x="5" y="6" width="4" height="3" fill="var(--color-success)" />}
+    </svg>
+  );
+}
 function NavIconSandbox({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -86,11 +94,12 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "2" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
-  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "4" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "5" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "6" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "8" },
+  { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
+  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "5" },
+  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "6" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "7" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
 ];
 
 function SignalPilotLogo() {
@@ -165,6 +174,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
+  const [projectCount, setProjectCount] = useState(0);
   const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
 
   // Poll for active sandbox count and connection health
@@ -177,6 +187,12 @@ export default function Sidebar() {
       .then((r) => r.ok ? r.json() : [])
       .then((sandboxes: { status: string }[]) => {
         setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
+      })
+      .catch(() => {});
+    fetch(`${url}/api/projects`, { headers })
+      .then((r) => r.ok ? r.json() : [])
+      .then((projects: { status: string }[]) => {
+        setProjectCount(projects.length);
       })
       .catch(() => {});
     fetch(`${url}/api/health/connections`, { headers })
@@ -253,7 +269,7 @@ export default function Sidebar() {
       <nav className="flex-1 px-3 py-2 space-y-0.5">
         {nav.map(({ href, label, icon: Icon, shortcut }) => {
           const active = pathname.startsWith(href);
-          const badge = href === "/sandboxes" ? activeSandboxes : 0;
+          const badge = href === "/sandboxes" ? activeSandboxes : href === "/projects" ? projectCount : 0;
           return (
             <Link
               key={href}

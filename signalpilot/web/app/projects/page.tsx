@@ -1,0 +1,370 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import {
+  Plus,
+  Trash2,
+  Loader2,
+  FolderOpen,
+  Database,
+  Clock,
+  ArrowRight,
+  Upload,
+} from "lucide-react";
+import { getProjects, createProject, deleteProject, getConnections } from "@/lib/api";
+import type { ProjectInfo, ConnectionInfo } from "@/lib/types";
+import { EmptyState } from "@/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { StatusDot } from "@/components/ui/data-viz";
+import { useToast } from "@/components/ui/toast";
+import { TimeAgo } from "@/components/ui/time-ago";
+
+/* ── Empty icon for projects ── */
+function EmptyProject({ className = "" }: { className?: string }) {
+  return (
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none" className={className}>
+      <path d="M4 12L4 40H44V12H24L20 6H4V12Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="miter" fill="none" />
+      <line x1="16" y1="24" x2="32" y2="24" stroke="currentColor" strokeWidth="1" opacity="0.4" />
+      <line x1="16" y1="30" x2="28" y2="30" stroke="currentColor" strokeWidth="1" opacity="0.4" />
+    </svg>
+  );
+}
+
+const NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export default function ProjectsPage() {
+  const { toast } = useToast();
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: "", connection_name: "" });
+  const [importForm, setImportForm] = useState({ path: "", connection_name: "", mode: "link" as "link" | "copy" });
+
+  const refresh = useCallback(() => {
+    getProjects().then(setProjects).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    getConnections().then(setConnections).catch(() => {});
+    const i = setInterval(refresh, 10000);
+    return () => clearInterval(i);
+  }, [refresh]);
+
+  async function handleCreate() {
+    if (!createForm.name || !NAME_PATTERN.test(createForm.name)) {
+      toast("name must match [a-zA-Z0-9_-]", "error");
+      return;
+    }
+    if (!createForm.connection_name) {
+      toast("select a connection", "error");
+      return;
+    }
+    setCreating(true);
+    try {
+      const p = await createProject({
+        name: createForm.name,
+        connection_name: createForm.connection_name,
+        source: "new",
+      });
+      setProjects((prev) => [p, ...prev]);
+      setShowCreate(false);
+      setCreateForm({ name: "", connection_name: "" });
+    } catch (e) { toast(String(e), "error"); }
+    finally { setCreating(false); }
+  }
+
+  async function handleImport() {
+    if (!importForm.path) {
+      toast("path is required", "error");
+      return;
+    }
+    if (!importForm.connection_name) {
+      toast("select a connection", "error");
+      return;
+    }
+    setCreating(true);
+    try {
+      const p = await createProject({
+        path: importForm.path,
+        connection_name: importForm.connection_name,
+        source: "local",
+        mode: importForm.mode,
+      });
+      setProjects((prev) => [p, ...prev]);
+      setShowImport(false);
+      setImportForm({ path: "", connection_name: "", mode: "link" });
+    } catch (e) { toast(String(e), "error"); }
+    finally { setCreating(false); }
+  }
+
+  async function handleDelete(name: string) {
+    try {
+      await deleteProject(name);
+      setProjects((prev) => prev.filter((p) => p.name !== name));
+    } catch (e) { toast(String(e), "error"); }
+  }
+
+  return (
+    <div className="p-8 animate-fade-in">
+      <PageHeader
+        title="projects"
+        subtitle="dbt"
+        description="dbt project management"
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+            >
+              <Upload className="w-3.5 h-3.5" /> import local
+            </button>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            >
+              <Plus className="w-3.5 h-3.5" /> new project
+            </button>
+          </div>
+        }
+      />
+
+      <TerminalBar
+        path="projects --list"
+        status={<StatusDot status={projects.length > 0 ? "healthy" : "unknown"} size={4} pulse={false} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">total: <code className="text-[12px] text-[var(--color-text)]">{projects.length}</code></span>
+          <span className="text-[var(--color-text-dim)]">active: <code className="text-[12px] text-[var(--color-success)]">{projects.filter(p => p.status === "active").length}</code></span>
+        </div>
+      </TerminalBar>
+
+      {/* Create dialog */}
+      {showCreate && (
+        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
+          <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
+            <FolderOpen className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">new project</span>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">name</label>
+                <input
+                  type="text"
+                  placeholder="my-dbt-project"
+                  value={createForm.name}
+                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection</label>
+                <select
+                  value={createForm.connection_name}
+                  onChange={(e) => setCreateForm({ ...createForm, connection_name: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                >
+                  <option value="">select connection</option>
+                  {connections.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name} ({c.db_type})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleCreate}
+                disabled={creating}
+                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              >
+                {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                create
+              </button>
+              <button
+                onClick={() => setShowCreate(false)}
+                className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+              >
+                cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import dialog */}
+      {showImport && (
+        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
+          <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
+            <Upload className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">import local project</span>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">path</label>
+                <input
+                  type="text"
+                  placeholder="/home/user/my-dbt-project"
+                  value={importForm.path}
+                  onChange={(e) => setImportForm({ ...importForm, path: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection</label>
+                <select
+                  value={importForm.connection_name}
+                  onChange={(e) => setImportForm({ ...importForm, connection_name: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                >
+                  <option value="">select connection</option>
+                  {connections.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name} ({c.db_type})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="mb-4">
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)] cursor-pointer">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    checked={importForm.mode === "link"}
+                    onChange={() => setImportForm({ ...importForm, mode: "link" })}
+                    className="accent-[var(--color-text)]"
+                  />
+                  link (reference in place)
+                </label>
+                <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)] cursor-pointer">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    checked={importForm.mode === "copy"}
+                    onChange={() => setImportForm({ ...importForm, mode: "copy" })}
+                    className="accent-[var(--color-text)]"
+                  />
+                  copy (managed copy)
+                </label>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleImport}
+                disabled={creating}
+                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              >
+                {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                import
+              </button>
+              <button
+                onClick={() => setShowImport(false)}
+                className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+              >
+                cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Project grid */}
+      {projects.length === 0 ? (
+        <EmptyState
+          icon={EmptyProject}
+          title="no projects"
+          description="create or import a dbt project to get started"
+          action={
+            <button
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+            >
+              <Plus className="w-3.5 h-3.5" /> create first project
+            </button>
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] stagger-fade-in">
+          {projects.map((proj) => (
+            <Link
+              key={proj.id}
+              href={`/projects/${proj.name}`}
+              className="group block bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] transition-all card-accent-top overflow-hidden"
+            >
+              {/* Card header */}
+              <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: proj.status === "active" ? "var(--color-success)" : proj.status === "error" ? "var(--color-error)" : "var(--color-text-dim)", opacity: proj.status === "active" ? 1 : 0.4 }} />
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-20" />
+                  <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
+                </div>
+                <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{proj.status}</span>
+                <div className="flex items-center gap-1">
+                  <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleDelete(proj.name);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 space-y-2.5">
+                {/* Name */}
+                <div className="flex items-center gap-2">
+                  <StatusDot
+                    status={proj.status === "active" ? "healthy" : proj.status === "error" ? "error" : "warning"}
+                    size={4}
+                    pulse={false}
+                  />
+                  <span className="text-xs text-[var(--color-text)] font-bold uppercase tracking-wider group-hover:text-white transition-colors">
+                    {proj.name}
+                  </span>
+                </div>
+
+                {/* Info grid */}
+                <div className="grid grid-cols-2 gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                  <div className="flex items-center gap-1.5">
+                    <Database className="w-3 h-3" strokeWidth={1.5} />
+                    <span className="truncate">{proj.connection_name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 border border-[var(--color-border)] text-[11px]">{proj.db_type}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 tabular-nums">
+                    <span>{proj.model_count} models</span>
+                  </div>
+                  {proj.last_scanned_at && (
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-3 h-3" strokeWidth={1.5} />
+                      <TimeAgo timestamp={proj.last_scanned_at} live className="tabular-nums" />
+                    </div>
+                  )}
+                </div>
+
+                {/* Badges */}
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="px-1.5 py-0.5 border border-[var(--color-border)] text-[11px] tracking-wider">
+                    {proj.storage}
+                  </span>
+                  <span className="px-1.5 py-0.5 border border-[var(--color-border)] text-[11px] tracking-wider">
+                    {proj.source}
+                  </span>
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

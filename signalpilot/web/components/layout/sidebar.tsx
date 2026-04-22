@@ -246,6 +246,29 @@ function ClerkUserButton({ displayName }: { displayName: string }) {
   );
 }
 
+/** API Keys nav link — only rendered in cloud mode, nested under /settings */
+function ApiKeysNavLink({ pathname }: { pathname: string }) {
+  const { isCloudMode } = useAppAuth();
+
+  if (!isCloudMode) return null;
+
+  const active = pathname.startsWith("/settings/api-keys");
+
+  return (
+    <Link
+      href="/settings/api-keys"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <KeyRound size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">api keys</span>
+    </Link>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -366,6 +389,8 @@ export default function Sidebar() {
             </Link>
           );
         })}
+        {/* API Keys sub-link — cloud mode only */}
+        <ApiKeysNavLink pathname={pathname} />
       </nav>
 
       {/* User section — Clerk UserButton or sign-in link */}

@@ -17,6 +17,7 @@ import {
 import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
+import { useAppAuth } from "@/lib/auth-context";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -85,6 +86,22 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
   connect: { label: "CON", color: "text-[var(--color-text-dim)]" },
   block: { label: "BLK", color: "text-[var(--color-error)]" },
 };
+
+/* ── Signed-in user greeting ── */
+function UserGreeting() {
+  const { isCloudMode, user } = useAppAuth();
+
+  if (!isCloudMode || !user) return null;
+
+  const email = user.email ?? "—";
+
+  return (
+    <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
+      signed in as{" "}
+      <span className="text-[var(--color-text-muted)]">{email}</span>
+    </p>
+  );
+}
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
@@ -155,6 +172,8 @@ export default function DashboardPage() {
         subtitle="live overview"
         description="signalpilot gateway status and metrics"
       />
+
+      <UserGreeting />
 
       {/* ── System status bar ── */}
       <TerminalBar

@@ -157,13 +157,13 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* BYOF Firecracker Configuration */}
+      {/* BYOS Sandbox Configuration */}
       <section className="mb-8">
-        <SectionHeader icon={Server} title="firecracker sandbox (byof)" />
+        <SectionHeader icon={Server} title="sandbox configuration (byos)" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="p-6 space-y-4">
             <p className="text-[12px] text-[var(--color-text-dim)] -mt-1 mb-2 tracking-wider">
-              bring your own firecracker — point to any sandbox manager endpoint.
+              bring your own sandbox — point to any sandbox manager endpoint.
             </p>
             <div>
               <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">provider</label>
@@ -171,7 +171,7 @@ export default function SettingsPage() {
                 onChange={(e) => setSettings({ ...settings, sandbox_provider: e.target.value as "local" | "remote" })}
                 className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]">
                 <option value="local">local (same machine / docker)</option>
-                <option value="remote">remote (byof hosted instance)</option>
+                <option value="remote">remote (byos hosted instance)</option>
               </select>
             </div>
             <div>
@@ -328,7 +328,7 @@ export default function SettingsPage() {
               <input type="text" value={settings.gateway_url}
                 onChange={(e) => setSettings({ ...settings, gateway_url: e.target.value })}
                 className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
-              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandbox vms use to call back to the gateway</p>
+              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandboxes use to call back to the gateway</p>
             </div>
             <div>
               <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway api key</label>

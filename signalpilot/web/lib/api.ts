@@ -185,6 +185,16 @@ export const importConnections = (manifest: Record<string, unknown>) =>
     errors: { name: string; error: string }[];
   }>("/api/connections/import", { method: "POST", body: JSON.stringify(manifest) });
 
+// Projects
+export const getProjects = () => request<import("./types").ProjectInfo[]>("/api/projects");
+export const getProject = (name: string) => request<import("./types").ProjectInfo>(`/api/projects/${name}`);
+export const createProject = (p: Record<string, unknown>) =>
+  request<import("./types").ProjectInfo>("/api/projects", { method: "POST", body: JSON.stringify(p) });
+export const deleteProject = (name: string) =>
+  request<void>(`/api/projects/${name}`, { method: "DELETE" });
+export const scanProject = (name: string) =>
+  request<{ message: string; model_count: number }>(`/api/projects/${name}/scan`, { method: "POST" });
+
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");
 export const createSandbox = (s: Record<string, unknown>) =>

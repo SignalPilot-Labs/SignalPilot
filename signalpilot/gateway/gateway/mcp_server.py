@@ -5,7 +5,7 @@ Run with stdio transport (for Claude Code):
     python -m gateway.mcp_server
 
 Tools exposed:
-    execute_code     — Run Python code in an isolated Firecracker microVM
+    execute_code     — Run Python code in an isolated gVisor sandbox
     query_database   — Run governed read-only SQL against a connected database
     list_connections — List configured database connections
     list_sandboxes   — List active sandbox sessions
@@ -96,7 +96,7 @@ mcp = FastMCP(
     "SignalPilot",
     instructions=(
         "You have access to SignalPilot, a governed sandbox for AI database access. "
-        "Use execute_code to run Python in an isolated Firecracker microVM (~300ms). "
+        "Use execute_code to run Python in an isolated gVisor sandbox (~300ms). "
         "Use query_database for read-only SQL with automatic governance (LIMIT injection, "
         "DDL/DML blocking, audit logging). Use list_connections to see available databases."
     ),
@@ -118,12 +118,12 @@ def _get_sandbox_url() -> str:
 @mcp.tool()
 async def execute_code(code: str, timeout: int = 30) -> str:
     """
-    Execute Python code in an isolated Firecracker microVM sandbox.
+    Execute Python code in an isolated gVisor sandbox.
 
-    The code runs in a secure, ephemeral microVM with Python 3.10 and common
+    The code runs in a secure, ephemeral gVisor sandbox with Python 3.12 and common
     stdlib modules pre-loaded (math, re, collections, datetime, etc.).
-    Each execution gets a fresh VM that is destroyed after returning.
-    Typical latency: ~300ms (snapshot-accelerated).
+    Each execution gets a fresh sandbox that is destroyed after returning.
+    Typical latency: ~300ms.
 
     Args:
         code: Python code to execute
@@ -154,7 +154,7 @@ async def execute_code(code: str, timeout: int = 30) -> str:
             )
             data = resp.json()
         except httpx.ConnectError:
-            return f"Error: Cannot connect to sandbox manager at {sandbox_url}. Is Firecracker running?"
+            return f"Error: Cannot connect to sandbox manager at {sandbox_url}. Is the sandbox manager running?"
         except Exception as e:
             return f"Error: {e}"
 
@@ -370,8 +370,7 @@ async def sandbox_status() -> str:
     """
     Check the health of the sandbox manager and list active sandboxes.
 
-    Returns sandbox manager health, KVM status, snapshot readiness,
-    and any active sandbox sessions.
+    Returns sandbox manager health and active sandbox count.
     """
     settings = load_settings()
     sandbox_url = settings.sandbox_manager_url
@@ -386,9 +385,7 @@ async def sandbox_status() -> str:
     lines = [
         f"Sandbox Manager: {sandbox_url}",
         f"Status: {health.get('status', 'unknown')}",
-        f"KVM: {'available' if health.get('kvm_available') else 'NOT available'}",
-        f"Snapshot: {'ready (fast mode ~300ms)' if health.get('snapshot_ready') else 'not ready (cold boot ~1600ms)'}",
-        f"Active VMs: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
+        f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
     ]
 
     sandboxes = list_sandboxes()
@@ -3171,6 +3168,78 @@ async def dbt_project_validate(
         timeout,
     )
     return _format_validation_result(result)
+
+
+# ─── Project management tools ────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def create_project(name: str, connection_name: str) -> str:
+    """Create a new dbt project wired to an existing connection."""
+    from .models import ProjectCreate, ProjectSource
+    from . import store
+
+    try:
+        proj = ProjectCreate(
+            name=name,
+            connection_name=connection_name,
+            source=ProjectSource.new,
+        )
+        info = store.create_project(proj)
+    except ValueError as e:
+        return f"Error: {e}"
+    return (
+        f"Created project '{info.name}' at {info.project_dir}\n"
+        f"  connection: {info.connection_name}\n"
+        f"  db_type: {info.db_type}\n"
+        f"  storage: {info.storage.value}"
+    )
+
+
+@mcp.tool()
+async def list_projects() -> str:
+    """List all configured dbt projects."""
+    from . import store
+
+    projects = store.list_projects()
+    if not projects:
+        return "No projects configured."
+    lines = [f"Found {len(projects)} project(s):\n"]
+    for p in projects:
+        lines.append(
+            f"  - {p.name}  ({p.db_type}, {p.status.value})  "
+            f"connection={p.connection_name}  models={p.model_count}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_project(name: str) -> str:
+    """Get dbt project detail including path and model count."""
+    from . import store
+
+    proj = store.get_project(name)
+    if not proj:
+        return f"Error: Project '{name}' not found."
+    lines = [
+        f"Project: {proj.name}",
+        f"  id: {proj.id}",
+        f"  connection: {proj.connection_name}",
+        f"  db_type: {proj.db_type}",
+        f"  project_dir: {proj.project_dir}",
+        f"  storage: {proj.storage.value}",
+        f"  source: {proj.source.value}",
+        f"  status: {proj.status.value}",
+        f"  model_count: {proj.model_count}",
+        f"  dbt_version: {proj.dbt_version}",
+    ]
+    if proj.description:
+        lines.append(f"  description: {proj.description}")
+    if proj.tags:
+        lines.append(f"  tags: {', '.join(proj.tags)}")
+    if proj.git_remote:
+        lines.append(f"  git_remote: {proj.git_remote}")
+    return "\n".join(lines)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

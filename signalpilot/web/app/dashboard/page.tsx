@@ -533,7 +533,7 @@ function DashboardContent() {
         path="dashboard --watch"
         status={
           <StatusDot
-            status={metrics?.sandbox_health === "healthy" && metrics?.kvm_available ? "healthy" : metrics ? "error" : "unknown"}
+            status={metrics?.sandbox_health === "healthy" && metrics?.sandbox_available ? "healthy" : metrics ? "error" : "unknown"}
             size={4}
             pulse={metrics?.sandbox_health === "healthy"}
           />
@@ -550,8 +550,8 @@ function DashboardContent() {
           </div>
           <div className="flex items-center gap-2">
             <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">kvm:</span>
-            <StatusBadge ok={metrics ? metrics.kvm_available : null} />
+            <span className="text-[var(--color-text-dim)]">sandbox:</span>
+            <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
           </div>
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
@@ -577,8 +577,8 @@ function DashboardContent() {
           icon={Terminal}
         />
         <MetricCard
-          label="active vms"
-          value={metrics ? `${metrics.active_vms} / ${metrics.max_vms}` : "—"}
+          label="sandbox instances"
+          value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
           icon={Cpu}
         />
         <MetricCard

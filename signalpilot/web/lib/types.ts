@@ -84,6 +84,25 @@ export interface ConnectionInfo {
   schema_filter_exclude: string[] | null;
 }
 
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  connection_name: string;
+  project_dir: string;
+  storage: "managed" | "linked";
+  source: "new" | "local" | "github" | "dbt-cloud";
+  db_type: string;
+  dbt_version: string;
+  model_count: number;
+  status: "active" | "error" | "archived";
+  created_at: number;
+  last_scanned_at: number | null;
+  git_remote: string | null;
+  git_branch: string | null;
+  description: string;
+  tags: string[];
+}
+
 export interface SandboxInfo {
   id: string;
   vm_id: string | null;
@@ -145,11 +164,11 @@ export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;
   sandbox_health: string;
-  kvm_available: boolean;
+  sandbox_available: boolean;
   active_sandboxes: number;
   running_sandboxes: number;
-  active_vms: number;
-  max_vms: number;
+  active_sandbox_instances: number;
+  max_sandbox_instances: number;
   connections: number;
   query_cache?: {
     entries: number;

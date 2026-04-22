@@ -39,18 +39,16 @@ services:
   sandbox:
     image: signalpilot/sandbox
     build:
-      context: ../../sp-firecracker-vm
+      context: ../../sp-sandbox
       dockerfile: Dockerfile.sandbox
     ports:
       - "8180:8080"
-    devices:
-      - /dev/kvm:/dev/kvm
-    privileged: true
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
     environment:
       - SP_GATEWAY_URL=http://gateway:3300
-      - SP_MAX_VMS=10
-      - SP_VM_MEMORY_MB=512
-      - SP_VM_VCPUS=1
+      - SP_MAX_VMS=10  # kept for sandbox_manager.py compat (not in repo)
     restart: unless-stopped
 
   postgres:

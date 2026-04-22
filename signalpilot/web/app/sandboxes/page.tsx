@@ -73,8 +73,8 @@ export default function SandboxesPage() {
     <div className="p-8 animate-fade-in">
       <PageHeader
         title="sandboxes"
-        subtitle="microvms"
-        description="firecracker microvms for isolated code execution"
+        subtitle="sandboxes"
+        description="gvisor sandboxes for isolated code execution"
         actions={
           <button
             onClick={() => setShowCreate(true)}
@@ -153,7 +153,7 @@ export default function SandboxesPage() {
         <EmptyState
           icon={EmptySandbox}
           title="no sandboxes"
-          description="create a sandbox to execute code in an isolated firecracker microvm"
+          description="create a sandbox to execute code in an isolated gvisor environment"
           action={
             <button
               onClick={() => setShowCreate(true)}

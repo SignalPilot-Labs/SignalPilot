@@ -115,7 +115,7 @@ export function SystemDiagram({
               {">"}_
             </text>
             <text x="550" y="210" textAnchor="middle" fill="var(--color-text-dim)" fontSize="13" fontFamily="monospace" letterSpacing="0.1em">
-              VM × {activeSandboxes}
+              Sandbox × {activeSandboxes}
             </text>
           </g>
 

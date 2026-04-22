@@ -191,7 +191,7 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 |-----------|-------------|
 | `signalpilot/` | Core gateway + web UI — the MCP server |
 | `plugin/` | Claude Code plugin (skills, agents, MCP config) |
-| `sp-firecracker-vm/` | Firecracker/gVisor sandboxed code execution |
+| `sp-sandbox/` | gVisor sandboxed code execution |
 | `benchmark/` | Spider 2.0 benchmark suite — see [`benchmark/`](benchmark/) |
 
 ---

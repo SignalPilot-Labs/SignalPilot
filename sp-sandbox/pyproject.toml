@@ -1,0 +1,8 @@
+[project]
+name = "sp-sandbox"
+version = "0.1.0"
+description = "SignalPilot gVisor sandbox manager"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.9.0",
+]

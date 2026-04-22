@@ -1,12 +1,35 @@
 <div align="center">
 
-# ⚡ SignalPilot
+# ⚡ SignalPilot Data Agent
 
-**Governed AI Database Access**
+### 🏆 Officially ranked #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**
+
+**+7.45 points above the next best agent (Databao by JetBrains, 44.11). New SOTA on the 68-task dbt benchmark as of Apr 21, 2026.**
+
+**Governed AI agents with connector suites and access to your data stack (db, dbt and more), optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).**
+
+[📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [🚀 Try SignalPilot](#use-with-claude-code-plugin) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📊 See benchmarks](benchmark/)
 
 </div>
 
-Connect any database, get schema discovery + read-only SQL execution + dbt project management — all through a single MCP server that any AI agent can use.
+---
+
+## For Data & Platform Teams
+
+We partner with data, analytics, and platform teams who want to put AI agents to work on real warehouse workloads — safely.
+
+- **Governed production access** — bring SignalPilot into your Snowflake / BigQuery / Postgres / dbt stack with enterprise guardrails (read-only, LIMIT-injected, DDL/DML-blocked, fully audit-logged).
+- **Harness & agent optimization with AutoFyn** — we tune your agent harness, prompts, skills, and retrieval to hit production accuracy targets on *your* data, not a leaderboard.
+- **Benchmark-driven evaluation** — we bring the same eval rigor that earned us the official #1 spot on Spider 2.0-DBT (51.56, +7.45 over the runner-up) into your environment: custom task suites, regression tracking, and measurable lift.
+- **Enterprise support** — SSO, private deployments, SLAs, and hands-on engineering support.
+
+**Talk to us** about your data, dbt, or agent harness optimization workload: [cal.com/fahimaziz/autofyn-intro](https://cal.com/fahimaziz/autofyn-intro) · Learn more at [signalpilot.ai](https://www.signalpilot.ai/).
+
+---
+
+## Try SignalPilot Data Agent
+
+**Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
 
 ```bash
 # Start SignalPilot
@@ -159,12 +182,6 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 | `plugin/` | Claude Code plugin (skills, agents, MCP config) |
 | `sp-firecracker-vm/` | Firecracker/gVisor sandboxed code execution |
 | `benchmark/` | Spider 2.0 benchmark suite — see [`benchmark/`](benchmark/) |
-
----
-
-## Benchmarks
-
-SignalPilot is benchmarked on [Spider 2.0](https://spider2-sql.github.io/) (dbt, Snowflake, SQLite/BigQuery). See [`benchmark/`](benchmark/) for the full harness, results, and reproduction instructions.
 
 ---
 

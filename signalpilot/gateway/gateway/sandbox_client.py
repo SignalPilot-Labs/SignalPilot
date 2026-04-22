@@ -1,8 +1,8 @@
 """
-Firecracker Sandbox Client — BYOF (Bring Your Own Firecracker) abstraction.
+Sandbox Client -- BYOS (Bring Your Own Sandbox) abstraction.
 
-Talks to the sandbox_manager HTTP API (sp-firecracker-vm/sandbox_manager.py).
-The URL is configurable from the settings page, enabling BYOF deployments.
+Talks to the sandbox_manager HTTP API (sp-sandbox/sandbox_manager.py).
+The URL is configurable from the settings page, enabling BYOS deployments.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .models import ExecuteResult, SandboxInfo
 
 
 class SandboxClient:
-    """HTTP client for the Firecracker sandbox manager."""
+    """HTTP client for the gVisor sandbox manager."""
 
     ALLOWED_SCHEMES = {"http", "https"}
 
@@ -57,9 +57,9 @@ class SandboxClient:
         row_limit: int = 10_000,
     ) -> SandboxInfo:
         """
-        Spin up a new Firecracker microVM and return a SandboxInfo.
-        We create the VM lazily — on first execute call — to avoid the overhead
-        of booting a VM that may never run code.
+        Create a new gVisor sandbox and return a SandboxInfo.
+        We create the sandbox lazily — on first execute call — to avoid the overhead
+        of starting a sandbox that may never run code.
         """
         sandbox_id = str(uuid.uuid4())
         return SandboxInfo(
@@ -119,7 +119,7 @@ class SandboxClient:
                 success=False,
                 error=(
                     f"Cannot connect to sandbox manager at {self.base_url}. "
-                    "Check your BYOF settings or ensure Firecracker is running."
+                    "Check your sandbox settings or ensure the sandbox manager is running."
                 ),
                 execution_ms=(time.monotonic() - start) * 1000,
             )

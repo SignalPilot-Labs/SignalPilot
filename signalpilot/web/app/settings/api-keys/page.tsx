@@ -22,7 +22,6 @@ import { useToast } from "@/components/ui/toast";
 import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
-import { generateKeyUsage } from "@/lib/mock-usage";
 
 // ---------------------------------------------------------------------------
 // New key revealed panel
@@ -222,9 +221,11 @@ function CreateKeyForm({
 
 function KeyRow({
   apiKey,
+  requestCount,
   onDelete,
 }: {
   apiKey: ApiKeyResponse;
+  requestCount: number;
   onDelete: (id: string) => void;
 }) {
   const createdDate = new Date(apiKey.created_at).toLocaleDateString("en-US", {
@@ -240,8 +241,6 @@ function KeyRow({
         day: "numeric",
       })
     : "never";
-
-  const usageStats = generateKeyUsage(apiKey);
 
   return (
     <div className="flex items-center gap-4 px-5 py-3 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors group">
@@ -281,7 +280,7 @@ function KeyRow({
 
       {/* Requests */}
       <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider w-20 flex-shrink-0 tabular-nums">
-        {usageStats.totalRequests.toLocaleString()}
+        {requestCount.toLocaleString()}
       </span>
 
       {/* Delete */}
@@ -389,12 +388,33 @@ function ApiKeysContent() {
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Map of key_id -> total_requests, populated from real or mock data
+  const [requestCounts, setRequestCounts] = useState<Map<string, number>>(new Map());
 
   const fetchKeys = useCallback(async () => {
     setLoadError(null);
     try {
-      const data = await client.getApiKeys();
-      setKeys(data);
+      const [keysData, byKeyRes] = await Promise.all([
+        client.getApiKeys(),
+        client.getUsageByKey().catch(() => null),
+      ]);
+      setKeys(keysData);
+
+      if (byKeyRes !== null) {
+        const counts = new Map<string, number>();
+        for (const entry of byKeyRes.keys) {
+          counts.set(entry.key_id, entry.total_requests);
+        }
+        setRequestCounts(counts);
+      } else {
+        // Fall back to mock per-key counts
+        const { generateKeyUsage } = await import("@/lib/mock-usage");
+        const counts = new Map<string, number>();
+        for (const k of keysData) {
+          counts.set(k.id, generateKeyUsage(k).totalRequests);
+        }
+        setRequestCounts(counts);
+      }
     } catch (e) {
       setLoadError(String(e));
     } finally {
@@ -427,6 +447,8 @@ function ApiKeysContent() {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { raw_key: _raw, ...keyData } = created;
     setKeys((prev) => [keyData, ...prev]);
+    // New key starts with 0 requests
+    setRequestCounts((prev) => new Map(prev).set(created.id, 0));
     toast("api key created", "success");
   }
 
@@ -435,6 +457,11 @@ function ApiKeysContent() {
     try {
       await client.deleteApiKey(id);
       setKeys((prev) => prev.filter((k) => k.id !== id));
+      setRequestCounts((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
       toast("api key deleted", "success");
     } catch (e) {
       toast("failed to delete key", "error");
@@ -553,6 +580,7 @@ function ApiKeysContent() {
                 <KeyRow
                   key={key.id}
                   apiKey={key}
+                  requestCount={requestCounts.get(key.id) ?? 0}
                   onDelete={(id) => setDeleteTarget(id)}
                 />
               ))}

@@ -41,6 +41,39 @@ export interface SubscriptionResponse {
   max_api_keys: number;
 }
 
+export interface UsageSummaryResponse {
+  total_requests: number;
+  total_requests_today: number;
+  total_requests_7d: number;
+  total_requests_30d: number;
+  daily_limit: number;
+  daily_used: number;
+  daily_reset_at: string;
+  active_keys: number;
+  last_activity_at: string | null;
+}
+
+export interface DailyUsagePoint {
+  date: string;
+  requests: number;
+}
+
+export interface DailyUsageResponse {
+  points: DailyUsagePoint[];
+}
+
+export interface KeyUsageEntry {
+  key_id: string;
+  key_name: string;
+  total_requests: number;
+  last_7d: number;
+  last_used_at: string | null;
+}
+
+export interface KeyUsageByKeyResponse {
+  keys: KeyUsageEntry[];
+}
+
 // ---------------------------------------------------------------------------
 // Core fetch
 // ---------------------------------------------------------------------------
@@ -102,6 +135,9 @@ export interface BackendClient {
     cancelUrl: string,
   ): Promise<{ checkout_url: string }>;
   createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
+  getUsageSummary(): Promise<UsageSummaryResponse>;
+  getUsageDaily(days?: number): Promise<DailyUsageResponse>;
+  getUsageByKey(): Promise<KeyUsageByKeyResponse>;
 }
 
 /**
@@ -145,5 +181,14 @@ export function useBackendClient(): BackendClient {
         method: "POST",
         body: JSON.stringify({ return_url: returnUrl }),
       }),
+
+    getUsageSummary: () =>
+      backendFetch<UsageSummaryResponse>("/api/v1/usage/summary", getToken),
+
+    getUsageDaily: (days = 30) =>
+      backendFetch<DailyUsageResponse>(`/api/v1/usage/daily?days=${days}`, getToken),
+
+    getUsageByKey: () =>
+      backendFetch<KeyUsageByKeyResponse>("/api/v1/usage/by-key", getToken),
   };
 }

@@ -25,8 +25,7 @@ import { useConnection } from "@/lib/connection-context";
 import { useAppAuth } from "@/lib/auth-context";
 import { useSubscription } from "@/lib/subscription-context";
 import { useBackendClient } from "@/lib/backend-client";
-import type { ApiKeyResponse } from "@/lib/backend-client";
-import { generateDailyUsage, generateKeyUsage } from "@/lib/mock-usage";
+import type { UsageSummaryResponse, DailyUsagePoint } from "@/lib/backend-client";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -217,21 +216,18 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
   );
 }
 
-/** Usage analytics card — receives keys as prop, no fetch of its own. */
-function UsageAnalyticsContent({ keys }: { keys: ApiKeyResponse[] | null }) {
-  const dailyData = keys ? generateDailyUsage(keys, 7) : [];
-  const last7DaysTotal = dailyData.reduce((sum, d) => sum + d.requests, 0);
-
-  const keyStats = keys ? keys.map((k) => generateKeyUsage(k)) : [];
-  const activeKeys = keyStats.filter((s) => s.last7Days > 0).length;
-
-  const sparkValues = dailyData.map((d) => d.requests);
-
-  // Most recent lastUsedAt across all keys
-  const latestActivity = keyStats.reduce<string | null>((latest, s) => {
-    if (!latest) return s.lastUsedAt;
-    return s.lastUsedAt > latest ? s.lastUsedAt : latest;
-  }, null);
+/** Usage analytics card — receives summary and sparkPoints as props, no fetch of its own. */
+function UsageAnalyticsContent({
+  summary,
+  sparkPoints,
+}: {
+  summary: UsageSummaryResponse | null;
+  sparkPoints: DailyUsagePoint[] | null;
+}) {
+  const sparkValues = sparkPoints ? sparkPoints.map((d) => d.requests) : [];
+  const last7DaysTotal = summary?.total_requests_7d ?? null;
+  const activeKeys = summary?.active_keys ?? null;
+  const latestActivity = summary?.last_activity_at ?? null;
 
   return (
     <div className="mb-4">
@@ -245,7 +241,7 @@ function UsageAnalyticsContent({ keys }: { keys: ApiKeyResponse[] | null }) {
             </span>
           </div>
           <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
-            {keys === null ? (
+            {last7DaysTotal === null ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
             ) : last7DaysTotal.toLocaleString()}
           </p>
@@ -271,12 +267,12 @@ function UsageAnalyticsContent({ keys }: { keys: ApiKeyResponse[] | null }) {
             </span>
           </div>
           <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
-            {keys === null ? (
+            {activeKeys === null ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
             ) : activeKeys}
           </p>
           <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
-            {keys === null ? "" : `of ${keys.length} total`}
+            {summary !== null ? `of ${summary.active_keys} active (7d)` : ""}
           </p>
         </div>
 
@@ -288,7 +284,7 @@ function UsageAnalyticsContent({ keys }: { keys: ApiKeyResponse[] | null }) {
               last activity
             </span>
           </div>
-          {keys === null ? (
+          {summary === null ? (
             <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
           ) : latestActivity ? (
             <TimeAgo
@@ -315,35 +311,88 @@ function UsageAnalyticsContent({ keys }: { keys: ApiKeyResponse[] | null }) {
   );
 }
 
-/** Shared content component that fetches keys once and passes them to both
- *  CloudStatusContent and UsageAnalyticsContent — no duplicate API calls. */
+/** Shared content component that fetches keys + usage summary in parallel and
+ *  passes them to CloudStatusContent and UsageAnalyticsContent. */
 function CloudAndUsageContent() {
   const client = useBackendClient();
-  const [keys, setKeys] = useState<ApiKeyResponse[] | null>(null);
   const [keyCount, setKeyCount] = useState<number | null>(null);
+  const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
+  const [sparkPoints, setSparkPoints] = useState<DailyUsagePoint[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    client.getApiKeys()
-      .then((data) => {
-        if (!cancelled) {
-          setKeys(data);
-          setKeyCount(data.length);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setKeys([]);
-          setKeyCount(-1); // sentinel: error
-        }
-      });
+
+    // Fetch keys for key count and usage summary + daily sparkline in parallel
+    Promise.all([
+      client.getApiKeys(),
+      client.getUsageSummary().catch(() => null),
+      client.getUsageDaily(7).catch(() => null),
+    ]).then(([keysData, summaryData, dailyRes]) => {
+      if (cancelled) return;
+      setKeyCount(keysData.length);
+
+      if (summaryData !== null) {
+        setSummary(summaryData);
+      } else {
+        // Fall back to mock summary derived from keys
+        import("@/lib/mock-usage").then(({ generateDailyUsage, generateKeyUsage, getRateLimitStatus }) => {
+          if (cancelled) return;
+          const mockKeyStats = keysData.map((k) => generateKeyUsage(k));
+          const mockRateLimit = getRateLimitStatus("free");
+          const mockSummary: UsageSummaryResponse = {
+            total_requests: mockKeyStats.reduce((sum, s) => sum + s.totalRequests, 0),
+            total_requests_today: mockRateLimit.used,
+            total_requests_7d: mockKeyStats.reduce((sum, s) => sum + s.last7Days, 0),
+            total_requests_30d: mockKeyStats.reduce((sum, s) => sum + s.totalRequests, 0),
+            daily_limit: mockRateLimit.limit,
+            daily_used: mockRateLimit.used,
+            daily_reset_at: mockRateLimit.resetAt,
+            active_keys: mockKeyStats.filter((s) => s.last7Days > 0).length,
+            last_activity_at: mockKeyStats.reduce<string | null>((latest, s) => {
+              if (!latest) return s.lastUsedAt;
+              return s.lastUsedAt > latest ? s.lastUsedAt : latest;
+            }, null),
+          };
+          setSummary(mockSummary);
+          const mockDaily = generateDailyUsage(keysData, 7);
+          setSparkPoints(mockDaily);
+        });
+        return;
+      }
+
+      if (dailyRes !== null) {
+        setSparkPoints(dailyRes.points);
+      } else {
+        import("@/lib/mock-usage").then(({ generateDailyUsage }) => {
+          if (cancelled) return;
+          setSparkPoints(generateDailyUsage(keysData, 7));
+        });
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setKeyCount(-1);
+        setSummary({
+          total_requests: 0,
+          total_requests_today: 0,
+          total_requests_7d: 0,
+          total_requests_30d: 0,
+          daily_limit: 1000,
+          daily_used: 0,
+          daily_reset_at: new Date(Date.now() + 86400000).toISOString(),
+          active_keys: 0,
+          last_activity_at: null,
+        });
+        setSparkPoints([]);
+      }
+    });
+
     return () => { cancelled = true; };
   }, [client]);
 
   return (
     <>
       <CloudStatusContent keyCount={keyCount} />
-      <UsageAnalyticsContent keys={keys} />
+      <UsageAnalyticsContent summary={summary} sparkPoints={sparkPoints} />
     </>
   );
 }

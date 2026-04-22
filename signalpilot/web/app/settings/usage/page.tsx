@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
-import type { ApiKeyResponse } from "@/lib/backend-client";
+import type { UsageSummaryResponse, DailyUsagePoint, KeyUsageEntry } from "@/lib/backend-client";
 import { useSubscription } from "@/lib/subscription-context";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -26,7 +26,6 @@ import {
   generateKeyUsage,
   getRateLimitStatus,
 } from "@/lib/mock-usage";
-import type { KeyUsageStats } from "@/lib/mock-usage";
 
 // ---------------------------------------------------------------------------
 // Custom recharts tooltip
@@ -55,27 +54,29 @@ function UsageTooltip({
 }
 
 // ---------------------------------------------------------------------------
-// Rate limit bar
+// Rate limit bar — accepts UsageSummaryResponse (real or mock-mapped)
 // ---------------------------------------------------------------------------
 
-function RateLimitCard({ planTier }: { planTier: string }) {
-  const info = getRateLimitStatus(planTier);
+function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
+  const percentage = summary.daily_limit > 0
+    ? Math.round((summary.daily_used / summary.daily_limit) * 100)
+    : 0;
 
   const barColor =
-    info.percentage < 50
+    percentage < 50
       ? "var(--color-success)"
-      : info.percentage < 80
+      : percentage < 80
         ? "var(--color-warning)"
         : "var(--color-error)";
 
   const textColor =
-    info.percentage < 50
+    percentage < 50
       ? "text-[var(--color-success)]"
-      : info.percentage < 80
+      : percentage < 80
         ? "text-[var(--color-warning)]"
         : "text-[var(--color-error)]";
 
-  const resetDate = new Date(info.resetAt);
+  const resetDate = new Date(summary.daily_reset_at);
   const resetTimeStr = resetDate.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -88,9 +89,9 @@ function RateLimitCard({ planTier }: { planTier: string }) {
         <div className="flex items-center gap-2">
           <StatusDot
             status={
-              info.percentage < 50
+              percentage < 50
                 ? "healthy"
-                : info.percentage < 80
+                : percentage < 80
                   ? "warning"
                   : "error"
             }
@@ -101,23 +102,23 @@ function RateLimitCard({ planTier }: { planTier: string }) {
           </span>
         </div>
         <span className={`text-[13px] font-light tabular-nums ${textColor}`}>
-          {info.percentage}%
+          {percentage}%
         </span>
       </div>
 
       {/* Progress bar */}
       <div
         role="progressbar"
-        aria-valuenow={info.used}
+        aria-valuenow={summary.daily_used}
         aria-valuemin={0}
-        aria-valuemax={info.limit}
-        aria-label={`Rate limit: ${info.used} of ${info.limit} requests used today`}
+        aria-valuemax={summary.daily_limit}
+        aria-label={`Rate limit: ${summary.daily_used} of ${summary.daily_limit} requests used today`}
         className="h-1.5 bg-[var(--color-border)] w-full mb-3 overflow-hidden"
       >
         <div
           className="h-full transition-all duration-500"
           style={{
-            width: `${Math.min(info.percentage, 100)}%`,
+            width: `${Math.min(percentage, 100)}%`,
             backgroundColor: barColor,
           }}
         />
@@ -126,10 +127,10 @@ function RateLimitCard({ planTier }: { planTier: string }) {
       <div className="flex items-center justify-between text-[12px] tracking-wider">
         <span className="text-[var(--color-text-dim)]">
           <span className="tabular-nums text-[var(--color-text-muted)]">
-            {info.used.toLocaleString()}
+            {summary.daily_used.toLocaleString()}
           </span>{" "}
           of{" "}
-          <span className="tabular-nums">{info.limit.toLocaleString()}</span> requests
+          <span className="tabular-nums">{summary.daily_limit.toLocaleString()}</span> requests
         </span>
         <span className="text-[var(--color-text-dim)]">
           resets at{" "}
@@ -141,40 +142,44 @@ function RateLimitCard({ planTier }: { planTier: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-key breakdown row
+// Per-key breakdown row — uses KeyUsageEntry (backend shape)
 // ---------------------------------------------------------------------------
 
-function KeyUsageRow({ stats }: { stats: KeyUsageStats }) {
+function KeyUsageRow({ entry }: { entry: KeyUsageEntry }) {
   return (
     <div className="flex items-center gap-4 px-5 py-3 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors">
       {/* Key name */}
       <div className="flex-1 min-w-0">
         <span className="text-xs text-[var(--color-text-muted)] tracking-wider truncate block">
-          {stats.keyName}
+          {entry.key_name}
         </span>
       </div>
 
       {/* Key ID prefix */}
       <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider w-28 flex-shrink-0 truncate">
-        {stats.keyId.slice(0, 8)}…
+        {entry.key_id.slice(0, 8)}…
       </code>
 
       {/* Total requests */}
       <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider w-24 flex-shrink-0 tabular-nums">
-        {stats.totalRequests.toLocaleString()}
+        {entry.total_requests.toLocaleString()}
       </span>
 
       {/* Last 7 days */}
       <span className="text-[12px] text-[var(--color-success)] tracking-wider w-20 flex-shrink-0 tabular-nums">
-        {stats.last7Days.toLocaleString()}
+        {entry.last_7d.toLocaleString()}
       </span>
 
       {/* Last used */}
       <div className="w-28 flex-shrink-0">
-        <TimeAgo
-          timestamp={new Date(stats.lastUsedAt).getTime()}
-          className="text-[12px] text-[var(--color-text-dim)] tracking-wider tabular-nums"
-        />
+        {entry.last_used_at ? (
+          <TimeAgo
+            timestamp={new Date(entry.last_used_at).getTime()}
+            className="text-[12px] text-[var(--color-text-dim)] tracking-wider tabular-nums"
+          />
+        ) : (
+          <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">—</span>
+        )}
       </div>
     </div>
   );
@@ -214,36 +219,85 @@ function UsageContent() {
   const client = useBackendClient();
   const { planTier } = useSubscription();
   const { toast } = useToast();
-  const [keys, setKeys] = useState<ApiKeyResponse[] | null>(null);
+
+  const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
+  const [dailyData, setDailyData] = useState<DailyUsagePoint[] | null>(null);
+  const [keyStats, setKeyStats] = useState<KeyUsageEntry[] | null>(null);
+  const [usingMock, setUsingMock] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    client
-      .getApiKeys()
-      .then((data) => {
-        if (!cancelled) setKeys(data);
+
+    Promise.all([
+      client.getUsageSummary(),
+      client.getUsageDaily(30),
+      client.getUsageByKey(),
+    ])
+      .then(([summaryData, dailyRes, byKeyRes]) => {
+        if (cancelled) return;
+        setSummary(summaryData);
+        setDailyData(dailyRes.points);
+        setKeyStats(
+          [...byKeyRes.keys].sort((a, b) => b.total_requests - a.total_requests),
+        );
+        setUsingMock(false);
       })
-      .catch((e) => {
-        if (!cancelled) {
-          toast(String(e), "error");
-          setKeys([]);
-        }
+      .catch(() => {
+        if (cancelled) return;
+        // Fall back to mock data — map to backend shapes
+        const mockRateLimit = getRateLimitStatus(planTier);
+        const mockKeys = client.getApiKeys().catch(() => []);
+        mockKeys.then((keys) => {
+          if (cancelled) return;
+          const mockDaily = generateDailyUsage(keys, 30);
+          const mockKeyStats: KeyUsageEntry[] = keys.map((k) => {
+            const stats = generateKeyUsage(k);
+            return {
+              key_id: stats.keyId,
+              key_name: stats.keyName,
+              total_requests: stats.totalRequests,
+              last_7d: stats.last7Days,
+              last_used_at: stats.lastUsedAt,
+            };
+          });
+
+          const mockSummary: UsageSummaryResponse = {
+            total_requests: mockKeyStats.reduce((sum, s) => sum + s.total_requests, 0),
+            total_requests_today: mockRateLimit.used,
+            total_requests_7d: mockKeyStats.reduce((sum, s) => sum + s.last_7d, 0),
+            total_requests_30d: mockKeyStats.reduce((sum, s) => sum + s.total_requests, 0),
+            daily_limit: mockRateLimit.limit,
+            daily_used: mockRateLimit.used,
+            daily_reset_at: mockRateLimit.resetAt,
+            active_keys: mockKeyStats.filter((s) => s.last_7d > 0).length,
+            last_activity_at: mockKeyStats.reduce<string | null>((latest, s) => {
+              if (!latest || !s.last_used_at) return latest ?? s.last_used_at;
+              return s.last_used_at > latest ? s.last_used_at : latest;
+            }, null),
+          };
+
+          setSummary(mockSummary);
+          setDailyData(mockDaily);
+          setKeyStats(
+            [...mockKeyStats].sort((a, b) => b.total_requests - a.total_requests),
+          );
+          setUsingMock(true);
+        }).catch((e) => {
+          if (!cancelled) toast(String(e), "error");
+        });
       });
+
     return () => {
       cancelled = true;
     };
-  }, [client, toast]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planTier]);
 
-  if (keys === null) {
+  if (summary === null || dailyData === null || keyStats === null) {
     return <UsageSkeleton />;
   }
 
-  const dailyData = generateDailyUsage(keys, 30);
-  const keyStats: KeyUsageStats[] = keys
-    .map((k) => generateKeyUsage(k))
-    .sort((a, b) => b.totalRequests - a.totalRequests);
-
-  const hasData = keys.length > 0;
+  const hasData = keyStats.length > 0;
 
   return (
     <div className="p-8 max-w-4xl animate-fade-in">
@@ -260,17 +314,22 @@ function UsageContent() {
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
-            <code className="text-[12px] text-[var(--color-text)]">{keys.length}</code>
+            <code className="text-[12px] text-[var(--color-text)]">{keyStats.length}</code>
           </span>
           <span className="text-[var(--color-text-dim)]">
             plan:{" "}
             <code className="text-[12px] text-[var(--color-text)]">{planTier}</code>
           </span>
+          {usingMock && (
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider opacity-60">
+              (mock data)
+            </span>
+          )}
         </div>
       </TerminalBar>
 
       {/* Rate limit status */}
-      <RateLimitCard planTier={planTier} />
+      <RateLimitCard summary={summary} />
 
       {/* Daily usage chart */}
       <section className="mb-8">
@@ -355,8 +414,8 @@ function UsageContent() {
           ) : (
             <>
               <KeyUsageTableHeader />
-              {keyStats.map((stats) => (
-                <KeyUsageRow key={stats.keyId} stats={stats} />
+              {keyStats.map((entry) => (
+                <KeyUsageRow key={entry.key_id} entry={entry} />
               ))}
             </>
           )}

@@ -323,7 +323,7 @@ export default function Sidebar() {
 
   // Poll for active sandbox count and connection health
   const fetchCounts = useCallback(() => {
-    const url = typeof window !== "undefined" ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300" : "";
+    const url = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
     const key = typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
     const headers: Record<string, string> = {};
     if (key) headers["Authorization"] = `Bearer ${key}`;

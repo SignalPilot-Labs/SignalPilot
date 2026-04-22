@@ -18,6 +18,7 @@ import type { ApiKeyResponse } from "@/lib/backend-client";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { CodeBlock } from "@/components/ui/code-block";
 import { StatusDot } from "@/components/ui/data-viz";
+import { SectionHeader } from "@/components/ui/section-header";
 
 // ---------------------------------------------------------------------------
 // MCP URL derivation
@@ -94,33 +95,6 @@ const CLIENT_TABS: { id: ClientTab; label: string; filename: string }[] = [
   { id: "generic-http", label: "generic http", filename: "config.json" },
 ];
 
-// ---------------------------------------------------------------------------
-// Section header — identical to api-keys page pattern
-// ---------------------------------------------------------------------------
-
-function SectionHeader({
-  icon: Icon,
-  title,
-  iconColor,
-}: {
-  icon: React.ElementType;
-  title: string;
-  iconColor?: string;
-}) {
-  return (
-    <div className="section-header mb-4">
-      <div className="flex items-center gap-2">
-        <Icon
-          className={`w-3.5 h-3.5 ${iconColor || "text-[var(--color-text-dim)]"}`}
-          strokeWidth={1.5}
-        />
-        <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
-          {title}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // URL copy button — inline for the endpoint section

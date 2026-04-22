@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Terminal,
   Database,
@@ -153,12 +154,12 @@ function CloudStatusContent() {
           {statusLabel}
         </p>
         {showUpgrade && (
-          <a
+          <Link
             href="/settings/billing"
             className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
           >
             upgrade <ArrowRight className="w-3 h-3" />
-          </a>
+          </Link>
         )}
       </div>
 
@@ -182,12 +183,12 @@ function CloudStatusContent() {
         <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
           of {maxApiKeys} allowed
         </p>
-        <a
+        <Link
           href="/settings/api-keys"
           className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
         >
           manage <ArrowRight className="w-3 h-3" />
-        </a>
+        </Link>
       </div>
 
       {/* Card 3: MCP Endpoint */}
@@ -213,12 +214,12 @@ function CloudStatusContent() {
             {mcpDisplay}
           </p>
         )}
-        <a
+        <Link
           href="/settings/mcp-connect"
           className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
         >
           connect <ArrowRight className="w-3 h-3" />
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -500,9 +501,9 @@ export default function DashboardPage() {
                 recent activity
               </span>
             </div>
-            <a href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            <Link href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
               view all <ArrowRight className="w-3 h-3" />
-            </a>
+            </Link>
           </div>
           <div className="divide-y divide-[var(--color-border)]">
             {recentAudit.length === 0 ? (
@@ -601,9 +602,9 @@ export default function DashboardPage() {
                   connections
                 </span>
               </div>
-              <a href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 manage <ArrowRight className="w-3 h-3" />
-              </a>
+              </Link>
             </div>
             <div className="divide-y divide-[var(--color-border)]">
               {connections.length === 0 ? (

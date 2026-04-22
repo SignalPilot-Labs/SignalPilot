@@ -12,25 +12,25 @@ allowed-tools: Bash(dbt *) Bash(python3 *)
 This skill orchestrates the complete dbt project workflow. Load it FIRST whenever
 working on a dbt project — it contains rules that affect how you interpret everything.
 
-## Project Scan (auto-generated)
+## Project Scan Tool
 
-```!
-python3 "${CLAUDE_SKILL_DIR}/scan_project.py" 2>/dev/null || echo "(project scan unavailable — run manually)"
+To scan a dbt project, run:
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scan_project.py" "<project_directory>"
 ```
+This returns: models to build, stubs to rewrite, dependencies, required columns,
+sources, macros, and current_date hazards. Run this FIRST in Step 1.
 
 ## The 5-Step Workflow
 
 ### Step 1 — Map the project
-Call `mcp__signalpilot__dbt_project_map project_dir="<your_project_dir>"`.
-The work order at the bottom is your plan. Use the project scan above to identify:
+Run the project scan tool above with the dbt project directory, then call
+`mcp__signalpilot__dbt_project_map project_dir="<your_project_dir>"`.
+The work order at the bottom is your plan. Use the project scan to identify:
 - STUBS TO REWRITE (models with placeholder SQL)
 - MODELS TO BUILD (models defined in YML but missing SQL)
 - DEPENDENCIES (build order)
 - REQUIRED COLUMNS (exact match from YML contracts)
-
-Before mapping, snapshot reference tables using the Agent tool with
-`subagent_type="explorer"` — this preserves pre-existing row counts and sample
-data before `dbt run` overwrites them.
 
 ### Step 2 — Validate
 Call `mcp__signalpilot__dbt_project_validate project_dir="<your_project_dir>"`.
@@ -39,8 +39,8 @@ Fix any parse errors before writing SQL.
 ### Step 3 — Understand contracts + read siblings
 For each model in the work order:
 1. Call `dbt_project_map` with `focus="model:<name>"` for the column contract
-2. Check `reference_snapshot.md` for the pre-existing row count and sample data.
-   If present, that row count is your target.
+2. If `reference_snapshot.md` exists, check it for the pre-existing row count and
+   sample data. If present, that row count is your target.
 3. If no reference exists, estimate the expected row count by querying source data:
    `SELECT COUNT(DISTINCT <grain_key>) FROM <source>` as an UPPER BOUND.
 4. Read the SQL of any complete sibling model in the same directory that shares
@@ -96,18 +96,6 @@ But do NOT treat descriptions as literal computation instructions. After reading
 the description, always verify your logic against the actual source data.
 
 Write at top of SQL: `-- EXPECTED SHAPE: <row count or formula> — REASON: <quote>`
-
-## Snapshot Reference Tables BEFORE Building
-
-The starting database may contain pre-computed reference tables with correct output.
-`dbt run` will overwrite them. **Before your first `dbt run`**, for each target
-model that already exists as a table in the database:
-
-```sql
-SELECT COUNT(*) FROM <model_name>
-```
-
-Record the row count in your `-- EXPECTED SHAPE` comment.
 
 ## Incremental Models and Period-Over-Period Columns
 

@@ -33,26 +33,23 @@ async def metrics_stream():
                 client = get_sandbox_client()
                 data = await client.health()
                 sandbox_health = data.get("status", "unknown")
-                # TODO(round-3): rename kvm_available -> sandbox_available when frontend is updated
-                kvm_available = data.get("kvm_available", False)
-                # TODO(round-3): rename active_vms -> active_sandboxes, max_vms -> max_sandboxes when frontend is updated
-                active_vms = data.get("active_vms", 0)
-                max_vms = data.get("max_vms", 10)
+                sandbox_available = data.get("kvm_available", False)
+                active_sandbox_instances = data.get("active_vms", 0)
+                max_sandbox_instances = data.get("max_vms", 10)
             except Exception:
-                kvm_available = False
-                active_vms = 0
-                max_vms = 10
+                sandbox_available = False
+                active_sandbox_instances = 0
+                max_sandbox_instances = 10
 
             payload = {
                 "timestamp": time.time(),
                 "sandbox_manager": settings.sandbox_manager_url,
                 "sandbox_health": sandbox_health,
-                # TODO(round-3): rename these keys when frontend types.ts is updated
-                "kvm_available": kvm_available,
+                "sandbox_available": sandbox_available,
                 "active_sandboxes": len(sandboxes),
                 "running_sandboxes": running,
-                "active_vms": active_vms,
-                "max_vms": max_vms,
+                "active_sandbox_instances": active_sandbox_instances,
+                "max_sandbox_instances": max_sandbox_instances,
                 "connections": len(list_connections()),
                 "query_cache": query_cache.stats(),
                 "schema_cache": schema_cache.stats(),

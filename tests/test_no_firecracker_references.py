@@ -1,6 +1,5 @@
 """Regression test: ensure no stale Firecracker/KVM/jailer references remain in the codebase.
 
-Frontend TSX/TS files under signalpilot/web/ are excluded — those are updated in Round 3.
 Documentation that mentions KVM only to explain gVisor does NOT need it is allowed.
 """
 
@@ -27,10 +26,21 @@ def _is_excluded_path(path: Path, repo_root: Path) -> bool:
 
 def _is_frontend(path: Path, repo_root: Path) -> bool:
     try:
-        rel = path.relative_to(repo_root / _FRONTEND_DIR)
+        path.relative_to(repo_root / _FRONTEND_DIR)
         return True
     except ValueError:
         return False
+
+
+def _collect_frontend_ts_files(repo_root: Path) -> list[Path]:
+    """Collect all TypeScript and TSX files under the frontend directory."""
+    frontend_dir = repo_root / _FRONTEND_DIR
+    files: list[Path] = []
+    for pattern in ("**/*.ts", "**/*.tsx"):
+        for path in frontend_dir.rglob(pattern.removeprefix("**/")):
+            if path.is_file() and not _is_excluded_path(path, repo_root):
+                files.append(path)
+    return files
 
 
 def _collect_source_files(repo_root: Path, *, include_frontend: bool = True) -> list[Path]:
@@ -84,15 +94,12 @@ def _is_kvm_negation(line: str) -> bool:
 
 
 class TestNoFirecrackerReferences:
-    """Ensure no stale Firecracker/KVM references remain in the codebase.
-
-    Frontend files (signalpilot/web/) are excluded — deferred to Round 3.
-    """
+    """Ensure no stale Firecracker/KVM references remain in the codebase."""
 
     def test_no_firecracker_in_source_files(self):
         repo_root = _repo_root()
         this_file = Path(__file__).resolve()
-        files = _collect_source_files(repo_root, include_frontend=False)
+        files = _collect_source_files(repo_root, include_frontend=True)
 
         pattern = re.compile(r"firecracker", re.IGNORECASE)
         exclude_paths = {this_file}
@@ -113,7 +120,7 @@ class TestNoFirecrackerReferences:
         this_file = Path(__file__).resolve()
         metrics_py = (repo_root / "signalpilot" / "gateway" / "gateway" / "api" / "metrics.py").resolve()
 
-        files = _collect_source_files(repo_root, include_frontend=False)
+        files = _collect_source_files(repo_root, include_frontend=True)
 
         package_lock_files = {
             path for path in files if path.name == "package-lock.json"
@@ -123,7 +130,7 @@ class TestNoFirecrackerReferences:
         exclude_paths = {this_file, metrics_py} | package_lock_files
 
         matches = _find_matches(files, pattern, exclude_paths)
-        matches = [(p, n, l) for p, n, l in matches if not _is_kvm_negation(l)]
+        matches = [(p, n, line) for p, n, line in matches if not _is_kvm_negation(line)]
 
         if matches:
             details = "\n".join(
@@ -179,4 +186,25 @@ class TestNoFirecrackerReferences:
         for filename in expected_files:
             assert (sandbox_dir / filename).exists(), (
                 f"Expected file {filename} not found in {sandbox_dir}"
+            )
+
+    def test_no_vm_terminology_in_frontend(self):
+        """Ensure frontend TS/TSX files have no stale VM/BYOF/microvm field names or terminology."""
+        repo_root = _repo_root()
+        this_file = Path(__file__).resolve()
+        files = _collect_frontend_ts_files(repo_root)
+
+        pattern = re.compile(r"active_vms|max_vms|\bbyof\b|\bmicrovms?\b", re.IGNORECASE)
+        exclude_paths = {this_file}
+
+        matches = _find_matches(files, pattern, exclude_paths)
+
+        if matches:
+            details = "\n".join(
+                f"  {path.relative_to(repo_root)}:{line_num}: {line}"
+                for path, line_num, line in matches
+            )
+            raise AssertionError(
+                f"Found {len(matches)} stale VM terminology reference(s) in frontend TS/TSX files"
+                f" (active_vms, max_vms, byof, microvm/microvms):\n{details}"
             )

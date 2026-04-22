@@ -327,9 +327,9 @@ export default function Sidebar() {
               </span>
             </div>
           </Tooltip>
-          <Tooltip content="bring your own firecracker" position="left">
+          <Tooltip content="bring your own sandbox" position="left">
             <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
-              byof
+              byos
             </span>
           </Tooltip>
         </div>

@@ -3176,8 +3176,25 @@ async def dbt_project_validate(
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main():
-    """Run the MCP server over stdio."""
-    mcp.run(transport="stdio")
+    """Run the MCP server.
+
+    Transport is selected via SP_MCP_TRANSPORT env var (default: stdio).
+    When running as streamable-http, wraps the Starlette app with
+    MCPAuthMiddleware and serves it with uvicorn.
+    """
+    import os as _entry_os
+    transport = _entry_os.environ.get("SP_MCP_TRANSPORT", "stdio")
+
+    if transport == "streamable-http":
+        import uvicorn
+        from .mcp_auth import MCPAuthMiddleware
+
+        port = int(_entry_os.environ.get("SP_MCP_PORT", "8000"))
+        starlette_app = mcp.streamable_http_app()
+        authenticated_app = MCPAuthMiddleware(starlette_app)
+        uvicorn.run(authenticated_app, host="0.0.0.0", port=port)
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

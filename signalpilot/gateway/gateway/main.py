@@ -155,8 +155,10 @@ try:
     # Override the gateway URL so the MCP tools call back to this same process
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
+    from .mcp_auth import MCPAuthMiddleware
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
+    _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     app.mount("/", _mcp_http_app)
     logger.info("MCP streamable-http endpoint mounted at /mcp")
 except Exception as e:

@@ -145,11 +145,11 @@ export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;
   sandbox_health: string;
-  kvm_available: boolean;
+  sandbox_available: boolean;
   active_sandboxes: number;
   running_sandboxes: number;
-  active_vms: number;
-  max_vms: number;
+  active_sandbox_instances: number;
+  max_sandbox_instances: number;
   connections: number;
   query_cache?: {
     entries: number;

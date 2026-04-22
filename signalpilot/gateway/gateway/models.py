@@ -13,11 +13,11 @@ from pydantic import BaseModel, Field
 
 class SandboxProvider(str, Enum):
     local = "local"       # local sandbox_manager at socket/http
-    remote = "remote"     # BYOF — remote sandbox manager HTTP endpoint
+    remote = "remote"     # BYOS -- remote sandbox manager HTTP endpoint
 
 
 class GatewaySettings(BaseModel):
-    # BYOF Firecracker configuration
+    # Sandbox configuration (BYOS -- Bring Your Own Sandbox)
     sandbox_provider: SandboxProvider = SandboxProvider.local
     sandbox_manager_url: str = "http://localhost:8180"
     sandbox_api_key: str | None = None

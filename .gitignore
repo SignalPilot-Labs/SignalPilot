@@ -6,6 +6,7 @@ CLAUDE.md
 .env
 __pycache__/
 *.pyc
+*.tsbuildinfo
 session-transcript.jsonl
 
 # Benchmark

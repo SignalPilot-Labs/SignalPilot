@@ -5,7 +5,7 @@ Run with stdio transport (for Claude Code):
     python -m gateway.mcp_server
 
 Tools exposed:
-    execute_code     — Run Python code in an isolated Firecracker microVM
+    execute_code     — Run Python code in an isolated gVisor sandbox
     query_database   — Run governed read-only SQL against a connected database
     list_connections — List configured database connections
     list_sandboxes   — List active sandbox sessions
@@ -96,7 +96,7 @@ mcp = FastMCP(
     "SignalPilot",
     instructions=(
         "You have access to SignalPilot, a governed sandbox for AI database access. "
-        "Use execute_code to run Python in an isolated Firecracker microVM (~300ms). "
+        "Use execute_code to run Python in an isolated gVisor sandbox (~300ms). "
         "Use query_database for read-only SQL with automatic governance (LIMIT injection, "
         "DDL/DML blocking, audit logging). Use list_connections to see available databases."
     ),
@@ -118,12 +118,12 @@ def _get_sandbox_url() -> str:
 @mcp.tool()
 async def execute_code(code: str, timeout: int = 30) -> str:
     """
-    Execute Python code in an isolated Firecracker microVM sandbox.
+    Execute Python code in an isolated gVisor sandbox.
 
-    The code runs in a secure, ephemeral microVM with Python 3.10 and common
+    The code runs in a secure, ephemeral gVisor sandbox with Python 3.12 and common
     stdlib modules pre-loaded (math, re, collections, datetime, etc.).
-    Each execution gets a fresh VM that is destroyed after returning.
-    Typical latency: ~300ms (snapshot-accelerated).
+    Each execution gets a fresh sandbox that is destroyed after returning.
+    Typical latency: ~300ms.
 
     Args:
         code: Python code to execute
@@ -154,7 +154,7 @@ async def execute_code(code: str, timeout: int = 30) -> str:
             )
             data = resp.json()
         except httpx.ConnectError:
-            return f"Error: Cannot connect to sandbox manager at {sandbox_url}. Is Firecracker running?"
+            return f"Error: Cannot connect to sandbox manager at {sandbox_url}. Is the sandbox manager running?"
         except Exception as e:
             return f"Error: {e}"
 
@@ -370,8 +370,7 @@ async def sandbox_status() -> str:
     """
     Check the health of the sandbox manager and list active sandboxes.
 
-    Returns sandbox manager health, KVM status, snapshot readiness,
-    and any active sandbox sessions.
+    Returns sandbox manager health and active sandbox count.
     """
     settings = load_settings()
     sandbox_url = settings.sandbox_manager_url
@@ -386,9 +385,7 @@ async def sandbox_status() -> str:
     lines = [
         f"Sandbox Manager: {sandbox_url}",
         f"Status: {health.get('status', 'unknown')}",
-        f"KVM: {'available' if health.get('kvm_available') else 'NOT available'}",
-        f"Snapshot: {'ready (fast mode ~300ms)' if health.get('snapshot_ready') else 'not ready (cold boot ~1600ms)'}",
-        f"Active VMs: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
+        f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
     ]
 
     sandboxes = list_sandboxes()

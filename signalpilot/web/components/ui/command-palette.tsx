@@ -73,13 +73,13 @@ export function CommandPalette() {
     { id: "nav-dashboard", label: "dashboard", description: "overview and metrics", shortcut: "^1", action: () => router.push("/dashboard"), icon: <IconNav />, category: "navigate" },
     { id: "nav-query", label: "query explorer", description: "governed sql queries", shortcut: "^2", action: () => router.push("/query"), icon: <IconNav />, category: "navigate" },
     { id: "nav-schema", label: "schema explorer", description: "browse tables and columns", shortcut: "^3", action: () => router.push("/schema"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-sandboxes", label: "sandboxes", description: "firecracker microvms", shortcut: "^4", action: () => router.push("/sandboxes"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-sandboxes", label: "sandboxes", description: "gvisor sandboxes", shortcut: "^4", action: () => router.push("/sandboxes"), icon: <IconNav />, category: "navigate" },
     { id: "nav-connections", label: "connections", description: "database connections", shortcut: "^5", action: () => router.push("/connections"), icon: <IconNav />, category: "navigate" },
     { id: "nav-health", label: "health monitoring", description: "connection health and latency", shortcut: "^6", action: () => router.push("/health"), icon: <IconNav />, category: "navigate" },
     { id: "nav-audit", label: "audit log", description: "compliance audit trail", shortcut: "^7", action: () => router.push("/audit"), icon: <IconNav />, category: "navigate" },
     { id: "nav-settings", label: "settings", description: "instance configuration", shortcut: "^8", action: () => router.push("/settings"), icon: <IconNav />, category: "navigate" },
     // Actions
-    { id: "action-new-sandbox", label: "create sandbox", description: "spin up a new microvm", action: () => router.push("/sandboxes"), icon: <IconAction />, category: "actions" },
+    { id: "action-new-sandbox", label: "create sandbox", description: "spin up a new sandbox", action: () => router.push("/sandboxes"), icon: <IconAction />, category: "actions" },
     { id: "action-new-connection", label: "add connection", description: "configure a new database", action: () => router.push("/connections"), icon: <IconAction />, category: "actions" },
     { id: "action-export-audit", label: "export audit log", description: "download compliance data", action: () => router.push("/audit"), icon: <IconAction />, category: "actions" },
   ], [router]);

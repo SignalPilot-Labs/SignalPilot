@@ -1,0 +1,31 @@
+# SignalPilot Sandbox Test Container -- gVisor
+# Self-contained: installs gVisor runsc during build.
+#
+# BUILD:
+#   docker build -f Dockerfile.test -t signalpilot/sandbox-test .
+#
+# RUN:
+#   docker run --rm --cap-add SYS_PTRACE --cap-add SYS_ADMIN signalpilot/sandbox-test
+
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GVISOR_VERSION=20260323.0
+
+# System deps (curl for install)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install gVisor (runsc) -- pinned version, auto-detect architecture
+RUN ARCH=$(uname -m) && \
+    curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}/runsc" \
+    -o /usr/local/bin/runsc && \
+    chmod +x /usr/local/bin/runsc
+
+# Copy test runner
+COPY test/run-test.sh /opt/run-test.sh
+RUN chmod +x /opt/run-test.sh
+
+ENTRYPOINT ["/opt/run-test.sh"]

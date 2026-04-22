@@ -175,7 +175,7 @@ export function EmptyList({ className = "" }: { className?: string }) {
 export function EmptySandbox({ className = "" }: { className?: string }) {
   return (
     <svg width="64" height="48" viewBox="0 0 64 48" fill="none" className={className}>
-      {/* VM box */}
+      {/* Sandbox box */}
       <rect x="8" y="8" width="48" height="32" rx="0" stroke="var(--color-border-hover)" strokeWidth="1" />
       {/* Inner sandbox boundary — rotating dash */}
       <rect x="14" y="14" width="36" height="20" rx="0" stroke="var(--color-border)" strokeWidth="1" strokeDasharray="3 3">
@@ -195,7 +195,7 @@ export function EmptySandbox({ className = "" }: { className?: string }) {
         <animate attributeName="opacity" values="0;0.15;0" dur="2s" repeatCount="indefinite" />
       </rect>
       {/* Label */}
-      <text x="32" y="45" fill="var(--color-text-dim)" fontSize="5" fontFamily="monospace" textAnchor="middle" opacity="0.5">FIRECRACKER</text>
+      <text x="32" y="45" fill="var(--color-text-dim)" fontSize="5" fontFamily="monospace" textAnchor="middle" opacity="0.5">SANDBOX</text>
     </svg>
   );
 }

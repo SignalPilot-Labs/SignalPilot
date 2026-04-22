@@ -29,8 +29,9 @@ RUN mkdir -p /opt/signalpilot
 COPY pyproject.toml /opt/signalpilot/
 RUN pip install --no-cache-dir /opt/signalpilot/
 
-COPY executor_base.py /opt/signalpilot/
-COPY executor_gvisor.py /opt/signalpilot/
+COPY constants.py /opt/signalpilot/
+COPY models.py /opt/signalpilot/
+COPY executor.py /opt/signalpilot/
 COPY sandbox_manager.py /opt/signalpilot/
 
 WORKDIR /opt/signalpilot

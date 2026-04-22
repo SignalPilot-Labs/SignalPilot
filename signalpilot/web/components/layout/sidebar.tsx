@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { KeyRound, CreditCard, Plug, BarChart3 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
@@ -213,47 +214,13 @@ function UserSection() {
 }
 
 /**
- * Thin wrapper around Clerk's UserButton.
- * Isolated in its own component so the require() is scoped and not
- * at module level (avoids importing Clerk when it might not be loaded).
+ * Thin wrapper around Clerk's UserButton — dynamically imported so
+ * @clerk/nextjs is never loaded until ClerkProvider has mounted.
  */
-function ClerkUserButton({ displayName }: { displayName: string }) {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { UserButton } = require("@clerk/nextjs") as {
-    UserButton: React.ComponentType<{
-      afterSignOutUrl?: string;
-      appearance?: object;
-    }>;
-  };
-
-  return (
-    <div className="flex items-center gap-2 px-1 py-1">
-      <UserButton
-        afterSignOutUrl="/"
-        appearance={{
-          elements: {
-            userButtonAvatarBox: {
-              width: "24px",
-              height: "24px",
-              borderRadius: "0px",
-            },
-            userButtonPopoverCard: {
-              borderRadius: "0px",
-              backgroundColor: "#0a0a0a",
-              border: "1px solid #222222",
-            },
-          },
-        }}
-      />
-      <span
-        className="text-[11px] text-[var(--color-text-dim)] tracking-wide truncate max-w-[120px]"
-        title={displayName}
-      >
-        {displayName}
-      </span>
-    </div>
-  );
-}
+const ClerkUserButton = dynamic(
+  () => import("@/components/layout/clerk-user-button"),
+  { ssr: false }
+);
 
 /** API Keys nav link — only rendered in cloud mode, nested under /settings */
 function ApiKeysNavLink({ pathname }: { pathname: string }) {

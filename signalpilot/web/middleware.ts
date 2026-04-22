@@ -31,11 +31,19 @@ function applySecurityHeaders(
   // Fix JetBrains Mono CSP bug: cdn.jsdelivr.net was not in font-src
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 
+  let workerSrc = "'self'";
+
   if (withClerk) {
-    connectSrc += " https://*.clerk.accounts.dev";
+    connectSrc +=
+      " https://*.clerk.accounts.dev https://clerk-telemetry.com";
     scriptSrc += " https://*.clerk.accounts.dev";
     imgSrc += " https://img.clerk.com";
+    workerSrc += " blob:";
   }
+
+  const backendUrl =
+    process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  connectSrc += ` ${backendUrl}`;
 
   response.headers.set(
     "Content-Security-Policy",
@@ -43,6 +51,7 @@ function applySecurityHeaders(
       "default-src 'self'",
       `connect-src ${connectSrc}`,
       `script-src ${scriptSrc}`,
+      `worker-src ${workerSrc}`,
       "style-src 'self' 'unsafe-inline'",
       `img-src ${imgSrc}`,
       `font-src ${fontSrc}`,

@@ -1,7 +1,12 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
-import { useAuth, useUser } from "@clerk/nextjs";
+import {
+  createContext,
+  useContext,
+  lazy,
+  Suspense,
+  type ReactNode,
+} from "react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,43 +41,22 @@ export interface AppAuth {
 // Context
 // ---------------------------------------------------------------------------
 
-const AuthContext = createContext<AppAuth | null>(null);
+export const AuthContext = createContext<AppAuth | null>(null);
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 // ---------------------------------------------------------------------------
-// Inner components — NEVER call Clerk hooks conditionally in a single body.
-// ClerkAuthInner: always inside ClerkProvider, unconditionally calls hooks.
-// LocalAuthInner: never inside ClerkProvider, returns static values.
+// Lazy-loaded Clerk inner component.
+// This ensures @clerk/nextjs is NEVER imported when clerkEnabled=false.
 // ---------------------------------------------------------------------------
 
-function ClerkAuthInner({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn, signOut } = useAuth();
-  const { user: clerkUser } = useUser();
+const ClerkAuthInner = lazy(() =>
+  import("./clerk-auth-inner").then((m) => ({ default: m.ClerkAuthInner }))
+);
 
-  const user: AppUser | null =
-    isSignedIn && clerkUser
-      ? {
-          id: clerkUser.id,
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-          email: clerkUser.primaryEmailAddress?.emailAddress ?? null,
-          imageUrl: clerkUser.imageUrl,
-        }
-      : null;
-
-  const value: AppAuth = {
-    isAuthenticated: isSignedIn === true,
-    isCloudMode: IS_CLOUD_MODE,
-    isLocalMode: !IS_CLOUD_MODE,
-    clerkEnabled: true,
-    user,
-    isLoaded,
-    signOut: signOut ?? null,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
+// ---------------------------------------------------------------------------
+// Local-mode inner component (no Clerk dependency)
+// ---------------------------------------------------------------------------
 
 function LocalAuthInner({ children }: { children: ReactNode }) {
   const value: AppAuth = {
@@ -100,7 +84,11 @@ interface AuthProviderProps {
 
 export function AuthProvider({ clerkEnabled, children }: AuthProviderProps) {
   if (clerkEnabled) {
-    return <ClerkAuthInner>{children}</ClerkAuthInner>;
+    return (
+      <Suspense fallback={null}>
+        <ClerkAuthInner>{children}</ClerkAuthInner>
+      </Suspense>
+    );
   }
   return <LocalAuthInner>{children}</LocalAuthInner>;
 }

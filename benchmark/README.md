@@ -1,478 +1,191 @@
-# Spider2 Benchmark Suite with SignalPilot
+# Spider2-DBT Benchmark
 
-Run [Spider2](https://github.com/xlang-ai/Spider2) benchmark tasks using Claude Agent SDK + SignalPilot MCP. Supports three benchmark suites:
-
-| Suite | Tasks | Database | Agent Mode |
-|-------|-------|----------|------------|
-| **spider2-dbt** | dbt transformation projects | DuckDB | dbt project completion |
-| **spider2-snowflake** | SQL questions against Snowflake | Snowflake (PAT) | SQL query writing |
-| **spider2-lite** | SQL questions against multiple DBs | SQLite, BigQuery, Snowflake | SQL query writing |
-
-The agent gets:
-- Full Claude Code tool access (Read, Write, Edit, Bash, Glob, Grep, Agent, etc.)
-- SignalPilot MCP server for governed database access (schema exploration, SQL queries)
-- Suite-specific skills in `.claude/skills/`
-- For dbt: dbt-duckdb for data transformation
-
-## Quick Start
-
-```bash
-# 1. Setup (one-time per suite)
-python -m benchmark.setup_dbt          # for spider2-dbt
-
-# 2. Run a benchmark task
-python -m benchmark.run_direct chinook001                              # dbt (default)
-python -m benchmark.run_direct sf_task001 --suite spider2-snowflake    # snowflake
-python -m benchmark.run_direct lite_task001 --suite spider2-lite       # lite
-```
-
-## Setup
-
-### Common Prerequisites
-
-```bash
-# Set your OAuth token in .env at the SignalPilot repo root
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-```
-
-### Spider2-DBT Setup
-
-```bash
-# 1. Clone Spider2 and download data
-git clone https://github.com/xlang-ai/Spider2.git ~/spider2-repo
-cd ~/spider2-repo/spider2-dbt
-pip install gdown
-gdown 'https://drive.google.com/uc?id=1N3f7BSWC4foj-V-1C9n8M2XmgV7FOcqL'  # DBT_start_db.zip
-gdown 'https://drive.google.com/uc?id=1s0USV_iQLo4oe05QqAMnhGGp5jeejCzp'  # dbt_gold.zip
-python setup.py
-
-# 2. Set env var (or add to .env)
-export SPIDER2_DBT_DIR=~/spider2-repo/spider2-dbt
-
-# 3. Run setup checks
-python -m benchmark.setup_dbt
-```
-
-### Spider2-Snowflake Setup
-
-```bash
-# 1. Get spider2-snowflake data
-# Set env var pointing to the data directory
-export SPIDER2_SNOWFLAKE_DIR=~/spider2-repo/spider2-snowflake
-
-# 2. Configure Snowflake credentials
-# Create benchmark/.env.snowflake with:
-SNOWFLAKE_ACCOUNT=<your-account>
-SNOWFLAKE_USER=<your-user>
-SNOWFLAKE_TOKEN=<your-programmatic-access-token>
-SNOWFLAKE_ROLE=<your-role>
-SNOWFLAKE_WAREHOUSE=<your-warehouse>
-```
-
-### Spider2-Lite Setup
-
-```bash
-# 1. Get spider2-lite data
-export SPIDER2_LITE_DIR=~/spider2-repo/spider2-lite
-
-# 2. For SQLite tasks: data is bundled in the dataset
-# 3. For BigQuery tasks: place service_account.json in benchmark/
-# 4. For Snowflake tasks: configure .env.snowflake (same as above)
-```
-
-### Credential Files (never commit these)
-
-| File | Purpose | Required For |
-|------|---------|--------------|
-| `benchmark/.env.snowflake` | Snowflake PAT credentials | spider2-snowflake, spider2-lite (Snowflake tasks) |
-| `benchmark/service_account.json` | BigQuery service account | spider2-lite (BigQuery tasks) |
-
-These are covered by `benchmark/.gitignore`.
-
-## Running Benchmarks
-
-### Single Task
-
-```bash
-# spider2-dbt (default suite)
-python -m benchmark.run_direct chinook001
-python -m benchmark.run_direct chinook001 --model claude-opus-4-6
-python -m benchmark.run_direct chinook001 --max-turns 30
-python -m benchmark.run_direct chinook001 --skip-agent       # re-evaluate only
-python -m benchmark.run_direct chinook001 --no-reset         # keep previous workdir
-
-# spider2-snowflake
-python -m benchmark.run_direct sf_task001 --suite spider2-snowflake
-python -m benchmark.run_direct sf_task001 --suite spider2-snowflake --model claude-opus-4-6
-
-# spider2-lite
-python -m benchmark.run_direct lite_task001 --suite spider2-lite
-```
-
-### Batch Run
-
-```bash
-# Run all evaluable tasks for a suite
-python -m benchmark.run_batch                                 # dbt (default)
-python -m benchmark.run_batch --suite spider2-snowflake       # snowflake
-python -m benchmark.run_batch --suite spider2-lite            # lite
-
-# Limit to specific tasks
-python -m benchmark.run_batch --tasks chinook001,f1001
-python -m benchmark.run_batch --suite spider2-lite --tasks lite001,lite002
-```
-
-## How It Works
-
-### Spider2-DBT Flow
-
-1. Copies task dbt project + skills + `.mcp.json` to `_dbt_workdir/<id>`
-2. Registers DuckDB with SignalPilot gateway
-3. Runs main agent (writes SQL models, runs `dbt run`)
-4. Post-agent safety nets: quick-fix, value-verify, name-fix agents
-5. Evaluates: result DuckDB tables vs gold DuckDB tables
-6. Cleans up connection
-
-### Spider2-Snowflake / Spider2-Lite Flow
-
-1. Creates clean workdir in `_sql_workdir/<suite>/<id>` with SQL skills
-2. Registers appropriate connection (Snowflake PAT, SQLite file, or BigQuery service account)
-3. Runs SQL agent (explores schema, writes query, executes via MCP, saves `result.csv`)
-4. Evaluates: `result.csv` vs gold CSV
-5. Cleans up connection
-
-### Connection Registration Per Database
-
-| Database | Method | Connection Fields |
-|----------|--------|-------------------|
-| DuckDB | Direct file path | `db_type=duckdb, database=<path>` |
-| Snowflake | PAT (Programmatic Access Token) | `db_type=snowflake, account, user, password=<PAT>` |
-| SQLite | File path | `db_type=sqlite, database=<path>` |
-| BigQuery | Service account | `db_type=bigquery, project, dataset, credentials_json` |
-
-### Credential Reload (Gateway Integration)
-
-The benchmark runner registers connections via `gateway.store.create_connection()` before launching the agent. The MCP gateway process (started by Claude Agent SDK) picks up these credentials automatically via a **reload-on-miss** mechanism in `gateway/store.py`:
-
-- `get_connection_string(name)` checks the in-memory vault first. If the key is missing, it re-reads `credentials.enc` from disk and retries.
-- `get_credential_extras(name)` follows the same pattern for OAuth tokens, service account JSON, etc.
-- This ensures externally registered connections are available without restarting the gateway.
-
-### MCP Credential Extras (All Tools)
-
-All MCP tool handlers in `gateway/mcp_server.py` pass `credential_extras` to the pool manager when acquiring connections. This ensures that BigQuery service account JSON and Snowflake PAT credentials flow through to the connectors for **every** tool — not just `query_database`. Without this, schema exploration tools (`list_tables`, `describe_table`, `schema_overview`, etc.) would fail for cloud databases because the connector falls back to default credentials (ADC / password auth).
-
-### Validation Checks (every task must pass all 9)
-
-1. **SDK connects to MCP** — agent runs without connection errors
-2. **SDK sees skills** — skills copied to `.claude/skills/`, git init for discovery
-3. **Correct system prompt** — suite-appropriate prompt with correct DB backend
-4. **Prompt building** — `build_sql_agent_prompt` returns non-empty string with correct backend/conn values and no unresolved template vars or dbt leakage
-5. **CLAUDE.md written** — `write_sql_claude_md` / `write_claude_md` creates a valid CLAUDE.md with correct content
-6. **MCP connected to correct DB** — connection registered before agent, correct type
-7. **No cross-task leakage** — connection deleted after each task, fresh registration
-8. **Gold not leaked** — gold files live outside workdir, never copied in
-9. **MCP query works** — actual SQL query executes through pool_manager with credential extras
+Automated benchmark pipeline for [Spider2-DBT](https://github.com/xlang-ai/Spider2) tasks using Claude Agent SDK + SignalPilot MCP.
 
 ## Architecture
 
 ```
+┌─────────────────────────────────────────────────────────────────┐
+│  run4.sh (orchestrator)                                         │
+│  - Launches 3 concurrent Docker containers                      │
+│  - Polls for completion every 5s                                │
+│  - Collects results immediately on exit                         │
+│  - Fresh volume per task (zero stale data)                      │
+│  - Per-task FAKETIME from gold_build_dates.json                 │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Container (sp-dbt-benchmark-agent)                              │
+│  - python -m benchmark.run_direct <task>                        │
+│  - Claude Agent SDK spawns agent + verifier subagent            │
+│  - SignalPilot MCP (stdio) for governed DB access               │
+│  - dbt wrapper: libfaketime for deterministic current_date      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## How It Works
+
+### 1. Date Determinism
+
+dbt models using `current_date` / `current_timestamp` produce different output depending on when they run. We solve this generically:
+
+- **`derive_gold_dates.py`** — scans each gold DB to reverse-engineer when it was built (from calendar spines, age columns, or date boundaries). Produces `gold_build_dates.json`.
+- **dbt wrapper** (`/usr/local/bin/dbt`) — applies `libfaketime` with the task's derived date for `run/compile/build` commands. Other commands (`deps`, `parse`) use the real clock for network access.
+- **`FAKETIME_DONT_FAKE_MONOTONIC=1`** — prevents libfaketime from breaking Python's threading/multiprocessing.
+- **`DO_NOT_TRACK=1` + `DBT_NO_VERSION_CHECK=1`** — disables dbt's outbound HTTPS calls that hang under faked time.
+
+This is non-discriminate (same algorithm for all 64 tasks) and auditable (derivation script + JSON are checked in).
+
+### 2. Agent Pipeline
+
+For each task, the runner:
+
+1. **Prepare workdir** — copies task from spider2 source, installs CLAUDE.md, registers MCP connection
+2. **Snapshot reference tables** — captures pre-existing table row counts and column types
+3. **Run agent** — Claude Agent SDK with system prompt, skills, and verifier subagent
+4. **Evaluate** — compares result DB against gold using vector matching
+
+### 3. Verification Subagent
+
+After the main agent builds models, it spawns a verifier subagent that:
+
+- Discovers all required models from YML (independent of main agent's message)
+- Checks column schema, row counts, value spot-checks against reference snapshot
+- Builds any missing models the main agent forgot
+- Retries on DB lock errors (waits for dbt to release)
+
+### 4. Evaluation
+
+The comparator (`evaluation/comparator.py`) replicates Spider2's official `compare_pandas_table()`:
+
+- Per-table vector matching with numeric tolerance (1e-2)
+- Column-index-based comparison from eval config
+- Supports `ignore_order` (sorts by sort key)
+- Handles `fct_` ↔ `fact_` prefix resolution
+
+## Running
+
+### Prerequisites
+
+- Docker Desktop
+- Spider2-DBT dataset (examples + gold DBs)
+- SignalPilot gateway running (`docker compose up gateway`)
+- OAuth token in `.env`
+
+### Single Task
+
+```bash
+# Inside container or with proper env:
+python -m benchmark.run_direct chinook001 --model claude-sonnet-4-6
+```
+
+### Full Benchmark (64 tasks, 3 concurrent)
+
+```bash
+# Generate per-task dates (one-time or after gold changes)
+python benchmark/derive_gold_dates.py
+
+# Run all tasks
+bash benchmark/run4.sh
+```
+
+Results stream to `benchmark/results/dbt-run4/run4.log`. Each task gets:
+- `task_result.json` — pass/fail, turns, elapsed time
+- `trace.json` — full agent transcript
+- `project/` — workdir snapshot (SQL files, duckdb, dbt artifacts)
+- `queries/` — MCP query audit log
+
+### Re-run a Single Task
+
+```bash
+# With fresh volume and per-task date
+TASK=shopify001
+TASK_DATE=$(python3 -c "import json; print(json.load(open('benchmark/gold_build_dates.json'))['$TASK'])")
+docker volume create sp-workdir-$TASK
+docker run -d --name sp-run4-$TASK \
+  -e FAKETIME="$TASK_DATE 12:00:00" \
+  -e CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" \
+  ... sp-dbt-benchmark-agent -c "..."
+```
+
+## Directory Structure
+
+```
 benchmark/
-├── run_direct.py          # entry point router (--suite flag)
-├── run_batch.py           # batch runner (--suite flag)
+├── run4.sh                      # Orchestrator script
+├── run_direct.py                # Entry point (routes to runners/)
+├── derive_gold_dates.py         # Derives per-task build dates from gold
+├── gold_build_dates.json        # Cached per-task dates (auto-generated)
+├── Dockerfile.dbt-agent         # Container image with dbt + faketime wrapper
+├── mcp_test_config.json         # MCP server config for containers
 │
-├── core/                  # shared infrastructure
-│   ├── suite.py           # BenchmarkSuite enum + SuiteConfig
-│   ├── paths.py           # all path constants (DBT, Snowflake, Lite)
-│   ├── tasks.py           # task/eval-config loaders (generic + suite-aware)
-│   ├── workdir.py         # workdir setup (dbt + SQL variants)
-│   ├── mcp.py             # connection registration (DuckDB, Snowflake, SQLite, BigQuery)
-│   └── logging.py         # log() + log_separator()
+├── runners/
+│   └── direct.py                # Main benchmark runner
 │
-├── runners/               # suite-specific orchestration
-│   ├── direct.py          # spider2-dbt runner (dbt projects)
-│   └── sql_runner.py      # spider2-snowflake + spider2-lite runner (SQL queries)
+├── agent/
+│   ├── prompts.py               # Agent prompt builder
+│   └── sdk_runner.py            # Claude Agent SDK wrapper
 │
-├── agent/                 # Claude Agent SDK glue
-│   ├── sdk_runner.py      # run_sdk_agent wrapper (shared across all suites)
-│   ├── prompts.py         # dbt-specific prompt builder
-│   └── sql_prompts.py     # SQL-specific prompt builder (Snowflake/Lite)
+├── prompts/
+│   ├── dbt_local_system.md      # System prompt template
+│   └── dbt_verify_subagent.md   # Verifier subagent prompt
 │
-├── evaluation/            # result comparison
-│   ├── comparator.py      # DuckDB-vs-DuckDB (spider2-dbt)
-│   ├── sql_comparator.py  # CSV-vs-CSV (spider2-snowflake, spider2-lite)
-│   ├── db_utils.py        # find_result_db, row counts
-│   └── local_comparator.py# positional comparator (legacy)
+├── skills/
+│   ├── dbt-workflow/            # Project mapping, grain inference
+│   ├── dbt-write/              # SQL writing rules, sibling patterns
+│   ├── dbt-debugging/          # Error recovery
+│   ├── dbt-date-spines/        # Date spine patterns
+│   └── duckdb-sql/             # DuckDB syntax reference
 │
-├── dbt_tools/             # dbt-specific analysis + fix-ups
-│   ├── scanner.py, templates.py, fixes.py, postprocess.py
+├── core/
+│   ├── suite.py                 # Suite config (task loading, skill lists)
+│   ├── workdir.py               # Workdir lifecycle (prepare, CLAUDE.md)
+│   ├── mcp.py                   # MCP connection management
+│   ├── audit.py                 # Run result persistence
+│   └── logging.py               # Logging utilities
 │
-├── skills/                # Claude Code skills (copied per run)
-│   ├── dbt-workflow/      # dbt project completion workflow
-│   ├── dbt-verification/  # dbt output verification
-│   ├── dbt-debugging/     # dbt error diagnosis
-│   ├── dbt-date-spines/   # date spine patterns
-│   ├── duckdb-sql/        # DuckDB SQL patterns
-│   ├── sql-workflow/      # generic SQL workflow (Snowflake/Lite)
-│   ├── snowflake-sql/     # Snowflake SQL patterns
-│   ├── bigquery-sql/      # BigQuery SQL patterns
-│   └── sqlite-sql/        # SQLite SQL patterns
+├── evaluation/
+│   ├── comparator.py            # Gold vs result comparison
+│   └── db_utils.py             # DuckDB file utilities
 │
-├── prompts/               # prompt reference docs
-│   ├── dbt_local_system.md        # dbt suite system prompt (runtime: SDK system_prompt)
-│   ├── dbt_local_system.md.bak    # backup of original dbt prompt before generalization
-│   ├── dbt_local_user.md          # dbt suite user prompt template
-│   ├── system_general.md          # generalized SQL system prompt (runtime: Snowflake/Lite suites)
-│   ├── sql_snowflake_system.md    # reference doc (not used at runtime)
-│   └── sql_lite_system.md         # reference doc (not used at runtime)
+├── dbt_tools/
+│   ├── scanner.py               # Model classification (complete/stub/missing)
+│   └── templates.py             # SQL template pre-population
 │
-├── validate_bench.py      # structural validation (per-suite, 6 checks)
-├── validate_bench_e2e.py  # end-to-end validation (all suites, 45 checks)
-├── validate_live_mcp.py   # live MCP connectivity (all 4 DB backends)
-│
-├── test_tasks/            # self-contained test suite (no spider2 data repo needed)
-│   ├── setup_test_data.py # one-time fixture creation (SQLite DBs, gold CSVs)
-│   ├── runner.py          # runs 5 tasks across all 3 suites and 4 DB backends
-│   └── tasks/             # inline task definitions + gold fixtures
-│
-├── legacy/                # older Spider2-SQLite flow (not imported by active runners)
-└── docs/                  # supplementary notes
+└── results/
+    └── dbt-run4/                # Current run results
+        ├── run4.log             # Live progress log
+        └── <task>/
+            ├── task_result.json
+            ├── trace.json
+            ├── project/
+            └── queries/
 ```
 
-### Runtime Directories (not tracked in git)
+## Methodology
 
-- `_dbt_workdir/` — used by spider2-dbt runner
-- `_sql_workdir/` — used by spider2-snowflake and spider2-lite runners
-- `test-env/` — used by `run_dbt_local.py`
+### Scoring
 
-## Skills
+- **Task pass rate**: task passes if ALL eval tables pass
+- **Table pass rate**: individual table pass/fail (more granular)
+- A table passes if its value vectors match gold within tolerance
 
-Skills are suite-specific and copied to `.claude/skills/` in each task's workdir.
+### Determinism
 
-| Suite | Skills Loaded |
-|-------|--------------|
-| spider2-dbt | dbt-workflow, dbt-verification, dbt-debugging, dbt-date-spines, duckdb-sql |
-| spider2-snowflake | sql-workflow, snowflake-sql |
-| spider2-lite | sql-workflow, snowflake-sql, bigquery-sql, sqlite-sql |
+Sources of nondeterminism and how they're handled:
 
-Add new skills by creating `benchmark/skills/<name>/SKILL.md` with frontmatter:
+| Source | Mitigation |
+|--------|-----------|
+| `current_date` in SQL | libfaketime with per-task gold build date |
+| Agent writes different SQL each run | Verifier subagent catches row count mismatches |
+| dbt holds DB lock | Verifier retries on lock errors, 600s timeout |
+| Stale workdir data | Fresh Docker volume per task |
+| dbt telemetry hangs | `DO_NOT_TRACK=1`, `DBT_NO_VERSION_CHECK=1` |
 
-```markdown
----
-description: Short description of what this skill does
----
+### Eval Integrity
 
-## Skill content here
-```
-
-## Gold Data
-
-### Spider2-DBT Gold
-
-Out of 68 total tasks, 60 have correct gold data, 7 have no gold DB file, and 1 has a table name mismatch.
-
-```bash
-python -m benchmark.setup_dbt --audit           # audit gold data
-python -m benchmark.setup_dbt --build-gold       # build missing gold DBs
-```
-
-### Spider2-Snowflake / Lite Gold
-
-Gold results are CSV files in the evaluation suite. The evaluator compares the agent's `result.csv` against gold CSVs using the same vector-matching algorithm as the dbt evaluator.
-
-## Validation
-
-Three validation scripts verify the benchmark infrastructure before running real tasks.
-
-### Structural Validation (per-suite)
-
-```bash
-python -m benchmark.validate_bench --suite spider2-lite
-python -m benchmark.validate_bench --suite spider2-snowflake
-python -m benchmark.validate_bench --suite spider2-dbt
-```
-
-Runs 6 structural checks per suite: workdir creation, MCP config, skills discovery, system prompt, connection registration, and gold leak prevention. Exits 0 if all pass/skip, 1 if any fail.
-
-### Live MCP Connectivity (all databases)
-
-```bash
-python -m benchmark.validate_live_mcp
-```
-
-Tests live database connectivity through the full MCP gateway stack for all 4 backends (Snowflake, BigQuery, SQLite, DuckDB). For each backend: registers a test connection, queries through pool_manager with credential_extras, verifies the result, then cleans up. Cloud backends SKIP (not FAIL) when credential files are missing.
-
-```
-Backend    | Status | Detail
------------|--------|-------
-snowflake  | PASS   | Query returned 1 row(s)
-bigquery   | PASS   | Query returned 1 row(s)
-sqlite     | PASS   | Query returned 1 row(s)
-duckdb     | PASS   | Query returned 1 row(s)
-```
-
-### End-to-End Validation (all suites at once)
-
-```bash
-python -m benchmark.validate_bench_e2e
-python -m benchmark.validate_bench_e2e --verbose
-```
-
-Runs 5 synthetic tasks across all 3 suites and all 4 database backends (45 total checks):
-
-| Task | Suite | DB Backend | What it tests |
-|------|-------|------------|---------------|
-| 1 | spider2-snowflake | Snowflake | PAT connection via `.env.snowflake` |
-| 2 | spider2-dbt | DuckDB | Local DuckDB file + dbt skills + dbt system prompt |
-| 3 | spider2-lite | SQLite | Local SQLite file + SQL skills |
-| 4 | spider2-lite | Snowflake | Snowflake connection via lite suite |
-| 5 | spider2-lite | BigQuery | BigQuery via `service_account.json` |
-
-Each task runs 9 checks:
-
-| # | Check | What it verifies |
-|---|-------|-----------------|
-| 1 | **workdir_setup** | Directory created with `.mcp.json`, `.git/`, correct structure |
-| 2 | **skills_copied** | Suite-specific `SKILL.md` files present in `.claude/skills/` |
-| 3 | **system_prompt** | Correct prompt file exists; template variables resolve cleanly |
-| 4 | **prompt_building** | `build_sql_agent_prompt` returns non-empty string with correct backend/conn, no template leakage (SQL suites only; SKIP for dbt) |
-| 5 | **claude_md_written** | `write_sql_claude_md` / `write_claude_md` creates a valid CLAUDE.md with correct content |
-| 6 | **connection_registered** | DB connection in gateway store with correct `db_type` |
-| 7 | **no_bloat** | No leftover `e2e_validate_*` connections from prior tasks |
-| 8 | **no_gold_leak** | No gold-related files in the workdir |
-| 9 | **mcp_query** | Actual SQL query executes through pool_manager with credential extras |
-
-Snowflake/BigQuery checks SKIP (not FAIL) if credential files are absent or cloud auth fails (credential issue, not code bug). All cleanup (workdirs, connections, temp DB files) runs in `finally` blocks.
-
-#### User Acceptance Criteria
-
-The validator maps all 9 checks to 6 user-facing acceptance criteria and prints a summary table after all tasks complete. This gives a high-level pass/fail view before the numeric totals:
-
-```
-== User Acceptance Criteria ==
-
-Task                               | C1  | C2  | C3  | C4  | C5  | C6
-spider2-snowflake / snowflake      | PASS| PASS| PASS| PASS| PASS| PASS
-spider2-dbt / duckdb               | PASS| PASS| PASS| PASS| PASS| PASS
-spider2-lite / sqlite              | PASS| PASS| PASS| PASS| PASS| PASS
-spider2-lite / snowflake           | PASS| PASS| PASS| PASS| PASS| PASS
-spider2-lite / bigquery            | PASS| PASS| PASS| PASS| PASS| PASS
-
-Legend:
-  C1: SDK connects to MCP
-  C2: SDK can call and see skills
-  C3: SDK has correct system prompt
-  C4: MCP connected to correct DB
-  C5: MCP not bloated with other tasks
-  C6: Gold never leaked
-```
-
-The 6 criteria and their check mappings:
-
-| Criterion | Label | Checks |
-|-----------|-------|--------|
-| C1 | SDK connects to MCP | `workdir_setup`, `mcp_query` |
-| C2 | SDK can call and see skills | `skills_copied` |
-| C3 | SDK has correct system prompt | `system_prompt`, `prompt_building`, `claude_md_written` |
-| C4 | MCP connected to correct DB | `connection_registered` |
-| C5 | MCP not bloated with other tasks | `no_bloat` |
-| C6 | Gold never leaked | `no_gold_leak` |
-
-Criterion status rules: PASS if all mapped checks pass; FAIL if any mapped check fails; SKIP if no failures but at least one mapped check was skipped (e.g. cloud credentials absent).
-
-### Quick Verification Sequence
-
-```bash
-# Run all validations to confirm everything works:
-python -m benchmark.validate_live_mcp                        # 4/4 DB backends
-python -m benchmark.validate_bench --suite spider2-dbt
-python -m benchmark.validate_bench --suite spider2-snowflake
-python -m benchmark.validate_bench --suite spider2-lite
-python -m benchmark.validate_bench_e2e                       # 45/45 checks
-
-# Run the self-contained test task suite (no spider2 data repo needed):
-python -m benchmark.test_tasks.setup_test_data   # one-time setup
-python -m benchmark.test_tasks.runner             # 5/5 tasks should pass
-```
-
-## Test Task Suite
-
-Self-contained test tasks that exercise the full benchmark pipeline without requiring the 10 GB+ spider2 data repository. Each task is defined inline with its own gold answer; no external data download is needed.
-
-### Purpose
-
-Verify that the benchmark infrastructure — task JSONL loading, workdir setup, skills copy, CLAUDE.md generation, MCP connection registration, and CSV evaluation — works end-to-end on a fresh clone or after a code change, without pulling the full spider2 datasets.
-
-### Setup (one-time)
-
-```bash
-python -m benchmark.test_tasks.setup_test_data
-```
-
-Creates the minimal data fixtures (SQLite databases, CSV gold files) that the test tasks reference.
-
-### Run
-
-```bash
-python -m benchmark.test_tasks.runner
-```
-
-All 5 tasks should report PASS. Exit code is 0 on success, 1 if any task fails.
-
-### Tasks
-
-| Task ID | Suite | DB Backend | What it covers |
-|---------|-------|------------|----------------|
-| `test_sf_current_date` | spider2-snowflake | Snowflake | PAT connection, SQL prompt building, CSV eval |
-| `test_dbt_simple001` | spider2-dbt | DuckDB | dbt workdir, dbt skills, CLAUDE.md, dbt eval |
-| `test_lite_sqlite001` | spider2-lite | SQLite | local SQLite file, SQL skills, CSV eval |
-| `test_lite_sf001` | spider2-lite | Snowflake | lite-suite Snowflake path, CSV eval |
-| `test_lite_bq001` | spider2-lite | BigQuery | service-account path, CSV eval |
-
-### Pipeline Coverage
-
-Each task verifies:
-
-1. **Task JSONL loading** — task record parsed correctly from the inline fixture
-2. **Workdir setup** — directory created with `.mcp.json`, `.git/`, correct structure
-3. **Skills copy** — suite-appropriate `SKILL.md` files present in `.claude/skills/`
-4. **CLAUDE.md generation** — `write_sql_claude_md` / `write_claude_md` produces valid content
-5. **MCP connection registration** — connection stored in gateway with correct `db_type`
-6. **Evaluation against gold data** — result CSV matched against gold CSV via the standard comparator
-
-> **Note:** Agent execution is skipped by default. The runner writes known-correct results directly to `result.csv` and proceeds straight to evaluation. This validates the benchmark infrastructure, not agent quality. To test the agent itself, use `run_direct.py` with real spider2 data.
-
-## System Prompts
-
-Both suites now pass their system prompt through the Claude Agent SDK's `system_prompt` parameter. Template variables are resolved at runtime before the agent starts.
-
-### SQL Suites (`prompts/system_general.md`)
-
-SQL suites (spider2-snowflake, spider2-lite) receive a generalized system prompt injected via the Claude Agent SDK. The prompt:
-
-- Describes all SignalPilot MCP tools generically (no hardcoded database names)
-- Uses template variables `${work_dir}`, `${instance_id}`, `${connection_name}` filled at runtime
-- Lists dbt tools as conditionally available
-- Keeps the agent focused: explore schema → write query → verify → save `result.csv`
-
-### dbt Suite (`prompts/dbt_local_system.md`)
-
-The dbt suite (spider2-dbt) passes `dbt_local_system.md` as the SDK `system_prompt` parameter. Template variables resolved at runtime:
-
-- `${work_dir}` — absolute path to the task workdir
-- `${instance_id}` — task instance ID (also the DuckDB MCP connection name)
-- `${instruction}` — task-specific instruction text
-- `${dbt_bin}` — absolute path to the dbt binary
-
-The E2E validator (criterion C3) verifies that all four variables resolve with no `${...}` patterns remaining after substitution.
-
-## Environment Variables
-
-| Variable | Required For | Description |
-|----------|-------------|-------------|
-| `CLAUDE_CODE_OAUTH_TOKEN` | All suites | Claude Code OAuth token |
-| `SPIDER2_DBT_DIR` | spider2-dbt | Path to spider2-dbt data directory |
-| `SPIDER2_REPO_DIR` | setup_dbt.py | Path to root spider2 repo clone (default: project root) |
-| `SPIDER2_SNOWFLAKE_DIR` | spider2-snowflake | Path to spider2-snowflake data directory |
-| `SPIDER2_LITE_DIR` | spider2-lite | Path to spider2-lite data directory |
-| `SP_GATEWAY_URL` | All suites | SignalPilot gateway URL (default: http://localhost:3300) |
+- No eval config data (condition_tabs, condition_cols) is exposed to the agent
+- No post-agent fixes use eval-specific information
+- The date derivation uses only gold DB contents (publicly available data)
+- All prompts follow `benchmark-prompting.md` rules

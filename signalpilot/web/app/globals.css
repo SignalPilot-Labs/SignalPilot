@@ -38,6 +38,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Cursor — all interactive elements get pointer ── */
+a, button, [role="button"], [role="tab"], select, label[for],
+input[type="checkbox"], input[type="radio"], summary {
+  cursor: pointer;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -18,6 +18,7 @@ import {
   CreditCard,
   Key,
   Plug,
+  Plus,
 } from "lucide-react";
 import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
@@ -45,6 +46,8 @@ function MetricCard({
   icon: Icon,
   accentColor,
   sparkValues,
+  actionHref,
+  actionLabel,
 }: {
   label: string;
   value: string | number;
@@ -52,12 +55,21 @@ function MetricCard({
   icon: React.ElementType;
   accentColor?: string;
   sparkValues?: number[];
+  actionHref?: string;
+  actionLabel?: string;
 }) {
   return (
     <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
-      <div className="flex items-center gap-2 mb-3">
-        <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
-        <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
+        </div>
+        {actionHref && (
+          <Link href={actionHref} className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+            <Plus className="w-2.5 h-2.5" />{actionLabel || "add"}
+          </Link>
+        )}
       </div>
       <p className="text-2xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
       {subtext && (
@@ -582,6 +594,7 @@ function DashboardContent() {
           value={connections.length}
           subtext={connections.length > 0 ? connections.map(c => c.db_type).filter((v, i, a) => a.indexOf(v) === i).join(", ") : undefined}
           icon={Database}
+          actionHref="/connections?action=new"
         />
         <MetricCard
           label="total spent"
@@ -803,9 +816,14 @@ function DashboardContent() {
                   connections
                 </span>
               </div>
-              <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-                manage <ArrowRight className="w-3 h-3" />
-              </Link>
+              <div className="flex items-center gap-3">
+                <Link href="/connections?action=new" className="flex items-center gap-1 px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+                  <Plus className="w-3 h-3" /> add
+                </Link>
+                <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                  manage <ArrowRight className="w-3 h-3" />
+                </Link>
+              </div>
             </div>
             <div className="divide-y divide-[var(--color-border)]">
               {connections.length === 0 ? (

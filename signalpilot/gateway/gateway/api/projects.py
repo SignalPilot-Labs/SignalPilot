@@ -66,5 +66,5 @@ async def scan_project(name: str):
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     now = time.time()
-    result = update_project(name, ProjectUpdate(last_scanned_at=now))
-    return {"project": name, "scanned_at": now, "status": "ok"}
+    update_project(name, ProjectUpdate(last_scanned_at=now))
+    return {"project": name, "scanned_at": now, "model_count": proj.model_count, "status": "ok"}

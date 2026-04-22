@@ -41,7 +41,7 @@ export default function ProjectsPage() {
   const [showImport, setShowImport] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({ name: "", connection_name: "" });
-  const [importForm, setImportForm] = useState({ path: "", connection_name: "", mode: "link" as "link" | "copy" });
+  const [importForm, setImportForm] = useState({ name: "", path: "", connection_name: "", mode: "link" as "link" | "copy" });
 
   const refresh = useCallback(() => {
     getProjects().then(setProjects).catch(() => {});
@@ -78,6 +78,10 @@ export default function ProjectsPage() {
   }
 
   async function handleImport() {
+    if (!importForm.name || !NAME_PATTERN.test(importForm.name)) {
+      toast("name must match [a-zA-Z0-9_-]", "error");
+      return;
+    }
     if (!importForm.path) {
       toast("path is required", "error");
       return;
@@ -89,14 +93,15 @@ export default function ProjectsPage() {
     setCreating(true);
     try {
       const p = await createProject({
-        path: importForm.path,
+        name: importForm.name,
+        local_path: importForm.path,
         connection_name: importForm.connection_name,
         source: "local",
-        mode: importForm.mode,
+        link_mode: importForm.mode,
       });
       setProjects((prev) => [p, ...prev]);
       setShowImport(false);
-      setImportForm({ path: "", connection_name: "", mode: "link" });
+      setImportForm({ name: "", path: "", connection_name: "", mode: "link" });
     } catch (e) { toast(String(e), "error"); }
     finally { setCreating(false); }
   }
@@ -203,7 +208,17 @@ export default function ProjectsPage() {
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">import local project</span>
           </div>
           <div className="p-5">
-            <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">name</label>
+                <input
+                  type="text"
+                  placeholder="my-project"
+                  value={importForm.name}
+                  onChange={(e) => setImportForm({ ...importForm, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                />
+              </div>
               <div>
                 <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">path</label>
                 <input

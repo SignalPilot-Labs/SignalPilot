@@ -33,6 +33,14 @@ export interface MeResponse {
   image_url: string | null;
 }
 
+export interface SubscriptionResponse {
+  plan_tier: string;
+  status: string;
+  stripe_subscription_id: string | null;
+  current_period_end: string | null;
+  max_api_keys: number;
+}
+
 // ---------------------------------------------------------------------------
 // Core fetch
 // ---------------------------------------------------------------------------
@@ -87,6 +95,13 @@ export interface BackendClient {
   getApiKeys(): Promise<ApiKeyResponse[]>;
   createApiKey(name: string, scopes: string[]): Promise<ApiKeyCreatedResponse>;
   deleteApiKey(keyId: string): Promise<void>;
+  getSubscription(): Promise<SubscriptionResponse>;
+  createCheckoutSession(
+    planTier: string,
+    successUrl: string,
+    cancelUrl: string,
+  ): Promise<{ checkout_url: string }>;
+  createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
 }
 
 /**
@@ -110,6 +125,25 @@ export function useBackendClient(): BackendClient {
     deleteApiKey: (keyId: string) =>
       backendFetch<void>(`/api/v1/keys/${keyId}`, getToken, {
         method: "DELETE",
+      }),
+
+    getSubscription: () =>
+      backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),
+
+    createCheckoutSession: (planTier: string, successUrl: string, cancelUrl: string) =>
+      backendFetch<{ checkout_url: string }>("/api/v1/billing/checkout", getToken, {
+        method: "POST",
+        body: JSON.stringify({
+          plan_tier: planTier,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        }),
+      }),
+
+    createPortalSession: (returnUrl: string) =>
+      backendFetch<{ portal_url: string }>("/api/v1/billing/portal", getToken, {
+        method: "POST",
+        body: JSON.stringify({ return_url: returnUrl }),
       }),
   };
 }

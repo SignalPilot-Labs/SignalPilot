@@ -14,6 +14,7 @@ import {
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyResponse, ApiKeyCreatedResponse } from "@/lib/backend-client";
+import { useSubscription } from "@/lib/subscription-context";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { EmptyState, EmptyList } from "@/components/ui/empty-states";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -440,6 +441,7 @@ export default function ApiKeysPage() {
 function ApiKeysContent() {
   const { isLoaded } = useAppAuth();
   const client = useBackendClient();
+  const { maxApiKeys, canCreateKey } = useSubscription();
 
   const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -528,7 +530,7 @@ function ApiKeysContent() {
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
             <code className="text-[12px] text-[var(--color-text)]">
-              {keys.length}
+              {keys.length}/{maxApiKeys}
             </code>
           </span>
         </div>
@@ -551,7 +553,13 @@ function ApiKeysContent() {
           {!showCreateForm && (
             <button
               onClick={() => setShowCreateForm(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+              disabled={!canCreateKey(keys.length)}
+              title={
+                !canCreateKey(keys.length)
+                  ? `key limit reached (${maxApiKeys}/${maxApiKeys}). upgrade your plan to create more keys.`
+                  : undefined
+              }
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-3 h-3" />
               create new key

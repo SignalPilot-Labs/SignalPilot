@@ -9,6 +9,7 @@ import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
 import { ConnectionProvider } from "@/lib/connection-context";
 import { AuthProvider } from "@/lib/auth-context";
+import { SubscriptionProvider } from "@/lib/subscription-context";
 import { clerkAppearance } from "@/lib/clerk-theme";
 
 export const metadata: Metadata = {
@@ -37,15 +38,17 @@ export default async function RootLayout({
     <ToastProvider>
       <ConnectionProvider>
         <AuthProvider clerkEnabled={clerkEnabled}>
-          <Sidebar />
-          <GridBackground />
-          <main className="ml-56 min-h-screen relative z-10">
-            <ErrorBoundary>
-              <PageTransition>{children}</PageTransition>
-            </ErrorBoundary>
-            <KeyboardShortcuts />
-            <CommandPalette />
-          </main>
+          <SubscriptionProvider>
+            <Sidebar />
+            <GridBackground />
+            <main className="ml-56 min-h-screen relative z-10">
+              <ErrorBoundary>
+                <PageTransition>{children}</PageTransition>
+              </ErrorBoundary>
+              <KeyboardShortcuts />
+              <CommandPalette />
+            </main>
+          </SubscriptionProvider>
         </AuthProvider>
       </ConnectionProvider>
     </ToastProvider>

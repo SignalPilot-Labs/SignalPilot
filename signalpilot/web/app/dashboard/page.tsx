@@ -13,11 +13,16 @@ import {
   BarChart3,
   ArrowRight,
   Loader2,
+  CreditCard,
+  Key,
+  Plug,
 } from "lucide-react";
 import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
 import { useAppAuth } from "@/lib/auth-context";
+import { useSubscription } from "@/lib/subscription-context";
+import { useBackendClient } from "@/lib/backend-client";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -86,6 +91,146 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
   connect: { label: "CON", color: "text-[var(--color-text-dim)]" },
   block: { label: "BLK", color: "text-[var(--color-error)]" },
 };
+
+/* ── Cloud status section ── */
+
+/** Inner content — safe to call useBackendClient() here since this component
+ *  is only rendered when isCloudMode is true (gate is CloudStatusSection). */
+function CloudStatusContent() {
+  const { planTier, status, maxApiKeys } = useSubscription();
+  const client = useBackendClient();
+  const [keyCount, setKeyCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    client.getApiKeys()
+      .then((keys) => {
+        if (!cancelled) setKeyCount(keys.length);
+      })
+      .catch(() => {
+        if (!cancelled) setKeyCount(-1); // sentinel: error
+      });
+    return () => { cancelled = true; };
+  }, [client]);
+
+  const tierColorMap: Record<string, string> = {
+    free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
+    pro: "text-[var(--color-success)] border-[var(--color-success)]/40",
+    team: "text-[var(--color-warning)] border-[var(--color-warning)]/40",
+  };
+  const tierClasses = tierColorMap[planTier] ?? tierColorMap.free;
+
+  const statusLabel = status === "past_due" ? "past due" : status;
+
+  // MCP endpoint detection — static check, no API call
+  const mcpUrl =
+    process.env.NEXT_PUBLIC_MCP_URL ||
+    process.env.NEXT_PUBLIC_GATEWAY_URL ||
+    null;
+  const mcpConfigured = Boolean(mcpUrl);
+  const mcpDisplay = mcpUrl
+    ? mcpUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    : null;
+
+  const showUpgrade = planTier === "free" || planTier === "pro";
+
+  return (
+    <div className="grid grid-cols-3 gap-px mb-4 bg-[var(--color-border)] border border-[var(--color-border)]">
+      {/* Card 1: Subscription */}
+      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="flex items-center gap-2 mb-3">
+          <CreditCard className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            subscription
+          </span>
+        </div>
+        <div className="mb-1.5">
+          <span className={`px-2 py-0.5 text-[11px] border tracking-[0.15em] uppercase ${tierClasses}`}>
+            {planTier}
+          </span>
+        </div>
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+          {statusLabel}
+        </p>
+        {showUpgrade && (
+          <a
+            href="/settings/billing"
+            className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+          >
+            upgrade <ArrowRight className="w-3 h-3" />
+          </a>
+        )}
+      </div>
+
+      {/* Card 2: API Keys */}
+      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="flex items-center gap-2 mb-3">
+          <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            api keys
+          </span>
+        </div>
+        <p className="text-2xl font-light metric-value text-[var(--color-text)]">
+          {keyCount === null ? (
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
+          ) : keyCount === -1 ? (
+            "—"
+          ) : (
+            keyCount
+          )}
+        </p>
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+          of {maxApiKeys} allowed
+        </p>
+        <a
+          href="/settings/api-keys"
+          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        >
+          manage <ArrowRight className="w-3 h-3" />
+        </a>
+      </div>
+
+      {/* Card 3: MCP Endpoint */}
+      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="flex items-center gap-2 mb-3">
+          <Plug className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            mcp endpoint
+          </span>
+        </div>
+        <div className="flex items-center gap-2 mb-1.5">
+          <StatusDot
+            status={mcpConfigured ? "healthy" : "error"}
+            size={4}
+            pulse={mcpConfigured}
+          />
+          <span className={`text-[12px] tracking-wider ${mcpConfigured ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
+            {mcpConfigured ? "configured" : "not configured"}
+          </span>
+        </div>
+        {mcpDisplay && (
+          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider font-mono truncate">
+            {mcpDisplay}
+          </p>
+        )}
+        <a
+          href="/settings/mcp-connect"
+          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        >
+          connect <ArrowRight className="w-3 h-3" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/** Gate — calls useAppAuth() and conditionally renders CloudStatusContent.
+ *  useBackendClient() is NEVER called here; it lives only in CloudStatusContent. */
+function CloudStatusSection() {
+  const { isCloudMode } = useAppAuth();
+  if (!isCloudMode) return null;
+  return <CloudStatusContent />;
+}
 
 /* ── Signed-in user greeting ── */
 function UserGreeting() {
@@ -174,6 +319,8 @@ export default function DashboardPage() {
       />
 
       <UserGreeting />
+
+      <CloudStatusSection />
 
       {/* ── System status bar ── */}
       <TerminalBar

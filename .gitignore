@@ -36,6 +36,13 @@ self-improve/monitor-web/audit/test-results/
 id_rsa*
 gcp-service-account.json
 
+# SignalPilot web
+signalpilot/web/.next/
+signalpilot/web/node_modules/
+signalpilot/web/tsconfig.tsbuildinfo
+signalpilot/web/next-env.d.ts
+.env.local
+
 # Docker volumes / runtime
 *.log
 .gstack/

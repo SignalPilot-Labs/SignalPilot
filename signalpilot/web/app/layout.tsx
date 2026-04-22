@@ -8,6 +8,8 @@ import { ToastProvider } from "@/components/ui/toast";
 import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
 import { ConnectionProvider } from "@/lib/connection-context";
+import { AuthProvider } from "@/lib/auth-context";
+import { clerkAppearance } from "@/lib/clerk-theme";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -22,28 +24,56 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+const isCloudMode = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkEnabled = isCloudMode || !!publishableKey;
+
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const content = (
+    <ToastProvider>
+      <ConnectionProvider>
+        <AuthProvider clerkEnabled={clerkEnabled}>
+          <Sidebar />
+          <GridBackground />
+          <main className="ml-56 min-h-screen relative z-10">
+            <ErrorBoundary>
+              <PageTransition>{children}</PageTransition>
+            </ErrorBoundary>
+            <KeyboardShortcuts />
+            <CommandPalette />
+          </main>
+        </AuthProvider>
+      </ConnectionProvider>
+    </ToastProvider>
+  );
+
+  if (clerkEnabled) {
+    const { ClerkProvider } = await import("@clerk/nextjs");
+    return (
+      <html lang="en" className="dark">
+        <body className="antialiased bg-noise">
+          <ClerkProvider
+            signInUrl="/sign-in"
+            signUpUrl="/sign-up"
+            signInFallbackRedirectUrl="/dashboard"
+            signUpFallbackRedirectUrl="/dashboard"
+            afterSignOutUrl="/"
+            appearance={clerkAppearance}
+          >
+            {content}
+          </ClerkProvider>
+        </body>
+      </html>
+    );
+  }
+
   return (
     <html lang="en" className="dark">
-      <body className="antialiased bg-noise">
-        <ToastProvider>
-          <ConnectionProvider>
-            <Sidebar />
-            <GridBackground />
-            <main className="ml-56 min-h-screen relative z-10">
-              <ErrorBoundary>
-                <PageTransition>{children}</PageTransition>
-              </ErrorBoundary>
-              <KeyboardShortcuts />
-              <CommandPalette />
-            </main>
-          </ConnectionProvider>
-        </ToastProvider>
-      </body>
+      <body className="antialiased bg-noise">{content}</body>
     </html>
   );
 }

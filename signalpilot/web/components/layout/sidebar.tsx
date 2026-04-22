@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
+import { KeyRound } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useAppAuth } from "@/lib/auth-context";
+
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
   const s = active ? "currentColor" : "currentColor";
@@ -93,6 +96,9 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "8" },
 ];
 
+/** Routes where the sidebar should be hidden */
+const AUTH_ROUTE_PREFIXES = ["/sign-in", "/sign-up"];
+
 function SignalPilotLogo() {
   return (
     <div className="relative">
@@ -161,6 +167,85 @@ function NavBadge({ count, color = "var(--color-success)" }: { count: number; co
   );
 }
 
+/** User section rendered between nav links and status footer */
+function UserSection() {
+  const { clerkEnabled, isAuthenticated, user } = useAppAuth();
+
+  if (!clerkEnabled) {
+    // Local mode without Clerk — no auth UI, existing behavior
+    return null;
+  }
+
+  if (isAuthenticated && user) {
+    const displayName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "user";
+
+    return (
+      <div className="px-3 py-2 border-t border-[var(--color-border)]">
+        <ClerkUserButton displayName={displayName} />
+      </div>
+    );
+  }
+
+  // Clerk enabled but not signed in
+  return (
+    <div className="px-3 py-2 border-t border-[var(--color-border)]">
+      <Link
+        href="/sign-in"
+        className="flex items-center gap-2 px-3 py-1.5 text-[12px] tracking-wider uppercase text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all"
+      >
+        <KeyRound size={12} className="flex-shrink-0" />
+        <span>sign in</span>
+      </Link>
+    </div>
+  );
+}
+
+/**
+ * Thin wrapper around Clerk's UserButton.
+ * Isolated in its own component so the require() is scoped and not
+ * at module level (avoids importing Clerk when it might not be loaded).
+ */
+function ClerkUserButton({ displayName }: { displayName: string }) {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { UserButton } = require("@clerk/nextjs") as {
+    UserButton: React.ComponentType<{
+      afterSignOutUrl?: string;
+      appearance?: object;
+    }>;
+  };
+
+  return (
+    <div className="flex items-center gap-2 px-1 py-1">
+      <UserButton
+        afterSignOutUrl="/"
+        appearance={{
+          elements: {
+            userButtonAvatarBox: {
+              width: "24px",
+              height: "24px",
+              borderRadius: "0px",
+            },
+            userButtonPopoverCard: {
+              borderRadius: "0px",
+              backgroundColor: "#0a0a0a",
+              border: "1px solid #222222",
+            },
+          },
+        }}
+      />
+      <span
+        className="text-[11px] text-[var(--color-text-dim)] tracking-wide truncate max-w-[120px]"
+        title={displayName}
+      >
+        {displayName}
+      </span>
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -210,6 +295,11 @@ export default function Sidebar() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [router]);
+
+  // Hide sidebar on auth pages — checked after all hooks are called
+  if (AUTH_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return null;
+  }
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
@@ -277,6 +367,9 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {/* User section — Clerk UserButton or sign-in link */}
+      <UserSection />
 
       {/* Status footer */}
       <div className="px-4 py-3 border-t border-[var(--color-border)] space-y-2.5">

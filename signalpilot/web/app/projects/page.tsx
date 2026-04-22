@@ -11,6 +11,7 @@ import {
   Clock,
   ArrowRight,
   Upload,
+  GitBranch,
 } from "lucide-react";
 import { getProjects, createProject, deleteProject, getConnections } from "@/lib/api";
 import type { ProjectInfo, ConnectionInfo } from "@/lib/types";
@@ -39,9 +40,11 @@ export default function ProjectsPage() {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showGithub, setShowGithub] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({ name: "", connection_name: "" });
   const [importForm, setImportForm] = useState({ name: "", path: "", connection_name: "", mode: "link" as "link" | "copy" });
+  const [githubForm, setGithubForm] = useState({ name: "", git_url: "", git_branch: "main", connection_name: "" });
 
   const refresh = useCallback(() => {
     getProjects().then(setProjects).catch(() => {});
@@ -106,6 +109,36 @@ export default function ProjectsPage() {
     finally { setCreating(false); }
   }
 
+  async function handleGithub() {
+    if (!githubForm.name || !NAME_PATTERN.test(githubForm.name)) {
+      toast("name must match [a-zA-Z0-9_-]", "error");
+      return;
+    }
+    if (!githubForm.git_url) {
+      toast("repo url is required", "error");
+      return;
+    }
+    if (!githubForm.connection_name) {
+      toast("select a connection", "error");
+      return;
+    }
+    setCreating(true);
+    try {
+      const p = await createProject({
+        name: githubForm.name,
+        git_url: githubForm.git_url,
+        git_branch: githubForm.git_branch || "main",
+        connection_name: githubForm.connection_name,
+        source: "github",
+      });
+      setProjects((prev) => [p, ...prev]);
+      setShowGithub(false);
+      setGithubForm({ name: "", git_url: "", git_branch: "main", connection_name: "" });
+      toast(`cloned ${githubForm.git_url}`, "success");
+    } catch (e) { toast(String(e), "error"); }
+    finally { setCreating(false); }
+  }
+
   async function handleDelete(name: string) {
     try {
       await deleteProject(name);
@@ -121,6 +154,12 @@ export default function ProjectsPage() {
         description="dbt project management"
         actions={
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowGithub(true)}
+              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+            >
+              <GitBranch className="w-3.5 h-3.5" /> github
+            </button>
             <button
               onClick={() => setShowImport(true)}
               className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
@@ -279,6 +318,79 @@ export default function ProjectsPage() {
               </button>
               <button
                 onClick={() => setShowImport(false)}
+                className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+              >
+                cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GitHub dialog */}
+      {showGithub && (
+        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
+          <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
+            <GitBranch className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">import from github</span>
+          </div>
+          <div className="p-5">
+            <div className="grid grid-cols-4 gap-4 mb-4">
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">name</label>
+                <input
+                  type="text"
+                  placeholder="my-project"
+                  value={githubForm.name}
+                  onChange={(e) => setGithubForm({ ...githubForm, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">repo url</label>
+                <input
+                  type="text"
+                  placeholder="https://github.com/org/repo.git"
+                  value={githubForm.git_url}
+                  onChange={(e) => setGithubForm({ ...githubForm, git_url: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">branch</label>
+                <input
+                  type="text"
+                  placeholder="main"
+                  value={githubForm.git_branch}
+                  onChange={(e) => setGithubForm({ ...githubForm, git_branch: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection</label>
+                <select
+                  value={githubForm.connection_name}
+                  onChange={(e) => setGithubForm({ ...githubForm, connection_name: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                >
+                  <option value="">select connection</option>
+                  {connections.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name} ({c.db_type})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleGithub}
+                disabled={creating}
+                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              >
+                {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
+                clone
+              </button>
+              <button
+                onClick={() => setShowGithub(false)}
                 className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 cancel

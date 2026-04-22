@@ -22,6 +22,11 @@ import { useToast } from "@/components/ui/toast";
 import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
+import {
+  getGatewayApiKeys,
+  createGatewayApiKey,
+  deleteGatewayApiKey,
+} from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // New key revealed panel
@@ -86,11 +91,11 @@ function NewKeyReveal({
 function CreateKeyForm({
   onCreated,
   onCancel,
-  client,
+  createFn,
 }: {
   onCreated: (key: ApiKeyCreatedResponse) => void;
   onCancel: () => void;
-  client: ReturnType<typeof useBackendClient>;
+  createFn: (name: string, scopes: string[]) => Promise<ApiKeyCreatedResponse>;
 }) {
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read", "query"]);
@@ -115,7 +120,7 @@ function CreateKeyForm({
     setCreating(true);
     setError(null);
     try {
-      const created = await client.createApiKey(name.trim(), scopes);
+      const created = await createFn(name.trim(), scopes);
       onCreated(created);
     } catch (e) {
       setError(String(e));
@@ -341,34 +346,11 @@ export default function ApiKeysPage() {
     return <ApiKeysSkeleton />;
   }
 
-  if (!isCloudMode) {
-    return (
-      <div className="p-8 max-w-4xl animate-fade-in">
-        <PageHeader
-          title="api keys"
-          subtitle="auth"
-          description="manage programmatic access keys for the signalpilot backend"
-        />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-          <div className="p-6 flex items-start gap-3">
-            <Info
-              className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
-              strokeWidth={1.5}
-            />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
-              api key management is available in cloud mode. set{" "}
-              <code className="text-[var(--color-text-muted)]">
-                NEXT_PUBLIC_DEPLOYMENT_MODE=cloud
-              </code>{" "}
-              and configure clerk to enable this feature.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
+  if (isCloudMode) {
+    return <ApiKeysContent />;
   }
 
-  return <ApiKeysContent />;
+  return <LocalApiKeysContent />;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +516,7 @@ function ApiKeysContent() {
         {showCreateForm && (
           <div className="mb-4">
             <CreateKeyForm
-              client={client}
+              createFn={(name, scopes) => client.createApiKey(name, scopes)}
               onCreated={handleCreated}
               onCancel={() => setShowCreateForm(false)}
             />
@@ -600,6 +582,173 @@ function ApiKeysContent() {
         onConfirm={() => {
           if (deleteTarget) handleDelete(deleteTarget);
         }}
+        onCancel={() => setDeleteTarget(null)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Local mode content — uses gateway /api/keys endpoints directly
+// ---------------------------------------------------------------------------
+
+function LocalApiKeysContent() {
+  const { toast } = useToast();
+  const MAX_KEYS = 50;
+
+  const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [requestCounts] = useState<Map<string, number>>(new Map());
+
+  const fetchKeys = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const keysData = await getGatewayApiKeys();
+      setKeys(keysData);
+    } catch (e) {
+      setLoadError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchKeys();
+  }, [fetchKeys]);
+
+  if (loading) {
+    return <ApiKeysSkeleton />;
+  }
+
+  function handleCreated(created: ApiKeyCreatedResponse) {
+    setNewlyCreated(created);
+    setShowCreateForm(false);
+    const { raw_key: _raw, ...keyData } = created;
+    setKeys((prev) => [keyData, ...prev]);
+    toast("api key created", "success");
+  }
+
+  async function handleDelete(id: string) {
+    setDeleting(true);
+    try {
+      await deleteGatewayApiKey(id);
+      setKeys((prev) => prev.filter((k) => k.id !== id));
+      toast("api key deleted", "success");
+    } catch {
+      toast("failed to delete key", "error");
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  }
+
+  return (
+    <div className="p-8 max-w-4xl animate-fade-in">
+      <PageHeader
+        title="api keys"
+        subtitle="local"
+        description="manage gateway api keys for programmatic access"
+      />
+
+      <TerminalBar
+        path="settings/api-keys --list"
+        status={<StatusDot status={loadError ? "error" : "healthy"} size={4} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">
+            keys:{" "}
+            <code className="text-[12px] text-[var(--color-text)]">
+              {keys.length}/{MAX_KEYS}
+            </code>
+          </span>
+        </div>
+      </TerminalBar>
+
+      {newlyCreated && (
+        <div className="mb-6">
+          <NewKeyReveal created={newlyCreated} onDismiss={() => setNewlyCreated(null)} />
+        </div>
+      )}
+
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <SectionHeader icon={Key} title="active keys" />
+          {!showCreateForm && (
+            <button
+              onClick={() => setShowCreateForm(true)}
+              disabled={keys.length >= MAX_KEYS}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Plus className="w-3 h-3" />
+              create new key
+            </button>
+          )}
+        </div>
+
+        {showCreateForm && (
+          <div className="mb-4">
+            <CreateKeyForm
+              createFn={(name, scopes) => createGatewayApiKey(name, scopes)}
+              onCreated={handleCreated}
+              onCancel={() => setShowCreateForm(false)}
+            />
+          </div>
+        )}
+
+        {loadError && (
+          <div className="mb-4 flex items-start gap-2 p-3 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5 animate-fade-in">
+            <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-error)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
+            <p className="text-[12px] text-[var(--color-error)] tracking-wider">{loadError}</p>
+          </div>
+        )}
+
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+          {keys.length === 0 ? (
+            <EmptyState
+              icon={EmptyList}
+              title="no api keys"
+              description="create a key to enable programmatic access to the signalpilot gateway"
+              action={
+                !showCreateForm ? (
+                  <button
+                    onClick={() => setShowCreateForm(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                  >
+                    <Plus className="w-3 h-3" />
+                    create first key
+                  </button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <>
+              <TableHeader />
+              {keys.map((key) => (
+                <KeyRow
+                  key={key.id}
+                  apiKey={key}
+                  requestCount={requestCounts.get(key.id) ?? 0}
+                  onDelete={(id) => setDeleteTarget(id)}
+                />
+              ))}
+            </>
+          )}
+        </div>
+      </section>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="delete api key"
+        message={`this will permanently revoke the key "${keys.find((k) => k.id === deleteTarget)?.name ?? ""}". any applications using it will immediately lose access.`}
+        confirmLabel={deleting ? "deleting..." : "delete key"}
+        cancelLabel="cancel"
+        variant="danger"
+        onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget); }}
         onCancel={() => setDeleteTarget(null)}
       />
     </div>

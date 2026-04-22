@@ -26,8 +26,7 @@ export const metadata: Metadata = {
 };
 
 const isCloudMode = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
-const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-const clerkEnabled = isCloudMode || !!publishableKey;
+const clerkEnabled = isCloudMode;
 
 export default async function RootLayout({
   children,

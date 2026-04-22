@@ -524,10 +524,6 @@ function DashboardContent() {
         description="signalpilot gateway status and metrics"
       />
 
-      <UserGreeting />
-
-      <CloudStatusSection />
-
       {/* ── System status bar ── */}
       <TerminalBar
         path="dashboard --watch"

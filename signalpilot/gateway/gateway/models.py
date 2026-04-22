@@ -36,6 +36,39 @@ class GatewaySettings(BaseModel):
     api_key: str | None = None
 
 
+# ─── API Keys ────────────────────────────────────────────────────────────────
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    scopes: list[str] = Field(default_factory=lambda: ["read", "query"])
+
+
+class ApiKeyRecord(BaseModel):
+    """Persisted API key record (hash stored, never the raw key)."""
+    id: str
+    name: str
+    prefix: str          # e.g. "sp_a1b2" — first 7 chars for display
+    key_hash: str        # SHA-256 hex digest of the full raw key
+    scopes: list[str]
+    created_at: str      # ISO 8601
+    last_used_at: str | None = None
+
+
+class ApiKeyResponse(BaseModel):
+    """Returned to clients — never includes hash."""
+    id: str
+    name: str
+    prefix: str
+    scopes: list[str]
+    created_at: str
+    last_used_at: str | None = None
+
+
+class ApiKeyCreatedResponse(ApiKeyResponse):
+    """Returned only on creation — includes the raw key once."""
+    raw_key: str
+
+
 # ─── Connections ─────────────────────────────────────────────────────────────
 
 class DBType(str, Enum):

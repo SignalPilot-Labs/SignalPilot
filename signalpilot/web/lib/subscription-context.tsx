@@ -51,8 +51,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
 
   const [planTier, setPlanTier] = useState("free");
   const [status, setStatus] = useState("active");
-  const [maxApiKeys, setMaxApiKeys] = useState(2);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [maxApiKeys, setMaxApiKeys] = useState(50);
+  const [isLoaded, setIsLoaded] = useState(true);
 
   const fetchSubscription = useCallback(async () => {
     if (!isAuthenticated) {

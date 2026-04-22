@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useAuth } from "@clerk/nextjs";
 
 // ---------------------------------------------------------------------------
@@ -78,10 +79,61 @@ export interface KeyUsageByKeyResponse {
 // Core fetch
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Token cache — Clerk tokens are valid for 60s, no need to fetch on every call.
+// Uses globalThis to survive Turbopack tree-shaking of module-level vars.
+// ---------------------------------------------------------------------------
+
+interface TokenCache {
+  token: string | null;
+  exp: number;
+}
+
+const CACHE_KEY = "__sp_token_cache";
+const TOKEN_CACHE_MARGIN_MS = 5_000;
+
+function _getCache(): TokenCache {
+  const g = globalThis as Record<string, unknown>;
+  if (!g[CACHE_KEY]) {
+    g[CACHE_KEY] = { token: null, exp: 0 };
+  }
+  return g[CACHE_KEY] as TokenCache;
+}
+
+function _parseJwtExp(token: string): number {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return (payload.exp ?? 0) * 1000;
+  } catch {
+    return 0;
+  }
+}
+
+async function _getCachedToken(
+  getToken: () => Promise<string | null>,
+): Promise<string | null> {
+  const cache = _getCache();
+  if (cache.token && Date.now() < cache.exp - TOKEN_CACHE_MARGIN_MS) {
+    return cache.token;
+  }
+  const token = await getToken();
+  if (token) {
+    cache.token = token;
+    cache.exp = _parseJwtExp(token);
+  }
+  return token;
+}
+
+function _invalidateCache(): void {
+  const cache = _getCache();
+  cache.token = null;
+  cache.exp = 0;
+}
+
 /**
  * Authenticated fetch against the backend API.
- * Accepts a `getToken` function (from Clerk's `useAuth()`) so the token is
- * always fresh — never stale from a prior render.
+ * Caches the Clerk JWT until near-expiry. On 401, invalidates the cache,
+ * fetches a fresh token, and retries once.
  */
 export async function backendFetch<T>(
   path: string,
@@ -94,21 +146,31 @@ export async function backendFetch<T>(
     );
   }
 
-  const token = await getToken();
+  const doFetch = async (token: string): Promise<Response> => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(options?.headers as Record<string, string>),
+    };
+    return fetch(`${BACKEND_URL}${path}`, { ...options, headers });
+  };
+
+  // Try with cached token first
+  const token = await _getCachedToken(getToken);
   if (!token) {
     throw new Error("No auth token available. Please sign in.");
   }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
-    ...(options?.headers as Record<string, string>),
-  };
+  let res = await doFetch(token);
 
-  const res = await fetch(`${BACKEND_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  // On 401, invalidate cache, get fresh token, retry once
+  if (res.status === 401) {
+    _invalidateCache();
+    const freshToken = await _getCachedToken(getToken);
+    if (freshToken) {
+      res = await doFetch(freshToken);
+    }
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => res.statusText);
@@ -147,7 +209,7 @@ export interface BackendClient {
 export function useBackendClient(): BackendClient {
   const { getToken } = useAuth();
 
-  return {
+  return useMemo<BackendClient>(() => ({
     getMe: () => backendFetch<MeResponse>("/api/v1/me", getToken),
 
     getApiKeys: () => backendFetch<ApiKeyResponse[]>("/api/v1/keys", getToken),
@@ -190,5 +252,5 @@ export function useBackendClient(): BackendClient {
 
     getUsageByKey: () =>
       backendFetch<KeyUsageByKeyResponse>("/api/v1/usage/by-key", getToken),
-  };
+  }), [getToken]);
 }

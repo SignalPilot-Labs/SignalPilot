@@ -65,6 +65,8 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 AUDIT_FILE = DATA_DIR / "audit.jsonl"
 PROJECTS_FILE = DATA_DIR / "projects.json"
 SCHEMA_ENDORSEMENTS_FILE = DATA_DIR / "schema_endorsements.json"
+API_KEYS_FILE = DATA_DIR / "api_keys.json"
+LOCAL_API_KEY_FILE = DATA_DIR / "local_api_key"
 
 # In-memory vault for raw credentials (cache — authoritative source is encrypted file)
 _credential_vault: dict[str, str] = {}
@@ -223,6 +225,96 @@ def load_settings() -> GatewaySettings:
 
 def save_settings(settings: GatewaySettings):
     _save_json(SETTINGS_FILE, settings.model_dump())
+
+
+# ─── Local API Key ────────────────────────────────────────────────────────────
+
+def get_local_api_key() -> str:
+    """Get or create a persistent local API key for dev mode.
+
+    Auto-generated on first call, persisted to SP_DATA_DIR/local_api_key.
+    Shared by the gateway, web UI, and MCP clients.
+    """
+    import secrets
+    _ensure_data_dir()
+    if LOCAL_API_KEY_FILE.exists():
+        key = LOCAL_API_KEY_FILE.read_text().strip()
+        if key:
+            return key
+    key = "sp_local_" + secrets.token_hex(16)
+    LOCAL_API_KEY_FILE.write_text(key)
+    try:
+        LOCAL_API_KEY_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    logger.info("Generated local API key: %s...", key[:12])
+    return key
+
+
+# ─── API Keys ────────────────────────────────────────────────────────────────
+
+def list_api_keys() -> list:
+    """Return all stored API key records (without raw keys)."""
+    from .models import ApiKeyRecord
+    data = _load_json(API_KEYS_FILE, {})
+    return [ApiKeyRecord(**v) for v in data.values()]
+
+
+def create_api_key(name: str, scopes: list[str]) -> tuple:
+    """Create a new API key. Returns (ApiKeyRecord, raw_key)."""
+    import secrets
+    import datetime
+    from .models import ApiKeyRecord
+
+    raw_key = "sp_" + secrets.token_hex(16)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    key_id = str(uuid.uuid4())
+    prefix = raw_key[:7]
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    record = ApiKeyRecord(
+        id=key_id,
+        name=name,
+        prefix=prefix,
+        key_hash=key_hash,
+        scopes=scopes,
+        created_at=now,
+        last_used_at=None,
+    )
+
+    data = _load_json(API_KEYS_FILE, {})
+    data[key_id] = record.model_dump()
+    _save_json(API_KEYS_FILE, data)
+    return record, raw_key
+
+
+def delete_api_key(key_id: str) -> bool:
+    """Delete an API key by ID. Returns True if found and deleted."""
+    data = _load_json(API_KEYS_FILE, {})
+    if key_id not in data:
+        return False
+    del data[key_id]
+    _save_json(API_KEYS_FILE, data)
+    return True
+
+
+def validate_stored_api_key(raw_key: str):
+    """Validate a raw key against stored hashes. Returns ApiKeyRecord or None."""
+    import hmac as _hmac
+    import datetime
+    from .models import ApiKeyRecord
+
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    data = _load_json(API_KEYS_FILE, {})
+
+    for key_id, entry in data.items():
+        if _hmac.compare_digest(entry.get("key_hash", ""), key_hash):
+            # Update last_used_at
+            entry["last_used_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            data[key_id] = entry
+            _save_json(API_KEYS_FILE, data)
+            return ApiKeyRecord(**entry)
+    return None
 
 
 # ─── Connections ─────────────────────────────────────────────────────────────

@@ -175,33 +175,59 @@ class MCPAuthMiddleware:
 
         backend_url = os.environ.get("SP_BACKEND_URL")
 
-        if not backend_url:
+        if backend_url:
+            # Cloud mode: validate against backend
+            raw_key = _extract_bearer_key(scope)
+            if not raw_key:
+                raw_key = _extract_api_key_header(scope)
+            if not raw_key:
+                await _send_401(send, "Authentication required. Provide API key via Authorization: Bearer <key> or X-API-Key header.")
+                return
+
+            auth_info = await validate_api_key(raw_key, backend_url)
+            if auth_info is None:
+                await _send_401(send, "Invalid or expired API key.")
+                return
+
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["auth"] = auth_info
+            await self._app(scope, receive, send)
+            return
+
+        # Local mode: validate against user-created gateway keys
+        from .store import validate_stored_api_key, list_api_keys
+
+        has_user_keys = len(list_api_keys()) > 0
+
+        if not has_user_keys:
+            # No user-created keys — allow all MCP connections
             global _warned_no_backend_url
             if not _warned_no_backend_url:
-                logger.warning(
-                    "MCP auth: SP_BACKEND_URL not set — running without authentication. "
-                    "Set SP_BACKEND_URL to enable key validation in production."
+                logger.info(
+                    "MCP auth: no API keys configured — MCP accepts all connections. "
+                    "Create an API key in settings to require authentication."
                 )
                 _warned_no_backend_url = True
             await self._app(scope, receive, send)
             return
 
-        # Extract Authorization: Bearer <key>
+        # User has created keys — require one
         raw_key = _extract_bearer_key(scope)
         if not raw_key:
-            await _send_401(send, "Authentication required. Provide API key via Authorization: Bearer <key>.")
+            raw_key = _extract_api_key_header(scope)
+        if not raw_key:
+            await _send_401(send, "Authentication required. Provide API key via X-API-Key header.")
             return
 
-        auth_info = await validate_api_key(raw_key, backend_url)
-        if auth_info is None:
-            await _send_401(send, "Invalid or expired API key.")
+        matched = validate_stored_api_key(raw_key)
+        if matched is None:
+            await _send_401(send, "Invalid API key.")
             return
 
-        # Store auth info on request state for downstream use
         if "state" not in scope:
             scope["state"] = {}
-        scope["state"]["auth"] = auth_info
-
+        scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name}
         await self._app(scope, receive, send)
 
 
@@ -213,6 +239,15 @@ def _extract_bearer_key(scope: dict[str, Any]) -> str | None:
             decoded = value.decode("latin-1")
             if decoded.startswith(_BEARER_PREFIX):
                 return decoded[len(_BEARER_PREFIX):].strip()
+    return None
+
+
+def _extract_api_key_header(scope: dict[str, Any]) -> str | None:
+    """Extract the raw API key from the X-API-Key header."""
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for name, value in headers:
+        if name.lower() == b"x-api-key":
+            return value.decode("latin-1").strip()
     return None
 
 

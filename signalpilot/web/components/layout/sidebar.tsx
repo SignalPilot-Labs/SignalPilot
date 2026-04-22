@@ -96,13 +96,13 @@ type NavIconComponent = React.FC<{ active: boolean }>;
 
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
-  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "2" },
+  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
   { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "5" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "6" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "7" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "8" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
 ];
 
@@ -222,12 +222,8 @@ const ClerkUserButton = dynamic(
   { ssr: false }
 );
 
-/** API Keys nav link — only rendered in cloud mode, nested under /settings */
+/** API Keys nav link — available in both local and cloud mode */
 function ApiKeysNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
   const active = pathname.startsWith("/settings/api-keys");
 
   return (
@@ -292,12 +288,8 @@ function UsageNavLink({ pathname }: { pathname: string }) {
   );
 }
 
-/** MCP Connect nav link — only rendered in cloud mode, nested under /settings */
+/** MCP Connect nav link — available in both local and cloud mode */
 function McpConnectNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
   const active = pathname.startsWith("/settings/mcp-connect");
 
   return (
@@ -340,7 +332,7 @@ export default function Sidebar() {
         setProjectCount(projects.length);
       })
       .catch(() => {});
-    fetch(`${url}/api/health/connections`, { headers })
+    fetch(`${url}/api/connections/health`, { headers })
       .then((r) => r.ok ? r.json() : { connections: [] })
       .then((data: { connections: { status: string }[] }) => {
         const conns = data.connections || [];

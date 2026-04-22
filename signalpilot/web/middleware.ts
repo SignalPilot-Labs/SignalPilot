@@ -11,8 +11,7 @@ import type { NextMiddleware, NextRequest } from "next/server";
  */
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
-const clerkEnabled =
-  IS_CLOUD_MODE || !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkEnabled = IS_CLOUD_MODE;
 
 // ---------------------------------------------------------------------------
 // Security header helper — applied in BOTH paths

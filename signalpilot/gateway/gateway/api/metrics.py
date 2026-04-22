@@ -33,7 +33,7 @@ async def metrics_stream():
                 client = get_sandbox_client()
                 data = await client.health()
                 sandbox_health = data.get("status", "unknown")
-                sandbox_available = data.get("kvm_available", False)
+                sandbox_available = data.get("status") == "healthy"
                 active_sandbox_instances = data.get("active_vms", 0)
                 max_sandbox_instances = data.get("max_vms", 10)
             except Exception:

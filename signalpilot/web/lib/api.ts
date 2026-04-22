@@ -1,8 +1,31 @@
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
+// Auto-fetch local API key from Next.js server route on first use
+let _localKeyPromise: Promise<string | null> | null = null;
+
+function _fetchLocalKey(): Promise<string | null> {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  return fetch("/api/local-key")
+    .then((r) => r.ok ? r.json() : null)
+    .then((data) => {
+      if (data?.key) {
+        localStorage.setItem("sp_api_key", data.key);
+        return data.key as string;
+      }
+      return null;
+    })
+    .catch(() => null);
+}
+
 function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("sp_api_key");
+  const stored = localStorage.getItem("sp_api_key");
+  if (stored) return stored;
+  // Kick off async fetch for next time
+  if (!_localKeyPromise) {
+    _localKeyPromise = _fetchLocalKey();
+  }
+  return null;
 }
 
 export function setApiKey(key: string | null) {
@@ -14,7 +37,11 @@ export function setApiKey(key: string | null) {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const apiKey = getApiKey();
+  let apiKey = getApiKey();
+  // If no key yet, wait for the local key fetch
+  if (!apiKey && _localKeyPromise) {
+    apiKey = await _localKeyPromise;
+  }
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string>),
@@ -194,6 +221,17 @@ export const deleteProject = (name: string) =>
   request<void>(`/api/projects/${name}`, { method: "DELETE" });
 export const scanProject = (name: string) =>
   request<{ message: string; model_count: number }>(`/api/projects/${name}/scan`, { method: "POST" });
+
+// API Keys (local mode — gateway-managed)
+export const getGatewayApiKeys = () =>
+  request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null }[]>("/api/keys");
+export const createGatewayApiKey = (name: string, scopes: string[]) =>
+  request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null; raw_key: string }>("/api/keys", {
+    method: "POST",
+    body: JSON.stringify({ name, scopes }),
+  });
+export const deleteGatewayApiKey = (keyId: string) =>
+  request<void>(`/api/keys/${keyId}`, { method: "DELETE" });
 
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");

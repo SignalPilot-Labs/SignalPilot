@@ -14,6 +14,7 @@ import {
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyResponse } from "@/lib/backend-client";
+import { getGatewayApiKeys } from "@/lib/api";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { CodeBlock } from "@/components/ui/code-block";
 import { StatusDot } from "@/components/ui/data-viz";
@@ -36,62 +37,40 @@ function getMcpUrl(): string {
 // Config snippet generators
 // ---------------------------------------------------------------------------
 
-function getClaudeDesktopConfig(mcpUrl: string): string {
-  return JSON.stringify(
-    {
-      mcpServers: {
-        signalpilot: {
-          url: mcpUrl,
-          headers: {
-            Authorization: "Bearer sp_your_api_key_here",
-          },
-        },
-      },
-    },
-    null,
-    2,
-  );
+function buildHeaders(hasKeys: boolean): Record<string, string> | undefined {
+  if (!hasKeys) return undefined;
+  return { "X-API-Key": "sp_your_api_key_here" };
 }
 
-function getCursorConfig(mcpUrl: string): string {
-  return JSON.stringify(
-    {
-      mcpServers: {
-        signalpilot: {
-          url: mcpUrl,
-          headers: {
-            Authorization: "Bearer sp_your_api_key_here",
-          },
-        },
-      },
-    },
-    null,
-    2,
-  );
+function getClaudeConfig(mcpUrl: string, hasKeys: boolean): string {
+  const entry: Record<string, unknown> = { type: "http", url: mcpUrl };
+  const headers = buildHeaders(hasKeys);
+  if (headers) entry.headers = headers;
+  return JSON.stringify({ mcpServers: { signalpilot: entry } }, null, 2);
 }
 
-function getGenericHttpConfig(mcpUrl: string): string {
-  return JSON.stringify(
-    {
-      url: mcpUrl,
-      transport: "streamable-http",
-      headers: {
-        Authorization: "Bearer sp_your_api_key_here",
-      },
-    },
-    null,
-    2,
-  );
+function getCursorConfig(mcpUrl: string, hasKeys: boolean): string {
+  const entry: Record<string, unknown> = { url: mcpUrl };
+  const headers = buildHeaders(hasKeys);
+  if (headers) entry.headers = headers;
+  return JSON.stringify({ mcpServers: { signalpilot: entry } }, null, 2);
+}
+
+function getGenericHttpConfig(mcpUrl: string, hasKeys: boolean): string {
+  const cfg: Record<string, unknown> = { url: mcpUrl, transport: "streamable-http" };
+  const headers = buildHeaders(hasKeys);
+  if (headers) cfg.headers = headers;
+  return JSON.stringify(cfg, null, 2);
 }
 
 // ---------------------------------------------------------------------------
 // Tab types
 // ---------------------------------------------------------------------------
 
-type ClientTab = "claude-desktop" | "cursor" | "generic-http";
+type ClientTab = "claude" | "cursor" | "generic-http";
 
 const CLIENT_TABS: { id: ClientTab; label: string; filename: string }[] = [
-  { id: "claude-desktop", label: "claude desktop", filename: "claude_desktop_config.json" },
+  { id: "claude", label: "claude code / desktop", filename: ".mcp.json" },
   { id: "cursor", label: "cursor", filename: ".cursor/mcp.json" },
   { id: "generic-http", label: "generic http", filename: "config.json" },
 ];
@@ -143,34 +122,11 @@ export default function McpConnectPage() {
     return <ApiKeysSkeleton />;
   }
 
-  if (!isCloudMode) {
-    return (
-      <div className="p-8 max-w-3xl animate-fade-in">
-        <PageHeader
-          title="mcp connect"
-          subtitle="integration"
-          description="connect mcp clients to signalpilot using your api key"
-        />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-          <div className="p-6 flex items-start gap-3">
-            <Info
-              className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
-              strokeWidth={1.5}
-            />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
-              mcp client configuration is available in cloud mode. set{" "}
-              <code className="text-[var(--color-text-muted)]">
-                NEXT_PUBLIC_DEPLOYMENT_MODE=cloud
-              </code>{" "}
-              and configure clerk to enable this feature.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
+  if (isCloudMode) {
+    return <McpConnectContent />;
   }
 
-  return <McpConnectContent />;
+  return <LocalMcpConnectContent />;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +142,7 @@ function McpConnectContent() {
   const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
   const [keysLoading, setKeysLoading] = useState(true);
   const [keysError, setKeysError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ClientTab>("claude-desktop");
+  const [activeTab, setActiveTab] = useState<ClientTab>("claude");
 
   const fetchKeys = useCallback(async () => {
     setKeysError(null);
@@ -219,18 +175,19 @@ function McpConnectContent() {
   // Config snippet for active tab
   // ---------------------------------------------------------------------------
 
+  const hasKeys = keys.length > 0;
+  const firstKey = hasKeys ? keys[0] : null;
+
   function getActiveConfig(): string {
     switch (activeTab) {
-      case "claude-desktop":
-        return getClaudeDesktopConfig(mcpUrl);
+      case "claude":
+        return getClaudeConfig(mcpUrl, hasKeys);
       case "cursor":
-        return getCursorConfig(mcpUrl);
+        return getCursorConfig(mcpUrl, hasKeys);
       case "generic-http":
-        return getGenericHttpConfig(mcpUrl);
+        return getGenericHttpConfig(mcpUrl, hasKeys);
     }
   }
-
-  const firstKey = keys.length > 0 ? keys[0] : null;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -285,7 +242,7 @@ function McpConnectContent() {
             </span>
             <span>
               auth:{" "}
-              <span className="text-[var(--color-text-muted)] font-mono">bearer token</span>
+              <span className="text-[var(--color-text-muted)] font-mono">X-API-Key</span>
             </span>
             <span>
               method:{" "}
@@ -439,6 +396,166 @@ function McpConnectContent() {
               . the full key is only shown once at creation time.
             </p>
           </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Local mode — fetches keys from gateway, shows no-auth config when no keys
+// ---------------------------------------------------------------------------
+
+function LocalMcpConnectContent() {
+  const mcpUrl = getMcpUrl();
+  const { toast } = useToast();
+
+  const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
+  const [keysLoading, setKeysLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<ClientTab>("claude");
+
+  const fetchKeys = useCallback(async () => {
+    try {
+      const data = await getGatewayApiKeys();
+      setKeys(data);
+    } catch {
+      // No keys or gateway unreachable — that's fine for local
+    } finally {
+      setKeysLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchKeys();
+  }, [fetchKeys]);
+
+  if (keysLoading) {
+    return <ApiKeysSkeleton />;
+  }
+
+  const hasKeys = keys.length > 0;
+  const firstKey = hasKeys ? keys[0] : null;
+
+  function getActiveConfig(): string {
+    switch (activeTab) {
+      case "claude":
+        return getClaudeConfig(mcpUrl, hasKeys);
+      case "cursor":
+        return getCursorConfig(mcpUrl, hasKeys);
+      case "generic-http":
+        return getGenericHttpConfig(mcpUrl, hasKeys);
+    }
+  }
+
+  return (
+    <div className="p-8 max-w-3xl animate-fade-in">
+      <PageHeader
+        title="mcp connect"
+        subtitle="integration"
+        description="connect mcp clients to your local signalpilot instance"
+      />
+
+      <TerminalBar
+        path="settings/mcp-connect --config"
+        status={<StatusDot status="healthy" size={4} />}
+      >
+        <div className="flex items-center gap-6 text-xs">
+          <span className="text-[var(--color-text-dim)]">
+            transport: <code className="text-[12px] text-[var(--color-text)]">streamable-http</code>
+          </span>
+          <span className="text-[var(--color-text-dim)]">
+            auth: <code className="text-[12px] text-[var(--color-text)]">{hasKeys ? "X-API-Key" : "none"}</code>
+          </span>
+        </div>
+      </TerminalBar>
+
+      {/* Endpoint */}
+      <section className="mb-8">
+        <SectionHeader icon={Plug} title="endpoint" />
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 space-y-4">
+          <div>
+            <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">mcp server url</p>
+            <div className="flex items-center gap-3">
+              <code className="flex-1 px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] text-[var(--color-success)] tracking-wider font-mono break-all">
+                {mcpUrl}
+              </code>
+              <UrlCopyButton text={mcpUrl} />
+            </div>
+          </div>
+          <div className="flex items-center gap-6 text-[11px] text-[var(--color-text-dim)] tracking-wider pt-1">
+            <span>transport: <span className="text-[var(--color-text-muted)] font-mono">streamable-http</span></span>
+            <span>auth: <span className="text-[var(--color-text-muted)] font-mono">{hasKeys ? "X-API-Key" : "none (no api key set)"}</span></span>
+          </div>
+        </div>
+      </section>
+
+      {/* API Key status */}
+      <section className="mb-8">
+        <SectionHeader icon={Key} title="authentication" />
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
+          {firstKey ? (
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <Key className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
+                <div className="min-w-0">
+                  <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1">active key</p>
+                  <div className="flex items-center gap-2">
+                    <code className="text-[13px] text-[var(--color-text-muted)] tracking-wider font-mono">{firstKey.prefix}...</code>
+                    <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider truncate max-w-[120px]">({firstKey.name})</span>
+                  </div>
+                </div>
+              </div>
+              <Link href="/settings/api-keys" className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider flex-shrink-0">
+                <ExternalLink className="w-3 h-3" /> manage keys
+              </Link>
+            </div>
+          ) : (
+            <div className="flex items-start gap-3">
+              <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
+              <div className="flex-1">
+                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-1">
+                  no api key configured — mcp clients can connect without authentication.
+                </p>
+                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                  to require auth, <Link href="/settings/api-keys" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline underline-offset-2">create an api key</Link> and it will be enforced automatically.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Client Configuration */}
+      <section className="mb-8">
+        <SectionHeader icon={Terminal} title="client configuration" />
+        <div role="tablist" className="flex items-center gap-0 mb-4 border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+          {CLIENT_TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button key={tab.id} role="tab" aria-selected={isActive} onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 px-4 py-2.5 text-[12px] tracking-wider transition-all border-r last:border-r-0 border-[var(--color-border)] ${
+                  isActive ? "text-[var(--color-text)] bg-[var(--color-bg-hover)] border-b-2 border-b-[var(--color-text)]" : "text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
+                }`}>
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        <div role="tabpanel">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase">file:</span>
+            <code className="text-[12px] text-[var(--color-text-muted)] tracking-wider">{CLIENT_TABS.find((t) => t.id === activeTab)?.filename}</code>
+          </div>
+          <CodeBlock code={getActiveConfig()} language="json" maxHeight="20rem" showLineNumbers={true} />
+          {hasKeys && (
+            <div className="mt-4 flex items-start gap-2 p-3 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+              <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
+              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                replace <code className="text-[var(--color-text-muted)]">sp_your_api_key_here</code> with your api key from{" "}
+                <Link href="/settings/api-keys" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline underline-offset-2">settings / api keys</Link>.
+              </p>
+            </div>
+          )}
         </div>
       </section>
     </div>

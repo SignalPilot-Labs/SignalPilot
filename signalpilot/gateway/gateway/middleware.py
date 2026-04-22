@@ -24,6 +24,7 @@ PUBLIC_PATHS = frozenset({
     "/health",
     "/docs",
     "/openapi.json",
+    "/api/metrics",
 })
 
 
@@ -44,13 +45,15 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
 
-        # Load the configured API key
-        from .store import load_settings
+        # Load the configured static API key, local key, and stored keys
+        from .store import load_settings, validate_stored_api_key, list_api_keys, get_local_api_key
         settings = load_settings()
         expected_key = settings.api_key
+        local_key = get_local_api_key()
+        has_stored_keys = len(list_api_keys()) > 0
 
-        # If no API key configured, allow all (dev mode) but flag it
-        if not expected_key:
+        # If no static key AND no stored keys AND no local key, allow all
+        if not expected_key and not has_stored_keys and not local_key:
             response = await call_next(request)
             response.headers["X-SignalPilot-Auth"] = "none"
             return response
@@ -70,16 +73,27 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        # Constant-time comparison to prevent timing attacks
-        if not hmac.compare_digest(provided_key, expected_key):
-            return Response(
-                content='{"detail":"Invalid API key."}',
-                status_code=403,
-                media_type="application/json",
-            )
+        # Try stored API keys first
+        matched = validate_stored_api_key(provided_key)
+        if matched:
+            response = await call_next(request)
+            return response
 
-        response = await call_next(request)
-        return response
+        # Fall back to static settings.api_key
+        if expected_key and hmac.compare_digest(provided_key, expected_key):
+            response = await call_next(request)
+            return response
+
+        # Fall back to local dev key
+        if local_key and hmac.compare_digest(provided_key, local_key):
+            response = await call_next(request)
+            return response
+
+        return Response(
+            content='{"detail":"Invalid API key."}',
+            status_code=403,
+            media_type="application/json",
+        )
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

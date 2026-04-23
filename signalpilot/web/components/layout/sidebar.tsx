@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock } from "lucide-react";
+import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 
@@ -293,6 +293,29 @@ function ByokNavLink({ pathname }: { pathname: string }) {
   );
 }
 
+/** Team nav link — cloud-mode only */
+function TeamNavLink({ pathname }: { pathname: string }) {
+  const { isCloudMode } = useAppAuth();
+
+  if (!isCloudMode) return null;
+
+  const active = pathname.startsWith("/settings/team");
+
+  return (
+    <Link
+      href="/settings/team"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <Users size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">team</span>
+    </Link>
+  );
+}
+
 /** Account Security nav link — cloud-mode only */
 function AccountSecurityNavLink({ pathname }: { pathname: string }) {
   const { isCloudMode } = useAppAuth();
@@ -457,6 +480,8 @@ export default function Sidebar() {
         <McpConnectNavLink pathname={pathname} />
         {/* Security sub-link */}
         <ByokNavLink pathname={pathname} />
+        {/* Team sub-link — cloud-mode only */}
+        <TeamNavLink pathname={pathname} />
         {/* Account Security sub-link — cloud-mode only */}
         <AccountSecurityNavLink pathname={pathname} />
       </nav>

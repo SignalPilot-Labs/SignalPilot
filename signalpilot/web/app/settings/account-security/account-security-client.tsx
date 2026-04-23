@@ -8,6 +8,7 @@ import { PasswordSection } from "@/components/security/password-section";
 import { TotpSection } from "@/components/security/totp-section";
 import { SmsSection } from "@/components/security/sms-section";
 import { BackupCodesSection } from "@/components/security/backup-codes-section";
+import { ActiveSessionsSection } from "@/components/security/active-sessions-section";
 
 export default function AccountSecurityClient() {
   const { user, isLoaded } = useUser();
@@ -56,6 +57,7 @@ export default function AccountSecurityClient() {
       <TotpSection />
       <SmsSection />
       <BackupCodesSection />
+      <ActiveSessionsSection />
     </div>
   );
 }

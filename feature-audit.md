@@ -114,3 +114,21 @@
 - [x] **Sandbox GET Scope Guards** — `GET /api/sandboxes` and `GET /api/sandboxes/{sandbox_id}` now require `read` scope. Previously any authenticated user could list/inspect all sandboxes regardless of API key scopes.
 - [x] **Pre-existing test_get_settings Fix** — Updated `test_api.py::TestSettingsEndpoint` to expect 401 for unauthenticated requests (was previously broken since R8).
 - [x] **29 new tests** — 20 settings security tests (scope enforcement, secret masking, null handling, PUT redaction, mask round-trip preservation) + 9 scope enforcement tests (sandbox read scope, settings admin scope). All pass.
+
+## Round 12: Comprehensive GET Endpoint Scope Sweep
+
+### COMPLETED
+
+- [x] **Audit Endpoints Admin Guard** — `GET /api/audit` and `GET /api/audit/export` now require `admin` scope. Compliance-sensitive data (SQL queries, connection names, agent IDs, timing) was previously readable by any authenticated API key.
+- [x] **File Browser Read Guard** — `GET /api/files/browse` now requires `read` scope. The endpoint proxies to the sandbox manager and exposes host filesystem contents.
+- [x] **Network Info Admin Guard** — `GET /api/network/info` now requires `admin` scope. Returns hostname, all local IPs, and public IP — infrastructure reconnaissance data useful for lateral movement.
+- [x] **Connection List/Detail Read Guards** — `GET /connections`, `GET /connections/{name}`, `GET /connections/health`, `GET /connections/stats`, `GET /connections/{name}/health`, `GET /connections/{name}/health/history`, `GET /connectors/capabilities`, `GET /connections/{name}/capabilities` all now require `read` scope. Previously any scope (including `execute`-only or `query`-only) could enumerate all connections.
+- [x] **Projects Read Guards** — `GET /projects` and `GET /projects/{name}` now require `read` scope.
+- [x] **Schema Read Guards (21 endpoints)** — All schema GET endpoints now require `read` scope: `/schema`, `/schema/grouped`, `/schema/samples`, `/schema/enriched`, `/schema/compact`, `/schema/ddl`, `/schema/agent-context`, `/schema/link`, `/schema/explore-table`, `/schema/overview`, `/schema/diff`, `/schema/refresh-status`, `/schema/diff-history`, `/schema/changes`, `/schema/filter`, `/schema/relationships`, `/schema/join-paths`, `/schema/sample-values`, `/schema/search`, `/schema/endorsements`, `/semantic-model`.
+- [x] **Budget Read Guards** — `GET /budget`, `GET /budget/{session_id}`, `GET /connections/{name}/annotations` now require `read` scope.
+- [x] **Cache/Pool Stats Read Guards** — `GET /cache/stats`, `GET /pool/stats`, `GET /schema-cache/stats` now require `read` scope.
+- [x] **Metrics Read Guard** — `GET /metrics` (SSE stream) now requires `read` scope. Previously authenticated but unscoped.
+- [x] **Duplicate Capabilities Routes Guarded** — Both copies of `GET /connectors/capabilities` and `GET /connections/{name}/capabilities` (in both `connections.py` and `metrics.py`) are guarded with `read` scope.
+- [x] **URL Utility POSTs Read-Scoped** — `POST /connections/parse-url`, `POST /connections/validate-url`, `POST /connections/build-url` now require `read` scope. Previously no scope required.
+- [x] **31 new tests** — TestAuditAdminScope (5), TestFilesBrowseReadScope (2), TestNetworkInfoAdminScope (3), TestConnectionsGetReadScope (11), TestProjectsGetReadScope (5), TestSchemaGetReadScope (7), TestBudgetGetReadScope (4), TestCacheStatsReadScope (6), TestMetricsReadScope (2), TestUrlUtilityReadScope (6). 102 total scope enforcement tests pass.
+- [x] **Updated TestParseUrlEndpointsUnauthenticated** — Renamed to TestUrlUtilityReadScope and updated to expect 403 without `read` scope (3 tests updated to reflect new scope requirement).

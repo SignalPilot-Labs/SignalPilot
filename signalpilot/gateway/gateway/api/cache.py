@@ -13,7 +13,7 @@ from .deps import StoreD, sanitize_db_error
 router = APIRouter(prefix="/api")
 
 
-@router.get("/cache/stats")
+@router.get("/cache/stats", dependencies=[RequireScope("read")])
 async def cache_stats():
     """Get query cache statistics (Feature #30)."""
     return query_cache.stats()
@@ -72,13 +72,13 @@ async def detect_pii(name: str, store: StoreD):
     }
 
 
-@router.get("/pool/stats")
+@router.get("/pool/stats", dependencies=[RequireScope("read")])
 async def pool_stats():
     """Get connection pool statistics for monitoring."""
     return pool_manager.stats()
 
 
-@router.get("/schema-cache/stats")
+@router.get("/schema-cache/stats", dependencies=[RequireScope("read")])
 async def schema_cache_stats():
     """Get schema cache statistics (Feature #18)."""
     return schema_cache.stats()

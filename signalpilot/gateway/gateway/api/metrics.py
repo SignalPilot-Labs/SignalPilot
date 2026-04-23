@@ -9,15 +9,16 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .deps import StoreD, get_sandbox_client_with_store
+from ..scope_guard import RequireScope
 from ..store import list_sandboxes
+from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")
 
 # ─── SSE metrics stream ──────────────────────────────────────────────────────
 
 
-@router.get("/metrics")
+@router.get("/metrics", dependencies=[RequireScope("read")])
 async def metrics_stream(store: StoreD):
     """Server-Sent Events stream of live gateway metrics.
 
@@ -220,7 +221,7 @@ _CONNECTOR_TIERS = {
 }
 
 
-@router.get("/connectors/capabilities")
+@router.get("/connectors/capabilities", dependencies=[RequireScope("read")])
 async def get_connector_capabilities(db_type: str | None = None):
     """Return connector tier classification and feature matrix.
 
@@ -263,7 +264,7 @@ async def get_connector_capabilities(db_type: str | None = None):
     }
 
 
-@router.get("/connections/{name}/capabilities")
+@router.get("/connections/{name}/capabilities", dependencies=[RequireScope("read")])
 async def get_connection_capabilities(name: str, store: StoreD):
     """Return capabilities for a specific connection based on its db_type.
 

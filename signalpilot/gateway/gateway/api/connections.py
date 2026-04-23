@@ -363,7 +363,7 @@ _CONNECTOR_TIERS = {
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/connections")
+@router.get("/connections", dependencies=[RequireScope("read")])
 async def get_connections(store: StoreD):
     return await store.list_connections()
 
@@ -382,13 +382,13 @@ async def add_connection(conn: ConnectionCreate, store: StoreD):
     return info
 
 
-@router.get("/connections/health")
+@router.get("/connections/health", dependencies=[RequireScope("read")])
 async def get_all_connection_health(window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for all monitored connections."""
     return {"connections": health_monitor.all_stats(window)}
 
 
-@router.get("/connections/stats")
+@router.get("/connections/stats", dependencies=[RequireScope("read")])
 async def get_connections_stats(store: StoreD):
     """Dashboard-level statistics for all connections."""
     connections = await store.list_connections()
@@ -539,7 +539,7 @@ async def import_connections(manifest: dict, store: StoreD):
     return results
 
 
-@router.get("/connections/{name}")
+@router.get("/connections/{name}", dependencies=[RequireScope("read")])
 async def get_connection_detail(name: str, store: StoreD):
     conn = await store.get_connection(name)
     if not conn:
@@ -742,7 +742,7 @@ async def warmup_all_schemas(store: StoreD):
     }
 
 
-@router.post("/connections/parse-url")
+@router.post("/connections/parse-url", dependencies=[RequireScope("read")])
 async def parse_connection_url(request: Request):
     """Parse a database connection URL into individual credential fields."""
     body = await request.json()
@@ -988,7 +988,7 @@ async def test_credentials(request: Request):
     }
 
 
-@router.post("/connections/validate-url")
+@router.post("/connections/validate-url", dependencies=[RequireScope("read")])
 async def validate_connection_url(body: dict):
     """Validate and parse a connection string without saving or connecting."""
     url = body.get("connection_string", "")
@@ -1087,7 +1087,7 @@ async def validate_connection_url(body: dict):
         return {"valid": False, "error": f"Invalid URL format: {e}"}
 
 
-@router.post("/connections/build-url")
+@router.post("/connections/build-url", dependencies=[RequireScope("read")])
 async def build_connection_url(body: dict):
     """Build a connection string from individual fields."""
     db_type = body.get("db_type", "")
@@ -1315,7 +1315,7 @@ async def test_connection(name: str, store: StoreD):
     }
 
 
-@router.get("/connections/{name}/health")
+@router.get("/connections/{name}/health", dependencies=[RequireScope("read")])
 async def get_connection_health(name: str, window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for a specific connection."""
     stats = health_monitor.connection_stats(name, window)
@@ -1324,7 +1324,7 @@ async def get_connection_health(name: str, window: int = Query(default=300, ge=6
     return stats
 
 
-@router.get("/connections/{name}/health/history")
+@router.get("/connections/{name}/health/history", dependencies=[RequireScope("read")])
 async def get_connection_health_history(
     name: str,
     window: int = Query(default=3600, ge=300, le=86400, description="History window in seconds"),
@@ -1342,7 +1342,7 @@ async def get_connection_health_history(
     }
 
 
-@router.get("/network/info")
+@router.get("/network/info", dependencies=[RequireScope("admin")])
 async def network_info():
     """Return this server's public IP and network info for firewall/whitelist setup."""
     result: dict = {
@@ -1536,7 +1536,7 @@ async def diagnose_connection(name: str, store: StoreD):
     return {"host": host, "port": port, "diagnostics": diagnostics}
 
 
-@router.get("/connectors/capabilities")
+@router.get("/connectors/capabilities", dependencies=[RequireScope("read")])
 async def get_connector_capabilities(db_type: str | None = None):
     """Return connector tier classification and feature matrix."""
     if db_type:
@@ -1567,7 +1567,7 @@ async def get_connector_capabilities(db_type: str | None = None):
     }
 
 
-@router.get("/connections/{name}/capabilities")
+@router.get("/connections/{name}/capabilities", dependencies=[RequireScope("read")])
 async def get_connection_capabilities(name: str, store: StoreD):
     """Return capabilities for a specific connection based on its db_type."""
     info = await store.get_connection(name)

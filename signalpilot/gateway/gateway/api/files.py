@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
+from ..scope_guard import RequireScope
 from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")
 
 
-@router.get("/files/browse")
+@router.get("/files/browse", dependencies=[RequireScope("read")])
 async def browse_files(
     store: StoreD,
     path: str | None = Query(default=None, description="Directory to browse"),

@@ -502,30 +502,45 @@ class TestGetSettingsAdminScopeEnforcement:
         assert response.status_code == 403
 
 
-# ─── TestParseUrlEndpointsUnauthenticated ─────────────────────────────────────
+# ─── TestUrlUtilityReadScope ──────────────────────────────────────────────────
 
 
-class TestParseUrlEndpointsUnauthenticated:
-    """parse-url, validate-url, build-url are pure parsing — no scope required."""
+class TestUrlUtilityReadScope:
+    """parse-url, validate-url, build-url require 'read' scope (R12)."""
 
-    def test_parse_url_does_not_require_scope(self, client):
-        """parse-url has no RequireScope — succeeds even with empty scopes."""
+    def test_parse_url_returns_403_without_read_scope(self, client):
         _set_scopes([])
+        response = client.post("/api/connections/parse-url", json={
+            "url": "postgresql://user:pass@db.example.com:5432/mydb",
+            "db_type": "postgres",
+        })
+        assert response.status_code == 403
+
+    def test_parse_url_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
         response = client.post("/api/connections/parse-url", json={
             "url": "postgresql://user:pass@db.example.com:5432/mydb",
             "db_type": "postgres",
         })
         assert response.status_code != 403
 
-    def test_validate_url_does_not_require_scope(self, client):
+    def test_validate_url_returns_403_without_read_scope(self, client):
         _set_scopes([])
+        response = client.post("/api/connections/validate-url", json={
+            "connection_string": "postgresql://user:pass@db.example.com:5432/mydb",
+            "db_type": "postgres",
+        })
+        assert response.status_code == 403
+
+    def test_validate_url_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
         response = client.post("/api/connections/validate-url", json={
             "connection_string": "postgresql://user:pass@db.example.com:5432/mydb",
             "db_type": "postgres",
         })
         assert response.status_code != 403
 
-    def test_build_url_does_not_require_scope(self, client):
+    def test_build_url_returns_403_without_read_scope(self, client):
         _set_scopes([])
         response = client.post("/api/connections/build-url", json={
             "db_type": "postgres",
@@ -535,4 +550,310 @@ class TestParseUrlEndpointsUnauthenticated:
             "username": "user",
             "password": "pass",
         })
+        assert response.status_code == 403
+
+    def test_build_url_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.post("/api/connections/build-url", json={
+            "db_type": "postgres",
+            "host": "db.example.com",
+            "port": 5432,
+            "database": "mydb",
+            "username": "user",
+            "password": "pass",
+        })
         assert response.status_code != 403
+
+
+# ─── TestAuditAdminScope ──────────────────────────────────────────────────────
+
+
+class TestAuditAdminScope:
+    """GET /api/audit and GET /api/audit/export require 'admin' scope."""
+
+    def test_get_audit_returns_403_without_admin_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/audit")
+        assert response.status_code == 403
+
+    def test_get_audit_returns_403_with_only_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/audit")
+        assert response.status_code == 403
+
+    def test_get_audit_passes_with_admin_scope(self, client):
+        _set_scopes(["admin"])
+        response = client.get("/api/audit")
+        assert response.status_code != 403
+
+    def test_export_audit_returns_403_without_admin_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/audit/export")
+        assert response.status_code == 403
+
+    def test_export_audit_passes_with_admin_scope(self, client):
+        _set_scopes(["admin"])
+        response = client.get("/api/audit/export")
+        assert response.status_code != 403
+
+
+# ─── TestFilesBrowseReadScope ─────────────────────────────────────────────────
+
+
+class TestFilesBrowseReadScope:
+    """GET /api/files/browse requires 'read' scope."""
+
+    def test_browse_files_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/files/browse")
+        assert response.status_code == 403
+
+    def test_browse_files_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/files/browse")
+        assert response.status_code != 403
+
+
+# ─── TestNetworkInfoAdminScope ────────────────────────────────────────────────
+
+
+class TestNetworkInfoAdminScope:
+    """GET /api/network/info requires 'admin' scope."""
+
+    def test_network_info_returns_403_without_admin_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/network/info")
+        assert response.status_code == 403
+
+    def test_network_info_returns_403_with_only_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/network/info")
+        assert response.status_code == 403
+
+    def test_network_info_passes_with_admin_scope(self, client):
+        _set_scopes(["admin"])
+        response = client.get("/api/network/info")
+        assert response.status_code != 403
+
+
+# ─── TestConnectionsGetReadScope ─────────────────────────────────────────────
+
+
+class TestConnectionsGetReadScope:
+    """GET connection list/detail/health/stats require 'read' scope."""
+
+    def test_list_connections_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connections")
+        assert response.status_code == 403
+
+    def test_list_connections_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connections")
+        assert response.status_code != 403
+
+    def test_list_connections_returns_403_with_only_execute_scope(self, client):
+        _set_scopes(["execute"])
+        response = client.get("/api/connections")
+        assert response.status_code == 403
+
+    def test_get_connection_detail_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connections/my-conn")
+        assert response.status_code == 403
+
+    def test_get_connection_detail_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connections/nonexistent-conn")
+        assert response.status_code != 403
+
+    def test_get_connections_health_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connections/health")
+        assert response.status_code == 403
+
+    def test_get_connections_health_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connections/health")
+        assert response.status_code != 403
+
+    def test_get_connections_stats_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connections/stats")
+        assert response.status_code == 403
+
+    def test_get_connections_stats_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connections/stats")
+        assert response.status_code != 403
+
+    def test_get_connector_capabilities_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connectors/capabilities")
+        assert response.status_code == 403
+
+    def test_get_connector_capabilities_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connectors/capabilities")
+        assert response.status_code != 403
+
+
+# ─── TestProjectsGetReadScope ─────────────────────────────────────────────────
+
+
+class TestProjectsGetReadScope:
+    """GET /api/projects and GET /api/projects/{name} require 'read' scope."""
+
+    def test_list_projects_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/projects")
+        assert response.status_code == 403
+
+    def test_list_projects_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/projects")
+        assert response.status_code != 403
+
+    def test_list_projects_returns_403_with_only_query_scope(self, client):
+        _set_scopes(["query"])
+        response = client.get("/api/projects")
+        assert response.status_code == 403
+
+    def test_get_project_detail_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/projects/my-project")
+        assert response.status_code == 403
+
+    def test_get_project_detail_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/projects/nonexistent-project")
+        assert response.status_code != 403
+
+
+# ─── TestSchemaGetReadScope ───────────────────────────────────────────────────
+
+
+class TestSchemaGetReadScope:
+    """Schema GET endpoints require 'read' scope."""
+
+    def test_get_schema_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connections/my-conn/schema")
+        assert response.status_code == 403
+
+    def test_get_schema_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connections/nonexistent/schema")
+        assert response.status_code != 403
+
+    def test_get_schema_returns_403_with_only_query_scope(self, client):
+        """query-only key cannot enumerate schema — specific threat from Finding 4."""
+        _set_scopes(["query"])
+        response = client.get("/api/connections/my-conn/schema")
+        assert response.status_code == 403
+
+    def test_get_grouped_schema_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/connections/my-conn/schema/grouped")
+        assert response.status_code == 403
+
+    def test_get_grouped_schema_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/connections/nonexistent/schema/grouped")
+        assert response.status_code != 403
+
+    def test_get_schema_changes_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/schema/changes")
+        assert response.status_code == 403
+
+    def test_get_schema_changes_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/schema/changes")
+        assert response.status_code != 403
+
+
+# ─── TestBudgetGetReadScope ───────────────────────────────────────────────────
+
+
+class TestBudgetGetReadScope:
+    """Budget GET endpoints require 'read' scope."""
+
+    def test_list_budgets_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/budget")
+        assert response.status_code == 403
+
+    def test_list_budgets_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/budget")
+        assert response.status_code != 403
+
+    def test_get_budget_session_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/budget/some-session")
+        assert response.status_code == 403
+
+    def test_get_budget_session_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/budget/nonexistent-session")
+        assert response.status_code != 403
+
+
+# ─── TestCacheStatsReadScope ──────────────────────────────────────────────────
+
+
+class TestCacheStatsReadScope:
+    """Cache/pool/schema-cache stats GET endpoints require 'read' scope."""
+
+    def test_cache_stats_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/cache/stats")
+        assert response.status_code == 403
+
+    def test_cache_stats_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/cache/stats")
+        assert response.status_code != 403
+
+    def test_pool_stats_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/pool/stats")
+        assert response.status_code == 403
+
+    def test_pool_stats_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/pool/stats")
+        assert response.status_code != 403
+
+    def test_schema_cache_stats_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/schema-cache/stats")
+        assert response.status_code == 403
+
+    def test_schema_cache_stats_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/schema-cache/stats")
+        assert response.status_code != 403
+
+
+# ─── TestMetricsReadScope ─────────────────────────────────────────────────────
+
+
+class TestMetricsReadScope:
+    """GET /api/metrics requires 'read' scope.
+
+    Note: /api/metrics is an SSE stream (infinite generator). Only the 403 path
+    is tested synchronously — the success path would block forever waiting for
+    the stream to close and is covered by scope_guard unit tests instead.
+    """
+
+    def test_metrics_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/metrics")
+        assert response.status_code == 403
+
+    def test_metrics_returns_403_with_only_execute_scope(self, client):
+        _set_scopes(["execute"])
+        response = client.get("/api/metrics")
+        assert response.status_code == 403

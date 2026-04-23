@@ -8,12 +8,13 @@ import time
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
+from ..scope_guard import RequireScope
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 
 
-@router.get("/audit")
+@router.get("/audit", dependencies=[RequireScope("admin")])
 async def get_audit(
     store: StoreD,
     limit: int = Query(default=100, le=500),
@@ -30,7 +31,7 @@ async def get_audit(
     return {"entries": entries, "total": len(entries)}
 
 
-@router.get("/audit/export")
+@router.get("/audit/export", dependencies=[RequireScope("admin")])
 async def export_audit(
     store: StoreD,
     connection_name: str | None = None,

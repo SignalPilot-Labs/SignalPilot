@@ -26,7 +26,7 @@ async def create_budget(req: BudgetCreateRequest):
     return budget.to_dict()
 
 
-@router.get("/budget/{session_id}")
+@router.get("/budget/{session_id}", dependencies=[RequireScope("read")])
 async def get_budget(session_id: str):
     """Get budget status for a session."""
     budget = budget_ledger.get_session(session_id)
@@ -35,7 +35,7 @@ async def get_budget(session_id: str):
     return budget.to_dict()
 
 
-@router.get("/budget")
+@router.get("/budget", dependencies=[RequireScope("read")])
 async def list_budgets():
     """List all active session budgets."""
     return {
@@ -55,7 +55,7 @@ async def close_budget(session_id: str):
 # ─── Schema Annotations ────────────────────────────────────────────────────
 
 
-@router.get("/connections/{name}/annotations")
+@router.get("/connections/{name}/annotations", dependencies=[RequireScope("read")])
 async def get_annotations(name: str, store: StoreD):
     """Get schema annotations for a connection (Feature #16)."""
     info = await store.get_connection(name)

@@ -13,7 +13,7 @@ from .deps import StoreD
 router = APIRouter(prefix="/api")
 
 
-@router.get("/projects")
+@router.get("/projects", dependencies=[RequireScope("read")])
 async def get_projects(store: StoreD):
     """List all registered dbt projects."""
     return await store.list_projects()
@@ -29,7 +29,7 @@ async def add_project(proj: ProjectCreate, store: StoreD):
     return info
 
 
-@router.get("/projects/{name}")
+@router.get("/projects/{name}", dependencies=[RequireScope("read")])
 async def get_project_detail(name: str, store: StoreD):
     """Get a single dbt project by name."""
     proj = await store.get_project(name)

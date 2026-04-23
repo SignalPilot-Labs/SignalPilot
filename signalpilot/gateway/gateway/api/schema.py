@@ -75,7 +75,7 @@ def _load_semantic_model(name: str) -> dict:
 # GET /connections/{name}/schema
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema")
+@router.get("/connections/{name}/schema", dependencies=[RequireScope("read")])
 async def get_connection_schema(
     name: str,
     store: StoreD,
@@ -146,7 +146,7 @@ async def get_connection_schema(
 # GET /connections/{name}/schema/grouped
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/grouped")
+@router.get("/connections/{name}/schema/grouped", dependencies=[RequireScope("read")])
 async def get_grouped_schema(
     name: str,
     store: StoreD,
@@ -200,7 +200,7 @@ async def get_grouped_schema(
 # GET /connections/{name}/schema/samples
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/samples")
+@router.get("/connections/{name}/schema/samples", dependencies=[RequireScope("read")])
 async def get_schema_samples(
     name: str,
     store: StoreD,
@@ -376,7 +376,7 @@ FROM {table}
 # GET /connections/{name}/schema/enriched
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/enriched")
+@router.get("/connections/{name}/schema/enriched", dependencies=[RequireScope("read")])
 async def get_enriched_schema(
     name: str,
     store: StoreD,
@@ -491,7 +491,7 @@ async def get_enriched_schema(
 # GET /connections/{name}/schema/compact
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/compact")
+@router.get("/connections/{name}/schema/compact", dependencies=[RequireScope("read")])
 async def get_compact_schema(
     name: str,
     store: StoreD,
@@ -675,7 +675,7 @@ async def get_compact_schema(
 # GET /connections/{name}/schema/ddl
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/ddl")
+@router.get("/connections/{name}/schema/ddl", dependencies=[RequireScope("read")])
 async def get_schema_ddl(
     name: str,
     store: StoreD,
@@ -915,7 +915,7 @@ async def get_schema_ddl(
 # GET /connections/{name}/schema/agent-context
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/agent-context")
+@router.get("/connections/{name}/schema/agent-context", dependencies=[RequireScope("read")])
 async def get_agent_context(
     name: str,
     store: StoreD,
@@ -1336,7 +1336,7 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
 }
 
 
-@router.get("/connections/{name}/schema/link")
+@router.get("/connections/{name}/schema/link", dependencies=[RequireScope("read")])
 async def schema_link(
     name: str,
     store: StoreD,
@@ -2267,7 +2267,7 @@ async def refine_schema(
     }
 
 
-@router.get("/connections/{name}/schema/explore-table")
+@router.get("/connections/{name}/schema/explore-table", dependencies=[RequireScope("read")])
 async def explore_table(
     name: str,
     store: StoreD,
@@ -2361,7 +2361,7 @@ async def explore_table(
     return result
 
 
-@router.get("/connections/{name}/schema/overview")
+@router.get("/connections/{name}/schema/overview", dependencies=[RequireScope("read")])
 async def get_schema_overview(name: str, store: StoreD):
     """Quick database overview -- table count, total columns, total rows, FK graph density."""
     info = await require_connection(store, name)
@@ -2442,7 +2442,7 @@ async def get_schema_overview(name: str, store: StoreD):
     }
 
 
-@router.get("/connections/{name}/schema/diff")
+@router.get("/connections/{name}/schema/diff", dependencies=[RequireScope("read")])
 async def get_schema_diff(name: str, store: StoreD):
     """Compare current database schema against cached version."""
     info = await require_connection(store, name)
@@ -2480,7 +2480,7 @@ async def get_schema_diff(name: str, store: StoreD):
     }
 
 
-@router.get("/connections/{name}/schema/refresh-status")
+@router.get("/connections/{name}/schema/refresh-status", dependencies=[RequireScope("read")])
 async def get_schema_refresh_status(name: str, store: StoreD):
     """Get schema refresh schedule status for a connection."""
     info = await require_connection(store, name)
@@ -2501,7 +2501,7 @@ async def get_schema_refresh_status(name: str, store: StoreD):
     }
 
 
-@router.get("/connections/{name}/schema/diff-history")
+@router.get("/connections/{name}/schema/diff-history", dependencies=[RequireScope("read")])
 async def get_schema_diff_history(name: str, store: StoreD):
     """Get schema change history for a connection."""
     info = await require_connection(store, name)
@@ -2514,7 +2514,7 @@ async def get_schema_diff_history(name: str, store: StoreD):
     }
 
 
-@router.get("/schema/changes")
+@router.get("/schema/changes", dependencies=[RequireScope("read")])
 async def get_all_schema_changes():
     """Get recent schema changes across all connections."""
     history = schema_cache.get_diff_history()
@@ -2524,7 +2524,7 @@ async def get_all_schema_changes():
     }
 
 
-@router.get("/connections/{name}/schema/filter")
+@router.get("/connections/{name}/schema/filter", dependencies=[RequireScope("read")])
 async def get_filtered_schema_endpoint(
     name: str,
     store: StoreD,
@@ -2569,7 +2569,7 @@ async def get_filtered_schema_endpoint(
     }
 
 
-@router.get("/connections/{name}/schema/relationships")
+@router.get("/connections/{name}/schema/relationships", dependencies=[RequireScope("read")])
 async def get_schema_relationships(
     name: str,
     store: StoreD,
@@ -2668,7 +2668,7 @@ async def get_schema_relationships(
         }
 
 
-@router.get("/connections/{name}/schema/join-paths")
+@router.get("/connections/{name}/schema/join-paths", dependencies=[RequireScope("read")])
 async def get_join_paths(
     name: str,
     store: StoreD,
@@ -2784,7 +2784,7 @@ async def get_join_paths(
     }
 
 
-@router.get("/connections/{name}/schema/sample-values")
+@router.get("/connections/{name}/schema/sample-values", dependencies=[RequireScope("read")])
 async def get_cached_sample_values(
     name: str,
     store: StoreD,
@@ -2849,7 +2849,7 @@ async def get_cached_sample_values(
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
 
 
-@router.get("/connections/{name}/schema/search")
+@router.get("/connections/{name}/schema/search", dependencies=[RequireScope("read")])
 async def search_schema(
     name: str,
     store: StoreD,
@@ -3003,7 +3003,7 @@ async def search_schema(
 # ─── Schema Endorsements (HEX Data Browser pattern) ────────────────────────
 
 
-@router.get("/connections/{name}/schema/endorsements")
+@router.get("/connections/{name}/schema/endorsements", dependencies=[RequireScope("read")])
 async def get_endorsements(name: str, store: StoreD):
     """Get schema endorsement config for a connection."""
     await require_connection(store, name)
@@ -3028,7 +3028,7 @@ async def update_endorsements(name: str, store: StoreD, body: dict):
 # ─── Semantic Model (HEX inline schema editing) ───────────────────────────
 
 
-@router.get("/connections/{name}/semantic-model")
+@router.get("/connections/{name}/semantic-model", dependencies=[RequireScope("read")])
 async def get_semantic_model(name: str, store: StoreD):
     """Get the semantic model for a connection."""
     await require_connection(store, name)

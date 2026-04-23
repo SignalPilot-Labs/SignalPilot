@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..models import ProjectCreate, ProjectUpdate
-from ..store import (
+from ..project_store import (
     create_project,
     delete_project,
     get_project,

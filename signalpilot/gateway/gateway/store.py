@@ -46,10 +46,6 @@ from .models import (
     ConnectionUpdate,
     DBType,
     GatewaySettings,
-    ProjectCreate,
-    ProjectInfo,
-    ProjectStorage,
-    ProjectUpdate,
     SandboxInfo,
     SSHTunnelConfig,
     SSLConfig,
@@ -541,19 +537,6 @@ def get_credential_extras(name: str) -> dict:
     if name not in _credential_extras:
         reload_credentials()
     return _credential_extras.get(name, {})
-
-
-# ─── Projects (delegated to project_store.py) ────────────────────────────────
-
-from .project_store import (  # noqa: E402
-    _generate_dbt_project_yml,
-    _generate_profiles_yml,
-    create_project,
-    delete_project,
-    get_project,
-    list_projects,
-    update_project,
-)
 
 
 # ─── Sandboxes ───────────────────────────────────────────────────────────────

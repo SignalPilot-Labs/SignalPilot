@@ -5,8 +5,11 @@ SignalPilot Gateway Middleware — authentication, rate limiting, security heade
 from __future__ import annotations
 
 import hmac
+import logging
 import time
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -89,8 +92,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                         "auth_method": "api_key",
                     }
                     return await call_next(request)
-        except Exception:
-            pass  # DB not ready yet, fall through
+        except Exception as e:
+            logger.warning("API key DB validation failed: %s", e)
 
         return Response(
             content='{"detail":"Invalid API key."}',
@@ -143,7 +146,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _client_ip(self, request: Request) -> str:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            # Use rightmost IP (added by the closest trusted proxy) to prevent
+            # spoofing via attacker-controlled leftmost values.
+            return forwarded.split(",")[-1].strip()
         return request.client.host if request.client else "unknown"
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:

@@ -20,7 +20,7 @@ from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import init_db, close_db, get_session_factory
-from .store import Store
+from .store import Store, _validate_encryption_health
 from .api import register_routers
 from .api.deps import reset_sandbox_client, _sandbox_client
 
@@ -36,6 +36,15 @@ async def lifespan(app: FastAPI):
     # Initialize gateway DB tables
     await init_db()
 
+    # Verify encryption key is functional at startup
+    if not _validate_encryption_health():
+        logger.error(
+            "STARTUP: Encryption health check failed. "
+            "Credentials may not be readable. Check SP_ENCRYPTION_KEY configuration."
+        )
+    else:
+        logger.info("STARTUP: Encryption health check passed.")
+
     async def _pool_cleanup_loop():
         while True:
             await asyncio.sleep(60)
@@ -47,7 +56,7 @@ async def lifespan(app: FastAPI):
             try:
                 factory = get_session_factory()
                 async with factory() as session:
-                    store = Store(session)  # No user_id = global (all users' connections)
+                    store = Store(session, allow_unscoped=True)  # Background task: needs cross-user access
                     connections = await store.list_connections()
                     now = time.time()
                     for conn_info in connections:

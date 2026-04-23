@@ -18,10 +18,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from urllib.parse import quote as url_quote
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db.models import (
@@ -53,28 +52,87 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
 
+PBKDF2_ITERATIONS = 600_000
+PBKDF2_KEY_LENGTH = 32
+SALT_FILE_NAME = ".encryption_salt"
+KEY_FILE_NAME = ".encryption_key"
+
+
+class CredentialEncryptionError(Exception):
+    """Raised when credential encryption or decryption fails in a non-recoverable way."""
+
+
+# Module-level key cache — populated on first call, reused thereafter.
+# Avoids re-running PBKDF2 (≈200 ms) on every encrypt/decrypt call.
+_CACHED_KEY: bytes | None = None
+
 
 # ─── Encryption ──────────────────────────────────────────────────────────────
 
+def _load_or_create_salt() -> bytes:
+    """Load or create the persistent PBKDF2 salt stored at SP_DATA_DIR/.encryption_salt."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    salt_file = DATA_DIR / SALT_FILE_NAME
+    if salt_file.exists():
+        return salt_file.read_bytes()
+    salt = os.urandom(16)
+    salt_file.write_bytes(salt)
+    os.chmod(str(salt_file), 0o600)
+    return salt
+
+
+def _derive_key_pbkdf2(passphrase: str) -> bytes:
+    """Derive a Fernet-compatible key from a passphrase using PBKDF2-HMAC-SHA256."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    salt = _load_or_create_salt()
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=PBKDF2_KEY_LENGTH,
+        salt=salt,
+        iterations=PBKDF2_ITERATIONS,
+    )
+    raw_key = kdf.derive(passphrase.encode())
+    return base64.urlsafe_b64encode(raw_key)
+
+
+def _derive_key_legacy_sha256(passphrase: str) -> bytes:
+    """Legacy (insecure) key derivation via SHA-256. Used only for migration fallback."""
+    digest = hashlib.sha256(passphrase.encode()).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
 def _get_encryption_key() -> bytes:
+    """Return the cached Fernet key, deriving it on first call."""
+    global _CACHED_KEY
+    if _CACHED_KEY is not None:
+        return _CACHED_KEY
+
     from cryptography.fernet import Fernet
 
     key_str = os.getenv("SP_ENCRYPTION_KEY")
     if key_str:
         try:
             Fernet(key_str.encode())
-            return key_str.encode()
+            # Already a valid Fernet key — use directly.
+            _CACHED_KEY = key_str.encode()
+            return _CACHED_KEY
         except Exception:
-            digest = hashlib.sha256(key_str.encode()).digest()
-            return base64.urlsafe_b64encode(digest)
+            # Treat as a passphrase; derive a proper key via PBKDF2.
+            _CACHED_KEY = _derive_key_pbkdf2(key_str)
+            return _CACHED_KEY
     else:
-        key_file = DATA_DIR / ".encryption_key"
+        key_file = DATA_DIR / KEY_FILE_NAME
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         if key_file.exists():
-            return key_file.read_bytes().strip()
+            _CACHED_KEY = key_file.read_bytes().strip()
+            return _CACHED_KEY
         key = Fernet.generate_key()
         key_file.write_bytes(key)
-        return key
+        os.chmod(str(key_file), 0o600)
+        _CACHED_KEY = key
+        return _CACHED_KEY
 
 
 def _encrypt(data: str) -> bytes:
@@ -87,6 +145,65 @@ def _decrypt(encrypted: bytes) -> str:
     from cryptography.fernet import Fernet
     f = Fernet(_get_encryption_key())
     return f.decrypt(encrypted).decode()
+
+
+def _decrypt_with_migration(encrypted: bytes) -> tuple[str, bool]:
+    """Decrypt ciphertext, falling back to legacy key derivation if needed.
+
+    Returns:
+        (plaintext, needs_migration) where needs_migration is True when the
+        legacy SHA-256 path was used and the caller should re-encrypt the row
+        with the current PBKDF2-derived key.
+    """
+    from cryptography.fernet import Fernet, InvalidToken
+
+    key_str = os.getenv("SP_ENCRYPTION_KEY")
+
+    # Fast path: try primary (PBKDF2-derived or direct Fernet) key first.
+    try:
+        return _decrypt(encrypted), False
+    except InvalidToken:
+        pass
+
+    # Only attempt legacy fallback when env var is a passphrase (not a raw Fernet key).
+    if key_str:
+        try:
+            Fernet(key_str.encode())
+            # key_str is a valid raw Fernet key — no legacy path makes sense.
+            raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
+        except CredentialEncryptionError:
+            raise
+        except Exception:
+            pass  # key_str is a passphrase; try legacy derivation.
+
+        legacy_key = _derive_key_legacy_sha256(key_str)
+        try:
+            f_legacy = Fernet(legacy_key)
+            plaintext = f_legacy.decrypt(encrypted).decode()
+            logger.warning(
+                "Credential decrypted with legacy SHA-256 key derivation. "
+                "This is deprecated — row will be re-encrypted with PBKDF2 key."
+            )
+            return plaintext, True
+        except InvalidToken:
+            pass
+
+    raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
+
+
+def _validate_encryption_health() -> bool:
+    """Verify that the current encryption key can round-trip encrypt/decrypt.
+
+    Returns True if healthy, False otherwise. Called at startup.
+    """
+    try:
+        test_plaintext = "health-check-" + secrets.token_hex(8)
+        ciphertext = _encrypt(test_plaintext)
+        recovered = _decrypt(ciphertext)
+        return recovered == test_plaintext
+    except Exception as exc:
+        logger.error("Encryption health check failed: %s", exc)
+        return False
 
 
 # ─── Connection string builder (pure function) ──────────────────────────────
@@ -349,12 +466,20 @@ def get_local_api_key() -> str:
 class Store:
     """Database-backed store scoped by user_id.
 
-    If user_id is None, operations apply globally (for background tasks).
+    Pass allow_unscoped=True for background tasks that legitimately need
+    access across all users.  Callers that omit user_id without allow_unscoped=True
+    will get a ValueError from _conn_filter to prevent accidental data leaks.
     """
 
-    def __init__(self, session: AsyncSession, user_id: str | None = None):
+    def __init__(
+        self,
+        session: AsyncSession,
+        user_id: str | None = None,
+        allow_unscoped: bool = False,
+    ):
         self.session = session
         self.user_id = user_id
+        self._allow_unscoped = allow_unscoped
 
     # ─── Settings ────────────────────────────────────────────────────────
 
@@ -392,7 +517,12 @@ class Store:
     def _conn_filter(self):
         if self.user_id is not None:
             return GatewayConnection.user_id == self.user_id
-        return True
+        if self._allow_unscoped:
+            return literal(True)
+        raise ValueError(
+            "Store requires user_id for connection queries. "
+            "Use allow_unscoped=True for background tasks that need cross-user access."
+        )
 
     async def list_connections(self) -> list[ConnectionInfo]:
         result = await self.session.execute(
@@ -551,8 +681,13 @@ class Store:
                 if cred_row:
                     cred_row.connection_string_enc = _encrypt(raw_cred)
                     cred_row.extras_enc = _encrypt(json.dumps(extras))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(
+                    "Credential encryption failed for connection %s: %s", name, e
+                )
+                raise CredentialEncryptionError(
+                    f"Failed to encrypt credentials for connection '{name}'"
+                ) from e
 
         await self.session.commit()
         await self.session.refresh(row)
@@ -569,7 +704,11 @@ class Store:
         row = result.scalar_one_or_none()
         if not row:
             return None
-        return _decrypt(row.connection_string_enc)
+        plaintext, needs_migration = _decrypt_with_migration(row.connection_string_enc)
+        if needs_migration:
+            row.connection_string_enc = _encrypt(plaintext)
+            await self.session.commit()
+        return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
         uid = self.user_id or "local"
@@ -582,7 +721,11 @@ class Store:
         row = result.scalar_one_or_none()
         if not row or not row.extras_enc:
             return {}
-        return json.loads(_decrypt(row.extras_enc))
+        plaintext, needs_migration = _decrypt_with_migration(row.extras_enc)
+        if needs_migration:
+            row.extras_enc = _encrypt(plaintext)
+            await self.session.commit()
+        return json.loads(plaintext)
 
     # ─── Projects ────────────────────────────────────────────────────────
 

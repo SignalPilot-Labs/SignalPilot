@@ -239,8 +239,8 @@ class TestMCPAuthMiddleware:
     """Tests for the pure ASGI MCPAuthMiddleware."""
 
     @pytest.mark.asyncio
-    async def test_no_backend_url_passes_through(self):
-        """When SP_BACKEND_URL is unset, all requests should pass through."""
+    async def test_db_error_returns_401(self):
+        """When the DB is unavailable during local auth, return 401 (fail closed)."""
         downstream_called = False
 
         async def downstream_app(scope, receive, send):
@@ -257,14 +257,15 @@ class TestMCPAuthMiddleware:
         mcp_auth._warned_no_backend_url = False
 
         with patch.dict("os.environ", {}, clear=True):
-            # Ensure SP_BACKEND_URL is absent
+            # Ensure SP_BACKEND_URL is absent so DB session factory raises
             import os
             os.environ.pop("SP_BACKEND_URL", None)
             response = await _collect_response(middleware, scope)
 
         mcp_auth._warned_no_backend_url = original_warned
-        assert downstream_called is True
-        assert response["status"] == 200
+        # Security fix: DB errors must return 401, not pass through
+        assert downstream_called is False
+        assert response["status"] == 401
 
     @pytest.mark.asyncio
     async def test_valid_key_passes_through_and_sets_auth(self):

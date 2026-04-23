@@ -10,12 +10,15 @@ from typing import Any
 from urllib.parse import quote_plus, urlparse, unquote, parse_qs
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..models import ConnectionCreate, ConnectionUpdate
 from ..store import (
+    CredentialEncryptionError,
     _build_connection_string,
     _extract_credential_extras,
 )
@@ -409,12 +412,33 @@ async def get_connections_stats(store: StoreD):
     return {"connections": stats, "total": len(stats)}
 
 
-@router.get("/connections/export")
+class ExportRequest(BaseModel):
+    include_credentials: bool
+    confirm: bool
+
+
+@router.post("/connections/export")
 async def export_connections(
+    body: ExportRequest,
     store: StoreD,
-    include_credentials: bool = Query(default=False, description="Include passwords and secrets (security risk)"),
 ):
-    """Export all connections as a portable JSON manifest."""
+    """Export all connections as a portable JSON manifest.
+
+    Requires explicit confirmation via POST body.
+    Credential export is audit-logged.
+    """
+    if not body.confirm:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Export requires confirm=true in the request body."},
+        )
+
+    logger.warning(
+        "Credential export requested by user %s, include_credentials=%s",
+        store.user_id,
+        body.include_credentials,
+    )
+
     all_conns = await store.list_connections()
     exported = []
     for conn in all_conns:
@@ -435,10 +459,16 @@ async def export_connections(
             if val is not None:
                 entry[field] = val
 
-        if include_credentials:
-            conn_str = await store.get_connection_string(entry["name"])
-            if conn_str:
-                entry["connection_string"] = conn_str
+        if body.include_credentials:
+            try:
+                conn_str = await store.get_connection_string(entry["name"])
+                if conn_str:
+                    entry["connection_string"] = conn_str
+            except CredentialEncryptionError:
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": "Failed to decrypt connection credentials."},
+                )
             if conn_dict.get("ssl_config"):
                 entry["ssl_config"] = conn_dict["ssl_config"]
             if conn_dict.get("ssh_tunnel"):
@@ -450,7 +480,7 @@ async def export_connections(
         "version": "1.0",
         "exported_at": time.time(),
         "connection_count": len(exported),
-        "includes_credentials": include_credentials,
+        "includes_credentials": body.include_credentials,
         "connections": exported,
     }
 
@@ -476,7 +506,7 @@ async def import_connections(manifest: dict, store: StoreD):
             await store.create_connection(conn)
             results["imported"] += 1
         except Exception as e:
-            results["errors"].append({"name": name, "error": str(e)})
+            results["errors"].append({"name": name, "error": "Failed to import connection"})
 
     return results
 
@@ -518,7 +548,13 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD):
 
     old_conn_str = await store.get_connection_string(name)
 
-    result = await store.update_connection(name, update)
+    try:
+        result = await store.update_connection(name, update)
+    except CredentialEncryptionError:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "Failed to update connection credentials."},
+        )
     if not result:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
@@ -662,7 +698,7 @@ async def warmup_all_schemas(store: StoreD):
             return {"name": name, "status": "ok", "table_count": len(schema),
                     "sample_columns": sample_count}
         except Exception as e:
-            return {"name": name, "status": "error", "error": str(e)[:200]}
+            return {"name": name, "status": "error", "error": sanitize_db_error(str(e))[:200]}
 
     results = await asyncio.gather(*[_warmup_one(c) for c in connections], return_exceptions=False)
     elapsed = (time.monotonic() - start) * 1000

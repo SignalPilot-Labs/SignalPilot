@@ -241,9 +241,8 @@ class MCPAuthMiddleware:
                 scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name}
                 await self._app(scope, receive, send)
         except Exception as e:
-            logger.warning("MCP auth: DB error in local validation: %s", e)
-            # If DB isn't ready, allow through in local mode
-            await self._app(scope, receive, send)
+            logger.error("MCP auth: DB error in local validation: %s", e)
+            await _send_401(send, "Authentication service unavailable. Please try again.")
 
 
 def _extract_bearer_key(scope: dict[str, Any]) -> str | None:

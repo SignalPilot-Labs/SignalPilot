@@ -1960,6 +1960,7 @@ export default function ConnectionsPage() {
   const { refreshConnections: syncGlobalConnections } = useConnection();
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [securityBannerExpanded, setSecurityBannerExpanded] = useState(false);
   const [editingConnection, setEditingConnection] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { status: string; message: string; phases?: { phase: string; status: string; message: string; duration_ms?: number }[]; total_duration_ms?: number }>>({});
@@ -2394,6 +2395,41 @@ export default function ConnectionsPage() {
           <span className="text-[var(--color-text-dim)]">registered: <code className="text-[12px] text-[var(--color-text)]">{connections.length}</code></span>
         </div>
       </TerminalBar>
+
+      {/* ─── Security Banner ─── */}
+      <div className="mb-4 border border-emerald-500/20 bg-emerald-500/5">
+        <button
+          type="button"
+          onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)}
+          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-emerald-500/5 transition-colors"
+        >
+          <Shield className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" strokeWidth={1.5} />
+          <span className="flex-1 text-[11px] text-emerald-400/90 tracking-wider leading-relaxed">
+            All database credentials are encrypted at rest using AES-128 with HMAC-SHA256 authentication. Passwords and secrets never leave this server unencrypted.
+          </span>
+          {securityBannerExpanded
+            ? <ChevronDown className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />}
+        </button>
+        {securityBannerExpanded && (
+          <div className="px-4 pb-3 border-t border-emerald-500/10 animate-fade-in">
+            <ul className="mt-2.5 space-y-1.5">
+              {[
+                "Credentials are encrypted before storage using Fernet symmetric encryption",
+                "Encryption keys are derived using PBKDF2 with 600,000 iterations",
+                "Connection strings, passwords, API keys, and private keys are all encrypted",
+                "Credentials are only decrypted in-memory when establishing database connections",
+                "Audit logging tracks all credential access",
+              ].map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-[11px] text-emerald-400/70 tracking-wider">
+                  <Lock className="w-2.5 h-2.5 mt-0.5 flex-shrink-0 text-emerald-500/50" strokeWidth={1.5} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
 
       {/* ─── Create Connection Form ─── */}
       {showForm && (
@@ -3010,6 +3046,12 @@ export default function ConnectionsPage() {
                       <Tooltip content={`Tier ${CONNECTOR_TIERS[conn.db_type as DBType]?.tier || 3}: ${CONNECTOR_TIERS[conn.db_type as DBType]?.tier === 1 ? "Full support" : CONNECTOR_TIERS[conn.db_type as DBType]?.tier === 2 ? "Stable" : "Basic"}`} position="top">
                         <span className={`text-[11px] px-1 py-0.5 border tracking-wider cursor-default ${CONNECTOR_TIERS[conn.db_type as DBType]?.color || "text-zinc-400 border-zinc-500/30"}`}>
                           {CONNECTOR_TIERS[conn.db_type as DBType]?.label || "T3"}
+                        </span>
+                      </Tooltip>
+                      <Tooltip content="Credentials encrypted at rest with AES-128 + HMAC-SHA256" position="top">
+                        <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-emerald-500/30 text-emerald-400/80 tracking-wider cursor-default">
+                          <Lock className="w-2.5 h-2.5" strokeWidth={1.5} />
+                          encrypted
                         </span>
                       </Tooltip>
                       {conn.ssl && (

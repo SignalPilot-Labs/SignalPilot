@@ -7,12 +7,15 @@ The URL is configurable from the settings page, enabling BYOS deployments.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 
 import httpx
 
 from .models import ExecuteResult, SandboxInfo
+
+logger = logging.getLogger(__name__)
 
 
 class SandboxClient:
@@ -193,9 +196,10 @@ class SandboxClient:
                 vm_id=data.get("vm_id"),
             )
         except Exception as e:
+            logger.error("execute_code_with_mounts failed: %s", e)
             return ExecuteResult(
                 success=False,
-                error=str(e),
+                error="Unexpected sandbox execution error",
                 execution_ms=(time.monotonic() - start) * 1000,
             )
 

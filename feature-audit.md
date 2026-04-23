@@ -291,3 +291,39 @@
 - [x] **Trino SSL Temp File Credential Leak (MEDIUM)** — Trino connector created SSL cert/key temp files via `tempfile.NamedTemporaryFile(delete=False)` directly, bypassing base class tracking. Cert file had world-readable permissions (0o644). Files persisted on disk indefinitely. Fixed by using `self._write_ssl_temp_file(pem, chmod=0o600)` from base class. Added `self._cleanup_temp_files()` in `close()` method.
 - [x] **Pre-existing Test Fix** — Fixed `test_list_connections_empty` and other test_api.py tests that broke after auth enforcement was added in prior rounds.
 - [x] **20 new tests** — 10 in `test_mcp_dbt_security.py` (signature, timeout clamping, path traversal), 10 in `test_trino_ssl_cleanup.py` (temp file tracking, cleanup, close behavior). All pass.
+
+## Round 27: Final Security Scan — Audit Complete
+
+### COMPLETED
+
+Final comprehensive scan across four high-risk categories. **All clean — no new findings.**
+
+- [x] **WebSocket/Streaming Endpoints** — CLEAN. No WebSocket routes exist in the gateway. SSE endpoints hardened in R24 (connection limits + max duration).
+- [x] **Subprocess/Exec Calls** — CLEAN. Only `subprocess.run()` in `dbt/validator.py`, hardened in R26 (no user-controlled binary, `stdin=DEVNULL`, timeout 1-300s, path-validated). No `shell=True`, `os.system`, `os.popen`, `eval()`, or `exec()` in production code.
+- [x] **F-String SQL Patterns** — CLEAN. All f-string SQL uses `_quote_table()` or `_quote_identifier()` with proper double-quote escaping. DuckDB SQL validated by sqlglot (SELECT-only) and executed inside gVisor sandbox.
+- [x] **Deserialization Attacks** — CLEAN. No `pickle`, `yaml.load` (unsafe), or `marshal.load` anywhere. All YAML parsing uses `yaml.safe_load()`.
+
+### Audit Summary (26 Rounds of Hardening)
+
+| Category | Rounds | Status |
+|---|---|---|
+| Credential encryption at rest | R1, R3 | PBKDF2-HMAC-SHA256 (600k iter), key rotation |
+| Auth bypass & scope enforcement | R1, R8-R9, R12, R25 | 43+ endpoints guarded, fail-closed |
+| SSRF prevention | R9-R10 | DNS resolution, CGNAT/6to4 blocking |
+| SQL injection | R5, R15 | 11 sites fixed, identifier quoting |
+| Path traversal | R2, R6 | `Path.is_relative_to()`, DATA_DIR containment |
+| Command injection | R6, R26 | Privilege drop, dbt_bin removal |
+| XSS/CSP/security headers | R4, R7, R17, R23 | CSP, HSTS, fingerprint suppression |
+| Rate limiting | R1, R6 | Three-tier rate limiting |
+| Docker sandbox hardening | R6-R7 | Read-only rootfs, network isolation, audit logging |
+| Error sanitization | R18-R19 | REST + MCP error leakage prevention |
+| Race conditions | R20 | Atomic file creation, IntegrityError handling |
+| Input validation | R21 | Enums, string/list/numeric bounds |
+| Secret scanning & Docker pinning | R22 | Clean scan, reproducible builds |
+| Log credential sanitization | R24 | Connection string redaction |
+| SSE resource exhaustion | R24 | Semaphore + max duration |
+| Credential export escalation | R25 | Admin scope for credential export |
+| Trino SSL leak | R26 | Temp file cleanup, proper permissions |
+| Dependency vulnerabilities | R16 | Next.js CVE fixed, pip-audit clean |
+
+**Total: 400+ security tests added across 26 rounds. Audit marked COMPLETE.**

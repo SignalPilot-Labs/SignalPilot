@@ -57,6 +57,14 @@ PBKDF2_KEY_LENGTH = 32
 SALT_FILE_NAME = ".encryption_salt"
 KEY_FILE_NAME = ".encryption_key"
 
+# Key version tracking for rotation support.
+# Bump this constant when rotating to a new key material. When bumped, the operator
+# sets the new key via SP_ENCRYPTION_KEY and the old key is kept for decryption
+# of legacy rows (future multi-key read logic). Currently only version 1 exists.
+# key_version is orthogonal to _decrypt_with_migration: that handles "which derivation
+# method" while key_version handles "which key material".
+CURRENT_KEY_VERSION = 1
+
 
 class CredentialEncryptionError(Exception):
     """Raised when credential encryption or decryption fails in a non-recoverable way."""
@@ -639,6 +647,7 @@ class Store:
             connection_name=conn.name,
             connection_string_enc=_encrypt(raw_cred),
             extras_enc=_encrypt(json.dumps(extras)),
+            key_version=CURRENT_KEY_VERSION,
         )
         self.session.add(cred)
         await self.session.commit()
@@ -723,6 +732,7 @@ class Store:
                 if cred_row:
                     cred_row.connection_string_enc = _encrypt(raw_cred)
                     cred_row.extras_enc = _encrypt(json.dumps(extras))
+                    cred_row.key_version = CURRENT_KEY_VERSION
             except Exception as e:
                 logger.error(
                     "Credential encryption failed for connection %s: %s", name, e
@@ -747,8 +757,17 @@ class Store:
         if not row:
             return None
         plaintext, needs_migration = _decrypt_with_migration(row.connection_string_enc)
-        if needs_migration:
+        # Re-encrypt if using legacy key derivation OR if key_version is behind current.
+        # Concurrent reads may both re-encrypt — this is safe because re-encryption
+        # with the same key is idempotent (same plaintext, same key version result).
+        needs_version_upgrade = row.key_version != CURRENT_KEY_VERSION
+        if needs_migration or needs_version_upgrade:
             row.connection_string_enc = _encrypt(plaintext)
+            # Re-encrypt extras_enc too so key_version covers both fields
+            if row.extras_enc:
+                extras_plain, _ = _decrypt_with_migration(row.extras_enc)
+                row.extras_enc = _encrypt(extras_plain)
+            row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
         return plaintext
 
@@ -764,8 +783,17 @@ class Store:
         if not row or not row.extras_enc:
             return {}
         plaintext, needs_migration = _decrypt_with_migration(row.extras_enc)
-        if needs_migration:
+        # Re-encrypt if using legacy key derivation OR if key_version is behind current.
+        # Concurrent reads may both re-encrypt — this is safe because re-encryption
+        # with the same key is idempotent (same plaintext, same key version result).
+        needs_version_upgrade = row.key_version != CURRENT_KEY_VERSION
+        if needs_migration or needs_version_upgrade:
             row.extras_enc = _encrypt(plaintext)
+            # Re-encrypt connection_string_enc too so key_version covers both fields
+            if row.connection_string_enc:
+                cs_plain, _ = _decrypt_with_migration(row.connection_string_enc)
+                row.connection_string_enc = _encrypt(cs_plain)
+            row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
         return json.loads(plaintext)
 
@@ -1084,3 +1112,19 @@ class Store:
             id=row.id, name=row.name, prefix=row.prefix, key_hash=row.key_hash,
             scopes=row.scopes, created_at=row.created_at, last_used_at=row.last_used_at,
         )
+
+    # ─── Key Rotation ────────────────────────────────────────────────────
+
+    async def get_credentials_needing_rotation(self) -> int:
+        """Return count of credentials encrypted with a key version below CURRENT_KEY_VERSION.
+
+        This is a global (non-user-scoped) query, intentionally, because it is
+        called from the admin-only security_status endpoint which needs a system-wide count.
+        """
+        from sqlalchemy import func as sa_func
+        result = await self.session.execute(
+            select(sa_func.count()).select_from(GatewayCredential).where(
+                GatewayCredential.key_version < CURRENT_KEY_VERSION
+            )
+        )
+        return result.scalar_one()

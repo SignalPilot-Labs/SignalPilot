@@ -26,9 +26,12 @@
 - [x] **dbt profiles.yml Plaintext** — `profiles.yml` written with `chmod 0o600`, project directory set to `chmod 0o700` in `_create_new_project()`.
 - [x] **Docker Compose Hardcoded Passwords** — `docker-compose.yml` postgres service documented as dev-only with inline warning comment.
 
+### COMPLETED
+
+- [x] **Metrics/Health Exposure** — `/api/metrics` removed from `PUBLIC_PATHS` (requires auth); payload stripped of `sandbox_manager` URL, `query_cache`, and `schema_cache` internals; `/health` verified safe (only `status` + `version`). 19 tests verify auth enforcement and payload sanitization.
+- [x] **Key Rotation Support** — `key_version` column added to `GatewayCredential` with `server_default="1"`; idempotent `ALTER TABLE ADD COLUMN IF NOT EXISTS` migration in `engine.py`; `CURRENT_KEY_VERSION` constant in `store.py`; lazy re-encryption on version mismatch re-encrypts BOTH `connection_string_enc` and `extras_enc` atomically; `get_credentials_needing_rotation()` global count; security status endpoint reports `current_key_version` and `total_credentials_pending_rotation`.
+- [x] **E2E Test Fixes** — Fixed `Base` → `GatewayBase` import bug; fixed sync→async cleanup fixture; added key_version and special-character round-trip tests.
+
 ### NOT YET EXPLORED
 
-- [ ] **Metrics/Health Exposure** — `/api/metrics` and `/health` in PUBLIC_PATHS may leak internal info
 - [ ] **Frontend Accessibility** — SecurityBanner collapsible needs `aria-expanded`/`aria-controls`, Tooltip keyboard support
-- [ ] **Key Rotation Support** — `key_version` column for multi-key decryption support
-- [ ] **Full E2E Testing** — Docker-based integration tests with real DB connections

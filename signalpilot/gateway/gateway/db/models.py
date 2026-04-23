@@ -123,6 +123,7 @@ class GatewayCredential(GatewayBase):
     connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
     connection_string_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     extras_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    key_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
     __table_args__ = (
         UniqueConstraint("user_id", "connection_name", name="uq_gw_cred_user_conn"),

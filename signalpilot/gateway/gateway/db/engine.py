@@ -10,6 +10,7 @@ import os
 import logging
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -87,11 +88,29 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+async def _ensure_key_version_column(engine) -> None:
+    """Add key_version column to gateway_credentials if it does not exist.
+
+    SQLAlchemy's create_all does not add columns to existing tables, so this
+    idempotent ALTER TABLE handles existing deployments. Postgres-only (no
+    SQLite fallback — the gateway DB is always Postgres).
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_credentials "
+                "ADD COLUMN IF NOT EXISTS key_version INTEGER NOT NULL DEFAULT 1"
+            )
+        )
+    logger.info("Ensured key_version column on gateway_credentials")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(GatewayBase.metadata.create_all)
+    await _ensure_key_version_column(engine)
     logger.info("Gateway database tables initialized")
 
 

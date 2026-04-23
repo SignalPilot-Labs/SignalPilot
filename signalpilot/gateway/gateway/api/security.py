@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select
 
 from ..db.models import GatewayCredential
-from ..store import _validate_encryption_health
+from ..store import CURRENT_KEY_VERSION, _validate_encryption_health
 from .deps import StoreD
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ async def security_status(store: StoreD):
     key_source = "environment" if os.getenv("SP_ENCRYPTION_KEY") else "auto-generated"
     encryption_healthy = _validate_encryption_health()
 
-    # Scope count to current user's credentials only
+    # Count current user's own credentials
     result = await store.session.execute(
         select(func.count()).select_from(GatewayCredential).where(
             GatewayCredential.user_id == store.user_id
@@ -52,11 +52,15 @@ async def security_status(store: StoreD):
     )
     credentials_encrypted = result.scalar_one()
 
+    # Global count across all users (admin view)
+    total_pending_rotation = await store.get_credentials_needing_rotation()
+
     logger.info(
-        "Security status requested by user %s: healthy=%s, credentials=%d",
+        "Security status requested by user %s: healthy=%s, credentials=%d, pending_rotation=%d",
         store.user_id,
         encryption_healthy,
         credentials_encrypted,
+        total_pending_rotation,
     )
 
     return {
@@ -64,4 +68,6 @@ async def security_status(store: StoreD):
         "key_source": key_source,
         "encryption_healthy": encryption_healthy,
         "credentials_encrypted": credentials_encrypted,
+        "current_key_version": CURRENT_KEY_VERSION,
+        "total_credentials_pending_rotation": total_pending_rotation,
     }

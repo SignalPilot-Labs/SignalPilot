@@ -103,12 +103,13 @@ class RequestBodySizeLimitMiddleware:
         })
 
 
-# Paths that don't require authentication
+# Paths that don't require authentication.
+# /api/metrics is intentionally excluded — it streams live infrastructure data
+# and must be protected by auth to prevent unauthenticated topology enumeration.
 PUBLIC_PATHS = frozenset({
     "/health",
     "/docs",
     "/openapi.json",
-    "/api/metrics",
 })
 
 

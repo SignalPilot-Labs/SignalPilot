@@ -9,8 +9,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .deps import StoreD, get_sandbox_client_with_store, schema_cache
-from ..governance.cache import query_cache
+from .deps import StoreD, get_sandbox_client_with_store
 from ..store import list_sandboxes
 
 router = APIRouter(prefix="/api")
@@ -20,11 +19,15 @@ router = APIRouter(prefix="/api")
 
 @router.get("/metrics")
 async def metrics_stream(store: StoreD):
-    """Server-Sent Events stream of live gateway metrics."""
+    """Server-Sent Events stream of live gateway metrics.
+
+    Returns operational metrics only. Internal details (sandbox manager URL,
+    query/schema cache stats) are intentionally omitted to prevent infrastructure
+    topology leakage to authenticated but potentially untrusted callers.
+    """
 
     async def generate():
         while True:
-            settings = await store.load_settings()
             sandboxes = list_sandboxes()
             running = sum(1 for s in sandboxes if s.status == "running")
 
@@ -45,7 +48,6 @@ async def metrics_stream(store: StoreD):
 
             payload = {
                 "timestamp": time.time(),
-                "sandbox_manager": settings.sandbox_manager_url,
                 "sandbox_health": sandbox_health,
                 "sandbox_available": sandbox_available,
                 "active_sandboxes": len(sandboxes),
@@ -53,8 +55,6 @@ async def metrics_stream(store: StoreD):
                 "active_sandbox_instances": active_sandbox_instances,
                 "max_sandbox_instances": max_sandbox_instances,
                 "connections": len(connections),
-                "query_cache": query_cache.stats(),
-                "schema_cache": schema_cache.stats(),
             }
 
             yield f"data: {json.dumps(payload)}\n\n"

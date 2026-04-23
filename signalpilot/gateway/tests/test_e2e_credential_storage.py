@@ -47,9 +47,9 @@ async def db_session():
     engine = create_async_engine(_BACKEND_URL, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    from gateway.db.models import Base
+    from gateway.db.models import GatewayBase
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(GatewayBase.metadata.create_all)
 
     async with factory() as session:
         yield session
@@ -64,28 +64,25 @@ async def store(db_session):
     return Store(db_session, user_id="integration-test-user")
 
 
-@pytest.fixture(autouse=True)
-def cleanup_test_connections(db_session):
+@pytest_asyncio.fixture(autouse=True)
+async def cleanup_test_connections(db_session):
     """Clean up any connections created during integration tests."""
-    yield
-    import asyncio
     from sqlalchemy import delete
     from gateway.db.models import GatewayConnection, GatewayCredential
 
-    async def _cleanup():
-        async with db_session.begin():
-            await db_session.execute(
-                delete(GatewayCredential).where(
-                    GatewayCredential.user_id == "integration-test-user"
-                )
-            )
-            await db_session.execute(
-                delete(GatewayConnection).where(
-                    GatewayConnection.user_id == "integration-test-user"
-                )
-            )
+    yield
 
-    asyncio.get_event_loop().run_until_complete(_cleanup())
+    async with db_session.begin():
+        await db_session.execute(
+            delete(GatewayCredential).where(
+                GatewayCredential.user_id == "integration-test-user"
+            )
+        )
+        await db_session.execute(
+            delete(GatewayConnection).where(
+                GatewayConnection.user_id == "integration-test-user"
+            )
+        )
 
 
 class TestCredentialStorageRoundTrip:
@@ -180,3 +177,95 @@ class TestCredentialStorageRoundTrip:
         )
         with pytest.raises(ValueError, match="Database path not allowed"):
             await store.create_connection(conn)
+
+    @pytest.mark.asyncio
+    async def test_key_version_set_on_create(self, store, db_session):
+        """Newly created credentials must have key_version == CURRENT_KEY_VERSION."""
+        from gateway.models import ConnectionCreate
+        from gateway.store import CURRENT_KEY_VERSION
+        from sqlalchemy import select
+        from gateway.db.models import GatewayCredential
+
+        unique_suffix = uuid.uuid4().hex[:8]
+        conn_name = f"inttest-kv-{unique_suffix}"
+
+        conn = ConnectionCreate(
+            name=conn_name,
+            db_type="postgres",
+            host="localhost",
+            port=5432,
+            database="testdb",
+            username="testuser",
+            password="somepassword",
+        )
+        await store.create_connection(conn)
+
+        result = await db_session.execute(
+            select(GatewayCredential).where(
+                GatewayCredential.connection_name == conn_name,
+                GatewayCredential.user_id == "integration-test-user",
+            )
+        )
+        cred_row = result.scalar_one()
+        assert cred_row.key_version == CURRENT_KEY_VERSION
+
+    @pytest.mark.asyncio
+    async def test_key_version_preserved_on_update(self, store, db_session):
+        """Updating connection credentials sets key_version == CURRENT_KEY_VERSION."""
+        from gateway.models import ConnectionCreate, ConnectionUpdate
+        from gateway.store import CURRENT_KEY_VERSION
+        from sqlalchemy import select
+        from gateway.db.models import GatewayCredential
+
+        unique_suffix = uuid.uuid4().hex[:8]
+        conn_name = f"inttest-kvupd-{unique_suffix}"
+
+        conn = ConnectionCreate(
+            name=conn_name,
+            db_type="postgres",
+            host="localhost",
+            port=5432,
+            database="testdb",
+            username="testuser",
+            password="initial-password",
+        )
+        await store.create_connection(conn)
+
+        update = ConnectionUpdate(password="updated-password")
+        await store.update_connection(conn_name, update)
+
+        result = await db_session.execute(
+            select(GatewayCredential).where(
+                GatewayCredential.connection_name == conn_name,
+                GatewayCredential.user_id == "integration-test-user",
+            )
+        )
+        cred_row = result.scalar_one()
+        assert cred_row.key_version == CURRENT_KEY_VERSION
+
+    @pytest.mark.asyncio
+    async def test_credential_round_trip_with_special_chars(self, store):
+        """Password with special characters must survive URL encoding in connection string."""
+        from gateway.models import ConnectionCreate
+
+        unique_suffix = uuid.uuid4().hex[:8]
+        conn_name = f"inttest-special-{unique_suffix}"
+        # Include characters that require URL encoding and unicode
+        password = f"p@ss#w0rd/{unique_suffix}\u00e9\u00e0"
+
+        conn = ConnectionCreate(
+            name=conn_name,
+            db_type="postgres",
+            host="db.example.com",
+            port=5432,
+            database="mydb",
+            username="admin",
+            password=password,
+        )
+        await store.create_connection(conn)
+
+        retrieved = await store.get_connection_string(conn_name)
+        assert retrieved is not None
+        # The extras must preserve the raw password for drivers that need it
+        extras = await store.get_credential_extras(conn_name)
+        assert extras.get("password") == password

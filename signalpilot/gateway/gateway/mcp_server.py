@@ -3161,7 +3161,6 @@ async def dbt_project_map(
 @mcp.tool()
 async def dbt_project_validate(
     project_dir: str,
-    dbt_bin: str = "",
     timeout: int = 60,
 ) -> str:
     """
@@ -3183,23 +3182,42 @@ async def dbt_project_validate(
 
     Args:
         project_dir: absolute path to the dbt project root
-        dbt_bin: optional path to the dbt executable (default: search PATH)
-        timeout: subprocess timeout in seconds (default 60)
+        timeout: subprocess timeout in seconds (default 60, clamped to 1-300)
 
     Returns:
         markdown-formatted validation report
     """
     import asyncio
+    from pathlib import Path as _Path
 
     if not project_dir or not project_dir.strip():
         return "Error: project_dir is required"
+
+    clean_dir = project_dir.strip()
+
+    # Require absolute path to prevent relative path confusion.
+    if not _Path(clean_dir).is_absolute():
+        return "Error: project_dir must be an absolute path"
+
+    # Reject path traversal — check resolved path for .. segments.
+    try:
+        resolved = _Path(clean_dir).resolve()
+    except (ValueError, OSError) as exc:
+        return f"Error: invalid project_dir: {exc}"
+
+    # Reject if any part of the original (unresolved) path contains .. segments.
+    if ".." in _Path(clean_dir).parts:
+        return "Error: project_dir must not contain '..' segments"
+
+    # Clamp timeout to a safe range: minimum 1s, maximum 300s (5 minutes).
+    clamped_timeout = max(1, min(timeout, 300))
+
     # _validate_project calls subprocess.run, which would block this handler's
     # event loop and can stall MCP heartbeats on Windows. Offload to a thread.
     result = await asyncio.to_thread(
         _validate_project,
-        project_dir.strip(),
-        dbt_bin.strip() or None,
-        timeout,
+        str(resolved),
+        clamped_timeout,
     )
     return _format_validation_result(result)
 

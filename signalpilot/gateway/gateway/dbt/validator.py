@@ -56,14 +56,12 @@ _DBT_TIMEOUT_DEFAULT = 60  # seconds
 
 def validate_project(
     project_dir: str | Path,
-    dbt_bin: str | None = None,
     timeout: int = _DBT_TIMEOUT_DEFAULT,
 ) -> ValidationResult:
     """Run `dbt parse` against the project and return structured results.
 
     Args:
         project_dir: path to the dbt project root
-        dbt_bin: optional path to the dbt executable (default: search PATH)
         timeout: subprocess timeout in seconds
 
     Returns:
@@ -81,14 +79,14 @@ def validate_project(
             degradation_mode="project_missing",
         )
 
-    dbt_bin = dbt_bin or shutil.which("dbt") or "dbt"
-    if not shutil.which(dbt_bin) and not Path(dbt_bin).exists():
+    dbt_bin = shutil.which("dbt")
+    if dbt_bin is None:
         return ValidationResult(
             success=False,
             parse_time_ms=0.0,
             error_count=1,
             warning_count=0,
-            errors=[f"dbt executable not found: {dbt_bin}"],
+            errors=["dbt executable not found on PATH"],
             degradation_mode="dbt_not_installed",
         )
 
@@ -123,7 +121,7 @@ def validate_project(
             parse_time_ms=(time.perf_counter() - t0) * 1000.0,
             error_count=1,
             warning_count=0,
-            errors=[f"dbt executable could not be launched: {dbt_bin}"],
+            errors=["dbt executable could not be launched"],
             degradation_mode="dbt_not_installed",
         )
     except OSError as e:

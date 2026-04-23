@@ -280,3 +280,14 @@
 - [x] **Credential Export Scope Escalation (MEDIUM)** — `POST /connections/export` with `include_credentials=true` decrypts and returns all stored database passwords, connection strings, SSL configs, and SSH tunnel configs. Was protected by only `write` scope — any write-scoped API key could exfiltrate all credentials. Added `require_scopes(request, "admin")` check when `body.include_credentials` is true. Base `RequireScope("write")` retained for non-credential exports.
 - [x] **`require_scopes()` Docstring Warning** — Added warning to `scope_guard.py` explaining that `auth is None` grants all scopes, and every scope-protected endpoint MUST have a `UserID` or `StoreD` dependency.
 - [x] **Auth Enforcement Tests** — 24 new tests in `test_auth_enforcement.py`: JWT enforcement on cache (5), connection (9), budget (4), sandbox (2) endpoints; credential export scope escalation (4). All pass. 102 pre-existing scope tests also pass.
+
+## Round 26: dbt Command Injection Fix, Trino SSL Credential Leak Fix
+
+### COMPLETED
+
+- [x] **dbt_bin Arbitrary Command Execution (HIGH)** — `dbt_project_validate` MCP tool accepted a user-controlled `dbt_bin` parameter that flowed to `subprocess.run([dbt_bin, "parse"], ...)`. An MCP client could set `dbt_bin` to any executable on the filesystem (`/bin/sh`, `/usr/bin/python3`, etc.). Fixed by removing `dbt_bin` from both `mcp_server.py` tool signature and `dbt/validator.py` `validate_project()`. Now always resolves `dbt` via `shutil.which("dbt")`.
+- [x] **dbt Timeout Clamping** — `timeout` parameter clamped to `max(1, min(timeout, 300))` — prevents attacker from keeping subprocess alive indefinitely.
+- [x] **dbt project_dir Path Traversal Prevention** — Added validation: rejects non-absolute paths, empty paths, and paths containing `..` segments. Uses `Path.resolve()` for final path.
+- [x] **Trino SSL Temp File Credential Leak (MEDIUM)** — Trino connector created SSL cert/key temp files via `tempfile.NamedTemporaryFile(delete=False)` directly, bypassing base class tracking. Cert file had world-readable permissions (0o644). Files persisted on disk indefinitely. Fixed by using `self._write_ssl_temp_file(pem, chmod=0o600)` from base class. Added `self._cleanup_temp_files()` in `close()` method.
+- [x] **Pre-existing Test Fix** — Fixed `test_list_connections_empty` and other test_api.py tests that broke after auth enforcement was added in prior rounds.
+- [x] **20 new tests** — 10 in `test_mcp_dbt_security.py` (signature, timeout clamping, path traversal), 10 in `test_trino_ssl_cleanup.py` (temp file tracking, cleanup, close behavior). All pass.

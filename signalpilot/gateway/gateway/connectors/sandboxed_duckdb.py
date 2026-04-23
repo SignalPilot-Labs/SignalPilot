@@ -124,7 +124,7 @@ class SandboxedDuckDBConnector(BaseConnector):
         the user's home directory at /host-data.
         """
         self._host_path = self._translate_path(connection_string)
-        logger.info("SandboxedDuckDB: translated path %s → %s", connection_string, self._host_path)
+        logger.info("SandboxedDuckDB: translated path → %s", self._host_path)
         # Lazily get sandbox client
         if self._sandbox_client is None:
             try:

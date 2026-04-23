@@ -15,51 +15,73 @@ from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")
 
+# ─── SSE resource-limit constants ────────────────────────────────────────────
+
+MAX_SSE_CONNECTIONS: int = 20
+SSE_MAX_DURATION_SECONDS: int = 3600
+_SSE_RETRY_AFTER_SECONDS: int = 30
+
+_sse_semaphore = asyncio.Semaphore(MAX_SSE_CONNECTIONS)
+
 # ─── SSE metrics stream ──────────────────────────────────────────────────────
 
 
 @router.get("/metrics", dependencies=[RequireScope("read")])
-async def metrics_stream(store: StoreD):
+async def metrics_stream(store: StoreD) -> StreamingResponse:
     """Server-Sent Events stream of live gateway metrics.
 
     Returns operational metrics only. Internal details (sandbox manager URL,
     query/schema cache stats) are intentionally omitted to prevent infrastructure
     topology leakage to authenticated but potentially untrusted callers.
+
+    Enforces a global cap of MAX_SSE_CONNECTIONS concurrent streams. Streams
+    automatically close after SSE_MAX_DURATION_SECONDS; clients should reconnect.
     """
+    if _sse_semaphore.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many concurrent SSE connections. Try again later.",
+            headers={"Retry-After": str(_SSE_RETRY_AFTER_SECONDS)},
+        )
 
     async def generate():
-        while True:
-            sandboxes = list_sandboxes()
-            running = sum(1 for s in sandboxes if s.status == "running")
+        await _sse_semaphore.acquire()
+        try:
+            deadline = time.monotonic() + SSE_MAX_DURATION_SECONDS
+            while time.monotonic() < deadline:
+                sandboxes = list_sandboxes()
+                running = sum(1 for s in sandboxes if s.status == "running")
 
-            sandbox_health = "unknown"
-            try:
-                client = await get_sandbox_client_with_store(store)
-                data = await client.health()
-                sandbox_health = data.get("status", "unknown")
-                sandbox_available = data.get("status") == "healthy"
-                active_sandbox_instances = data.get("active_vms", 0)
-                max_sandbox_instances = data.get("max_vms", 10)
-            except Exception:
-                sandbox_available = False
-                active_sandbox_instances = 0
-                max_sandbox_instances = 10
+                sandbox_health = "unknown"
+                try:
+                    client = await get_sandbox_client_with_store(store)
+                    data = await client.health()
+                    sandbox_health = data.get("status", "unknown")
+                    sandbox_available = data.get("status") == "healthy"
+                    active_sandbox_instances = data.get("active_vms", 0)
+                    max_sandbox_instances = data.get("max_vms", 10)
+                except Exception:
+                    sandbox_available = False
+                    active_sandbox_instances = 0
+                    max_sandbox_instances = 10
 
-            connections = await store.list_connections()
+                connections = await store.list_connections()
 
-            payload = {
-                "timestamp": time.time(),
-                "sandbox_health": sandbox_health,
-                "sandbox_available": sandbox_available,
-                "active_sandboxes": len(sandboxes),
-                "running_sandboxes": running,
-                "active_sandbox_instances": active_sandbox_instances,
-                "max_sandbox_instances": max_sandbox_instances,
-                "connections": len(connections),
-            }
+                payload = {
+                    "timestamp": time.time(),
+                    "sandbox_health": sandbox_health,
+                    "sandbox_available": sandbox_available,
+                    "active_sandboxes": len(sandboxes),
+                    "running_sandboxes": running,
+                    "active_sandbox_instances": active_sandbox_instances,
+                    "max_sandbox_instances": max_sandbox_instances,
+                    "connections": len(connections),
+                }
 
-            yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(5)
+                yield f"data: {json.dumps(payload)}\n\n"
+                await asyncio.sleep(5)
+        finally:
+            _sse_semaphore.release()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

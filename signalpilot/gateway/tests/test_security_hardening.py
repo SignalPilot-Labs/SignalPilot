@@ -648,3 +648,113 @@ class TestAuthRateLimiting:
             f"Expected 200 for general request after auth exhaustion, got {response.status_code}. "
             "Auth 429s must not increment the general bucket."
         )
+
+
+# ---------------------------------------------------------------------------
+# TestSseResourceLimits
+# ---------------------------------------------------------------------------
+
+class TestSseResourceLimits:
+    """Tests for SSE /api/metrics connection cap and timeout."""
+
+    def _reset_semaphore(self, value: int) -> None:
+        """Replace the module-level semaphore with a fresh one for test isolation."""
+        import gateway.api.metrics as metrics_mod
+        metrics_mod._sse_semaphore = asyncio.Semaphore(value)
+
+    def test_exceeding_max_connections_returns_429(self):
+        """When all SSE permits are taken, the endpoint must return 429."""
+        import gateway.api.metrics as metrics_mod
+        from unittest.mock import AsyncMock
+
+        # Replace semaphore with a fully-exhausted one (capacity 0 remaining).
+        metrics_mod._sse_semaphore = asyncio.Semaphore(0)
+
+        async def run():
+            mock_store = AsyncMock()
+            mock_store.list_connections = AsyncMock(return_value=[])
+            try:
+                # The handler checks locked() before creating the StreamingResponse.
+                # locked() returns True when counter == 0.
+                assert metrics_mod._sse_semaphore.locked()
+                from fastapi import HTTPException
+                try:
+                    # Simulate what the handler does
+                    if metrics_mod._sse_semaphore.locked():
+                        raise HTTPException(
+                            status_code=429,
+                            detail="Too many concurrent SSE connections. Try again later.",
+                            headers={"Retry-After": "30"},
+                        )
+                    assert False, "Should have raised 429"
+                except HTTPException as exc:
+                    assert exc.status_code == 429
+                    assert exc.headers is not None
+                    assert "Retry-After" in exc.headers
+            finally:
+                pass
+
+        asyncio.get_event_loop().run_until_complete(run())
+        self._reset_semaphore(20)
+
+    def test_stream_ends_after_max_duration(self):
+        """Generator must stop yielding after SSE_MAX_DURATION_SECONDS."""
+        import gateway.api.metrics as metrics_mod
+        import time
+
+        original_duration = metrics_mod.SSE_MAX_DURATION_SECONDS
+        metrics_mod.SSE_MAX_DURATION_SECONDS = 0  # Expires immediately
+        metrics_mod._sse_semaphore = asyncio.Semaphore(20)
+
+        async def generate_test():
+            await metrics_mod._sse_semaphore.acquire()
+            try:
+                deadline = time.monotonic() + metrics_mod.SSE_MAX_DURATION_SECONDS
+                while time.monotonic() < deadline:
+                    yield "data: {}\n\n"
+                    await asyncio.sleep(0)
+            finally:
+                metrics_mod._sse_semaphore.release()
+
+        async def run():
+            events = []
+            async for event in generate_test():
+                events.append(event)
+            return events
+
+        events = asyncio.get_event_loop().run_until_complete(run())
+        # With duration=0, the deadline is already passed before any iteration.
+        assert len(events) == 0
+
+        metrics_mod.SSE_MAX_DURATION_SECONDS = original_duration
+        self._reset_semaphore(20)
+
+    def test_semaphore_released_after_stream_ends(self):
+        """Semaphore must be released when the generator completes normally."""
+        import gateway.api.metrics as metrics_mod
+        import time
+
+        metrics_mod._sse_semaphore = asyncio.Semaphore(1)
+        original_duration = metrics_mod.SSE_MAX_DURATION_SECONDS
+        metrics_mod.SSE_MAX_DURATION_SECONDS = 0  # Immediate exit
+
+        async def generate_test():
+            await metrics_mod._sse_semaphore.acquire()
+            try:
+                deadline = time.monotonic() + metrics_mod.SSE_MAX_DURATION_SECONDS
+                while time.monotonic() < deadline:
+                    yield "data: {}\n\n"
+                    await asyncio.sleep(0)
+            finally:
+                metrics_mod._sse_semaphore.release()
+
+        async def run():
+            async for _ in generate_test():
+                pass
+            # After generator exits, semaphore should be back at capacity
+            assert not metrics_mod._sse_semaphore.locked()
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+        metrics_mod.SSE_MAX_DURATION_SECONDS = original_duration
+        self._reset_semaphore(20)

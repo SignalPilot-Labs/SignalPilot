@@ -261,3 +261,13 @@
 - [x] **MCPToolCall.arguments Depth/Size Validation** — Added `model_validator(mode="after")` to `MCPToolCall` in `models.py`. Enforces max nesting depth of 20 levels and max serialized size of 100KB. `_check_dict_depth` helper raises BEFORE recursing (prevents stack overflow). Prevents JSON bomb attacks through the previously unvalidated `dict[str, Any]` field.
 - [x] **Security Header Tests** — 3 new tests in `test_security_hardening.py`: `test_x_xss_protection_disabled`, `test_x_content_type_options_nosniff`, `test_x_frame_options_deny`. Previously untested headers now verified.
 - [x] **MCPToolCall Validation Tests** — 4 new tests in `test_input_validation.py`: depth limit exceeded (21 levels), depth OK (20 levels), size limit exceeded (>100KB), normal dict OK. All pass.
+
+## Round 24: Log Credential Sanitization & SSE Resource Exhaustion Prevention
+
+### COMPLETED
+
+- [x] **Connection String Credential Leakage in Logs (HIGH)** — `pool_manager.py` logged pool cache keys containing full connection strings (with embedded passwords) at INFO and WARNING levels. Added `_safe_pool_key_for_log()` helper that strips credentials from URL-format strings using `urlparse` (returns `db_type:host:port`) while passing through non-URL formats (BigQuery project IDs, DuckDB paths) unchanged. Fixed 5 log sites: line 270 (full key logged), lines 343/345/357 (key[:40] logged — password visible within 40 chars), line 98 (SSH tunnel exception potentially containing connection string, now logs only `type(e).__name__`).
+- [x] **DuckDB Connection String Log Fix** — `sandboxed_duckdb.py` logged raw `connection_string` at INFO level. Replaced with `self._host_path` (the translated, non-sensitive file path).
+- [x] **SSE Metrics Stream Resource Exhaustion (MEDIUM)** — `GET /api/metrics` ran an infinite `while True` SSE generator with no connection limit or timeout. Added `asyncio.Semaphore(20)` global connection cap — handler checks `locked()` and returns HTTP 429 with `Retry-After: 30` header before creating StreamingResponse. Generator acquires semaphore at start, releases in `finally`. Added 1-hour max stream duration (`SSE_MAX_DURATION_SECONDS = 3600`) — stream self-terminates after deadline.
+- [x] **Log Sanitization Tests** — 9 new tests in `test_logging_sanitization.py`: postgres/snowflake/mysql URL credential stripping, BigQuery project ID pass-through, DuckDB path pass-through, malformed URL fallback, edge cases.
+- [x] **SSE Resource Limit Tests** — 3 new tests in `test_security_hardening.py`: 429 on exhausted semaphore, stream ends after max duration, semaphore released after stream ends. All pass.

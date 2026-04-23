@@ -44,6 +44,33 @@ _URI_SCHEMES: dict[str, list[str]] = {
 }
 
 
+def _safe_pool_key_for_log(key: str) -> str:
+    """Return a log-safe representation of a pool key.
+
+    Pool keys have the format ``db_type:connection_string``. If the connection
+    string looks like a URL (contains ``://``), parse it and return only the
+    host and port — never the credentials. Non-URL formats (bare project IDs,
+    file paths) are returned as-is since they do not contain embedded passwords.
+    """
+    colon_idx = key.find(":")
+    if colon_idx == -1:
+        return key
+    db_type = key[:colon_idx]
+    remainder = key[colon_idx + 1:]
+    if "://" not in remainder:
+        # Non-URL format (BigQuery project ID, DuckDB/SQLite path) — safe to log.
+        return key
+    try:
+        parsed = urlparse(remainder)
+        host = parsed.hostname or ""
+        port = parsed.port
+        if port:
+            return f"{db_type}:{host}:{port}"
+        return f"{db_type}:{host}"
+    except Exception:
+        return f"{db_type}:<redacted>"
+
+
 def _rewrite_connection_string(
     connection_string: str,
     db_type: str,
@@ -95,7 +122,7 @@ def _rewrite_connection_string(
 
         return result
     except Exception as e:
-        logger.warning("Failed to rewrite connection string for SSH tunnel: %s", e)
+        logger.warning("Failed to rewrite connection string for SSH tunnel: %s", type(e).__name__)
         return connection_string
 
 
@@ -243,7 +270,7 @@ class PoolManager:
                     connection_string, db_type, local_host, local_port
                 )
                 self._tunnels[key] = tunnel
-                logger.info("SSH tunnel active for %s, connecting via %s:%d", key, local_host, local_port)
+                logger.info("SSH tunnel active for %s, connecting via %s:%d", _safe_pool_key_for_log(key), local_host, local_port)
 
             # Track keepalive interval if provided
             keepalive = (
@@ -316,9 +343,9 @@ class PoolManager:
                         healthy = await connector.health_check()
                         if healthy:
                             self._last_keepalive[key] = now
-                            logger.debug("Keepalive ping OK for %s", key[:40])
+                            logger.debug("Keepalive ping OK for %s", _safe_pool_key_for_log(key))
                         else:
-                            logger.warning("Keepalive ping failed for %s — removing from pool", key[:40])
+                            logger.warning("Keepalive ping failed for %s — removing from pool", _safe_pool_key_for_log(key))
                             try:
                                 await connector.close()
                             except Exception:
@@ -330,7 +357,7 @@ class PoolManager:
                                 self._tunnels[key].stop()
                                 del self._tunnels[key]
                     except Exception as e:
-                        logger.warning("Keepalive error for %s: %s", key[:40], e)
+                        logger.warning("Keepalive error for %s: %s", _safe_pool_key_for_log(key), e)
                         self._last_keepalive[key] = now  # Don't spam retries
 
     async def release(self, db_type: str, connection_string: str) -> None:

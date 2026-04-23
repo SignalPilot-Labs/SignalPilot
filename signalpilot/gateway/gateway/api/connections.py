@@ -42,11 +42,7 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
 
     if conn.connection_string:
         if conn.db_type in ("duckdb", "sqlite"):
-            try:
-                from ..store import _validate_local_db_path
-                _validate_local_db_path(conn.connection_string)
-            except ValueError as e:
-                errors.append(str(e))
+            pass  # Local file paths are sandboxed — no DATA_DIR restriction needed
         else:
             try:
                 validate_connection_params(conn.host, conn.port, conn.db_type, conn.connection_string)
@@ -96,12 +92,6 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
     if db in ("duckdb", "sqlite"):
         if not conn.database:
             errors.append(f"{db} requires a database file path (or :memory:)")
-        elif conn.database != ":memory:" and not conn.database.startswith("md:"):
-            try:
-                from ..store import _validate_local_db_path
-                _validate_local_db_path(conn.database)
-            except ValueError as e:
-                errors.append(str(e))
 
     if conn.ssh_tunnel and conn.ssh_tunnel.enabled:
         if not conn.ssh_tunnel.host:

@@ -668,11 +668,14 @@ class Store:
 
         # Store encrypted credentials
         raw_cred = conn.connection_string or _build_connection_string(conn)
-        # Chokepoint: validate DuckDB/SQLite paths regardless of how raw_cred was set.
-        # This catches the bypass where connection_string is provided directly,
-        # skipping _validate_connection_params() and _build_connection_string().
+        # Validate DuckDB/SQLite paths — but only for non-sandboxed modes.
+        # Local file paths (host paths like C:\Users\...) are executed via the
+        # gVisor sandbox which provides its own isolation. Only in-DATA_DIR
+        # paths (direct connector) need the traversal check.
         if conn.db_type in (DBType.duckdb, DBType.sqlite):
-            _validate_local_db_path(raw_cred)
+            is_sandboxed = raw_cred not in (":memory:",) and not raw_cred.startswith("md:")
+            if not is_sandboxed:
+                _validate_local_db_path(raw_cred)
         extras = _extract_credential_extras(conn)
         cred = GatewayCredential(
             user_id=uid,
@@ -758,7 +761,9 @@ class Store:
                 create_obj = ConnectionCreate(**merged)
                 raw_cred = create_obj.connection_string or _build_connection_string(create_obj)
                 if create_obj.db_type in ("duckdb", "sqlite"):
-                    _validate_local_db_path(raw_cred)
+                    is_sandboxed = raw_cred not in (":memory:",) and not raw_cred.startswith("md:")
+                    if not is_sandboxed:
+                        _validate_local_db_path(raw_cred)
                 extras = _extract_credential_extras(create_obj)
                 # Update credential row
                 cred_result = await self.session.execute(

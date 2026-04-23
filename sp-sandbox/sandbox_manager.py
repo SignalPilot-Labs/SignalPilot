@@ -276,7 +276,9 @@ async def browse_files_handler(request: web.Request) -> web.Response:
                     "path": str(entry),
                 })
             elif entry.is_file():
-                if fnmatch.fnmatch(entry.name.lower(), pattern.lower()):
+                # Support comma-separated patterns (e.g., "*.sqlite,*.db")
+                patterns = [p.strip() for p in pattern.split(",")]
+                if any(fnmatch.fnmatch(entry.name.lower(), p.lower()) for p in patterns):
                     files.append({
                         "name": entry.name,
                         "path": str(entry),

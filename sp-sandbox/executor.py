@@ -54,6 +54,7 @@ class GVisorExecutor:
         start = _now_ms()
 
         workdir = Path(tempfile.mkdtemp(prefix=f"sp-sandbox-{vm_id[:8]}-"))
+        os.chown(workdir, 65534, 65534)  # owned by nobody after setpriv drop
         self._workdirs[vm_id] = workdir
 
         # Create symlinks for file mounts (host file → sandbox workdir)
@@ -62,6 +63,7 @@ class GVisorExecutor:
                 host_path = Path(mount["host_path"])
                 sandbox_path = workdir / mount["sandbox_path"]
                 sandbox_path.parent.mkdir(parents=True, exist_ok=True)
+                os.chown(sandbox_path.parent, 65534, 65534)
                 try:
                     sandbox_path.symlink_to(host_path)
                 except OSError as e:
@@ -69,6 +71,7 @@ class GVisorExecutor:
 
         script_path = workdir / "user_code.py"
         script_path.write_text(code, encoding="utf-8")
+        os.chown(script_path, 65534, 65534)
 
         # Invoke the privilege-dropping wrapper, which sets ulimits and drops
         # to nobody (UID 65534) via setpriv before exec'ing the Python process.

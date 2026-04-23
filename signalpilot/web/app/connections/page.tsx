@@ -69,8 +69,8 @@ import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useConnection } from "@/lib/connection-context";
 
-/* ── DuckDB File Picker ── */
-function DuckDBFilePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/* ── Local DB File Picker (DuckDB / SQLite) ── */
+function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder = "/path/to/database.duckdb", hint = "paste a file path or browse to select a file" }: { value: string; onChange: (v: string) => void; pattern?: string; placeholder?: string; hint?: string }) {
   const [browsing, setBrowsing] = useState(false);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [files, setFiles] = useState<{ name: string; path: string; size_bytes: number }[]>([]);
@@ -82,7 +82,7 @@ function DuckDBFilePicker({ value, onChange }: { value: string; onChange: (v: st
     setLoading(true);
     setError(null);
     try {
-      const data = await browseFiles(path, "*.duckdb");
+      const data = await browseFiles(path, pattern);
       setCurrentPath(data.path);
       setFiles(data.files || []);
       setDirectories(data.directories || []);
@@ -126,7 +126,7 @@ function DuckDBFilePicker({ value, onChange }: { value: string; onChange: (v: st
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="/path/to/database.duckdb"
+          placeholder={placeholder}
           className="flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-text-dim)]"
         />
         <button
@@ -139,7 +139,7 @@ function DuckDBFilePicker({ value, onChange }: { value: string; onChange: (v: st
         </button>
       </div>
       <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
-        paste a file path or browse to select a .duckdb file
+        {hint}
       </p>
 
       {/* File browser modal */}
@@ -181,7 +181,7 @@ function DuckDBFilePicker({ value, onChange }: { value: string; onChange: (v: st
 
             {!loading && !error && files.length === 0 && directories.length === 0 && (
               <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] tracking-wider text-center">
-                no .duckdb files found in this directory
+                no matching files found in this directory
               </div>
             )}
 
@@ -1549,17 +1549,53 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     );
   }
 
-  // SQLite — just path
+  // SQLite — mode selector: local file or in-memory
   if (form.db_type === "sqlite") {
+    const sqliteMode = form.database === ":memory:" ? "memory" : "local";
     return (
-      <FormInput
-        label="database path"
-        value={form.database}
-        onChange={(v) => setForm({ ...form, database: v })}
-        placeholder=":memory: or /path/to/db.sqlite"
-        hint="file path or :memory:"
-        className="col-span-2"
-      />
+      <>
+        <div className="col-span-2 mb-1">
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <div className="flex gap-2">
+            {([
+              { key: "local", label: "local file" },
+              { key: "memory", label: "in-memory" },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  if (key === "memory") setForm({ ...form, database: ":memory:" });
+                  else setForm({ ...form, database: form.database === ":memory:" ? "" : form.database });
+                }}
+                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                  sqliteMode === key
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {sqliteMode === "local" && (
+          <LocalDBFilePicker
+            value={form.database}
+            onChange={(v) => setForm({ ...form, database: v })}
+            pattern="*.sqlite,*.db"
+            placeholder="/path/to/database.sqlite"
+            hint="paste a file path or browse to select a .sqlite or .db file"
+          />
+        )}
+
+        {sqliteMode === "memory" && (
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts.
+          </div>
+        )}
+      </>
     );
   }
 
@@ -1598,9 +1634,12 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         </div>
 
         {form.duckdb_mode === "local" && (
-          <DuckDBFilePicker
+          <LocalDBFilePicker
             value={form.database}
             onChange={(v) => setForm({ ...form, database: v })}
+            pattern="*.duckdb"
+            placeholder="/path/to/database.duckdb"
+            hint="paste a file path or browse to select a .duckdb file"
           />
         )}
 

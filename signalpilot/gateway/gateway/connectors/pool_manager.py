@@ -232,10 +232,14 @@ class PoolManager:
                     del self._tunnels[key]
                 del self._pools[key]
 
-            # Use sandboxed connector for local DuckDB files (host path, not :memory: or md:)
+            # Use sandboxed connectors for local file-based databases (DuckDB, SQLite)
+            # that live on the host filesystem and can't be opened directly from Docker.
             if db_type == "duckdb" and connection_string and not connection_string.startswith("md:") and connection_string != ":memory:":
                 from .sandboxed_duckdb import SandboxedDuckDBConnector
                 connector = SandboxedDuckDBConnector()
+            elif db_type == "sqlite" and connection_string and connection_string != ":memory:":
+                from .sandboxed_sqlite import SandboxedSQLiteConnector
+                connector = SandboxedSQLiteConnector()
             else:
                 connector = get_connector(db_type)
 

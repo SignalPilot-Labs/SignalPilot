@@ -251,3 +251,13 @@
 - [x] **Dockerfile.dbt-agent: pip packages pinned** — Pinned `claude-agent-sdk`, `httpx`, `mcp`, `aiofiles`, `pydantic`, `sqlglot` to installed environment versions. `dbt-duckdb`, `duckdb`, `pandas`, `pyarrow` not installed in build environment; left with TODO comment. `@anthropic-ai/claude-code` npm package left with TODO comment (no version reference found in codebase).
 - [x] **Dockerfile.plugin-test: npm TODO comment** — `@anthropic-ai/claude-code` pinning noted with TODO comment pending version verification.
 - [x] **No tests added** — Dockerfile changes cannot be unit-tested in this environment; a `docker build` smoke test is the appropriate verification.
+
+## Round 23: Security Headers Fix, .gitignore Hardening, MCPToolCall Depth Validation
+
+### COMPLETED
+
+- [x] **X-XSS-Protection Fix** — Changed `X-XSS-Protection` from dangerous `1; mode=block` to `0` in both backend (`middleware.py`) and frontend (`middleware.ts`). Per OWASP guidance, the XSS auditor in older browsers can be exploited to *introduce* XSS via selective script blocking. Setting to `0` disables the dangerous auditor. All modern browsers have removed it entirely.
+- [x] **`.gitignore` Hardening** — Added `.env.*` catch-all with `!.env.example` and `!.env.local.example` negations, `.DS_Store`, `Thumbs.db`, `.pytest_cache/`, `.mypy_cache/`, `.coverage`, `htmlcov/`, `coverage/`, `dist/`, `build/`, `*.sqlite`, `*.db`, `*.salt`, `*.p12`, `*.crt`. Prevents accidental commit of sensitive env files, OS artifacts, test coverage output, build artifacts, database files, and secret material.
+- [x] **MCPToolCall.arguments Depth/Size Validation** — Added `model_validator(mode="after")` to `MCPToolCall` in `models.py`. Enforces max nesting depth of 20 levels and max serialized size of 100KB. `_check_dict_depth` helper raises BEFORE recursing (prevents stack overflow). Prevents JSON bomb attacks through the previously unvalidated `dict[str, Any]` field.
+- [x] **Security Header Tests** — 3 new tests in `test_security_hardening.py`: `test_x_xss_protection_disabled`, `test_x_content_type_options_nosniff`, `test_x_frame_options_deny`. Previously untested headers now verified.
+- [x] **MCPToolCall Validation Tests** — 4 new tests in `test_input_validation.py`: depth limit exceeded (21 levels), depth OK (20 levels), size limit exceeded (>100KB), normal dict OK. All pass.

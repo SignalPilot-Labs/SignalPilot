@@ -202,6 +202,40 @@ class TestStringLengthLimits:
         with pytest.raises(ValidationError):
             MCPToolCall(tool="my_tool", session_id="s" * 129)
 
+    def test_mcp_tool_call_arguments_depth_limit(self):
+        """arguments nested 21 levels deep must raise ValidationError."""
+        nested: dict[str, Any] = {}
+        cursor = nested
+        for _ in range(21):
+            cursor["x"] = {}
+            cursor = cursor["x"]
+        with pytest.raises(ValidationError):
+            MCPToolCall(tool="my_tool", arguments=nested)
+
+    def test_mcp_tool_call_arguments_depth_ok(self):
+        """arguments nested exactly 20 levels deep must pass validation."""
+        nested: dict[str, Any] = {}
+        cursor = nested
+        for _ in range(20):
+            cursor["x"] = {}
+            cursor = cursor["x"]
+        m = MCPToolCall(tool="my_tool", arguments=nested)
+        assert m.tool == "my_tool"
+
+    def test_mcp_tool_call_arguments_size_limit(self):
+        """arguments with serialized size exceeding 100KB must raise ValidationError."""
+        large_value = "a" * 101_000
+        with pytest.raises(ValidationError):
+            MCPToolCall(tool="my_tool", arguments={"data": large_value})
+
+    def test_mcp_tool_call_arguments_normal_ok(self):
+        """Normal arguments dict must pass validation without errors."""
+        m = MCPToolCall(
+            tool="my_tool",
+            arguments={"key": "value", "nested": {"a": 1, "b": [1, 2, 3]}},
+        )
+        assert m.arguments["key"] == "value"
+
     def test_gateway_settings_sandbox_manager_url_too_long(self):
         with pytest.raises(ValidationError):
             GatewaySettings(sandbox_manager_url="http://" + "a" * 2048)

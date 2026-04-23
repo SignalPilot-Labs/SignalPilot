@@ -463,6 +463,21 @@ class TestSecurityHeadersMiddleware:
         script_src = directives.get("script-src", "")
         assert "'unsafe-inline'" not in script_src
 
+    def test_x_xss_protection_disabled(self):
+        """X-XSS-Protection must be set to 0 (disabled) to prevent XSS auditor exploits."""
+        headers = self._run_middleware()
+        assert headers.get("x-xss-protection") == "0"
+
+    def test_x_content_type_options_nosniff(self):
+        """X-Content-Type-Options must be set to nosniff."""
+        headers = self._run_middleware()
+        assert headers.get("x-content-type-options") == "nosniff"
+
+    def test_x_frame_options_deny(self):
+        """X-Frame-Options must be set to DENY."""
+        headers = self._run_middleware()
+        assert headers.get("x-frame-options") == "DENY"
+
     def test_csp_custom_override(self):
         """SP_GATEWAY_CSP_POLICY env var replaces the default policy entirely."""
         import os

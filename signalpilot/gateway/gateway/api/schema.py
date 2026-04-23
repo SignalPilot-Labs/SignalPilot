@@ -42,6 +42,23 @@ _re_refine = re
 
 router = APIRouter(prefix="/api")
 
+_FILTER_PATTERN_MAX_LEN = 200
+
+
+# Mirrors BaseConnector._quote_identifier (base.py:63-68).
+# Duplicated here because the API layer does not have a connector instance
+# at the point of SQL construction.
+def _quote_identifier(name: str, quote_char: str) -> str:
+    """Quote a single SQL identifier, escaping embedded quote characters."""
+    if quote_char == '[':
+        return '[' + name.replace(']', ']]') + ']'
+    return quote_char + name.replace(quote_char, quote_char + quote_char) + quote_char
+
+
+def _quote_table_name(table: str, quote_char: str) -> str:
+    """Quote a possibly schema-qualified table name (e.g., 'public.users')."""
+    return '.'.join(_quote_identifier(p, quote_char) for p in table.split('.'))
+
 # ---------------------------------------------------------------------------
 # Semantic model helpers (needed by agent-context endpoint)
 # ---------------------------------------------------------------------------
@@ -288,6 +305,9 @@ async def explore_column_values(
 
     Returns distinct values, value counts, and NULL statistics.
     """
+    if filter_pattern and len(filter_pattern) > _FILTER_PATTERN_MAX_LEN:
+        raise HTTPException(status_code=422, detail=f"filter_pattern must be at most {_FILTER_PATTERN_MAX_LEN} characters")
+
     info = await require_connection(store, name)
 
     conn_str = await store.get_connection_string(name)
@@ -299,19 +319,16 @@ async def explore_column_values(
     quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino", "duckdb", "sqlite") else '`'
     if db_type == "mssql":
         quote = '['
-        close_quote = ']'
-    else:
-        close_quote = quote
 
-    q_col = f"{quote}{column}{close_quote}"
+    q_col = _quote_identifier(column, quote)
+    q_table = _quote_table_name(table, quote)
 
     # Construct safe exploration query
-    parts = []
+    where_clause = ""
     if filter_pattern:
         like_op = "ILIKE" if db_type in ("postgres", "redshift", "snowflake") else "LIKE"
-        parts.append(f"WHERE {q_col} {like_op} :pattern")
-
-    where_clause = parts[0] if parts else ""
+        safe_pattern = filter_pattern.replace("'", "''")
+        where_clause = f"WHERE {q_col} {like_op} '{safe_pattern}'"
 
     # Build the query — dialect-aware LIMIT/TOP
     if db_type == "mssql":
@@ -319,7 +336,7 @@ async def explore_column_values(
 SELECT TOP {limit}
     {q_col} AS value,
     COUNT(*) AS [count]
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY [count] DESC
@@ -329,7 +346,7 @@ ORDER BY [count] DESC
 SELECT
     {q_col} AS value,
     COUNT(*) AS count
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY count DESC
@@ -342,14 +359,13 @@ SELECT
     COUNT(*) AS total_rows,
     SUM(CASE WHEN {q_col} IS NULL THEN 1 ELSE 0 END) AS null_count,
     COUNT(DISTINCT {q_col}) AS distinct_count
-FROM {table}
+FROM {q_table}
 """
 
     try:
         extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
-            # Replace :pattern placeholder with parameterized query
-            actual_sql = explore_sql.replace(":pattern", f"'{filter_pattern}'") if filter_pattern else explore_sql
+            actual_sql = explore_sql
 
             values_rows = await connector.execute(actual_sql, timeout=30)
             stats_rows = await connector.execute(null_sql, timeout=30)
@@ -3299,9 +3315,10 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
                     stat_parts.append(f"MAX({qo}{safe}{qc})")
                     stat_parts.append(f"AVG(CAST({qo}{safe}{qc} AS FLOAT))")
                 try:
-                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {table_key}"
+                    q_table_key = _quote_table_name(table_key, q)
+                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {q_table_key}"
                     if db_type == "mssql":
-                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {table_key}"
+                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {q_table_key}"
                     rows = await connector.execute(stat_sql, timeout=15)
                     if rows:
                         row = rows[0]

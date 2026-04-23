@@ -33,7 +33,7 @@ _MAX_CODE_LENGTH = 1_000_000
 def _quote_table(name: str) -> str:
     """Quote a table name for SQL, handling schema-qualified names like main.track."""
     parts = name.split(".")
-    return ".".join(f'"{p}"' for p in parts)
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def _validate_connection_name(name: str) -> str | None:
@@ -652,10 +652,11 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
         select_parts = []
         for col in date_cols:
             col_name = col["name"]
-            quoted = f'"{col_name}"'
-            select_parts.append(f'MIN({quoted}) AS "min_{col_name}", MAX({quoted}) AS "max_{col_name}"')
+            safe_col_name = col_name.replace('"', '""')
+            quoted = f'"{safe_col_name}"'
+            select_parts.append(f'MIN({quoted}) AS "min_{safe_col_name}", MAX({quoted}) AS "max_{safe_col_name}"')
 
-        quoted_table = f'"{table_schema}"."{table_name}"' if table_schema else f'"{table_name}"'
+        quoted_table = _quote_table(full_name)
         sql = f'SELECT {", ".join(select_parts)} FROM {quoted_table}'
 
         try:
@@ -2639,7 +2640,8 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 for key in keys:
                     try:
-                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM {_quote_table(table_name)}')
+                        safe_key = key.replace('"', '""')
+                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{safe_key}") as distinct_count FROM {_quote_table(table_name)}')
                         distinct_count: int = dist_rows[0].get("distinct_count", 0) if dist_rows else 0
                         if distinct_count == total_rows:
                             lines.append(f"    {key}: {distinct_count:,} distinct (UNIQUE - this is likely the grain)")

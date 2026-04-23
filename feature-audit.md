@@ -152,3 +152,20 @@
 - [x] **CORS allow_headers** — Added `"X-Request-ID"` to `allow_headers` list so browser clients can send client-generated correlation IDs on cross-origin requests.
 - [x] **Middleware ordering comment fix** — Updated stale comment block in `main.py` to accurately describe the actual middleware execution order: CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → Auth.
 - [x] **2 new tests** in `test_cors.py` — CORS expose_headers verification (GET with Origin), CORS allow_headers verification (OPTIONS preflight). Both pass.
+
+## Round 15: SQL Injection Fixes
+
+### COMPLETED
+
+- [x] **CRITICAL: `filter_pattern` SQL injection in `explore_column_values`** — User-supplied LIKE pattern now has single quotes escaped via `filter_pattern.replace("'", "''")` before interpolation into SQL. Length capped at 200 chars with a 422 response for over-length values. Prior code used raw string interpolation with zero escaping.
+- [x] **HIGH: Unquoted `table` in `explore_column_values`** — `table` query parameter now routed through `_quote_table_name(table, quote)` before use in both `explore_sql` (SELECT FROM) and `null_sql` (COUNT FROM). Previously `FROM {table}` used raw user input.
+- [x] **HIGH: Unescaped `column` in `explore_column_values`** — Column quoting replaced manual `f"{quote}{column}{close_quote}"` with `_quote_identifier(column, quote)`, which correctly escapes embedded quote characters for all dialects including MSSQL bracket quoting.
+- [x] **HIGH: Unquoted `table_key` in `explore_columns_deep`** — `stat_sql` now uses `_quote_table_name(table_key, q)` instead of bare `{table_key}`. The `q` variable is already computed in the surrounding loop for column quoting.
+- [x] **`_quote_identifier` / `_quote_table_name` helpers added to `schema.py`** — Module-level helpers mirror `BaseConnector._quote_identifier` (base.py:63-68). Marked with `# Mirrors BaseConnector._quote_identifier` comment. Duplicated (not imported) because the API layer has no connector instance at SQL construction time.
+- [x] **MEDIUM: `_quote_table` in `mcp_server.py` did not escape embedded `"`** — Fixed to use `p.replace('"', '""')` matching the pattern in `base.py:68`. All callers automatically benefit.
+- [x] **MEDIUM: Manual table quoting at mcp_server.py line 658** — Replaced `f'"{table_schema}"."{table_name}"'` with `_quote_table(full_name)` so embedded quote escaping applies and the helper is used consistently.
+- [x] **MEDIUM: Unescaped `col_name` in date range query (mcp_server.py line 655-656)** — `col_name` now escaped with `.replace('"', '""')` before wrapping in double quotes for both identifier use and alias use.
+- [x] **MEDIUM: Unescaped `key` in grain analysis (mcp_server.py line 2642)** — `key` now escaped with `key.replace('"', '""')` before wrapping in double quotes in the `COUNT(DISTINCT ...)` query.
+- [x] **MEDIUM: Backtick injection in `clickhouse.py` fallback path** — Replaced `` f'`{col}`' `` with `self._quote_identifier(col)`. `ClickHouseConnector` already overrides `_identifier_quote` to return `` ` ``, so the method correctly escapes embedded backticks.
+- [x] **MEDIUM: Single-quote injection in `mssql.py` string literal** — Column name in `SELECT '{col}' AS _col` now escaped with `safe_name = col.replace("'", "''")`. Matches the pattern in `base.py:267`.
+- [x] **26 new tests** in `test_sql_injection.py` — Unit tests for `_quote_identifier`, `_quote_table_name`, `_quote_table`, `ClickHouseConnector._quote_identifier`, MSSQL literal escaping; integration tests for `explore_column_values` scope enforcement and filter_pattern length cap; negative injection tests verifying SQL logic cannot escape the literal context.

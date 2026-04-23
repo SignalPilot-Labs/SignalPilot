@@ -408,7 +408,7 @@ class ClickHouseConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     data = self._raw_execute(
-                        f'SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}'
+                        f'SELECT DISTINCT {self._quote_identifier(col)} FROM {safe_table} WHERE {self._quote_identifier(col)} IS NOT NULL LIMIT {limit}'
                     )
                     if isinstance(data, tuple) and len(data) == 2:
                         rows = data[0]

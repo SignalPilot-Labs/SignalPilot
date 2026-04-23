@@ -9,11 +9,9 @@ Unit tests for Round 2 security hardening:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -395,3 +393,50 @@ class TestProfilesYmlPermissions:
         )
         result = store._generate_profiles_yml("sf_project", conn)
         assert "flake_secret_999" not in result
+
+
+# ---------------------------------------------------------------------------
+# TestSecurityHeadersMiddleware
+# ---------------------------------------------------------------------------
+
+class TestSecurityHeadersMiddleware:
+    """Tests for SecurityHeadersMiddleware header injection."""
+
+    def _run_middleware(self, headers: dict[str, str] | None = None) -> dict[str, str]:
+        """Run SecurityHeadersMiddleware and return response headers as a dict."""
+        from starlette.testclient import TestClient
+        from starlette.applications import Starlette
+        from starlette.requests import Request
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from gateway.middleware import SecurityHeadersMiddleware
+
+        async def homepage(request: Request) -> PlainTextResponse:
+            return PlainTextResponse("ok")
+
+        app = Starlette(routes=[Route("/", homepage)])
+        app.add_middleware(SecurityHeadersMiddleware)
+
+        client = TestClient(app, raise_server_exceptions=True)
+        response = client.get("/", headers=headers or {})
+        return dict(response.headers)
+
+    def test_permissions_policy_header(self):
+        """Permissions-Policy header must be present on any response."""
+        headers = self._run_middleware()
+        assert "permissions-policy" in headers
+        assert "camera=()" in headers["permissions-policy"]
+        assert "microphone=()" in headers["permissions-policy"]
+        assert "geolocation=()" in headers["permissions-policy"]
+
+    def test_hsts_header_when_https(self):
+        """Strict-Transport-Security must be set when X-Forwarded-Proto is https."""
+        headers = self._run_middleware(headers={"X-Forwarded-Proto": "https"})
+        assert "strict-transport-security" in headers
+        assert "max-age=63072000" in headers["strict-transport-security"]
+        assert "includeSubDomains" in headers["strict-transport-security"]
+
+    def test_no_hsts_header_when_http(self):
+        """Strict-Transport-Security must NOT be set on plain HTTP requests."""
+        headers = self._run_middleware()
+        assert "strict-transport-security" not in headers

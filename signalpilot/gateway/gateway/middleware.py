@@ -281,4 +281,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Cache-Control"] = "no-store"
+        # interest-cohort=() is kept for older browser coverage; FLoC is deprecated
+        # in modern browsers but the directive is harmless.
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+        )
+        # HSTS is only sent over HTTPS to avoid locking browsers into HTTPS on
+        # local HTTP dev setups. `preload` is intentionally omitted — it requires
+        # explicit opt-in via hstspreload.org and is a domain-level commitment that
+        # cannot be easily rolled back.
+        is_https = (
+            request.headers.get("x-forwarded-proto") == "https"
+            or request.url.scheme == "https"
+        )
+        if is_https:
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains"
+            )
         return response

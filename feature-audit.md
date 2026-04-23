@@ -32,6 +32,14 @@
 - [x] **Key Rotation Support** — `key_version` column added to `GatewayCredential` with `server_default="1"`; idempotent `ALTER TABLE ADD COLUMN IF NOT EXISTS` migration in `engine.py`; `CURRENT_KEY_VERSION` constant in `store.py`; lazy re-encryption on version mismatch re-encrypts BOTH `connection_string_enc` and `extras_enc` atomically; `get_credentials_needing_rotation()` global count; security status endpoint reports `current_key_version` and `total_credentials_pending_rotation`.
 - [x] **E2E Test Fixes** — Fixed `Base` → `GatewayBase` import bug; fixed sync→async cleanup fixture; added key_version and special-character round-trip tests.
 
-### NOT YET EXPLORED
+### COMPLETED
 
-- [ ] **Frontend Accessibility** — SecurityBanner collapsible needs `aria-expanded`/`aria-controls`, Tooltip keyboard support
+- [x] **Frontend Accessibility** — SecurityBanner collapsible has `aria-expanded`/`aria-controls`/`role="region"`, Tooltip has keyboard support (`onFocus`/`onBlur`), `role="tooltip"`, `aria-describedby` with `useId()`
+
+## Round 4: Frontend Accessibility, XSS Prevention, Security Headers
+
+### COMPLETED
+
+- [x] **Frontend Accessibility** — SecurityBanner aria attributes, Tooltip keyboard + ARIA support
+- [x] **Sandbox XSS Prevention** — Pure allowlist HTML sanitizer for `dangerouslySetInnerHTML` in sandbox output; strips all non-table elements and non-structural attributes; no `style` attribute allowed (CSS injection vector)
+- [x] **Gateway Security Headers** — `Permissions-Policy` header added; `Strict-Transport-Security` added conditionally (HTTPS only, no `preload`); 3 new tests verify behavior

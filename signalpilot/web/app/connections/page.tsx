@@ -2402,6 +2402,8 @@ export default function ConnectionsPage() {
           type="button"
           onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)}
           className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-emerald-500/5 transition-colors"
+          aria-expanded={securityBannerExpanded}
+          aria-controls="security-banner-details"
         >
           <Shield className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" strokeWidth={1.5} />
           <span className="flex-1 text-[11px] text-emerald-400/90 tracking-wider leading-relaxed">
@@ -2412,7 +2414,12 @@ export default function ConnectionsPage() {
             : <ChevronRight className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />}
         </button>
         {securityBannerExpanded && (
-          <div className="px-4 pb-3 border-t border-emerald-500/10 animate-fade-in">
+          <div
+            id="security-banner-details"
+            role="region"
+            aria-label="Security details"
+            className="px-4 pb-3 border-t border-emerald-500/10 animate-fade-in"
+          >
             <ul className="mt-2.5 space-y-1.5">
               {[
                 "Credentials are encrypted before storage using Fernet symmetric encryption",

@@ -203,6 +203,7 @@ class GatewayApiKey(GatewayBase):
     scopes: Mapped[list] = mapped_column(JSON, nullable=False)
     created_at: Mapped[str | None] = mapped_column(String)
     last_used_at: Mapped[str | None] = mapped_column(String)
+    expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
         Index("ix_gw_api_keys_user", "user_id"),

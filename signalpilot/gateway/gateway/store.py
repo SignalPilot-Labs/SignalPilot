@@ -1058,9 +1058,12 @@ class Store:
         return [ApiKeyRecord(
             id=r.id, name=r.name, prefix=r.prefix, key_hash=r.key_hash,
             scopes=r.scopes, created_at=r.created_at, last_used_at=r.last_used_at,
+            expires_at=r.expires_at, user_id=r.user_id,
         ) for r in result.scalars()]
 
-    async def create_api_key(self, name: str, scopes: list[str]) -> tuple[ApiKeyRecord, str]:
+    async def create_api_key(
+        self, name: str, scopes: list[str], expires_at: str | None = None
+    ) -> tuple[ApiKeyRecord, str]:
         uid = self.user_id or "local"
         raw_key = "sp_" + secrets.token_hex(16)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
@@ -1069,7 +1072,7 @@ class Store:
 
         db_key = GatewayApiKey(
             id=key_id, user_id=uid, name=name, prefix=raw_key[:7],
-            key_hash=key_hash, scopes=scopes, created_at=now,
+            key_hash=key_hash, scopes=scopes, created_at=now, expires_at=expires_at,
         )
         self.session.add(db_key)
         await self.session.commit()
@@ -1077,6 +1080,7 @@ class Store:
         record = ApiKeyRecord(
             id=key_id, name=name, prefix=raw_key[:7], key_hash=key_hash,
             scopes=scopes, created_at=now, last_used_at=None,
+            expires_at=expires_at, user_id=uid,
         )
         return record, raw_key
 
@@ -1106,11 +1110,22 @@ class Store:
             return None
         if not _hmac.compare_digest(row.key_hash, key_hash):
             return None
+        # Check expiry before allowing access
+        if row.expires_at is not None:
+            try:
+                expiry = datetime.fromisoformat(row.expires_at)
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry <= datetime.now(timezone.utc):
+                    return None
+            except (ValueError, TypeError):
+                return None  # Corrupt expiry data → treat as expired (fail closed)
         row.last_used_at = datetime.now(timezone.utc).isoformat()
         await self.session.commit()
         return ApiKeyRecord(
             id=row.id, name=row.name, prefix=row.prefix, key_hash=row.key_hash,
             scopes=row.scopes, created_at=row.created_at, last_used_at=row.last_used_at,
+            expires_at=row.expires_at, user_id=row.user_id,
         )
 
     # ─── Key Rotation ────────────────────────────────────────────────────

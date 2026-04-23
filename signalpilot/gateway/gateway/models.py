@@ -6,7 +6,7 @@ import time
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Settings ────────────────────────────────────────────────────────────────
@@ -38,9 +38,37 @@ class GatewaySettings(BaseModel):
 
 # ─── API Keys ────────────────────────────────────────────────────────────────
 
+VALID_API_KEY_SCOPES: frozenset[str] = frozenset({"read", "query", "execute", "write", "admin"})
+
+
 class ApiKeyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     scopes: list[str] = Field(default_factory=lambda: ["read", "query"])
+    expires_at: str | None = None
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, v: list[str]) -> list[str]:
+        invalid = [s for s in v if s not in VALID_API_KEY_SCOPES]
+        if invalid:
+            raise ValueError(
+                f"Invalid scope(s): {invalid}. Valid scopes are: {sorted(VALID_API_KEY_SCOPES)}"
+            )
+        return v
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expires_at(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        from datetime import datetime, timezone
+        try:
+            parsed = datetime.fromisoformat(v)
+        except (ValueError, TypeError):
+            raise ValueError("expires_at must be a valid ISO-8601 datetime string")
+        if parsed.tzinfo is None:
+            raise ValueError("expires_at must include timezone (e.g. +00:00 or Z)")
+        return v
 
 
 class ApiKeyRecord(BaseModel):
@@ -52,6 +80,8 @@ class ApiKeyRecord(BaseModel):
     scopes: list[str]
     created_at: str      # ISO 8601
     last_used_at: str | None = None
+    expires_at: str | None = None
+    user_id: str = "local"
 
 
 class ApiKeyResponse(BaseModel):
@@ -62,6 +92,7 @@ class ApiKeyResponse(BaseModel):
     scopes: list[str]
     created_at: str
     last_used_at: str | None = None
+    expires_at: str | None = None
 
 
 class ApiKeyCreatedResponse(ApiKeyResponse):

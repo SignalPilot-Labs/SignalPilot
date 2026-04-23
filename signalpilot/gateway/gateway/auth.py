@@ -105,7 +105,8 @@ async def resolve_user_id(request: Request) -> str:
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+        logger.warning("JWT validation failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
 # FastAPI dependency aliases

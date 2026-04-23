@@ -105,12 +105,29 @@ async def _ensure_key_version_column(engine) -> None:
     logger.info("Ensured key_version column on gateway_credentials")
 
 
+async def _ensure_expires_at_column(engine) -> None:
+    """Add expires_at column to gateway_api_keys if it does not exist.
+
+    SQLAlchemy's create_all does not add columns to existing tables, so this
+    idempotent ALTER TABLE handles existing deployments.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_api_keys "
+                "ADD COLUMN IF NOT EXISTS expires_at TEXT"
+            )
+        )
+    logger.info("Ensured expires_at column on gateway_api_keys")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(GatewayBase.metadata.create_all)
     await _ensure_key_version_column(engine)
+    await _ensure_expires_at_column(engine)
     logger.info("Gateway database tables initialized")
 
 

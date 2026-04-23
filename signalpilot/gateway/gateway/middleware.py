@@ -177,10 +177,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 matched = await store.validate_stored_api_key(provided_key)
                 if matched:
                     request.state.auth = {
-                        "user_id": matched.user_id if hasattr(matched, 'user_id') else "local",
+                        "user_id": matched.user_id,
                         "key_id": matched.id,
                         "key_name": matched.name,
                         "auth_method": "api_key",
+                        "scopes": matched.scopes,
                     }
                     return await call_next(request)
         except Exception as e:

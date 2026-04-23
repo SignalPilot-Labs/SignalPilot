@@ -514,3 +514,84 @@ class TestCorsOriginValidation:
         assert "http://localhost:3200" in origins
         assert "http://127.0.0.1:3000" in origins
         assert "http://127.0.0.1:3200" in origins
+
+
+# ---------------------------------------------------------------------------
+# TestAuthRateLimiting
+# ---------------------------------------------------------------------------
+
+class TestAuthRateLimiting:
+    """Tests for the third rate-limit tier targeting POST /api/keys."""
+
+    def _make_test_app(self, auth_rpm: int, general_rpm: int = 120, expensive_rpm: int = 30):
+        """Return a (TestClient, middleware) pair for rate limit testing.
+
+        The inner Starlette app accepts every method on every path so tests can
+        issue arbitrary method/path combinations without 405 responses.
+        """
+        from gateway.middleware import RateLimitMiddleware
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from starlette.requests import Request as StarletteRequest
+        from starlette.testclient import TestClient
+
+        async def catch_all(request: StarletteRequest) -> PlainTextResponse:
+            return PlainTextResponse("ok")
+
+        # Mount a single route that accepts all HTTP methods
+        route = Route("/{path:path}", catch_all, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+        app = Starlette(routes=[route])
+        app.add_middleware(
+            RateLimitMiddleware,
+            general_rpm=general_rpm,
+            expensive_rpm=expensive_rpm,
+            auth_rpm=auth_rpm,
+        )
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_auth_endpoint_429_after_limit(self):
+        """POST /api/keys returns 429 after auth_rpm requests from same IP."""
+        client = self._make_test_app(auth_rpm=3, general_rpm=120)
+
+        statuses = [
+            client.post("/api/keys", headers={"X-Forwarded-For": "10.0.0.1"}).status_code
+            for _ in range(5)
+        ]
+        # First 3 should succeed (200), then 429
+        assert statuses[:3] == [200, 200, 200], f"Expected first 3 to be 200, got {statuses[:3]}"
+        assert statuses[3] == 429, f"Expected 4th request to be 429, got {statuses[3]}"
+        assert statuses[4] == 429, f"Expected 5th request to be 429, got {statuses[4]}"
+
+    def test_general_endpoint_not_affected_by_auth_limit(self):
+        """GET /health is not blocked by the auth rate limit."""
+        client = self._make_test_app(auth_rpm=3, general_rpm=120)
+
+        statuses = [
+            client.get("/health", headers={"X-Forwarded-For": "10.0.0.2"}).status_code
+            for _ in range(10)
+        ]
+        assert all(s == 200 for s in statuses), f"Expected all 200, got {statuses}"
+
+    def test_auth_429_does_not_increment_general_bucket(self):
+        """Auth 429s must not consume the general rate limit bucket.
+
+        After exhausting the auth limit, the general bucket for that IP should
+        still have capacity (i.e., a non-auth request from same IP returns 200).
+        """
+        # general_rpm=5 so any leakage from auth 429s into the general bucket
+        # would be clearly visible — 6 auth 429s > 5 general slots.
+        client = self._make_test_app(auth_rpm=2, general_rpm=5)
+        ip_header = {"X-Forwarded-For": "10.0.0.3"}
+
+        # Exhaust auth limit (2 allowed + 4 extra 429s = 6 total auth requests)
+        for _ in range(6):
+            client.post("/api/keys", headers=ip_header)
+
+        # After auth exhaustion, a non-auth request should NOT be rate-limited
+        # (the 4 auth 429s must not have incremented the general bucket)
+        response = client.get("/health", headers=ip_header)
+        assert response.status_code == 200, (
+            f"Expected 200 for general request after auth exhaustion, got {response.status_code}. "
+            "Auth 429s must not increment the general bucket."
+        )

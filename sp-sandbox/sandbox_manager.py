@@ -14,6 +14,7 @@ Run:
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import os
 import uuid
@@ -104,6 +105,11 @@ async def execute_handler(request: web.Request) -> web.Response:
         # If path comes from the file browser (already under /host-data), use as-is.
         # Otherwise, try to map it: the host's home dir is mounted at /host-data
         resolved = Path(host_path).resolve()
+        if not resolved.is_relative_to(Path("/host-data").resolve()):
+            return web.json_response(
+                {"success": False, "error": "Mount path not allowed"},
+                status=400,
+            )
         if not resolved.exists() and host_data_root.exists():
             # Try stripping the host home prefix and mapping to /host-data
             # The file browser returns paths under /host-data already
@@ -190,6 +196,9 @@ async def browse_files_handler(request: web.Request) -> web.Response:
     pattern = request.query.get("pattern", "*.duckdb")
 
     resolved = Path(search_path).resolve()
+    allowed_root = Path("/host-data").resolve() if Path("/host-data").exists() else Path.home().resolve()
+    if not resolved.is_relative_to(allowed_root):
+        return web.json_response({"error": "Access denied"}, status=403)
     if not resolved.exists() or not resolved.is_dir():
         return web.json_response(
             {"error": f"Directory not found: {search_path}", "files": [], "directories": []},
@@ -209,7 +218,6 @@ async def browse_files_handler(request: web.Request) -> web.Response:
                     "path": str(entry),
                 })
             elif entry.is_file():
-                import fnmatch
                 if fnmatch.fnmatch(entry.name.lower(), pattern.lower()):
                     files.append({
                         "name": entry.name,

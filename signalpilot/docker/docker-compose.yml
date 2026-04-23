@@ -41,13 +41,18 @@ services:
     build:
       context: ../../sp-sandbox
       dockerfile: Dockerfile.sandbox
-    ports:
-      - "8180:8080"
     cap_add:
       - SYS_PTRACE
       - SYS_ADMIN
     security_opt:
       - apparmor:unconfined
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M,noexec
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 256
     environment:
       - SP_GATEWAY_URL=http://gateway:3300
       - SP_MAX_VMS=10

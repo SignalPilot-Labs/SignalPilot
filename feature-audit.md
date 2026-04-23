@@ -51,3 +51,12 @@
 - [x] **Broken Test Cleanup** — Fixed imports in `test_compact_schema.py` (→ `gateway.schema_utils`) and `test_fuzzy_search.py` (→ `gateway.api.schema`); deleted `test_audit_rotation.py` (target function removed). All 34 tests pass.
 - [x] **CORS Origin Validation** — `SP_ALLOWED_ORIGINS` env var now validated: wildcard `*` rejected (credential-stealing misconfiguration with `allow_credentials=True`), non-http/https origins rejected. Warnings logged for skipped entries. 7 new tests verify behavior.
 - [x] **MySQL Column Identifier Quoting** — Backtick-escape column names in `get_sample_values` fallback SQL path to prevent theoretical SQL injection via crafted column names. Dict key access correctly uses unescaped original name.
+
+## Round 6: Docker Sandbox Hardening & Auth Rate Limiting
+
+### COMPLETED
+
+- [x] **Docker Sandbox Container Hardening** — read-only root filesystem, tmpfs /tmp (100MB, noexec), no-new-privileges, mem_limit 512m, cpus 2, pids_limit 256. Removed exposed port 8180 (sandbox only reachable via Docker internal networking).
+- [x] **Sandbox Privilege Drop** — New `sandbox_exec.sh` wrapper script drops to nobody (UID 65534) via `setpriv` before exec'ing user code. CPU and file-size ulimits enforced. Input validation on timeout parameter prevents injection.
+- [x] **Sandbox Path Traversal Fix** — `browse_files_handler` and `execute_handler` both use `Path.is_relative_to()` to confine access to `/host-data`. Prevents directory traversal to `/etc`, `/proc`, or container internals. Applied to file mount validation as well.
+- [x] **Auth Endpoint Rate Limiting** — Three-tier rate limiting: auth (10rpm for `/api/keys` POST) > expensive (30rpm) > general (120rpm). Auth 429 returns early without incrementing general bucket. 3 new tests verify behavior including bucket isolation.

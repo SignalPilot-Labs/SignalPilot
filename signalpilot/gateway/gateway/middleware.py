@@ -193,19 +193,35 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple in-memory sliding window rate limiter."""
+    """Simple in-memory sliding window rate limiter.
 
-    def __init__(self, app, general_rpm: int = 120, expensive_rpm: int = 30):
-        super().__init__(app)
-        self.general_rpm = general_rpm
-        self.expensive_rpm = expensive_rpm
-        self._general_hits: dict[str, list[float]] = defaultdict(list)
-        self._expensive_hits: dict[str, list[float]] = defaultdict(list)
+    Three tiers (checked in order):
+      1. Auth (10 rpm)     — POST /api/keys
+      2. Expensive (30 rpm) — POST /api/query, /api/sandboxes, *execute*
+      3. General (120 rpm)  — all other requests
+
+    A 429 on any tier returns early without incrementing lower-tier buckets.
+    Auth requests that pass tier 1 still fall through to the general tier.
+    """
+
+    AUTH_PATHS = frozenset({"/api/keys"})
 
     EXPENSIVE_PATHS = frozenset({
         "/api/query",
         "/api/sandboxes",
     })
+
+    def __init__(self, app: ASGIApp, general_rpm: int = 120, expensive_rpm: int = 30, auth_rpm: int = 10) -> None:
+        super().__init__(app)
+        self.general_rpm = general_rpm
+        self.expensive_rpm = expensive_rpm
+        self.auth_rpm = auth_rpm
+        self._general_hits: dict[str, list[float]] = defaultdict(list)
+        self._expensive_hits: dict[str, list[float]] = defaultdict(list)
+        self._auth_hits: dict[str, list[float]] = defaultdict(list)
+
+    def _is_auth(self, request: Request) -> bool:
+        return request.url.path in self.AUTH_PATHS and request.method == "POST"
 
     def _is_expensive(self, request: Request) -> bool:
         path = request.url.path
@@ -225,10 +241,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         hits.append(now)
         return True
 
-    def _cleanup_stale_ips(self):
+    def _cleanup_stale_ips(self) -> None:
         now = time.monotonic()
         window = now - 120
-        for store_dict in (self._general_hits, self._expensive_hits):
+        for store_dict in (self._general_hits, self._expensive_hits, self._auth_hits):
             stale_ips = [ip for ip, hits in store_dict.items() if not hits or hits[-1] < window]
             for ip in stale_ips:
                 del store_dict[ip]
@@ -245,12 +261,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        total_tracked = len(self._general_hits) + len(self._expensive_hits)
+        total_tracked = len(self._general_hits) + len(self._expensive_hits) + len(self._auth_hits)
         if total_tracked > 100:
             self._cleanup_stale_ips()
 
         ip = self._client_ip(request)
 
+        # Tier 1: auth endpoints — check first, return early on 429
+        if self._is_auth(request):
+            if not self._check_rate(self._auth_hits[ip], self.auth_rpm):
+                return Response(
+                    content='{"detail":"Rate limit exceeded. Max ' + str(self.auth_rpm) + ' auth requests per minute."}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "60"},
+                )
+
+        # Tier 2: expensive endpoints — return early on 429
         if self._is_expensive(request):
             if not self._check_rate(self._expensive_hits[ip], self.expensive_rpm):
                 return Response(
@@ -260,6 +287,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     headers={"Retry-After": "60"},
                 )
 
+        # Tier 3: general bucket — all requests that pass the above tiers
         if not self._check_rate(self._general_hits[ip], self.general_rpm):
             return Response(
                 content='{"detail":"Rate limit exceeded. Max ' + str(self.general_rpm) + ' requests per minute."}',

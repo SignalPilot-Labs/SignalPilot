@@ -159,7 +159,7 @@ if _extra_origins:
 # Middleware stack (last added = outermost = runs first)
 # CORS must be outermost so error responses from auth also get CORS headers
 app.add_middleware(APIKeyAuthMiddleware)
-app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30)
+app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30, auth_rpm=10)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=2_097_152)
 app.add_middleware(

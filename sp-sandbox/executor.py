@@ -70,9 +70,12 @@ class GVisorExecutor:
         script_path = workdir / "user_code.py"
         script_path.write_text(code, encoding="utf-8")
 
-        # Run Python directly — the container itself provides gVisor isolation
-        # (via Docker runtime). No need for runsc inside the container.
+        # Invoke the privilege-dropping wrapper, which sets ulimits and drops
+        # to nobody (UID 65534) via setpriv before exec'ing the Python process.
+        # Do NOT use preexec_fn — it is unsafe in async/threaded contexts.
         cmd = [
+            "/opt/signalpilot/sandbox_exec.sh",
+            str(timeout),
             PYTHON_PATH,
             "-u",
             str(script_path),
@@ -86,6 +89,8 @@ class GVisorExecutor:
                 "SP_ENCRYPTION_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
             )
         }
+        # Ensure tempfile workdirs land on the tmpfs mount provided by the container
+        safe_env["TMPDIR"] = "/tmp"
 
         try:
             proc = await asyncio.create_subprocess_exec(

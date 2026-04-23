@@ -198,3 +198,13 @@
 - [x] **sandbox_client.py: line 88** — `str(e)` replaced with `"Sandbox communication error"`; actual exception logged at ERROR level.
 - [x] **engine/__init__.py: line 95** — SQL parse error now `f"SQL parse error: {str(e)[:100]}"` — preserves user-diagnostic value (reflects user-supplied SQL) while capping length.
 - [x] **13 new tests** in `test_error_sanitization.py` — Global handler 500 behavior (5 tests), HTTPException pass-through (not swallowed as 500), SQL parse error cap (3 tests), connections/projects endpoint message sanitization (5 tests, skip when auth middleware blocks).
+
+## Round 19: MCP Server Error Sanitization
+
+### COMPLETED
+
+- [x] **`mcp_errors.py` helper module** — `sanitize_mcp_error(error, *, cap=200)` applies sensitive pattern redaction, path stripping (`/home/`, `/var/`, `/opt/`, `/tmp/`, `/etc/`, `C:\`), Python traceback frame stripping, and length capping. `sanitize_proxy_response(status_code, body)` wraps REST API proxy responses with sanitization. `_SENSITIVE_PATTERNS` duplicated from `api/deps.py` (sync test added).
+- [x] **37 sites sanitized in `mcp_server.py`** — Category A (infra): sandbox URL removed from 3 error sites (lines 172, 201, 401, 404). Category B (DB errors): 19 sites wrapped with `sanitize_mcp_error(cap=300)` preserving diagnostic text for Spider2.0 agent self-correction. Category C (file I/O): 6 sites use `.name` instead of full path + sanitize. Category D (proxy responses): 14 sites including all 8 untruncated `resp.text` sites and 3 additional CTE/validate_query sites from spec review. Category E (validation): 1 defense-in-depth site.
+- [x] **Reviewer critical issues addressed** — Item 1: 8 untruncated `resp.text` sites wrapped with `sanitize_proxy_response`. Item 2: Lines 2318/2353 (CTE debugger) and line 1844 (validate_query) sanitized. Item 3: `source_error` (line 2728) sanitized before return at line 2740. Item 5: Line 201 sandbox error output wrapped with `sanitize_mcp_error`.
+- [x] **Spider2.0 self-correction preserved** — DB query errors use `cap=300` to retain diagnostic text; `query_error_hint()` pattern matching still uses raw `err_str` (server-side only); sanitized copy returned to client.
+- [x] **28 new tests** in `test_mcp_error_sanitization.py` — Sensitive pattern redaction (6), path stripping (3), traceback stripping (1), length capping (3), clean passthrough (2), empty string (1), proxy response formatting (5), drift guard for `_SENSITIVE_PATTERNS` sync (1), integration tests: sandbox URL not leaked (2), query error diagnostic preserved (3), schema fetch redacted (2).

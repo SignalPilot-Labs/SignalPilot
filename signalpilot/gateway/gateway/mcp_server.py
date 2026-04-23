@@ -55,6 +55,7 @@ from contextlib import asynccontextmanager
 
 from .engine import inject_limit, validate_sql as engine_validate_sql
 from .errors import query_error_hint
+from .mcp_errors import sanitize_mcp_error, sanitize_proxy_response
 from .models import AuditEntry
 import contextvars
 from .store import list_sandboxes, Store
@@ -169,9 +170,9 @@ async def execute_code(code: str, timeout: int = 30) -> str:
             )
             data = resp.json()
         except httpx.ConnectError:
-            return f"Error: Cannot connect to sandbox manager at {sandbox_url}. Is the sandbox manager running?"
+            return "Error: Cannot connect to sandbox manager. Is the sandbox manager running?"
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Sandbox execution failed: {sanitize_mcp_error(str(e))}"
 
     # Log to audit
     async with _store_session() as store:
@@ -198,7 +199,7 @@ async def execute_code(code: str, timeout: int = 30) -> str:
         return output + suffix if output else f"(no output){suffix}"
     else:
         error = data.get("error", "Unknown error")
-        return f"Error:\n{error}"
+        return f"Error:\n{sanitize_mcp_error(str(error))}"
 
 
 @mcp.tool()
@@ -295,7 +296,8 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
                 # Structured error feedback for agent self-correction (Spider2.0 SOTA pattern)
                 err_str = str(e)
                 hint = query_error_hint(err_str, conn_info.db_type)
-                return f"Query error: {err_str}" + (f"\n\nHint: {hint}" if hint else "")
+                sanitized = sanitize_mcp_error(err_str, cap=300)
+                return f"Query error: {sanitized}" + (f"\n\nHint: {hint}" if hint else "")
 
             elapsed_ms = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
@@ -397,11 +399,11 @@ async def sandbox_status() -> str:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{sandbox_url}/health")
             health = resp.json()
-    except Exception as e:
-        return f"Sandbox manager at {sandbox_url}: OFFLINE ({e})"
+    except Exception:
+        return "Sandbox manager: OFFLINE (connection failed)"
 
     lines = [
-        f"Sandbox Manager: {sandbox_url}",
+        "Sandbox Manager: connected",
         f"Status: {health.get('status', 'unknown')}",
         f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
     ]
@@ -459,7 +461,7 @@ async def describe_table(connection_name: str, table_name: str) -> str:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
         schema_cache.put(connection_name, schema)
 
     # Find the table (case-insensitive)
@@ -541,7 +543,7 @@ async def list_tables(connection_name: str) -> str:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
         schema_cache.put(connection_name, schema)
 
     # Build FK lookup
@@ -731,7 +733,7 @@ async def get_date_boundaries(connection_name: str) -> str:
     try:
         result = await _fetch_date_boundaries(connection_name)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not result.found_any:
         return f"Date boundaries for: {connection_name} ({result.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
@@ -916,7 +918,7 @@ async def fix_date_spine_hazards(
         try:
             boundaries = await _fetch_date_boundaries(connection_name)
         except Exception as e:
-            return f"Error fetching date boundaries: {e}"
+            return f"Error fetching date boundaries: {sanitize_mcp_error(str(e))}"
 
         if not boundaries.found_any:
             return (
@@ -956,7 +958,7 @@ async def fix_date_spine_hazards(
     try:
         fixes = generate_date_spine_fixes(project_path, hazards, resolved_date, add_day_offset)
     except OSError as e:
-        return f"Error reading source files: {e}"
+        return f"Error reading source files: {sanitize_mcp_error(str(e))}"
 
     # Write files.
     written: list[str] = []
@@ -972,7 +974,7 @@ async def fix_date_spine_hazards(
             fix.output_path.write_text(fix.content, encoding="utf-8")
             written.append(fix.output_path.name.removesuffix(".sql"))
         except OSError as e:
-            errors.append(f"{fix.output_path}: {e}")
+            errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
 
     # Build markdown report.
     report_lines = [f"## Date spine hazards fixed ({len([f for f in fixes if not f.already_overridden])} files)", ""]
@@ -1095,7 +1097,7 @@ async def fix_nondeterminism_hazards(
                         schema = await connector.get_schema()
                     schema_cache.put(connection_name, schema)
                 except Exception as e:
-                    schema_error = f"Could not fetch schema: {e}. Tiebreaker selection skipped."
+                    schema_error = f"Could not fetch schema: {sanitize_mcp_error(str(e))}. Tiebreaker selection skipped."
                     schema = {}
             table_columns = build_table_columns_from_schema(schema)
 
@@ -1103,7 +1105,7 @@ async def fix_nondeterminism_hazards(
     try:
         fixes = generate_nondeterminism_fixes(project_path, nd_warnings, table_columns)
     except OSError as e:
-        return f"Error reading source files: {e}"
+        return f"Error reading source files: {sanitize_mcp_error(str(e))}"
 
     # Write files.
     written: list[str] = []
@@ -1127,7 +1129,7 @@ async def fix_nondeterminism_hazards(
             fix.output_path.write_text(fix.content, encoding="utf-8")
             written.append(fix.output_path.name.removesuffix(".sql"))
         except OSError as e:
-            errors.append(f"{fix.output_path}: {e}")
+            errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
 
     # Build markdown report.
     total_fixed = len([f for f in fixes if f.fixes_applied and not f.already_overridden])
@@ -1295,7 +1297,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
             params={"from_table": from_table, "to_table": to_table, "max_hops": max_hops, "include_implicit": "true"},
         )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
     paths = data.get("paths", [])
@@ -1335,7 +1337,7 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
             params={"format": format},
         )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
     if format == "compact":
@@ -1377,7 +1379,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
             params={"table": table_name, "include_samples": True},
         )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
     lines = [f"Table: {data.get('table', table_name)}"]
@@ -1449,7 +1451,7 @@ async def schema_overview(connection_name: str) -> str:
         async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
             resp = await client.get(f"/api/connections/{connection_name}/schema/overview")
             if resp.status_code != 200:
-                return f"Error: {resp.text}"
+                return sanitize_proxy_response(resp.status_code, resp.text)
             data = resp.json()
 
         lines = [
@@ -1495,7 +1497,7 @@ async def schema_overview(connection_name: str) -> str:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
         schema_cache.put(connection_name, schema)
 
     fk_map: dict[str, str] = {}
@@ -1551,7 +1553,7 @@ async def connector_capabilities(connection_name: str = "") -> str:
         else:
             r = await client.get(f"{gw}/api/connectors/capabilities")
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     lines = ["Connector Capabilities:"]
@@ -1599,7 +1601,7 @@ async def schema_diff(connection_name: str) -> str:
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.get(f"{gw}/api/connections/{connection_name}/schema/diff")
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     lines = [f"Schema Diff for {connection_name}:"]
@@ -1668,7 +1670,7 @@ async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool 
             params={"max_tables": max_tables, "compress": compress},
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     compressed = data.get("compressed_tables", 0)
@@ -1712,7 +1714,7 @@ async def schema_link(connection_name: str, question: str, format: str = "ddl", 
             params={"question": question, "format": format, "max_tables": max_tables},
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     linked = data.get("linked_tables", 0)
@@ -1761,7 +1763,7 @@ async def explain_query(connection_name: str, sql: str) -> str:
             json={"connection_name": connection_name, "sql": sql},
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:300]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     parts = [f"-- EXPLAIN for: {connection_name}"]
@@ -1841,12 +1843,12 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             except Exception:
                 pass
             hint = query_error_hint(error_text, db_type)
-            parts = [f"INVALID ✗\n{error_text}"]
+            parts = [f"INVALID ✗\n{sanitize_mcp_error(error_text, cap=500)}"]
             if hint:
                 parts.append(f"\nSuggested fix: {hint}")
             return "\n".join(parts)
     except Exception as e:
-        return f"Validation error: {e}"
+        return f"Validation error: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -1879,7 +1881,7 @@ async def query_history(connection_name: str, limit: int = 10) -> str:
             },
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     entries = data.get("entries", [])
@@ -1979,7 +1981,7 @@ async def explore_columns(
         if resp.status_code == 404:
             return f"Table '{table}' not found. Check the table name with schema_link first."
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
 
         data = resp.json()
         explored_cols = data.get("columns", [])
@@ -2036,7 +2038,7 @@ async def explore_columns(
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error exploring columns: {e}"
+        return f"Error exploring columns: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2057,7 +2059,7 @@ async def schema_statistics(connection_name: str) -> str:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(f"{gw}/api/connections/{connection_name}/schema/overview")
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
 
         data = resp.json()
         lines = [
@@ -2104,7 +2106,7 @@ async def schema_statistics(connection_name: str) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2145,7 +2147,7 @@ async def explore_column(
                 params=params,
             )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
 
         data = resp.json()
         lines = [f"Column: {table}.{column}"]
@@ -2171,7 +2173,7 @@ async def explore_column(
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2208,7 +2210,7 @@ async def estimate_query_cost(connection_name: str, sql: str) -> str:
                 },
             )
             if resp.status_code != 200:
-                return f"Error: {resp.text}"
+                return sanitize_proxy_response(resp.status_code, resp.text)
             data = resp.json()
 
         lines = [f"Cost Estimate for: {connection_name}", ""]
@@ -2226,7 +2228,7 @@ async def estimate_query_cost(connection_name: str, sql: str) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error estimating cost: {e}"
+        return f"Error estimating cost: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2316,7 +2318,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                     lines.append(f"Sample: {preview}")
             else:
                 error_text = resp.text[:300]
-                lines.append(f"ERROR ✗: {error_text}")
+                lines.append(f"ERROR ✗: {sanitize_mcp_error(error_text, cap=300)}")
                 # Get hint
                 try:
                     async with httpx.AsyncClient(timeout=5) as client2:
@@ -2330,7 +2332,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                     pass
 
         except Exception as e:
-            lines.append(f"ERROR: {e}")
+            lines.append(f"ERROR: {sanitize_mcp_error(str(e))}")
 
         lines.append("")
 
@@ -2350,9 +2352,9 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
             data = resp.json()
             lines.append(f"OK ✓ — {data.get('row_count', 0)} rows returned")
         else:
-            lines.append(f"ERROR ✗: {resp.text[:300]}")
+            lines.append(f"ERROR ✗: {sanitize_mcp_error(resp.text[:300], cap=300)}")
     except Exception as e:
-        lines.append(f"ERROR: {e}")
+        lines.append(f"ERROR: {sanitize_mcp_error(str(e))}")
 
     return "\n".join(lines)
 
@@ -2402,7 +2404,7 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not rows:
         return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
@@ -2605,7 +2607,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}')
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     total_rows: int = count_rows[0].get("total_rows", 0) if count_rows else 0
 
@@ -2620,7 +2622,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 pragma_rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         except Exception as e:
-            return f"Error fetching schema: {e}"
+            return f"Error fetching schema: {sanitize_mcp_error(str(e))}"
         id_cols = [
             r.get("name", "")
             for r in pragma_rows
@@ -2650,9 +2652,9 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
                             fan_out = total_rows / distinct_count if distinct_count > 0 else 0
                             lines.append(f"    {key}: {distinct_count:,} distinct (NOT unique - fan-out factor ~{fan_out:.1f}x)")
                     except Exception as e:
-                        lines.append(f"    {key}: error checking distinctness ({e})")
+                        lines.append(f"    {key}: error checking distinctness ({sanitize_mcp_error(str(e), cap=100)})")
         except Exception as e:
-            lines.append(f"    error opening connection: {e}")
+            lines.append(f"    error opening connection: {sanitize_mcp_error(str(e), cap=100)}")
 
     if not keys:
         lines.append("    (no candidate keys found or provided)")
@@ -2711,7 +2713,7 @@ async def validate_model_output(
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     model_rows: int = model_rows_result[0].get("row_count", 0) if model_rows_result else 0
 
@@ -2725,7 +2727,7 @@ async def validate_model_output(
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
-            source_error = str(e)
+            source_error = sanitize_mcp_error(str(e))
 
     lines = [
         f"Model output validation: '{model_name}'",
@@ -2808,7 +2810,7 @@ async def audit_model_sources(
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
-        return f"Error: could not query model '{model_name}': {e}"
+        return f"Error: could not query model '{model_name}': {sanitize_mcp_error(str(e))}"
 
     model_rows: int = model_result[0].get("row_count", 0) if model_result else 0
 
@@ -2830,7 +2832,7 @@ async def audit_model_sources(
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(src)}')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
-            source_lines.append(f"  {src}:  ERROR: {e}")
+            source_lines.append(f"  {src}:  ERROR: {sanitize_mcp_error(str(e), cap=100)}")
             continue
 
         if src_rows == 0:
@@ -2910,7 +2912,7 @@ async def audit_model_sources(
                             f"  [OK]  {col_label}  {dist_count:>8,} distinct, {null_count:,} nulls"
                         )
                 except Exception as e:
-                    col_scan_lines.append(f"  [--] {col}: error ({e})")
+                    col_scan_lines.append(f"  [--] {col}: error ({sanitize_mcp_error(str(e), cap=100)})")
 
         except Exception:
             col_scan_header = "Column scan: unavailable (PRAGMA table_info failed)"
@@ -3055,7 +3057,7 @@ SELECT
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             result = await connector.execute(sql)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not result:
         return "Error: Query returned no results."
@@ -3219,7 +3221,7 @@ async def create_project(name: str, connection_name: str) -> str:
         )
         info = store.create_project(proj)
     except ValueError as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
     return (
         f"Created project '{info.name}' at {info.project_dir}\n"
         f"  connection: {info.connection_name}\n"

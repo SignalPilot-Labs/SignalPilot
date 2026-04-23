@@ -1610,9 +1610,9 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
           <div className="flex gap-2">
             {([
-              { key: "memory", label: "in-memory" },
               { key: "local", label: "local file" },
               { key: "motherduck", label: "MotherDuck" },
+              { key: "memory", label: "in-memory" },
             ] as const).map(({ key, label }) => (
               <button
                 key={key}
@@ -2269,6 +2269,7 @@ export default function ConnectionsPage() {
 
   async function handleTest(name: string) {
     setTesting(name);
+    setDiagResults((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
       const result = await testConnection(name);
       setTestResult((prev) => ({ ...prev, [name]: result }));
@@ -2290,6 +2291,7 @@ export default function ConnectionsPage() {
 
   async function handleDiagnose(name: string) {
     setDiagnosing(name);
+    setTestResult((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
       const result = await diagnoseConnection(name);
       setDiagResults((prev) => ({ ...prev, [name]: result }));
@@ -3176,6 +3178,14 @@ export default function ConnectionsPage() {
                           encrypted
                         </span>
                       </Tooltip>
+                      {(conn as any).byok_key_alias && (
+                        <Tooltip content={`Credentials encrypted with your key: ${(conn as any).byok_key_alias}`} position="top">
+                          <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-purple-500/30 text-purple-400/80 tracking-wider cursor-default">
+                            <Shield className="w-2.5 h-2.5" strokeWidth={1.5} />
+                            byok
+                          </span>
+                        </Tooltip>
+                      )}
                       {conn.ssl && (
                         <span className="text-[11px] px-1 py-0.5 border border-[var(--color-success)]/30 text-[var(--color-success)] tracking-wider">ssl</span>
                       )}

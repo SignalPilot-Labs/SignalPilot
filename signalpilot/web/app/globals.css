@@ -370,10 +370,15 @@ input[type="number"] {
   background: var(--color-text);
 }
 
-/* ── Terminal input placeholder ── */
+/* ── Input placeholder — dim enough to not look like real text ── */
+textarea::placeholder,
+input::placeholder {
+  color: var(--color-text-dim);
+  opacity: 0.35;
+}
 textarea:focus::placeholder,
 input:focus::placeholder {
-  opacity: 0.3;
+  opacity: 0.25;
 }
 
 /* ── Code block styling ── */

@@ -80,49 +80,69 @@ class BYOKProvider(Protocol):
 # ─── LocalBYOKProvider ───────────────────────────────────────────────────────
 
 class LocalBYOKProvider:
-    """Fernet-based BYOK provider for testing and local development.
+    """Fernet-based BYOK provider for local development.
 
-    Keys are stored in memory only. Not suitable for production use.
-    Each key in `_keys` is a Fernet-format key (44-byte base64url-encoded string
-    as returned by Fernet.generate_key()).
+    Keys are persisted to disk at {data_dir}/byok_keys/{org_id}_{key_alias}.key
+    so they survive container restarts. On register, the key is written to disk.
+    On access, the key is loaded from disk (cached in memory after first read).
     """
 
-    def __init__(self) -> None:
-        # Maps "{org_id}:{key_alias}" -> Fernet-format key bytes (44 bytes)
-        self._keys: dict[str, bytes] = {}
+    def __init__(self, data_dir: str | None = None) -> None:
+        import os
+        from pathlib import Path
+        self._data_dir = Path(data_dir or os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
+        self._key_dir = self._data_dir / "byok_keys"
+        self._key_dir.mkdir(parents=True, exist_ok=True)
+        # In-memory cache: "{org_id}:{key_alias}" -> Fernet key bytes
+        self._cache: dict[str, bytes] = {}
+
+    def _key_path(self, org_id: str, key_alias: str):
+        # Sanitize for filesystem safety
+        safe_name = f"{org_id}_{key_alias}".replace("/", "_").replace("\\", "_")
+        return self._key_dir / f"{safe_name}.key"
 
     def register_key(self, org_id: str, key_alias: str, key: bytes | None = None) -> None:
-        """Register a KEK for the given org and alias.
-
-        If key is None, generate a new Fernet key. This is a sync method for
-        test setup convenience.
-        """
+        """Register a KEK. Generates a new Fernet key if none provided. Persists to disk."""
         slot = f"{org_id}:{key_alias}"
-        self._keys[slot] = key if key is not None else Fernet.generate_key()
+        path = self._key_path(org_id, key_alias)
+        if path.exists():
+            # Key already on disk — load it instead of overwriting
+            self._cache[slot] = path.read_bytes().strip()
+            return
+        key_material = key if key is not None else Fernet.generate_key()
+        path.write_bytes(key_material)
+        self._cache[slot] = key_material
 
     def revoke_key(self, org_id: str, key_alias: str) -> None:
-        """Remove a KEK. Subsequent unwrap calls for this key raise BYOKKeyError."""
+        """Remove a KEK from memory and disk."""
         slot = f"{org_id}:{key_alias}"
-        self._keys.pop(slot, None)
+        self._cache.pop(slot, None)
+        path = self._key_path(org_id, key_alias)
+        if path.exists():
+            path.unlink()
 
     def _get_fernet(self, org_id: str, key_alias: str) -> Fernet:
         slot = f"{org_id}:{key_alias}"
-        kek = self._keys.get(slot)
+        kek = self._cache.get(slot)
         if kek is None:
-            raise BYOKKeyError(
-                org_id=org_id,
-                key_alias=key_alias,
-                message="Key not found",
-            )
+            # Try loading from disk
+            path = self._key_path(org_id, key_alias)
+            if path.exists():
+                kek = path.read_bytes().strip()
+                self._cache[slot] = kek
+            else:
+                raise BYOKKeyError(
+                    org_id=org_id,
+                    key_alias=key_alias,
+                    message="Key not found",
+                )
         return Fernet(kek)
 
     async def wrap_dek(self, org_id: str, key_alias: str, dek_plaintext: bytes) -> bytes:
-        """Encrypt a DEK using the registered KEK. Returns Fernet ciphertext bytes."""
         f = self._get_fernet(org_id, key_alias)
         return f.encrypt(dek_plaintext)
 
     async def unwrap_dek(self, org_id: str, key_alias: str, wrapped_dek: bytes) -> bytes:
-        """Decrypt a wrapped DEK. Raises BYOKKeyError if key missing or token invalid."""
         f = self._get_fernet(org_id, key_alias)
         try:
             return f.decrypt(wrapped_dek)
@@ -134,7 +154,6 @@ class LocalBYOKProvider:
             ) from exc
 
     async def generate_dek(self) -> bytes:
-        """Generate a fresh Fernet key (44 bytes) to use as a DEK."""
         return Fernet.generate_key()
 
     async def health_check(self) -> bool:

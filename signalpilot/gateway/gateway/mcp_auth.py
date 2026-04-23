@@ -250,7 +250,13 @@ class MCPAuthMiddleware:
 
                 if "state" not in scope:
                     scope["state"] = {}
-                scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name}
+                scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name, "user_id": "local"}
+                # Set user_id to "local" for local-mode MCP store access
+                try:
+                    from .mcp_server import mcp_user_id_var
+                    mcp_user_id_var.set("local")
+                except Exception:
+                    pass
                 await self._app(scope, receive, send)
         except Exception as e:
             logger.error("MCP auth: DB error in local validation: %s", e)

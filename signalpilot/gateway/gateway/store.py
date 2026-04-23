@@ -724,7 +724,7 @@ class Store:
             query_timeout=conn.query_timeout,
             keepalive_interval=conn.keepalive_interval,
             created_at=time.time(),
-            org_id=conn.org_id,
+            org_id=conn.org_id or (self.user_id if self.user_id else "local"),
             byok_key_alias=conn.byok_key_alias,
         )
         self.session.add(db_conn)

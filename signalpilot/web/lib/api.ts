@@ -371,6 +371,18 @@ export const setPIIConfig = (name: string, config: { enabled: boolean; rules: Re
 export const detectAndSavePII = (name: string) =>
   request<{ connection_name: string; columns_flagged: number; rules: Record<string, string>; enabled: boolean }>(`/api/connections/${name}/detect-and-save-pii`, { method: "POST" });
 
+// BYOK Key Management
+export type BYOKKey = { id: string; org_id: string; key_alias: string; provider_type: string; provider_config: Record<string, unknown> | null; status: string; created_at: number; revoked_at: number | null };
+export type BYOKStatus = { total: number; byok: number; managed: number; status: "none" | "partial" | "complete" };
+export const listBYOKKeys = () => request<BYOKKey[]>("/api/byok/keys");
+export const createBYOKKey = (body: { key_alias: string; provider_type: string; provider_config?: Record<string, unknown> }) =>
+  request<BYOKKey>("/api/byok/keys", { method: "POST", body: JSON.stringify(body) });
+export const deleteBYOKKey = (keyId: string, force = false) => request<void>(`/api/byok/keys/${keyId}${force ? "?force=true" : ""}`, { method: "DELETE" });
+export const validateBYOKKey = (keyId: string) => request<{ valid: boolean; error?: string }>(`/api/byok/keys/${keyId}/validate`, { method: "POST" });
+export const getBYOKStatus = () => request<BYOKStatus>("/api/byok/status");
+export const migrateToBYOK = (keyId: string) => request<{ migrated: number; failed: number; errors: string[] }>("/api/byok/migrate", { method: "POST", body: JSON.stringify({ key_id: keyId }) });
+export const revertToManaged = () => request<{ migrated: number; failed: number; errors: string[] }>("/api/byok/revert", { method: "POST" });
+
 // Schema Cache
 export const getSchemaCache = () =>
   request<{ cached_connections: number; total_entries: number; ttl_seconds: number }>("/api/schema-cache/stats");

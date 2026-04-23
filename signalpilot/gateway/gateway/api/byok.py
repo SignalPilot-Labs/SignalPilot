@@ -114,6 +114,13 @@ async def create_byok_key(
     await _upsert_org(db, org_id)
     await db.refresh(key)
 
+    # For local provider: auto-register the key material in memory
+    from ..store import _byok_provider as provider
+    from ..byok import LocalBYOKProvider
+    if isinstance(provider, LocalBYOKProvider):
+        provider.register_key(org_id, body.key_alias)
+        logger.info("Local BYOK key registered in-memory for org=%s alias=%s", org_id, body.key_alias)
+
     return _key_to_response(key)
 
 
@@ -180,8 +187,14 @@ async def delete_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    force: bool = False,
 ) -> Response:
-    """Delete a BYOK key. Returns 409 if key is in use by credentials."""
+    """Delete a BYOK key.
+
+    Without force=true, returns 409 if credentials use this key.
+    With force=true, reverts affected credentials to managed encryption first,
+    then deletes the key. This is the "revoke access" path.
+    """
     result = await db.execute(
         select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
     )
@@ -193,13 +206,35 @@ async def delete_byok_key(
         select(GatewayCredential).where(GatewayCredential.byok_key_id == key_id)
     )
     credentials_using_key = cred_result.scalars().all()
-    if credentials_using_key:
+    if credentials_using_key and not force:
         count = len(credentials_using_key)
-        logger.warning("Cannot delete key %s: in use by %d credential(s)", key_id, count)
         raise HTTPException(
             status_code=409,
-            detail="Key is in use by existing credentials and cannot be deleted",
+            detail=f"Key is in use by {count} credential(s). Use force=true to revert them to managed encryption and delete the key.",
         )
+
+    if credentials_using_key and force:
+        # Destructive revoke: credentials become permanently unreadable.
+        # Mark them as revoked so the gateway knows not to attempt decryption.
+        for cred in credentials_using_key:
+            cred.encryption_mode = "revoked"
+        # Clear byok_key_alias on connections
+        conn_result = await db.execute(
+            select(GatewayConnection).where(GatewayConnection.byok_key_alias == key.key_alias)
+        )
+        for conn in conn_result.scalars():
+            conn.byok_key_alias = None
+        await db.commit()
+        logger.warning(
+            "BYOK key %s force-deleted: %d credential(s) permanently revoked",
+            key_id, len(credentials_using_key),
+        )
+
+    # Revoke key from local provider (deletes key material from disk)
+    from ..byok import LocalBYOKProvider
+    from ..store import _byok_provider as current_provider
+    if isinstance(current_provider, LocalBYOKProvider):
+        current_provider.revoke_key(org_id, key.key_alias)
 
     await db.delete(key)
     await db.commit()

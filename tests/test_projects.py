@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -245,6 +245,37 @@ class TestCreateProject:
                     git_url="https://github.com/org/nope.git",
                 ))
 
+    def test_create_dbt_cloud_project(self):
+        conn = _make_connection("pg", "postgres")
+        mock_run = MagicMock(returncode=0, stderr="", stdout="")
+        with patch("signalpilot.gateway.gateway.store.get_connection", return_value=conn), \
+             patch("subprocess.run", return_value=mock_run):
+            project_dir = Path(_test_dir) / "projects" / "cloud-proj"
+            project_dir.mkdir(parents=True, exist_ok=True)
+            (project_dir / "dbt_project.yml").write_text("name: test")
+            proj = create_project(ProjectCreate(
+                name="cloud-proj",
+                connection_name="pg",
+                source=ProjectSource.dbt_cloud,
+                git_url="https://github.com/org/repo.git",
+                dbt_cloud_account_id="12345",
+                dbt_cloud_project_id="67890",
+            ))
+        assert proj.source == ProjectSource.dbt_cloud
+        assert proj.dbt_cloud_account_id == "12345"
+        assert proj.dbt_cloud_project_id == "67890"
+        assert proj.git_remote == "https://github.com/org/repo.git"
+
+    def test_create_dbt_cloud_missing_url_raises(self):
+        conn = _make_connection("pg", "postgres")
+        with patch("signalpilot.gateway.gateway.store.get_connection", return_value=conn):
+            with pytest.raises(ValueError, match="git_url is required"):
+                create_project(ProjectCreate(
+                    name="no-url-cloud",
+                    connection_name="pg",
+                    source=ProjectSource.dbt_cloud,
+                ))
+
     def test_create_local_missing_path_raises(self):
         conn = _make_connection("pg", "postgres")
         with patch("signalpilot.gateway.gateway.store.get_connection", return_value=conn):
@@ -439,3 +470,47 @@ class TestProjectsAPI:
     def test_scan_missing_returns_404(self, client):
         resp = client.post("/api/projects/ghost/scan")
         assert resp.status_code == 404
+
+
+class TestDbtCloudDiscoveryAPI:
+    """Integration tests for the dbt Cloud discovery endpoint."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from signalpilot.gateway.gateway.api.projects import router
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(router)
+        return TestClient(app)
+
+    def test_discover_returns_projects(self, client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "data": [
+                {"id": 1, "name": "analytics", "repository": {"remote_url": "git@github.com:org/analytics.git"}},
+                {"id": 2, "name": "marketing", "repository": None},
+            ]
+        }
+
+        mock_async_client = AsyncMock()
+        mock_async_client.get.return_value = mock_response
+
+        with patch("signalpilot.gateway.gateway.api.projects.httpx.AsyncClient") as mock_client_cls:
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_async_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            resp = client.post("/api/dbt-cloud/projects", json={"token": "dbtc_xxx", "account_id": "123"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+        assert data[0]["name"] == "analytics"
+        assert data[0]["git_url"] == "git@github.com:org/analytics.git"
+        assert data[1]["git_url"] is None
+
+    def test_discover_missing_token_returns_422(self, client):
+        resp = client.post("/api/dbt-cloud/projects", json={"token": "", "account_id": "123"})
+        assert resp.status_code == 422

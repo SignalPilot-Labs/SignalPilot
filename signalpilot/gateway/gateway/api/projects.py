@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import time
 
+import httpx
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ..models import ProjectCreate, ProjectUpdate
 from ..store import (
@@ -68,3 +70,35 @@ async def scan_project(name: str):
     now = time.time()
     update_project(name, ProjectUpdate(last_scanned_at=now))
     return {"project": name, "scanned_at": now, "model_count": proj.model_count, "status": "ok"}
+
+
+class DbtCloudDiscoverRequest(BaseModel):
+    """Request to discover projects from a dbt Cloud account."""
+    token: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1)
+
+
+@router.post("/dbt-cloud/projects")
+async def discover_dbt_cloud_projects(req: DbtCloudDiscoverRequest):
+    """Fetch project list from dbt Cloud API (proxied to avoid CORS)."""
+    url = f"https://cloud.getdbt.com/api/v2/accounts/{req.account_id}/projects/"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={"Authorization": f"Token {req.token}"})
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid dbt Cloud API token")
+        raise HTTPException(status_code=e.response.status_code, detail="dbt Cloud API error")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail="Cannot reach dbt Cloud API")
+
+    data = resp.json().get("data", [])
+    return [
+        {
+            "id": p["id"],
+            "name": p.get("name", ""),
+            "git_url": (p.get("repository") or {}).get("remote_url"),
+        }
+        for p in data
+    ]

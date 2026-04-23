@@ -194,6 +194,11 @@ export const deleteProject = (name: string) =>
   request<void>(`/api/projects/${name}`, { method: "DELETE" });
 export const scanProject = (name: string) =>
   request<{ message: string; model_count: number }>(`/api/projects/${name}/scan`, { method: "POST" });
+export const discoverDbtCloudProjects = (token: string, account_id: string) =>
+  request<{ id: number; name: string; git_url: string | null }[]>("/api/dbt-cloud/projects", {
+    method: "POST",
+    body: JSON.stringify({ token, account_id }),
+  });
 
 // Sandboxes
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");

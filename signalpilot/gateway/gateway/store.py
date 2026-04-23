@@ -720,6 +720,8 @@ def create_project(proj: ProjectCreate) -> ProjectInfo:
         return _create_local_project(proj, connection, data)
     if proj.source.value == "github":
         return _create_github_project(proj, connection, data)
+    if proj.source.value == "dbt-cloud":
+        return _create_dbt_cloud_project(proj, connection, data)
     return _create_new_project(proj, connection, data)
 
 
@@ -817,6 +819,55 @@ def _create_github_project(
         db_type=connection.db_type,
         git_remote=proj.git_url,
         git_branch=branch,
+        description=proj.description,
+        tags=proj.tags,
+    )
+    data[proj.name] = info.model_dump()
+    _save_json(PROJECTS_FILE, data)
+    return info
+
+
+def _create_dbt_cloud_project(
+    proj: ProjectCreate, connection: ConnectionInfo, data: dict
+) -> ProjectInfo:
+    """Handle source='dbt-cloud': clone the repo backing a dbt Cloud project."""
+    if not proj.git_url:
+        raise ValueError("git_url is required for dbt Cloud import (discovered via API)")
+
+    import subprocess
+
+    branch = proj.git_branch or "main"
+    project_dir = DATA_DIR / "projects" / proj.name
+
+    result = subprocess.run(
+        ["git", "clone", "--branch", branch, "--depth", "1", proj.git_url, str(project_dir)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"git clone failed: {result.stderr.strip()}")
+
+    if not (project_dir / "dbt_project.yml").exists():
+        shutil.rmtree(project_dir)
+        raise ValueError("Cloned repo does not contain dbt_project.yml")
+
+    (project_dir / "profiles.yml").write_text(
+        _generate_profiles_yml(proj.name, connection)
+    )
+
+    info = ProjectInfo(
+        id=str(uuid.uuid4()),
+        name=proj.name,
+        connection_name=proj.connection_name,
+        project_dir=str(project_dir),
+        storage=ProjectStorage.managed,
+        source=proj.source,
+        db_type=connection.db_type,
+        git_remote=proj.git_url,
+        git_branch=branch,
+        dbt_cloud_account_id=proj.dbt_cloud_account_id,
+        dbt_cloud_project_id=proj.dbt_cloud_project_id,
         description=proj.description,
         tags=proj.tags,
     )

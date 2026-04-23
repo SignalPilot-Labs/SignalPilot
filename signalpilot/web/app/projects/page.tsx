@@ -12,8 +12,9 @@ import {
   ArrowRight,
   Upload,
   GitBranch,
+  Cloud,
 } from "lucide-react";
-import { getProjects, createProject, deleteProject, getConnections } from "@/lib/api";
+import { getProjects, createProject, deleteProject, getConnections, discoverDbtCloudProjects } from "@/lib/api";
 import type { ProjectInfo, ConnectionInfo } from "@/lib/types";
 import { EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -41,10 +42,16 @@ export default function ProjectsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showGithub, setShowGithub] = useState(false);
+  const [showDbtCloud, setShowDbtCloud] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({ name: "", connection_name: "" });
   const [importForm, setImportForm] = useState({ name: "", path: "", connection_name: "", mode: "link" as "link" | "copy" });
   const [githubForm, setGithubForm] = useState({ name: "", git_url: "", git_branch: "main", connection_name: "" });
+  const [dbtCloudForm, setDbtCloudForm] = useState({ token: "", account_id: "" });
+  const [dbtCloudProjects, setDbtCloudProjects] = useState<{ id: number; name: string; git_url: string | null }[]>([]);
+  const [dbtCloudSelected, setDbtCloudSelected] = useState<{ id: number; name: string; git_url: string } | null>(null);
+  const [dbtCloudConnection, setDbtCloudConnection] = useState("");
+  const [dbtCloudFetching, setDbtCloudFetching] = useState(false);
 
   const refresh = useCallback(() => {
     getProjects().then(setProjects).catch(() => {});
@@ -139,6 +146,52 @@ export default function ProjectsPage() {
     finally { setCreating(false); }
   }
 
+  async function handleDbtCloudFetch() {
+    if (!dbtCloudForm.token || !dbtCloudForm.account_id) {
+      toast("token and account id are required", "error");
+      return;
+    }
+    setDbtCloudFetching(true);
+    try {
+      const projects = await discoverDbtCloudProjects(dbtCloudForm.token, dbtCloudForm.account_id);
+      setDbtCloudProjects(projects);
+      if (projects.length === 0) toast("no projects found in this account", "error");
+    } catch (e) { toast(String(e), "error"); }
+    finally { setDbtCloudFetching(false); }
+  }
+
+  async function handleDbtCloudImport() {
+    if (!dbtCloudSelected) {
+      toast("select a project", "error");
+      return;
+    }
+    if (!dbtCloudConnection) {
+      toast("select a connection", "error");
+      return;
+    }
+    setCreating(true);
+    try {
+      const name = dbtCloudSelected.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
+      const p = await createProject({
+        name,
+        git_url: dbtCloudSelected.git_url,
+        git_branch: "main",
+        connection_name: dbtCloudConnection,
+        source: "dbt-cloud",
+        dbt_cloud_account_id: dbtCloudForm.account_id,
+        dbt_cloud_project_id: String(dbtCloudSelected.id),
+      });
+      setProjects((prev) => [p, ...prev]);
+      setShowDbtCloud(false);
+      setDbtCloudForm({ token: "", account_id: "" });
+      setDbtCloudProjects([]);
+      setDbtCloudSelected(null);
+      setDbtCloudConnection("");
+      toast(`imported ${p.name} from dbt Cloud`, "success");
+    } catch (e) { toast(String(e), "error"); }
+    finally { setCreating(false); }
+  }
+
   async function handleDelete(name: string) {
     try {
       await deleteProject(name);
@@ -154,6 +207,12 @@ export default function ProjectsPage() {
         description="dbt project management"
         actions={
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowDbtCloud(true)}
+              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+            >
+              <Cloud className="w-3.5 h-3.5" /> dbt cloud
+            </button>
             <button
               onClick={() => setShowGithub(true)}
               className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
@@ -391,6 +450,113 @@ export default function ProjectsPage() {
               </button>
               <button
                 onClick={() => setShowGithub(false)}
+                className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+              >
+                cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* dbt Cloud dialog */}
+      {showDbtCloud && (
+        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
+          <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
+            <Cloud className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">import from dbt cloud</span>
+          </div>
+          <div className="p-5">
+            {/* Step 1: token + account */}
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">api token</label>
+                <input
+                  type="password"
+                  placeholder="dbtc_..."
+                  value={dbtCloudForm.token}
+                  onChange={(e) => setDbtCloudForm({ ...dbtCloudForm, token: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">account id</label>
+                <input
+                  type="text"
+                  placeholder="12345"
+                  value={dbtCloudForm.account_id}
+                  onChange={(e) => setDbtCloudForm({ ...dbtCloudForm, account_id: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={handleDbtCloudFetch}
+                  disabled={dbtCloudFetching}
+                  className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                >
+                  {dbtCloudFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+                  fetch projects
+                </button>
+              </div>
+            </div>
+
+            {/* Step 2: select project + connection */}
+            {dbtCloudProjects.length > 0 && (
+              <div className="border-t border-[var(--color-border)] pt-4 mt-4">
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-2 tracking-wider">select project</label>
+                <div className="space-y-1 mb-4 max-h-48 overflow-y-auto">
+                  {dbtCloudProjects.map((p) => (
+                    <label
+                      key={p.id}
+                      className={`flex items-center gap-3 px-3 py-2 cursor-pointer text-xs border transition-colors ${
+                        dbtCloudSelected?.id === p.id
+                          ? "border-[var(--color-text)] bg-[var(--color-bg-input)]"
+                          : "border-transparent hover:bg-[var(--color-bg-input)]"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="dbt-cloud-project"
+                        checked={dbtCloudSelected?.id === p.id}
+                        onChange={() => p.git_url ? setDbtCloudSelected({ id: p.id, name: p.name, git_url: p.git_url }) : null}
+                        disabled={!p.git_url}
+                        className="accent-[var(--color-text)]"
+                      />
+                      <span className={p.git_url ? "" : "text-[var(--color-text-dim)] line-through"}>{p.name}</span>
+                      <span className="text-[var(--color-text-dim)] font-mono ml-auto">{p.git_url || "no repo"}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection</label>
+                    <select
+                      value={dbtCloudConnection}
+                      onChange={(e) => setDbtCloudConnection(e.target.value)}
+                      className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                    >
+                      <option value="">select connection</option>
+                      {connections.map((c) => (
+                        <option key={c.name} value={c.name}>{c.name} ({c.db_type})</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <button
+                  onClick={handleDbtCloudImport}
+                  disabled={creating || !dbtCloudSelected}
+                  className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                >
+                  {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Cloud className="w-3.5 h-3.5" />}
+                  import
+                </button>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 mt-3">
+              <button
+                onClick={() => { setShowDbtCloud(false); setDbtCloudProjects([]); setDbtCloudSelected(null); }}
                 className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 cancel

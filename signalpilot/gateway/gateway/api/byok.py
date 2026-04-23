@@ -195,9 +195,10 @@ async def delete_byok_key(
     credentials_using_key = cred_result.scalars().all()
     if credentials_using_key:
         count = len(credentials_using_key)
+        logger.warning("Cannot delete key %s: in use by %d credential(s)", key_id, count)
         raise HTTPException(
             status_code=409,
-            detail=f"Key is in use by {count} credential(s)",
+            detail="Key is in use by existing credentials and cannot be deleted",
         )
 
     await db.delete(key)
@@ -270,7 +271,7 @@ async def migrate_credentials_to_byok(
     if key is None or key.org_id != org_id:
         raise HTTPException(
             status_code=404,
-            detail=f"Active BYOK key '{body.key_id}' not found",
+            detail="Active BYOK key not found",
         )
 
     migrated, failed, errors = await migrate_to_byok(

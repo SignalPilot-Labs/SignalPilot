@@ -338,7 +338,7 @@ async def migrate_to_byok(
                 cred_row.connection_name,
                 cred_row.user_id,
             )
-            error_msg = f"Failed to migrate credential {cred_row.id}: migration error"
+            error_msg = "Failed to migrate a credential: migration error"
             errors.append(error_msg)
             failed += 1
 
@@ -431,7 +431,7 @@ async def rotate_byok_key(
                 cred_row.connection_name,
                 cred_row.user_id,
             )
-            error_msg = f"Failed to rotate credential {cred_row.id}: rotation error"
+            error_msg = "Failed to rotate a credential: rotation error"
             errors.append(error_msg)
             failed += 1
 
@@ -521,7 +521,7 @@ async def revert_to_managed(
                 cred_row.connection_name,
                 cred_row.user_id,
             )
-            error_msg = f"Failed to revert credential {cred_row.id}: revert error"
+            error_msg = "Failed to revert a credential: revert error"
             errors.append(error_msg)
             failed += 1
 

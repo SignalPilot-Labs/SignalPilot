@@ -364,7 +364,7 @@ class TestMigrateH2ErrorRedaction:
         cred_mock.encryption_mode = "managed"
 
         async def _migrate_side_effect(*args, **kwargs):
-            return (0, 1, ["Failed to migrate credential cred-uuid-123: migration error"])
+            return (0, 1, ["Failed to migrate a credential: migration error"])
 
         with (
             patch("gateway.store._byok_provider", provider),
@@ -381,6 +381,7 @@ class TestMigrateH2ErrorRedaction:
         assert resp.status_code == 200
         body = resp.json()
         assert body["failed"] == 1
-        # Error message must use credential ID, not connection name
+        # Error message must not expose internal IDs or connection names
         assert "my-secret-db" not in str(body["errors"])
-        assert "cred-uuid-123" in str(body["errors"])
+        assert "cred-uuid-123" not in str(body["errors"])
+        assert "Failed to migrate a credential" in str(body["errors"])

@@ -519,7 +519,7 @@ class TestRotateEndpoint:
             with patch("gateway.store._dek_cache", new=None):
                 with patch(
                     "gateway.api.byok.rotate_byok_key",
-                    new=AsyncMock(return_value=(1, 1, ["Failed to rotate credential x: rotation error"])),
+                    new=AsyncMock(return_value=(1, 1, ["Failed to rotate a credential: rotation error"])),
                 ):
                     await rotate_byok_key_endpoint(
                         key_id="key-old",

@@ -24,7 +24,8 @@ from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import init_db, close_db, get_session_factory
-from .store import Store, _validate_encryption_health
+from .byok import DEKCache, LocalBYOKProvider
+from .store import Store, _validate_encryption_health, configure_byok
 from .api import register_routers
 from .api.deps import reset_sandbox_client, _sandbox_client
 
@@ -48,6 +49,12 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info("STARTUP: Encryption health check passed.")
+
+    # Configure BYOK provider (Phase 2)
+    byok_provider = LocalBYOKProvider()
+    dek_cache = DEKCache(ttl_seconds=300)
+    configure_byok(byok_provider, dek_cache)
+    logger.info("STARTUP: BYOK provider configured (LocalBYOKProvider)")
 
     async def _pool_cleanup_loop():
         while True:
@@ -121,6 +128,7 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()
+        dek_cache.clear()
         await close_db()
         from .api.deps import _sandbox_client
         if _sandbox_client:

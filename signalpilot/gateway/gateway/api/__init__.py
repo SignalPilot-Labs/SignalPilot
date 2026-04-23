@@ -16,6 +16,7 @@ from .projects import router as projects_router
 from .keys import router as keys_router
 from .files import router as files_router
 from .security import router as security_router
+from .byok import router as byok_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -34,3 +35,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(keys_router)
     app.include_router(files_router)
     app.include_router(security_router)
+    app.include_router(byok_router)

@@ -5,8 +5,11 @@ Provides:
 - LocalBYOKProvider: Fernet-based implementation for testing and development
 - DEKCache: thread-safe TTL cache for plaintext DEKs (avoids redundant KMS calls)
 - encrypt_envelope / decrypt_envelope: envelope encryption helpers used by store.py
+- encrypt_fields_envelope: multi-field single-DEK encryption helper
+- migrate_to_byok / revert_to_managed: credential migration functions
 
-Dependency direction: this module depends on nothing within the project.
+Dependency direction: this module depends on nothing within the project
+except db.models (data layer — not a circular dependency).
 External dependency: cryptography (already a project dependency).
 
 Security note: DEKCache stores plaintext DEKs in memory. The TTL is a
@@ -15,11 +18,18 @@ security-sensitive parameter — keep it short. Clear the cache on shutdown.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from cryptography.fernet import Fernet, InvalidToken
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .db.models import GatewayConnection, GatewayCredential
+
+logger = logging.getLogger(__name__)
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -242,3 +252,190 @@ async def decrypt_envelope(
 
     f = Fernet(dek)
     return f.decrypt(ciphertext).decode()
+
+
+async def encrypt_fields_envelope(
+    provider: BYOKProvider,
+    org_id: str,
+    key_alias: str,
+    fields: list[str],
+) -> tuple[list[bytes], bytes]:
+    """Encrypt multiple plaintext fields using a single DEK.
+
+    Generates ONE DEK, encrypts each field with it, and wraps the DEK once.
+    Use this instead of calling encrypt_envelope() multiple times when you
+    need to store multiple ciphertexts with a single wrapped_dek column.
+
+    Returns:
+        (list_of_ciphertexts, wrapped_dek) — ciphertexts in the same order as
+        the input fields list. Store wrapped_dek alongside all ciphertexts.
+    """
+    dek: bytes = await provider.generate_dek()
+    f = Fernet(dek)
+    ciphertexts = [f.encrypt(field.encode()) for field in fields]
+    wrapped_dek: bytes = await provider.wrap_dek(org_id, key_alias, dek)
+    return ciphertexts, wrapped_dek
+
+
+async def migrate_to_byok(
+    session: AsyncSession,
+    provider: BYOKProvider,
+    org_id: str,
+    key_id: str,
+    key_alias: str,
+    managed_decrypt: Callable[[bytes], tuple[str, bool]],
+) -> tuple[int, int, list[str]]:
+    """Re-encrypt all managed credentials for an org's connections to BYOK.
+
+    Loads all eligible credential rows in one query (join with connections),
+    then processes each individually. Per-credential atomicity: each row commits
+    independently so partial migration is safe to resume.
+
+    Returns:
+        (migrated_count, failed_count, error_messages)
+    """
+    result = await session.execute(
+        select(GatewayCredential, GatewayConnection).join(
+            GatewayConnection,
+            (GatewayConnection.user_id == GatewayCredential.user_id)
+            & (GatewayConnection.name == GatewayCredential.connection_name),
+        ).where(
+            GatewayConnection.org_id == org_id,
+            GatewayCredential.encryption_mode == ENCRYPTION_MODE_MANAGED,
+        )
+    )
+    rows = result.all()
+
+    migrated = 0
+    failed = 0
+    errors: list[str] = []
+
+    for cred_row, conn_row in rows:
+        try:
+            conn_string_plain, _ = managed_decrypt(cred_row.connection_string_enc)
+            extras_plain = "{}"
+            if cred_row.extras_enc:
+                extras_plain, _ = managed_decrypt(cred_row.extras_enc)
+
+            ciphertexts, wrapped_dek = await encrypt_fields_envelope(
+                provider, org_id, key_alias, [conn_string_plain, extras_plain]
+            )
+
+            cred_row.connection_string_enc = ciphertexts[0]
+            cred_row.extras_enc = ciphertexts[1]
+            cred_row.wrapped_dek = wrapped_dek
+            cred_row.encryption_mode = ENCRYPTION_MODE_BYOK
+            cred_row.byok_key_id = key_id
+
+            conn_row.byok_key_alias = key_alias
+
+            await session.commit()
+            migrated += 1
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "Failed to migrate credential for connection '%s' (user '%s')",
+                cred_row.connection_name,
+                cred_row.user_id,
+            )
+            error_msg = (
+                f"Failed to migrate credential for connection "
+                f"'{cred_row.connection_name}': migration error"
+            )
+            errors.append(error_msg)
+            failed += 1
+
+    return migrated, failed, errors
+
+
+async def revert_to_managed(
+    session: AsyncSession,
+    provider: BYOKProvider,
+    org_id: str,
+    managed_encrypt: Callable[[str], bytes],
+    cache: DEKCache | None = None,
+) -> tuple[int, int, list[str]]:
+    """Re-encrypt all BYOK credentials for an org back to managed encryption.
+
+    Loads all eligible credential rows in one query (join with connections),
+    then processes each individually. Per-credential atomicity: each row commits
+    independently so partial revert is safe.
+
+    Returns:
+        (reverted_count, failed_count, error_messages)
+    """
+    result = await session.execute(
+        select(GatewayCredential, GatewayConnection).join(
+            GatewayConnection,
+            (GatewayConnection.user_id == GatewayCredential.user_id)
+            & (GatewayConnection.name == GatewayCredential.connection_name),
+        ).where(
+            GatewayConnection.org_id == org_id,
+            GatewayCredential.encryption_mode == ENCRYPTION_MODE_BYOK,
+        )
+    )
+    rows = result.all()
+
+    migrated = 0
+    failed = 0
+    errors: list[str] = []
+
+    for cred_row, conn_row in rows:
+        try:
+            if cred_row.wrapped_dek is None:
+                raise ValueError("Credential is BYOK mode but has no wrapped_dek")
+
+            key_alias = conn_row.byok_key_alias
+            if not key_alias:
+                raise ValueError("Connection is missing byok_key_alias for BYOK decryption")
+
+            conn_string_plain = await decrypt_envelope(
+                provider=provider,
+                org_id=org_id,
+                key_alias=key_alias,
+                wrapped_dek=cred_row.wrapped_dek,
+                ciphertext=cred_row.connection_string_enc,
+                cache=cache,
+                credential_id=cred_row.id,
+            )
+
+            extras_plain = "{}"
+            if cred_row.extras_enc:
+                extras_plain = await decrypt_envelope(
+                    provider=provider,
+                    org_id=org_id,
+                    key_alias=key_alias,
+                    wrapped_dek=cred_row.wrapped_dek,
+                    ciphertext=cred_row.extras_enc,
+                    cache=cache,
+                    credential_id=cred_row.id,
+                )
+
+            cred_row.connection_string_enc = managed_encrypt(conn_string_plain)
+            cred_row.extras_enc = managed_encrypt(extras_plain)
+            cred_row.wrapped_dek = None
+            cred_row.encryption_mode = ENCRYPTION_MODE_MANAGED
+            cred_row.byok_key_id = None
+
+            conn_row.byok_key_alias = None
+
+            if cache is not None:
+                cache.invalidate(cred_row.id)
+
+            await session.commit()
+            migrated += 1
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "Failed to revert credential for connection '%s' (user '%s')",
+                cred_row.connection_name,
+                cred_row.user_id,
+            )
+            error_msg = (
+                f"Failed to revert credential for connection "
+                f"'{cred_row.connection_name}': revert error"
+            )
+            errors.append(error_msg)
+            failed += 1
+
+    return migrated, failed, errors

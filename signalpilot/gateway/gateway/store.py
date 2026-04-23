@@ -24,12 +24,14 @@ from sqlalchemy import delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .byok import BYOKProvider, DEKCache, decrypt_envelope
+from .byok import BYOKProvider, DEKCache, decrypt_envelope, encrypt_fields_envelope
 from .db.models import (
     GatewayApiKey,
     GatewayAuditLog,
+    GatewayBYOKKey,
     GatewayConnection,
     GatewayCredential,
+    GatewayOrg,
     GatewayProject,
     GatewaySetting,
 )
@@ -93,6 +95,46 @@ def configure_byok(provider: BYOKProvider, cache: DEKCache | None = None) -> Non
     global _byok_provider, _dek_cache
     _byok_provider = provider
     _dek_cache = cache
+
+
+async def _resolve_byok_key(
+    session: AsyncSession,
+    org_id: str,
+    key_alias: str | None = None,
+) -> GatewayBYOKKey | None:
+    """Resolve the active BYOK key for an org.
+
+    If key_alias is provided, looks up by org_id + key_alias + status='active'.
+    If key_alias is None, looks up the org's default_byok_key_id from GatewayOrg,
+    then loads that key.
+
+    Returns the GatewayBYOKKey row or None if not found.
+    """
+    if key_alias is not None:
+        result = await session.execute(
+            select(GatewayBYOKKey).where(
+                GatewayBYOKKey.org_id == org_id,
+                GatewayBYOKKey.key_alias == key_alias,
+                GatewayBYOKKey.status == "active",
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # No alias: look up the org's default key
+    org_result = await session.execute(
+        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
+    )
+    org_row = org_result.scalar_one_or_none()
+    if org_row is None or not org_row.default_byok_key_id:
+        return None
+
+    key_result = await session.execute(
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == org_row.default_byok_key_id,
+            GatewayBYOKKey.status == "active",
+        )
+    )
+    return key_result.scalar_one_or_none()
 
 
 # ─── Atomic file helper ──────────────────────────────────────────────────────
@@ -665,6 +707,8 @@ class Store:
             query_timeout=conn.query_timeout,
             keepalive_interval=conn.keepalive_interval,
             created_at=time.time(),
+            org_id=conn.org_id,
+            byok_key_alias=conn.byok_key_alias,
         )
         self.session.add(db_conn)
 
@@ -676,13 +720,40 @@ class Store:
         if conn.db_type in (DBType.duckdb, DBType.sqlite):
             _validate_local_db_path(raw_cred)
         extras = _extract_credential_extras(conn)
-        cred = GatewayCredential(
-            user_id=uid,
-            connection_name=conn.name,
-            connection_string_enc=_encrypt(raw_cred),
-            extras_enc=_encrypt(json.dumps(extras)),
-            key_version=CURRENT_KEY_VERSION,
-        )
+
+        # BYOK encrypt path: use envelope encryption when org has BYOK configured
+        byok_key = None
+        if conn.org_id and _byok_provider is not None:
+            byok_key = await _resolve_byok_key(
+                self.session, conn.org_id, conn.byok_key_alias
+            )
+
+        if byok_key is not None and _byok_provider is not None:
+            ciphertexts, wrapped_dek = await encrypt_fields_envelope(
+                _byok_provider,
+                conn.org_id,  # type: ignore[arg-type]
+                byok_key.key_alias,
+                [raw_cred, json.dumps(extras)],
+            )
+            db_conn.byok_key_alias = byok_key.key_alias
+            cred = GatewayCredential(
+                user_id=uid,
+                connection_name=conn.name,
+                connection_string_enc=ciphertexts[0],
+                extras_enc=ciphertexts[1],
+                key_version=CURRENT_KEY_VERSION,
+                encryption_mode="byok",
+                wrapped_dek=wrapped_dek,
+                byok_key_id=byok_key.id,
+            )
+        else:
+            cred = GatewayCredential(
+                user_id=uid,
+                connection_name=conn.name,
+                connection_string_enc=_encrypt(raw_cred),
+                extras_enc=_encrypt(json.dumps(extras)),
+                key_version=CURRENT_KEY_VERSION,
+            )
         self.session.add(cred)
         try:
             await self.session.commit()
@@ -771,9 +842,31 @@ class Store:
                 )
                 cred_row = cred_result.scalar_one_or_none()
                 if cred_row:
-                    cred_row.connection_string_enc = _encrypt(raw_cred)
-                    cred_row.extras_enc = _encrypt(json.dumps(extras))
-                    cred_row.key_version = CURRENT_KEY_VERSION
+                    # BYOK encrypt path: use envelope encryption if org has BYOK configured
+                    org_id = row.org_id
+                    key_alias = row.byok_key_alias
+                    byok_key = None
+                    if org_id and _byok_provider is not None:
+                        byok_key = await _resolve_byok_key(self.session, org_id, key_alias)
+
+                    if byok_key is not None and _byok_provider is not None:
+                        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
+                            _byok_provider,
+                            org_id,  # type: ignore[arg-type]
+                            byok_key.key_alias,
+                            [raw_cred, json.dumps(extras)],
+                        )
+                        cred_row.connection_string_enc = ciphertexts[0]
+                        cred_row.extras_enc = ciphertexts[1]
+                        cred_row.key_version = CURRENT_KEY_VERSION
+                        cred_row.encryption_mode = "byok"
+                        cred_row.wrapped_dek = wrapped_dek
+                        cred_row.byok_key_id = byok_key.id
+                        row.byok_key_alias = byok_key.key_alias
+                    else:
+                        cred_row.connection_string_enc = _encrypt(raw_cred)
+                        cred_row.extras_enc = _encrypt(json.dumps(extras))
+                        cred_row.key_version = CURRENT_KEY_VERSION
             except Exception as e:
                 logger.error(
                     "Credential encryption failed for connection %s: %s", name, e

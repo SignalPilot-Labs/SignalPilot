@@ -240,6 +240,11 @@ class ConnectionCreate(BaseModel):
         default=None, ge=0, le=600,
         description="Keepalive ping interval in seconds. 0 = disabled.",
     )
+    # ─── BYOK ───────────────────────────────────────────────────────────
+    org_id: str | None = Field(default=None, max_length=100)
+    byok_key_alias: str | None = Field(
+        default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$"
+    )
 
 
 class ConnectionUpdate(BaseModel):
@@ -471,6 +476,46 @@ class AuditEntry(BaseModel):
     duration_ms: float | None = None
     agent_id: str | None = None
     metadata: dict[str, Any] = {}
+
+
+# ─── BYOK API models ─────────────────────────────────────────────────────────
+
+class BYOKKeyCreate(BaseModel):
+    org_id: str = Field(..., min_length=1, max_length=100)
+    key_alias: str = Field(..., min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+    provider_type: str = Field(..., pattern=r"^(local|aws_kms|gcp_kms|azure_kv)$")
+    provider_config: dict[str, Any] | None = None
+
+
+class BYOKKeyUpdate(BaseModel):
+    key_alias: str | None = Field(default=None, min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+    status: str | None = Field(default=None, pattern=r"^(active|revoked)$")
+
+
+class BYOKKeyResponse(BaseModel):
+    id: str
+    org_id: str
+    key_alias: str
+    provider_type: str
+    provider_config: dict[str, Any] | None = None
+    status: str
+    created_at: float
+    revoked_at: float | None = None
+
+
+class BYOKMigrateRequest(BaseModel):
+    org_id: str = Field(..., min_length=1, max_length=100)
+    key_id: str = Field(..., min_length=1)
+
+
+class BYOKRevertRequest(BaseModel):
+    org_id: str = Field(..., min_length=1, max_length=100)
+
+
+class BYOKMigrateResponse(BaseModel):
+    migrated: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
 
 
 _MCP_ARGUMENTS_MAX_DEPTH: int = 20

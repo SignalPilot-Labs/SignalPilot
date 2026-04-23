@@ -24,6 +24,7 @@ from sqlalchemy import delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .byok import BYOKProvider, DEKCache, decrypt_envelope
 from .db.models import (
     GatewayApiKey,
     GatewayAuditLog,
@@ -74,6 +75,24 @@ class CredentialEncryptionError(Exception):
 # Module-level key cache — populated on first call, reused thereafter.
 # Avoids re-running PBKDF2 (≈200 ms) on every encrypt/decrypt call.
 _CACHED_KEY: bytes | None = None
+
+# Module-level BYOK state — set by configure_byok() before any BYOK credentials
+# are decrypted. Phase 2 will call configure_byok() from the application lifespan
+# handler (main.py startup). Phase 1 only adds the decrypt routing; the globals
+# remain None unless explicitly configured.
+_byok_provider: BYOKProvider | None = None
+_dek_cache: DEKCache | None = None
+
+
+def configure_byok(provider: BYOKProvider, cache: DEKCache | None = None) -> None:
+    """Set the module-level BYOK provider and optional DEK cache.
+
+    Call this during application startup before any requests are served.
+    Phase 2 will wire this into the FastAPI lifespan handler in main.py.
+    """
+    global _byok_provider, _dek_cache
+    _byok_provider = provider
+    _dek_cache = cache
 
 
 # ─── Atomic file helper ──────────────────────────────────────────────────────
@@ -770,52 +789,117 @@ class Store:
     async def get_connection_string(self, name: str) -> str | None:
         uid = self.user_id or "local"
         result = await self.session.execute(
-            select(GatewayCredential).where(
+            select(GatewayCredential, GatewayConnection).join(
+                GatewayConnection,
+                (GatewayConnection.user_id == GatewayCredential.user_id)
+                & (GatewayConnection.name == GatewayCredential.connection_name),
+                isouter=True,
+            ).where(
                 GatewayCredential.user_id == uid,
                 GatewayCredential.connection_name == name,
             )
         )
-        row = result.scalar_one_or_none()
-        if not row:
+        row_pair = result.first()
+        if not row_pair:
             return None
-        plaintext, needs_migration = _decrypt_with_migration(row.connection_string_enc)
+        cred_row, conn_row = row_pair
+
+        if cred_row.encryption_mode == "byok":
+            if _byok_provider is None:
+                raise CredentialEncryptionError("BYOK provider not configured")
+            if cred_row.wrapped_dek is None:
+                raise CredentialEncryptionError(
+                    f"Credential for connection '{name}' is BYOK mode but has no wrapped_dek"
+                )
+            org_id = conn_row.org_id if conn_row else None
+            key_alias = conn_row.byok_key_alias if conn_row else None
+            if not org_id or not key_alias:
+                raise CredentialEncryptionError(
+                    f"Connection '{name}' is missing org_id or byok_key_alias for BYOK decryption"
+                )
+            return await decrypt_envelope(
+                provider=_byok_provider,
+                org_id=org_id,
+                key_alias=key_alias,
+                wrapped_dek=cred_row.wrapped_dek,
+                ciphertext=cred_row.connection_string_enc,
+                cache=_dek_cache,
+                credential_id=cred_row.id,
+            )
+
+        # Managed (default) path — existing Fernet-based decryption
+        plaintext, needs_migration = _decrypt_with_migration(cred_row.connection_string_enc)
         # Re-encrypt if using legacy key derivation OR if key_version is behind current.
         # Concurrent reads may both re-encrypt — this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
-        needs_version_upgrade = row.key_version != CURRENT_KEY_VERSION
+        needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
-            row.connection_string_enc = _encrypt(plaintext)
+            cred_row.connection_string_enc = _encrypt(plaintext)
             # Re-encrypt extras_enc too so key_version covers both fields
-            if row.extras_enc:
-                extras_plain, _ = _decrypt_with_migration(row.extras_enc)
-                row.extras_enc = _encrypt(extras_plain)
-            row.key_version = CURRENT_KEY_VERSION
+            if cred_row.extras_enc:
+                extras_plain, _ = _decrypt_with_migration(cred_row.extras_enc)
+                cred_row.extras_enc = _encrypt(extras_plain)
+            cred_row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
         uid = self.user_id or "local"
         result = await self.session.execute(
-            select(GatewayCredential).where(
+            select(GatewayCredential, GatewayConnection).join(
+                GatewayConnection,
+                (GatewayConnection.user_id == GatewayCredential.user_id)
+                & (GatewayConnection.name == GatewayCredential.connection_name),
+                isouter=True,
+            ).where(
                 GatewayCredential.user_id == uid,
                 GatewayCredential.connection_name == name,
             )
         )
-        row = result.scalar_one_or_none()
-        if not row or not row.extras_enc:
+        row_pair = result.first()
+        if not row_pair:
             return {}
-        plaintext, needs_migration = _decrypt_with_migration(row.extras_enc)
+        cred_row, conn_row = row_pair
+        if not cred_row.extras_enc:
+            return {}
+
+        if cred_row.encryption_mode == "byok":
+            if _byok_provider is None:
+                raise CredentialEncryptionError("BYOK provider not configured")
+            if cred_row.wrapped_dek is None:
+                raise CredentialEncryptionError(
+                    f"Credential for connection '{name}' is BYOK mode but has no wrapped_dek"
+                )
+            org_id = conn_row.org_id if conn_row else None
+            key_alias = conn_row.byok_key_alias if conn_row else None
+            if not org_id or not key_alias:
+                raise CredentialEncryptionError(
+                    f"Connection '{name}' is missing org_id or byok_key_alias for BYOK decryption"
+                )
+            extras_json = await decrypt_envelope(
+                provider=_byok_provider,
+                org_id=org_id,
+                key_alias=key_alias,
+                wrapped_dek=cred_row.wrapped_dek,
+                ciphertext=cred_row.extras_enc,
+                cache=_dek_cache,
+                credential_id=cred_row.id,
+            )
+            return json.loads(extras_json)
+
+        # Managed (default) path — existing Fernet-based decryption
+        plaintext, needs_migration = _decrypt_with_migration(cred_row.extras_enc)
         # Re-encrypt if using legacy key derivation OR if key_version is behind current.
         # Concurrent reads may both re-encrypt — this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
-        needs_version_upgrade = row.key_version != CURRENT_KEY_VERSION
+        needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
-            row.extras_enc = _encrypt(plaintext)
+            cred_row.extras_enc = _encrypt(plaintext)
             # Re-encrypt connection_string_enc too so key_version covers both fields
-            if row.connection_string_enc:
-                cs_plain, _ = _decrypt_with_migration(row.connection_string_enc)
-                row.connection_string_enc = _encrypt(cs_plain)
-            row.key_version = CURRENT_KEY_VERSION
+            if cred_row.connection_string_enc:
+                cs_plain, _ = _decrypt_with_migration(cred_row.connection_string_enc)
+                cred_row.connection_string_enc = _encrypt(cs_plain)
+            cred_row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
         return json.loads(plaintext)
 

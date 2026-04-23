@@ -330,6 +330,9 @@ class ConnectionInfo(BaseModel):
     created_at: float = Field(default_factory=time.time)
     last_used: float | None = None
     status: str = "unknown"  # healthy | error | unknown
+    # BYOK scaffolding (Phase 1: always None; Phase 2 populates on encrypt)
+    org_id: str | None = None
+    byok_key_alias: str | None = None
 
 
 # ─── Projects ─────────────────────────────────────────────────────────────────

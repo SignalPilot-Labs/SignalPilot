@@ -13,12 +13,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from ..auth import UserID
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..models import ConnectionCreate, ConnectionUpdate
 from ..network_validation import validate_connection_params
-from ..scope_guard import RequireScope
+from ..scope_guard import RequireScope, require_scopes
 from ..store import (
     CredentialEncryptionError,
     _build_connection_string,
@@ -383,7 +384,7 @@ async def add_connection(conn: ConnectionCreate, store: StoreD):
 
 
 @router.get("/connections/health", dependencies=[RequireScope("read")])
-async def get_all_connection_health(window: int = Query(default=300, ge=60, le=3600)):
+async def get_all_connection_health(_: UserID, window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for all monitored connections."""
     return {"connections": health_monitor.all_stats(window)}
 
@@ -445,12 +446,17 @@ class ExportRequest(BaseModel):
 async def export_connections(
     body: ExportRequest,
     store: StoreD,
+    request: Request,
 ):
     """Export all connections as a portable JSON manifest.
 
     Requires explicit confirmation via POST body.
     Credential export is audit-logged.
+    Exporting credentials requires admin scope in addition to write scope.
     """
+    if body.include_credentials:
+        require_scopes(request, "admin")
+
     if not body.confirm:
         return JSONResponse(
             status_code=400,
@@ -748,7 +754,7 @@ async def warmup_all_schemas(store: StoreD):
 
 
 @router.post("/connections/parse-url", dependencies=[RequireScope("read")])
-async def parse_connection_url(request: Request):
+async def parse_connection_url(_: UserID, request: Request):
     """Parse a database connection URL into individual credential fields."""
     body = await request.json()
     url = body.get("url", "").strip()
@@ -838,7 +844,7 @@ async def parse_connection_url(request: Request):
 
 
 @router.post("/connections/test-credentials", dependencies=[RequireScope("write")])
-async def test_credentials(request: Request):
+async def test_credentials(_: UserID, request: Request):
     """Test connection credentials without saving."""
     body = await request.json()
     t0 = time.monotonic()
@@ -996,7 +1002,7 @@ async def test_credentials(request: Request):
 
 
 @router.post("/connections/validate-url", dependencies=[RequireScope("read")])
-async def validate_connection_url(body: dict):
+async def validate_connection_url(_: UserID, body: dict):
     """Validate and parse a connection string without saving or connecting."""
     url = body.get("connection_string", "")
     db_type = body.get("db_type", "")
@@ -1105,7 +1111,7 @@ _BUILD_URL_FIELD_LIMITS: dict[str, int] = {
 
 
 @router.post("/connections/build-url", dependencies=[RequireScope("read")])
-async def build_connection_url(body: dict):
+async def build_connection_url(_: UserID, body: dict):
     """Build a connection string from individual fields."""
     db_type = body.get("db_type", "")
     host = body.get("host", "")
@@ -1341,7 +1347,7 @@ async def test_connection(name: str, store: StoreD):
 
 
 @router.get("/connections/{name}/health", dependencies=[RequireScope("read")])
-async def get_connection_health(name: str, window: int = Query(default=300, ge=60, le=3600)):
+async def get_connection_health(_: UserID, name: str, window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for a specific connection."""
     stats = health_monitor.connection_stats(name, window)
     if stats is None:
@@ -1351,6 +1357,7 @@ async def get_connection_health(name: str, window: int = Query(default=300, ge=6
 
 @router.get("/connections/{name}/health/history", dependencies=[RequireScope("read")])
 async def get_connection_health_history(
+    _: UserID,
     name: str,
     window: int = Query(default=3600, ge=300, le=86400, description="History window in seconds"),
     bucket: int = Query(default=60, ge=10, le=3600, description="Bucket size in seconds"),
@@ -1368,7 +1375,7 @@ async def get_connection_health_history(
 
 
 @router.get("/network/info", dependencies=[RequireScope("admin")])
-async def network_info():
+async def network_info(_: UserID):
     """Return this server's public IP and network info for firewall/whitelist setup."""
     result: dict = {
         "hostname": socket.gethostname(),
@@ -1562,7 +1569,7 @@ async def diagnose_connection(name: str, store: StoreD):
 
 
 @router.get("/connectors/capabilities", dependencies=[RequireScope("read")])
-async def get_connector_capabilities(db_type: str | None = None):
+async def get_connector_capabilities(_: UserID, db_type: str | None = None):
     """Return connector tier classification and feature matrix."""
     if db_type:
         info = _CONNECTOR_TIERS.get(db_type)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from ..auth import UserID
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
@@ -14,13 +15,13 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/cache/stats", dependencies=[RequireScope("read")])
-async def cache_stats():
+async def cache_stats(_: UserID):
     """Get query cache statistics (Feature #30)."""
     return query_cache.stats()
 
 
 @router.post("/cache/invalidate", status_code=200, dependencies=[RequireScope("write")])
-async def invalidate_cache(connection_name: str | None = None):
+async def invalidate_cache(_: UserID, connection_name: str | None = None):
     """Invalidate cached query results. Optionally filter by connection."""
     count = query_cache.invalidate(connection_name)
     return {"invalidated": count, "connection_name": connection_name}
@@ -73,19 +74,19 @@ async def detect_pii(name: str, store: StoreD):
 
 
 @router.get("/pool/stats", dependencies=[RequireScope("read")])
-async def pool_stats():
+async def pool_stats(_: UserID):
     """Get connection pool statistics for monitoring."""
     return pool_manager.stats()
 
 
 @router.get("/schema-cache/stats", dependencies=[RequireScope("read")])
-async def schema_cache_stats():
+async def schema_cache_stats(_: UserID):
     """Get schema cache statistics (Feature #18)."""
     return schema_cache.stats()
 
 
 @router.post("/schema-cache/invalidate", status_code=200, dependencies=[RequireScope("write")])
-async def invalidate_schema_cache(connection_name: str | None = None):
+async def invalidate_schema_cache(_: UserID, connection_name: str | None = None):
     """Invalidate cached schema data. Optionally filter by connection."""
     count = schema_cache.invalidate(connection_name)
     return {"invalidated": count, "connection_name": connection_name}

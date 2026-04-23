@@ -9,6 +9,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from ..auth import UserID
 from ..scope_guard import RequireScope
 from ..store import list_sandboxes
 from .deps import StoreD, get_sandbox_client_with_store
@@ -244,7 +245,7 @@ _CONNECTOR_TIERS = {
 
 
 @router.get("/connectors/capabilities", dependencies=[RequireScope("read")])
-async def get_connector_capabilities(db_type: str | None = None):
+async def get_connector_capabilities(_: UserID, db_type: str | None = None):
     """Return connector tier classification and feature matrix.
 
     HEX-style tier system showing which features each connector supports.

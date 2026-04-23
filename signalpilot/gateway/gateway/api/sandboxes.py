@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
+from ..auth import UserID
 from ..models import AuditEntry, ExecuteRequest, SandboxCreate
 from ..scope_guard import RequireScope
 from ..store import (
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/sandboxes", dependencies=[RequireScope("read")])
-async def get_sandboxes():
+async def get_sandboxes(_: UserID):
     return list_sandboxes()
 
 
@@ -52,7 +53,7 @@ async def create_sandbox(req: SandboxCreate, store: StoreD):
 
 
 @router.get("/sandboxes/{sandbox_id}", dependencies=[RequireScope("read")])
-async def get_sandbox_detail(sandbox_id: str):
+async def get_sandbox_detail(_: UserID, sandbox_id: str):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")

@@ -21,6 +21,13 @@ def require_scopes(request: Request, *required: str) -> None:
     2. auth_method == "local_key" — local dev key. Grant all scopes.
     3. auth_method == "api_key" — stored API key. Check scopes explicitly.
 
+    WARNING: Case 1 grants all scopes when auth is None, which occurs for JWT
+    and cookie-authenticated requests before resolve_user_id runs. This means
+    every scope-protected endpoint MUST also include a `_: UserID` or
+    `store: StoreD` parameter dependency to ensure JWT verification actually
+    runs in cloud mode. Endpoints without those dependencies will pass scope
+    checks with an unverified (or fake) Bearer token.
+
     Raises:
         HTTPException(403): if any required scope is missing for an api_key auth.
     """

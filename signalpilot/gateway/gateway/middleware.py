@@ -7,6 +7,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import os
 import time
 from collections import defaultdict
 from typing import Any
@@ -299,6 +300,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_CSP_DEFAULT_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Adds security headers to all responses."""
 
@@ -326,4 +340,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["Strict-Transport-Security"] = (
                 "max-age=63072000; includeSubDomains"
             )
+        # CSP: SP_GATEWAY_CSP_POLICY overrides the default entirely when set.
+        # The deployer owns the full policy — no merging or layering.
+        csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY
+        response.headers["Content-Security-Policy"] = csp_policy
         return response

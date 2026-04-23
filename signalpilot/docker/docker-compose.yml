@@ -20,6 +20,9 @@ services:
     depends_on:
       sandbox:
         condition: service_started
+    networks:
+      - frontend
+      - backend
     restart: unless-stopped
 
   web:
@@ -34,6 +37,8 @@ services:
     command: ["npm", "start", "--", "--port", "3200"]
     depends_on:
       - gateway
+    networks:
+      - frontend
     restart: unless-stopped
 
   sandbox:
@@ -58,6 +63,8 @@ services:
       - SP_MAX_VMS=10
     volumes:
       - ${HOST_DATA_DIR:-~}:/host-data:ro   # host filesystem for local DB file access
+    networks:
+      - backend
     restart: unless-stopped
 
   # -- Development-only database --
@@ -74,7 +81,15 @@ services:
       - "5600:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
+    networks:
+      - backend
 
 volumes:
   sp-data:
   pg-data:
+
+networks:
+  frontend:
+    # gateway <-> web, gateway <-> external clients
+  backend:
+    internal: true  # prevents outbound internet access from containers on this network

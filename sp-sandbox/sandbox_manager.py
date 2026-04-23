@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
 import uuid
 from pathlib import Path
 
 from aiohttp import web
 
+import audit
 from constants import HOST, MAX_CODE_LENGTH, MAX_TIMEOUT, MAX_VMS, MIN_TIMEOUT, PORT
 from executor import GVisorExecutor
 
@@ -69,6 +69,8 @@ async def execute_handler(request: web.Request) -> web.Response:
     vm_id = body.get("vm_id")
     file_mounts = body.get("file_mounts", [])  # [{"host_path": "...", "sandbox_path": "...", "readonly": true}]
 
+    client_ip = request.remote
+
     if not code:
         return web.json_response(
             {"success": False, "error": "Missing required field: code"},
@@ -76,6 +78,18 @@ async def execute_handler(request: web.Request) -> web.Response:
         )
 
     if len(code) > MAX_CODE_LENGTH:
+        audit.log_execution(
+            session_token=session_token,
+            vm_id=vm_id or "",
+            code_length=len(code),
+            code_hash="",
+            timeout=0,
+            mount_count=0,
+            success=False,
+            error=f"Code exceeds max length ({MAX_CODE_LENGTH} chars)",
+            execution_ms=0,
+            client_ip=client_ip,
+        )
         return web.json_response(
             {"success": False, "error": f"Code exceeds max length ({MAX_CODE_LENGTH} chars)"},
             status=400,
@@ -86,6 +100,18 @@ async def execute_handler(request: web.Request) -> web.Response:
     timeout = max(MIN_TIMEOUT, min(int(timeout), MAX_TIMEOUT))
 
     if len(active_sessions) >= MAX_VMS and session_token not in active_sessions:
+        audit.log_execution(
+            session_token=session_token,
+            vm_id=vm_id or "",
+            code_length=len(code),
+            code_hash="",
+            timeout=timeout,
+            mount_count=0,
+            success=False,
+            error="Rate limited — too many sandbox requests",
+            execution_ms=0,
+            client_ip=client_ip,
+        )
         return web.json_response(
             {"success": False, "error": "Rate limited — too many sandbox requests"},
             status=429,
@@ -106,6 +132,18 @@ async def execute_handler(request: web.Request) -> web.Response:
         # Otherwise, try to map it: the host's home dir is mounted at /host-data
         resolved = Path(host_path).resolve()
         if not resolved.is_relative_to(Path("/host-data").resolve()):
+            audit.log_execution(
+                session_token=session_token,
+                vm_id=vm_id,
+                code_length=len(code),
+                code_hash="",
+                timeout=timeout,
+                mount_count=0,
+                success=False,
+                error="Mount path not allowed",
+                execution_ms=0,
+                client_ip=client_ip,
+            )
             return web.json_response(
                 {"success": False, "error": "Mount path not allowed"},
                 status=400,
@@ -144,10 +182,24 @@ async def execute_handler(request: web.Request) -> web.Response:
         len(validated_mounts),
     )
 
+    code_hash = audit.hash_code_for_audit(code)
     result = await executor.execute(code, vm_id, timeout, file_mounts=validated_mounts)
 
     # Clean up session after execution (these are one-shot, not persistent)
     active_sessions.pop(session_token, None)
+
+    audit.log_execution(
+        session_token=session_token,
+        vm_id=result.vm_id,
+        code_length=len(code),
+        code_hash=code_hash,
+        timeout=timeout,
+        mount_count=len(validated_mounts),
+        success=result.success,
+        error=result.error,
+        execution_ms=result.execution_ms,
+        client_ip=client_ip,
+    )
 
     return web.json_response({
         "success": result.success,

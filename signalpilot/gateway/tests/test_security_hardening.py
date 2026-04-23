@@ -441,6 +441,44 @@ class TestSecurityHeadersMiddleware:
         headers = self._run_middleware()
         assert "strict-transport-security" not in headers
 
+    def test_csp_header_present(self):
+        """content-security-policy header must be present on any response."""
+        headers = self._run_middleware()
+        assert "content-security-policy" in headers
+
+    def test_csp_default_directives(self):
+        """Default CSP must include baseline directives."""
+        headers = self._run_middleware()
+        csp = headers["content-security-policy"]
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "frame-ancestors 'none'" in csp
+
+    def test_csp_no_unsafe_inline_scripts(self):
+        """script-src directive must not allow unsafe-inline."""
+        headers = self._run_middleware()
+        csp = headers["content-security-policy"]
+        # Find the script-src directive and verify it has no unsafe-inline
+        directives = {d.strip().split(" ")[0]: d.strip() for d in csp.split(";")}
+        script_src = directives.get("script-src", "")
+        assert "'unsafe-inline'" not in script_src
+
+    def test_csp_custom_override(self):
+        """SP_GATEWAY_CSP_POLICY env var replaces the default policy entirely."""
+        import os
+        custom_policy = "default-src 'none'; script-src 'self' cdn.example.com"
+        with MagicMock():
+            original = os.environ.get("SP_GATEWAY_CSP_POLICY")
+            try:
+                os.environ["SP_GATEWAY_CSP_POLICY"] = custom_policy
+                headers = self._run_middleware()
+                assert headers["content-security-policy"] == custom_policy
+            finally:
+                if original is None:
+                    os.environ.pop("SP_GATEWAY_CSP_POLICY", None)
+                else:
+                    os.environ["SP_GATEWAY_CSP_POLICY"] = original
+
 
 # ---------------------------------------------------------------------------
 # TestCorsOriginValidation

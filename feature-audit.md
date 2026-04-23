@@ -93,3 +93,13 @@
 - [x] **Fail-closed on missing host** — TCP db_types with no extractable host raise ValueError instead of silently passing SSRF validation.
 - [x] **RequireScope lambda→def fix** — Fixed FastAPI DI issue where lambda-based RequireScope caused 422 errors (Request treated as query parameter).
 - [x] **88 new tests** (43 SSRF validation + 45 scope enforcement endpoints) — all passing. 255 total tests green.
+
+## Round 10: CGNAT SSRF Bypass Fix, Session Token Hardening
+
+### COMPLETED
+
+- [x] **CGNAT SSRF Bypass Fix** — `ALWAYS_BLOCKED_NETWORKS` tuple added to `network_validation.py` containing `100.64.0.0/10` (CGNAT / Shared Address Space, RFC 6598) and `192.88.99.0/24` (deprecated 6to4 relay anycast, RFC 7526). Python 3.12's `ipaddress.is_private` returns `False` for CGNAT, allowing attackers to target cloud-provider internal ranges. Fixed by explicit network-range denylist checked before `is_private`. CGNAT is always blocked regardless of `SP_ALLOW_PRIVATE_CONNECTIONS`.
+- [x] **IPv4-Mapped IPv6 CGNAT Bypass Prevented** — `_is_blocked_address()` is the single enforcement point called by both the direct IPv4/IPv6 path and the IPv4-mapped IPv6 extraction path in `_check_ip_address()`. No changes to `_check_ip_address()` were needed; the CGNAT check applies to both paths automatically.
+- [x] **Session Token Leak Fix** — `list_vms_handler()` in `sandbox_manager.py` now returns `token[:8] + "..."` instead of the full token in `/vms` responses. Prevents session token enumeration by anyone reaching the sandbox manager.
+- [x] **Session Token Length Validation** — `execute_handler()` rejects `session_token` longer than 128 chars with `400 {"error": "Invalid session token"}` before any audit logging or dict storage. Prevents memory exhaustion from oversized tokens stored as dict keys.
+- [x] **16 new tests** — 10 CGNAT/6to4 tests in `test_ssrf_validation.py` (including IPv4-mapped bypass, edge cases at range boundaries, `SP_ALLOW_PRIVATE_CONNECTIONS` always-blocked behavior) + 6 sandbox session tests in `sp-sandbox/test/test_sandbox_session.py` (token truncation format, empty sessions, oversized rejection, audit-logging not called before rejection). All 53 SSRF tests + 6 sandbox tests pass.

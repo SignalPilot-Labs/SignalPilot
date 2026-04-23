@@ -143,6 +143,71 @@ class TestIPv4MappedIPv6Bypass:
             with pytest.raises(ValueError, match="blocked"):
                 validate_connection_host("evil-private.example.com")
 
+    def test_ipv4_mapped_cgnat_is_blocked(self):
+        """::ffff:100.64.0.1 maps to CGNAT — must be blocked (bypass attempt)."""
+        with _patch_dns("::ffff:100.64.0.1"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("evil-cgnat.example.com")
+
+
+# ─── TestCGNATBlocking ────────────────────────────────────────────────────────
+
+
+class TestCGNATBlocking:
+    """Tests that CGNAT (100.64.0.0/10, RFC 6598) addresses are always blocked."""
+
+    def test_cgnat_start_of_range_is_blocked(self):
+        """100.64.0.1 is in the CGNAT range and must be blocked."""
+        with _patch_dns("100.64.0.1"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("cgnat.example.com")
+
+    def test_cgnat_middle_of_range_is_blocked(self):
+        """100.100.100.100 is in the CGNAT range and must be blocked."""
+        with _patch_dns("100.100.100.100"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("cgnat-mid.example.com")
+
+    def test_cgnat_end_of_range_is_blocked(self):
+        """100.127.255.254 is the last usable CGNAT address — must be blocked."""
+        with _patch_dns("100.127.255.254"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("cgnat-end.example.com")
+
+    def test_cgnat_blocked_even_when_allow_private_set(self):
+        """CGNAT is always blocked regardless of SP_ALLOW_PRIVATE_CONNECTIONS."""
+        with _patch_env_allow_private(True), _patch_dns("100.64.0.1"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("cgnat.example.com")
+
+    def test_cgnat_middle_blocked_even_when_allow_private_set(self):
+        """100.100.100.100 is still blocked when SP_ALLOW_PRIVATE_CONNECTIONS=true."""
+        with _patch_env_allow_private(True), _patch_dns("100.100.100.100"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("cgnat-mid.example.com")
+
+    def test_just_below_cgnat_range_is_allowed(self):
+        """100.63.255.255 is just below 100.64.0.0/10 — must be allowed."""
+        with _patch_dns("100.63.255.255"):
+            validate_connection_host("below-cgnat.example.com")  # should not raise
+
+    def test_just_above_cgnat_range_is_allowed(self):
+        """100.128.0.0 is just above 100.64.0.0/10 range — must be allowed."""
+        with _patch_dns("100.128.0.0"):
+            validate_connection_host("above-cgnat.example.com")  # should not raise
+
+    def test_6to4_relay_anycast_is_blocked(self):
+        """192.88.99.1 is in the deprecated 6to4 relay range (RFC 7526) — must be blocked."""
+        with _patch_dns("192.88.99.1"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("6to4-relay.example.com")
+
+    def test_6to4_relay_blocked_even_when_allow_private_set(self):
+        """192.88.99.0/24 is always blocked even when SP_ALLOW_PRIVATE_CONNECTIONS=true."""
+        with _patch_env_allow_private(True), _patch_dns("192.88.99.1"):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_connection_host("6to4-relay.example.com")
+
 
 # ─── TestAllowedExternalHosts ─────────────────────────────────────────────────
 

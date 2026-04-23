@@ -47,7 +47,7 @@ async def health_handler(request: web.Request) -> web.Response:
 async def list_vms_handler(request: web.Request) -> web.Response:
     """GET /vms — list active sandbox instances."""
     vms = [
-        {"vm_id": vm_id, "session_token": token}
+        {"vm_id": vm_id, "session_token": token[:8] + "..."}
         for token, vm_id in active_sessions.items()
     ]
     return web.json_response({"active_vms": vms})
@@ -70,6 +70,12 @@ async def execute_handler(request: web.Request) -> web.Response:
     file_mounts = body.get("file_mounts", [])  # [{"host_path": "...", "sandbox_path": "...", "readonly": true}]
 
     client_ip = request.remote
+
+    if len(session_token) > 128:
+        return web.json_response(
+            {"error": "Invalid session token"},
+            status=400,
+        )
 
     if not code:
         return web.json_response(

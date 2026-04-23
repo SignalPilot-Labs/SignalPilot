@@ -20,6 +20,14 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# Networks always blocked for SSRF protection, regardless of SP_ALLOW_PRIVATE_CONNECTIONS.
+# These ranges have no stdlib property (unlike loopback/link-local/private), so explicit
+# network-range checks are required.
+ALWAYS_BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("100.64.0.0/10"),   # CGNAT / Shared Address Space (RFC 6598)
+    ipaddress.ip_network("192.88.99.0/24"),  # Deprecated 6to4 relay anycast (RFC 7526)
+)
+
 # TCP-based db_types that require SSRF validation.
 # Cloud services (snowflake, bigquery, databricks) use HTTPS to external
 # cloud endpoints. Embedded databases (duckdb, sqlite) use file paths.
@@ -55,16 +63,24 @@ def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address, all
     - Link-local: 169.254.0.0/16 (includes AWS metadata 169.254.169.254),
       fe80::/10
     - Unspecified: 0.0.0.0, ::
+    - ALWAYS_BLOCKED_NETWORKS: CGNAT 100.64.0.0/10 (RFC 6598), 6to4 relay
+      192.88.99.0/24 (RFC 7526) — no stdlib property covers these ranges
 
     Blocked only when SP_ALLOW_PRIVATE_CONNECTIONS is unset/false:
     - RFC1918 private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
     - IPv6 unique-local: fc00::/7
+
+    Note: _check_ip_address() is the single call site for both direct IPv4/IPv6
+    and IPv4-mapped IPv6 paths — no changes to _check_ip_address() are needed.
     """
     if addr.is_loopback:
         return True
     if addr.is_link_local:
         return True
     if addr.is_unspecified:
+        return True
+
+    if any(addr in net for net in ALWAYS_BLOCKED_NETWORKS):
         return True
 
     if not allow_private:

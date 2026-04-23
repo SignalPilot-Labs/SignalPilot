@@ -36,6 +36,7 @@ We partner with data, analytics, and platform teams who want to put AI agents to
 git clone https://github.com/SignalPilot-Labs/signalpilot.git
 cd signalpilot
 docker compose up -d
+# Web UI available at http://localhost:3200
 
 # Add to Claude Code
 /plugin marketplace add ./plugin
@@ -163,7 +164,7 @@ Replace `sp_your_api_key_here` with your API key from **Settings → API Keys** 
 
 ## Connect a Database
 
-Via the web UI at `http://localhost:3300`, or via API:
+Via the web UI at `http://localhost:3200`, or via API:
 
 ```bash
 curl -X POST http://localhost:3300/api/connections \

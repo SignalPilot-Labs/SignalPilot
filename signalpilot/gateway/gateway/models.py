@@ -77,7 +77,7 @@ class ApiKeyCreate(BaseModel):
     def validate_expires_at(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        from datetime import datetime, timezone
+        from datetime import datetime
         try:
             parsed = datetime.fromisoformat(v)
         except (ValueError, TypeError):
@@ -503,7 +503,7 @@ class BYOKKeyResponse(BaseModel):
 
 
 class BYOKMigrateRequest(BaseModel):
-    key_id: str = Field(..., min_length=1)
+    key_id: str = Field(..., min_length=1, max_length=2048)
 
 
 class BYOKMigrateResponse(BaseModel):
@@ -513,7 +513,7 @@ class BYOKMigrateResponse(BaseModel):
 
 
 class BYOKRotateRequest(BaseModel):
-    new_key_id: str = Field(..., min_length=1)
+    new_key_id: str = Field(..., min_length=1, max_length=2048)
 
 
 class BYOKRotateResponse(BaseModel):
@@ -526,7 +526,7 @@ class BYOKMigrationStatusResponse(BaseModel):
     total: int
     byok: int
     managed: int
-    status: str
+    status: Literal["none", "partial", "complete"]
 
 
 _MCP_ARGUMENTS_MAX_DEPTH: int = 20

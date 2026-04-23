@@ -350,20 +350,25 @@ async def rotate_byok_key_endpoint(
     old_key.status = "rotating"
     await store.session.commit()
 
-    rotated, failed, errors = await rotate_byok_key(
-        session=store.session,
-        provider=provider,
-        org_id=org_id,
-        old_key_id=key_id,
-        old_key_alias=old_key.key_alias,
-        new_key_id=body.new_key_id,
-        new_key_alias=new_key.key_alias,
-        cache=cache,
-    )
+    try:
+        rotated, failed, errors = await rotate_byok_key(
+            session=store.session,
+            provider=provider,
+            org_id=org_id,
+            old_key_id=key_id,
+            old_key_alias=old_key.key_alias,
+            new_key_id=body.new_key_id,
+            new_key_alias=new_key.key_alias,
+            cache=cache,
+        )
 
-    if failed == 0:
-        old_key.status = "inactive"
+        if failed == 0:
+            old_key.status = "inactive"
+            await store.session.commit()
+    except Exception:
+        old_key.status = "active"
         await store.session.commit()
+        raise
 
     return BYOKRotateResponse(rotated=rotated, failed=failed, errors=errors)
 

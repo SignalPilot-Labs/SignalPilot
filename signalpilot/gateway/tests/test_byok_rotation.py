@@ -530,6 +530,36 @@ class TestRotateEndpoint:
 
         assert old_key.status == "rotating"
 
+    @pytest.mark.asyncio
+    async def test_rotate_reverts_status_on_unhandled_exception(self):
+        """Old key status is reverted to 'active' when an unhandled exception is raised."""
+        from gateway.api.byok import rotate_byok_key_endpoint
+        from gateway.models import BYOKRotateRequest
+
+        old_key = _make_byok_key(key_id="key-old", org_id="org1", key_alias="alias-old", status="active")
+        new_key = _make_byok_key(key_id="key-new", org_id="org1", key_alias="alias-new", status="active")
+
+        store = self._make_store()
+        store.session.execute = AsyncMock(
+            side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)]
+        )
+
+        with patch("gateway.store._byok_provider", new=MagicMock()):
+            with patch("gateway.store._dek_cache", new=None):
+                with patch(
+                    "gateway.api.byok.rotate_byok_key",
+                    new=AsyncMock(side_effect=RuntimeError("DB connection lost")),
+                ):
+                    with pytest.raises(RuntimeError, match="DB connection lost"):
+                        await rotate_byok_key_endpoint(
+                            key_id="key-old",
+                            body=BYOKRotateRequest(new_key_id="key-new"),
+                            store=store,
+                            org_id="org1",
+                        )
+
+        assert old_key.status == "active"
+
 
 # ─── TestMigrationStatusEndpoint ─────────────────────────────────────────────
 

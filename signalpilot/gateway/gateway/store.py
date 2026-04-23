@@ -779,20 +779,14 @@ def _create_local_project(
     return info
 
 
-def _create_github_project(
-    proj: ProjectCreate, connection: ConnectionInfo, data: dict
-) -> ProjectInfo:
-    """Handle source='github': clone a repo into a managed project."""
+def _clone_and_wire(
+    git_url: str, branch: str, project_dir: Path, project_name: str, connection: ConnectionInfo
+) -> None:
+    """Clone a git repo, validate dbt_project.yml, and generate profiles.yml."""
     import subprocess
 
-    if not proj.git_url:
-        raise ValueError("git_url is required for GitHub import")
-
-    branch = proj.git_branch or "main"
-    project_dir = DATA_DIR / "projects" / proj.name
-
     result = subprocess.run(
-        ["git", "clone", "--branch", branch, "--depth", "1", proj.git_url, str(project_dir)],
+        ["git", "clone", "--branch", branch, "--depth", "1", git_url, str(project_dir)],
         capture_output=True,
         text=True,
         timeout=120,
@@ -804,10 +798,21 @@ def _create_github_project(
         shutil.rmtree(project_dir)
         raise ValueError("Cloned repo does not contain dbt_project.yml")
 
-    # Generate profiles.yml wired to the connection
     (project_dir / "profiles.yml").write_text(
-        _generate_profiles_yml(proj.name, connection)
+        _generate_profiles_yml(project_name, connection)
     )
+
+
+def _create_github_project(
+    proj: ProjectCreate, connection: ConnectionInfo, data: dict
+) -> ProjectInfo:
+    """Handle source='github': clone a repo into a managed project."""
+    if not proj.git_url:
+        raise ValueError("git_url is required for GitHub import")
+
+    branch = proj.git_branch or "main"
+    project_dir = DATA_DIR / "projects" / proj.name
+    _clone_and_wire(proj.git_url, branch, project_dir, proj.name, connection)
 
     info = ProjectInfo(
         id=str(uuid.uuid4()),
@@ -834,27 +839,9 @@ def _create_dbt_cloud_project(
     if not proj.git_url:
         raise ValueError("git_url is required for dbt Cloud import (discovered via API)")
 
-    import subprocess
-
     branch = proj.git_branch or "main"
     project_dir = DATA_DIR / "projects" / proj.name
-
-    result = subprocess.run(
-        ["git", "clone", "--branch", branch, "--depth", "1", proj.git_url, str(project_dir)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        raise ValueError(f"git clone failed: {result.stderr.strip()}")
-
-    if not (project_dir / "dbt_project.yml").exists():
-        shutil.rmtree(project_dir)
-        raise ValueError("Cloned repo does not contain dbt_project.yml")
-
-    (project_dir / "profiles.yml").write_text(
-        _generate_profiles_yml(proj.name, connection)
-    )
+    _clone_and_wire(proj.git_url, branch, project_dir, proj.name, connection)
 
     info = ProjectInfo(
         id=str(uuid.uuid4()),

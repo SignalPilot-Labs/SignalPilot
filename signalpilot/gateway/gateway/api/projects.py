@@ -75,7 +75,7 @@ async def scan_project(name: str):
 class DbtCloudDiscoverRequest(BaseModel):
     """Request to discover projects from a dbt Cloud account."""
     token: str = Field(..., min_length=1)
-    account_id: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1, pattern=r"^[0-9]+$")
 
 
 @router.post("/dbt-cloud/projects")

@@ -16,17 +16,10 @@ from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..models import ConnectionCreate, ConnectionUpdate
 from ..store import (
-    create_connection,
-    delete_connection,
-    get_connection,
-    get_connection_string,
-    get_credential_extras,
-    list_connections,
-    update_connection,
     _build_connection_string,
     _extract_credential_extras,
 )
-from .deps import sanitize_db_error
+from .deps import StoreD, sanitize_db_error
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +94,14 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
 # Helper: auto schema refresh
 # ---------------------------------------------------------------------------
 
-async def _auto_schema_refresh(name: str, db_type: str):
+async def _auto_schema_refresh(name: str, db_type: str, store):
     """Background task: fetch schema for newly created connections."""
     await asyncio.sleep(2)
     try:
-        conn_str = get_connection_string(name)
+        conn_str = await store.get_connection_string(name)
         if not conn_str:
             return
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
             schema = await connector.get_schema()
             schema_cache.put(name, schema)
@@ -344,21 +337,21 @@ _CONNECTOR_TIERS = {
 # ---------------------------------------------------------------------------
 
 @router.get("/connections")
-async def get_connections():
-    return list_connections()
+async def get_connections(store: StoreD):
+    return await store.list_connections()
 
 
 @router.post("/connections", status_code=201)
-async def add_connection(conn: ConnectionCreate):
+async def add_connection(conn: ConnectionCreate, store: StoreD):
     errors = _validate_connection_params(conn)
     if errors:
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
     try:
-        info = create_connection(conn)
+        info = await store.create_connection(conn)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
-    asyncio.create_task(_auto_schema_refresh(info.name, info.db_type))
+    asyncio.create_task(_auto_schema_refresh(info.name, info.db_type, store))
     return info
 
 
@@ -369,9 +362,9 @@ async def get_all_connection_health(window: int = Query(default=300, ge=60, le=3
 
 
 @router.get("/connections/stats")
-async def get_connections_stats():
+async def get_connections_stats(store: StoreD):
     """Dashboard-level statistics for all connections."""
-    connections = list_connections()
+    connections = await store.list_connections()
     stats: list[dict] = []
     for conn in connections:
         conn_dict = conn.model_dump() if hasattr(conn, "model_dump") else dict(conn)
@@ -418,10 +411,11 @@ async def get_connections_stats():
 
 @router.get("/connections/export")
 async def export_connections(
+    store: StoreD,
     include_credentials: bool = Query(default=False, description="Include passwords and secrets (security risk)"),
 ):
     """Export all connections as a portable JSON manifest."""
-    all_conns = list_connections()
+    all_conns = await store.list_connections()
     exported = []
     for conn in all_conns:
         conn_dict = conn.model_dump() if hasattr(conn, "model_dump") else dict(conn)
@@ -442,7 +436,7 @@ async def export_connections(
                 entry[field] = val
 
         if include_credentials:
-            conn_str = get_connection_string(entry["name"])
+            conn_str = await store.get_connection_string(entry["name"])
             if conn_str:
                 entry["connection_string"] = conn_str
             if conn_dict.get("ssl_config"):
@@ -462,7 +456,7 @@ async def export_connections(
 
 
 @router.post("/connections/import")
-async def import_connections(manifest: dict):
+async def import_connections(manifest: dict, store: StoreD):
     """Import connections from an exported JSON manifest."""
     connections = manifest.get("connections", [])
     results = {"imported": 0, "skipped": [], "errors": []}
@@ -473,13 +467,13 @@ async def import_connections(manifest: dict):
             results["errors"].append({"name": "(empty)", "error": "Missing connection name"})
             continue
 
-        if get_connection(name):
+        if await store.get_connection(name):
             results["skipped"].append(name)
             continue
 
         try:
             conn = ConnectionCreate(**entry)
-            create_connection(conn)
+            await store.create_connection(conn)
             results["imported"] += 1
         except Exception as e:
             results["errors"].append({"name": name, "error": str(e)})
@@ -488,24 +482,24 @@ async def import_connections(manifest: dict):
 
 
 @router.get("/connections/{name}")
-async def get_connection_detail(name: str):
-    conn = get_connection(name)
+async def get_connection_detail(name: str, store: StoreD):
+    conn = await store.get_connection(name)
     if not conn:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     return conn
 
 
 @router.delete("/connections/{name}", status_code=204)
-async def remove_connection(name: str):
-    if not delete_connection(name):
+async def remove_connection(name: str, store: StoreD):
+    if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
 
 
 @router.put("/connections/{name}")
-async def edit_connection(name: str, update: ConnectionUpdate):
+async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD):
     """Update an existing connection. Only provided fields are changed."""
-    existing = get_connection(name)
+    existing = await store.get_connection(name)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
@@ -522,9 +516,9 @@ async def edit_connection(name: str, update: ConnectionUpdate):
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
-    old_conn_str = get_connection_string(name)
+    old_conn_str = await store.get_connection_string(name)
 
-    result = update_connection(name, update)
+    result = await store.update_connection(name, update)
     if not result:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
@@ -536,13 +530,13 @@ async def edit_connection(name: str, update: ConnectionUpdate):
 
 
 @router.post("/connections/{name}/clone")
-async def clone_connection(name: str, new_name: str = Query(..., min_length=1, max_length=64)):
+async def clone_connection(name: str, store: StoreD, new_name: str = Query(..., min_length=1, max_length=64)):
     """Clone an existing connection with a new name."""
-    existing = get_connection(name)
+    existing = await store.get_connection(name)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
-    if get_connection(new_name):
+    if await store.get_connection(new_name):
         raise HTTPException(status_code=409, detail=f"Connection '{new_name}' already exists")
 
     clone_desc = f"Clone of {name}" if not existing.description else f"{existing.description} (clone)"
@@ -557,30 +551,30 @@ async def clone_connection(name: str, new_name: str = Query(..., min_length=1, m
         if val is not None:
             create_data[field] = val
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if conn_str:
         create_data["connection_string"] = conn_str
 
     conn = ConnectionCreate(**create_data)
-    result = create_connection(conn)
+    result = await store.create_connection(conn)
     return result
 
 
 @router.post("/connections/{name}/schema/refresh")
-async def refresh_connection_schema(name: str):
+async def refresh_connection_schema(name: str, store: StoreD):
     """Force-refresh the cached schema for a connection."""
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
     schema_cache.invalidate(name)
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             schema = await connector.get_schema()
     except Exception as e:
@@ -588,7 +582,7 @@ async def refresh_connection_schema(name: str):
 
     schema_cache.put(name, schema)
     now = time.time()
-    update_connection(name, ConnectionUpdate(last_schema_refresh=now))
+    await store.update_connection(name, ConnectionUpdate(last_schema_refresh=now))
 
     return {
         "connection_name": name,
@@ -600,11 +594,11 @@ async def refresh_connection_schema(name: str):
 
 
 @router.post("/connections/schema/warmup")
-async def warmup_all_schemas():
+async def warmup_all_schemas(store: StoreD):
     """Parallel schema warmup for all connections."""
     from ..models import ConnectionInfo  # noqa: F811 — local import for type hint in inner func
 
-    connections = list_connections()
+    connections = await store.list_connections()
     if not connections:
         return {"warmed": 0, "results": [], "duration_ms": 0}
 
@@ -615,11 +609,11 @@ async def warmup_all_schemas():
         cached = schema_cache.get(name)
         if cached is not None:
             return {"name": name, "status": "cached", "table_count": len(cached)}
-        conn_str = get_connection_string(name)
+        conn_str = await store.get_connection_string(name)
         if not conn_str:
             return {"name": name, "status": "skipped", "error": "no credentials"}
         try:
-            extras = get_credential_extras(name)
+            extras = await store.get_credential_extras(name)
             async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
                 schema_cache.put(name, schema)
@@ -664,7 +658,7 @@ async def warmup_all_schemas():
                             pass
 
             now = time.time()
-            update_connection(name, ConnectionUpdate(last_schema_refresh=now))
+            await store.update_connection(name, ConnectionUpdate(last_schema_refresh=now))
             return {"name": name, "status": "ok", "table_count": len(schema),
                     "sample_columns": sample_count}
         except Exception as e:
@@ -808,14 +802,21 @@ async def test_credentials(request: Request):
 
     db_type = conn.db_type
 
-    # Phase 1: Network connectivity
+    # Phase 1: Network connectivity (skip for embedded/local DBs)
     t1 = time.monotonic()
-    try:
-        parsed = urlparse(conn_str if "://" in conn_str else f"dummy://{conn_str}")
-        host = parsed.hostname or conn.host or "localhost"
-        port = parsed.port or conn.port or 5432
+    is_embedded = db_type in ("duckdb", "sqlite", "bigquery")
+    if is_embedded:
+        phases.append({
+            "phase": "network", "status": "skipped",
+            "message": f"{db_type} does not require network connectivity check",
+            "duration_ms": 0,
+        })
+    else:
+        try:
+            parsed = urlparse(conn_str if "://" in conn_str else f"dummy://{conn_str}")
+            host = parsed.hostname or conn.host or "localhost"
+            port = parsed.port or conn.port or 5432
 
-        if host and port and db_type not in ("duckdb", "sqlite", "bigquery"):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             try:
@@ -837,28 +838,24 @@ async def test_credentials(request: Request):
                     "status": "error", "message": f"Network unreachable: {host}:{port}",
                     "phases": phases, "total_duration_ms": round((time.monotonic() - t0) * 1000, 1),
                 }
-        else:
+        except Exception as e:
             phases.append({
-                "phase": "network", "status": "skipped",
-                "message": f"{db_type} does not require network connectivity check",
-                "duration_ms": 0,
+                "phase": "network", "status": "warning",
+                "message": f"Could not verify network: {e}",
+                "duration_ms": round((time.monotonic() - t1) * 1000, 1),
             })
-    except Exception as e:
-        phases.append({
-            "phase": "network", "status": "warning",
-            "message": f"Could not verify network: {e}",
-            "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-        })
 
-    # Phase 2: Database authentication
+    # Phase 2: Database connection / file access
     t2 = time.monotonic()
+    phase2_label = "file_access" if is_embedded else "authentication"
     try:
         async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
             ok = await connector.health_check()
             if ok:
+                msg = "File found and readable" if is_embedded else "Authenticated and connected successfully"
                 phases.append({
-                    "phase": "authentication", "status": "ok",
-                    "message": "Authenticated and connected successfully",
+                    "phase": phase2_label, "status": "ok",
+                    "message": msg,
                     "duration_ms": round((time.monotonic() - t2) * 1000, 1),
                 })
 
@@ -890,16 +887,18 @@ async def test_credentials(request: Request):
                         "duration_ms": round((time.monotonic() - t3) * 1000, 1),
                     })
             else:
+                fail_msg = "File not found or not readable" if is_embedded else "Connection established but health check failed"
                 phases.append({
-                    "phase": "authentication", "status": "error",
-                    "message": "Connection established but health check failed",
+                    "phase": phase2_label, "status": "error",
+                    "message": fail_msg,
                     "duration_ms": round((time.monotonic() - t2) * 1000, 1),
                 })
     except Exception as e:
         err_msg = sanitize_db_error(str(e))
+        fail_prefix = "File access failed" if is_embedded else "Authentication failed"
         phases.append({
-            "phase": "authentication", "status": "error",
-            "message": f"Authentication failed: {err_msg}",
+            "phase": phase2_label, "status": "error",
+            "message": f"{fail_prefix}: {err_msg}",
             "hint": _connection_error_hint(db_type, str(e)),
             "duration_ms": round((time.monotonic() - t2) * 1000, 1),
         })
@@ -1108,17 +1107,17 @@ async def build_connection_url(body: dict):
 
 
 @router.post("/connections/{name}/test")
-async def test_connection(name: str):
+async def test_connection(name: str, store: StoreD):
     """Three-phase connection test."""
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         return {"status": "error", "phase": "credentials", "message": "No credentials stored (restart gateway to reload)"}
 
-    extras = get_credential_extras(name)
+    extras = await store.get_credential_extras(name)
     phases: list[dict] = []
     t0 = time.monotonic()
 
@@ -1308,22 +1307,22 @@ async def network_info():
 
 
 @router.post("/connections/{name}/diagnose")
-async def diagnose_connection(name: str):
+async def diagnose_connection(name: str, store: StoreD):
     """Run network-level diagnostics for a connection (DNS, TCP, TLS)."""
     import re as _re
 
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
     diagnostics: list[dict] = []
 
     if info.db_type in ("duckdb", "sqlite"):
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         t0 = time.monotonic()
         try:
             connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
@@ -1407,7 +1406,7 @@ async def diagnose_connection(name: str):
 
     # 3. TLS handshake
     ssl_db_types = {"postgres", "mysql", "redshift", "snowflake", "bigquery", "databricks", "clickhouse", "mssql"}
-    extras = get_credential_extras(name)
+    extras = await store.get_credential_extras(name)
     ssl_enabled = extras.get("ssl_config", {}).get("enabled", False) or info.db_type in ("snowflake", "bigquery", "databricks")
 
     if info.db_type in ssl_db_types and ssl_enabled:
@@ -1493,9 +1492,9 @@ async def get_connector_capabilities(db_type: str | None = None):
 
 
 @router.get("/connections/{name}/capabilities")
-async def get_connection_capabilities(name: str):
+async def get_connection_capabilities(name: str, store: StoreD):
     """Return capabilities for a specific connection based on its db_type."""
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 

@@ -72,12 +72,25 @@ class SandboxClient:
             row_limit=row_limit,
         )
 
+    async def browse_files(self, path: str | None = None, pattern: str = "*.duckdb") -> dict:
+        """Browse host filesystem via sandbox manager."""
+        params: dict[str, str] = {"pattern": pattern}
+        if path:
+            params["path"] = path
+        try:
+            resp = await self._client.get("/files", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            return {"error": str(e), "files": [], "directories": []}
+
     async def execute(
         self,
         sandbox: SandboxInfo,
         code: str,
         session_token: str,
         timeout: int = 30,
+        file_mounts: list[dict] | None = None,
     ) -> ExecuteResult:
         """Execute code in the sandbox's VM, booting it if needed."""
         start = time.monotonic()
@@ -90,6 +103,8 @@ class SandboxClient:
             }
             if sandbox.vm_id:
                 payload["vm_id"] = sandbox.vm_id
+            if file_mounts:
+                payload["file_mounts"] = file_mounts
 
             resp = await self._client.post(
                 "/execute",
@@ -148,6 +163,39 @@ class SandboxClient:
             return ExecuteResult(
                 success=False,
                 error="Unexpected sandbox execution error",
+                execution_ms=(time.monotonic() - start) * 1000,
+            )
+
+    async def execute_code_with_mounts(
+        self,
+        code: str,
+        file_mounts: list[dict],
+        timeout: int = 30,
+    ) -> ExecuteResult:
+        """Execute code with file mounts, without needing a sandbox object."""
+        start = time.monotonic()
+        session_token = str(uuid.uuid4())
+        try:
+            payload = {
+                "code": code,
+                "session_token": session_token,
+                "timeout": timeout,
+                "file_mounts": file_mounts,
+            }
+            resp = await self._client.post("/execute", json=payload, timeout=timeout + 10)
+            resp.raise_for_status()
+            data = resp.json()
+            return ExecuteResult(
+                success=data.get("success", True),
+                output=data.get("output", ""),
+                error=data.get("error"),
+                execution_ms=(time.monotonic() - start) * 1000,
+                vm_id=data.get("vm_id"),
+            )
+        except Exception as e:
+            return ExecuteResult(
+                success=False,
+                error=str(e),
                 execution_ms=(time.monotonic() - start) * 1000,
             )
 

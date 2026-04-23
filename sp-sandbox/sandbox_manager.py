@@ -6,6 +6,7 @@ Endpoints:
     GET  /vms            — List active sandbox instances
     POST /execute        — Execute Python code in an isolated gVisor sandbox
     DELETE /vm/{vm_id}   — Terminate a sandbox instance
+    GET  /files          — Browse host files (for local DB connections)
 
 Run:
     python3 sandbox_manager.py
@@ -14,7 +15,9 @@ Run:
 from __future__ import annotations
 
 import logging
+import os
 import uuid
+from pathlib import Path
 
 from aiohttp import web
 
@@ -63,6 +66,7 @@ async def execute_handler(request: web.Request) -> web.Response:
     session_token = body.get("session_token", "")
     timeout = body.get("timeout", 30)
     vm_id = body.get("vm_id")
+    file_mounts = body.get("file_mounts", [])  # [{"host_path": "...", "sandbox_path": "...", "readonly": true}]
 
     if not code:
         return web.json_response(
@@ -89,20 +93,55 @@ async def execute_handler(request: web.Request) -> web.Response:
     if vm_id is None:
         vm_id = str(uuid.uuid4())
 
+    # Validate file mounts
+    validated_mounts = []
+    host_data_root = Path("/host-data")
+    for mount in file_mounts:
+        host_path = mount.get("host_path", "")
+        sandbox_name = mount.get("sandbox_path", "")
+        if not host_path or not sandbox_name:
+            continue
+        # If path comes from the file browser (already under /host-data), use as-is.
+        # Otherwise, try to map it: the host's home dir is mounted at /host-data
+        resolved = Path(host_path).resolve()
+        if not resolved.exists() and host_data_root.exists():
+            # Try stripping the host home prefix and mapping to /host-data
+            # The file browser returns paths under /host-data already
+            pass  # resolved stays as-is, will fail the exists() check below
+        if not resolved.exists():
+            return web.json_response(
+                {"success": False, "error": f"Mount path does not exist: {host_path}"},
+                status=400,
+            )
+        if not resolved.is_file():
+            return web.json_response(
+                {"success": False, "error": f"Mount path is not a file: {host_path}"},
+                status=400,
+            )
+        # Only allow specific extensions for safety
+        allowed_exts = {".duckdb", ".db", ".sqlite", ".sqlite3", ".parquet", ".csv", ".json"}
+        if resolved.suffix.lower() not in allowed_exts:
+            return web.json_response(
+                {"success": False, "error": f"File type not allowed: {resolved.suffix}"},
+                status=400,
+            )
+        validated_mounts.append({"host_path": str(resolved), "sandbox_path": sandbox_name})
+
     active_sessions[session_token] = vm_id
 
     logger.info(
-        "execute: session=%s vm=%s timeout=%ds code_len=%d",
+        "execute: session=%s vm=%s timeout=%ds code_len=%d mounts=%d",
         session_token[:8],
         vm_id[:8],
         timeout,
         len(code),
+        len(validated_mounts),
     )
 
-    result = await executor.execute(code, vm_id, timeout)
+    result = await executor.execute(code, vm_id, timeout, file_mounts=validated_mounts)
 
-    if not result.success:
-        active_sessions.pop(session_token, None)
+    # Clean up session after execution (these are one-shot, not persistent)
+    active_sessions.pop(session_token, None)
 
     return web.json_response({
         "success": result.success,
@@ -138,6 +177,58 @@ async def on_shutdown(app: web.Application) -> None:
     await executor.cleanup()
 
 
+async def browse_files_handler(request: web.Request) -> web.Response:
+    """GET /files — browse host filesystem for local DB files.
+
+    Query params:
+        path: directory to list (default: user home)
+        pattern: glob pattern (default: *.duckdb)
+    """
+    # Default to /host-data (mounted from host) if it exists, else home dir
+    default_path = "/host-data" if Path("/host-data").exists() else str(Path.home())
+    search_path = request.query.get("path", default_path)
+    pattern = request.query.get("pattern", "*.duckdb")
+
+    resolved = Path(search_path).resolve()
+    if not resolved.exists() or not resolved.is_dir():
+        return web.json_response(
+            {"error": f"Directory not found: {search_path}", "files": [], "directories": []},
+            status=400,
+        )
+
+    # List matching files and subdirectories
+    files = []
+    directories = []
+    try:
+        for entry in sorted(resolved.iterdir()):
+            if entry.name.startswith("."):
+                continue  # skip hidden files
+            if entry.is_dir():
+                directories.append({
+                    "name": entry.name,
+                    "path": str(entry),
+                })
+            elif entry.is_file():
+                import fnmatch
+                if fnmatch.fnmatch(entry.name.lower(), pattern.lower()):
+                    files.append({
+                        "name": entry.name,
+                        "path": str(entry),
+                        "size_bytes": entry.stat().st_size,
+                    })
+    except PermissionError:
+        return web.json_response(
+            {"error": f"Permission denied: {search_path}", "files": [], "directories": []},
+            status=403,
+        )
+
+    return web.json_response({
+        "path": str(resolved),
+        "files": files,
+        "directories": directories,
+    })
+
+
 def create_app() -> web.Application:
     """Create the aiohttp application."""
     app = web.Application()
@@ -145,6 +236,7 @@ def create_app() -> web.Application:
     app.router.add_get("/vms", list_vms_handler)
     app.router.add_post("/execute", execute_handler)
     app.router.add_delete("/vm/{vm_id}", kill_vm_handler)
+    app.router.add_get("/files", browse_files_handler)
     app.on_shutdown.append(on_shutdown)
     return app
 

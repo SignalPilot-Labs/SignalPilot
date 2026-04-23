@@ -7,64 +7,58 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from ..models import ProjectCreate, ProjectUpdate
-from ..store import (
-    create_project,
-    delete_project,
-    get_project,
-    list_projects,
-    update_project,
-)
+from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 
 
 @router.get("/projects")
-async def get_projects():
+async def get_projects(store: StoreD):
     """List all registered dbt projects."""
-    return list_projects()
+    return await store.list_projects()
 
 
 @router.post("/projects", status_code=201)
-async def add_project(proj: ProjectCreate):
+async def add_project(proj: ProjectCreate, store: StoreD):
     """Create a new dbt project."""
     try:
-        info = create_project(proj)
+        info = await store.create_project(proj)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return info
 
 
 @router.get("/projects/{name}")
-async def get_project_detail(name: str):
+async def get_project_detail(name: str, store: StoreD):
     """Get a single dbt project by name."""
-    proj = get_project(name)
+    proj = await store.get_project(name)
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     return proj
 
 
 @router.put("/projects/{name}")
-async def edit_project(name: str, update: ProjectUpdate):
+async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
     """Update an existing dbt project."""
-    result = update_project(name, update)
+    result = await store.update_project(name, update)
     if not result:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     return result
 
 
 @router.delete("/projects/{name}", status_code=204)
-async def remove_project(name: str):
+async def remove_project(name: str, store: StoreD):
     """Delete a dbt project."""
-    if not delete_project(name):
+    if not await store.delete_project(name):
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
 
 
 @router.post("/projects/{name}/scan")
-async def scan_project(name: str):
+async def scan_project(name: str, store: StoreD):
     """Re-scan a dbt project (placeholder — updates last_scanned_at)."""
-    proj = get_project(name)
+    proj = await store.get_project(name)
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     now = time.time()
-    update_project(name, ProjectUpdate(last_scanned_at=now))
+    await store.update_project(name, ProjectUpdate(last_scanned_at=now))
     return {"project": name, "scanned_at": now, "model_count": proj.model_count, "status": "ok"}

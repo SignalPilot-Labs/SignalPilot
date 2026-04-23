@@ -14,6 +14,7 @@ from .cache import router as cache_router
 from .metrics import router as metrics_router
 from .projects import router as projects_router
 from .keys import router as keys_router
+from .files import router as files_router
 
 
 def register_routers(app: FastAPI) -> None:
@@ -30,3 +31,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(metrics_router)
     app.include_router(projects_router)
     app.include_router(keys_router)
+    app.include_router(files_router)

@@ -1,6 +1,15 @@
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
-// Auto-fetch local API key from Next.js server route on first use
+// ─── Cloud mode: Clerk token getter ─────────────────────────────────────────
+// Set by auth-context when Clerk is loaded so gateway requests use JWT auth
+let _clerkGetToken: (() => Promise<string | null>) | null = null;
+
+export function setClerkTokenGetter(getter: () => Promise<string | null>) {
+  _clerkGetToken = getter;
+}
+
+// ─── Local mode: auto-fetch local API key ───────────────────────────────────
 let _localKeyPromise: Promise<string | null> | null = null;
 
 function _fetchLocalKey(): Promise<string | null> {
@@ -21,7 +30,6 @@ function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
   const stored = localStorage.getItem("sp_api_key");
   if (stored) return stored;
-  // Kick off async fetch for next time
   if (!_localKeyPromise) {
     _localKeyPromise = _fetchLocalKey();
   }
@@ -36,23 +44,49 @@ export function setApiKey(key: string | null) {
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+// ─── Unified request function ───────────────────────────────────────────────
+
+async function _getAuthHeader(): Promise<string | null> {
+  // Cloud mode: use Clerk JWT
+  if (IS_CLOUD_MODE && _clerkGetToken) {
+    const token = await _clerkGetToken();
+    if (token) return `Bearer ${token}`;
+    return null;
+  }
+  // Local mode: use sp_ API key
   let apiKey = getApiKey();
-  // If no key yet, wait for the local key fetch
   if (!apiKey && _localKeyPromise) {
     apiKey = await _localKeyPromise;
   }
+  if (apiKey) return `Bearer ${apiKey}`;
+  return null;
+}
+
+async function request<T>(path: string, options?: RequestInit, _retried = false): Promise<T> {
+  const authHeader = await _getAuthHeader();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string>),
   };
-  if (apiKey) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
+  if (authHeader) {
+    headers["Authorization"] = authHeader;
   }
   const res = await fetch(`${GATEWAY_URL}${path}`, {
     ...options,
     headers,
   });
+  // On 401/403, clear stale credentials and retry once
+  if ((res.status === 401 || res.status === 403) && !_retried) {
+    localStorage.removeItem("sp_api_key");
+    _localKeyPromise = null;
+    // In cloud mode, the Clerk token getter will provide a fresh token on retry
+    // In local mode, re-fetch the local key
+    if (!IS_CLOUD_MODE) {
+      _localKeyPromise = _fetchLocalKey();
+      await _localKeyPromise;
+    }
+    return request<T>(path, options, true);
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -426,11 +460,71 @@ export const getConnectionSchemaLink = (name: string, question: string, format =
     scores?: Record<string, number>; tables?: Record<string, unknown>;
   }>(`/api/connections/${name}/schema/link?question=${encodeURIComponent(question)}&format=${format}&max_tables=${maxTables}`);
 
-// Metrics SSE
+// File Browser (for local DuckDB/SQLite — browses host filesystem via sandbox manager)
+export const browseFiles = (path?: string, pattern = "*.duckdb") => {
+  const params = new URLSearchParams({ pattern });
+  if (path) params.set("path", path);
+  return request<{
+    path: string;
+    files: { name: string; path: string; size_bytes: number }[];
+    directories: { name: string; path: string }[];
+    error?: string;
+  }>(`/api/files/browse?${params}`);
+};
+
+// Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
-  const es = new EventSource(`${GATEWAY_URL}/api/metrics`);
-  es.onmessage = (e) => {
-    try { cb(JSON.parse(e.data)); } catch {}
+  let aborted = false;
+  const controller = new AbortController();
+
+  (async () => {
+    // Retry loop: wait for auth to be ready, then connect
+    for (let attempt = 0; attempt < 10 && !aborted; attempt++) {
+      const authHeader = await _getAuthHeader();
+      if (!authHeader) {
+        // Auth not ready yet (Clerk still loading) — wait and retry
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+
+      try {
+        const res = await fetch(`${GATEWAY_URL}/api/metrics`, {
+          headers: { Accept: "text/event-stream", Authorization: authHeader },
+          signal: controller.signal,
+        });
+        if (res.status === 401 || res.status === 403) {
+          // Token may have expired or wasn't ready — retry
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        if (!res.ok || !res.body) return;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+
+        while (!aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try { cb(JSON.parse(line.slice(6))); } catch {}
+            }
+          }
+        }
+        return; // Clean exit
+      } catch {
+        if (aborted) return;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+  })();
+
+  return () => {
+    aborted = true;
+    controller.abort();
   };
-  return () => es.close();
 }

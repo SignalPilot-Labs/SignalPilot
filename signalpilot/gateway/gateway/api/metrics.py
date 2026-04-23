@@ -9,9 +9,9 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .deps import get_sandbox_client, load_settings, schema_cache
+from .deps import StoreD, get_sandbox_client_with_store, schema_cache
 from ..governance.cache import query_cache
-from ..store import get_connection, list_connections, list_sandboxes
+from ..store import list_sandboxes
 
 router = APIRouter(prefix="/api")
 
@@ -19,18 +19,18 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/metrics")
-async def metrics_stream():
+async def metrics_stream(store: StoreD):
     """Server-Sent Events stream of live gateway metrics."""
 
     async def generate():
         while True:
-            settings = load_settings()
+            settings = await store.load_settings()
             sandboxes = list_sandboxes()
             running = sum(1 for s in sandboxes if s.status == "running")
 
             sandbox_health = "unknown"
             try:
-                client = get_sandbox_client()
+                client = await get_sandbox_client_with_store(store)
                 data = await client.health()
                 sandbox_health = data.get("status", "unknown")
                 sandbox_available = data.get("status") == "healthy"
@@ -41,6 +41,8 @@ async def metrics_stream():
                 active_sandbox_instances = 0
                 max_sandbox_instances = 10
 
+            connections = await store.list_connections()
+
             payload = {
                 "timestamp": time.time(),
                 "sandbox_manager": settings.sandbox_manager_url,
@@ -50,7 +52,7 @@ async def metrics_stream():
                 "running_sandboxes": running,
                 "active_sandbox_instances": active_sandbox_instances,
                 "max_sandbox_instances": max_sandbox_instances,
-                "connections": len(list_connections()),
+                "connections": len(connections),
                 "query_cache": query_cache.stats(),
                 "schema_cache": schema_cache.stats(),
             }
@@ -262,12 +264,12 @@ async def get_connector_capabilities(db_type: str | None = None):
 
 
 @router.get("/connections/{name}/capabilities")
-async def get_connection_capabilities(name: str):
+async def get_connection_capabilities(name: str, store: StoreD):
     """Return capabilities for a specific connection based on its db_type.
 
     Combines tier info with live connection status for a complete picture.
     """
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 

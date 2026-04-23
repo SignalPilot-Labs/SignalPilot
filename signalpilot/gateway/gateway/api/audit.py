@@ -8,19 +8,20 @@ import time
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from ..store import read_audit
+from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 
 
 @router.get("/audit")
 async def get_audit(
+    store: StoreD,
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0),
     connection_name: str | None = None,
     event_type: str | None = None,
 ):
-    entries = await read_audit(
+    entries = await store.read_audit(
         limit=limit,
         offset=offset,
         connection_name=connection_name,
@@ -31,6 +32,7 @@ async def get_audit(
 
 @router.get("/audit/export")
 async def export_audit(
+    store: StoreD,
     connection_name: str | None = None,
     event_type: str | None = None,
     format: str = Query(default="json", pattern=r"^(json|csv)$"),
@@ -40,7 +42,7 @@ async def export_audit(
     Returns a downloadable JSON or CSV file with all audit entries
     matching the filter criteria. Suitable for SOC 2, HIPAA, or EU AI Act reporting.
     """
-    entries = await read_audit(
+    entries = await store.read_audit(
         limit=10_000,
         offset=0,
         connection_name=connection_name,

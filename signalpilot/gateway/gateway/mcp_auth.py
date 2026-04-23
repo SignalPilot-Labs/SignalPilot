@@ -192,43 +192,58 @@ class MCPAuthMiddleware:
             if "state" not in scope:
                 scope["state"] = {}
             scope["state"]["auth"] = auth_info
+            # Set context variable so MCP tools can access the user_id
+            try:
+                from .mcp_server import mcp_user_id_var
+                mcp_user_id_var.set(auth_info.get("user_id"))
+            except Exception:
+                pass
             await self._app(scope, receive, send)
             return
 
-        # Local mode: validate against user-created gateway keys
-        from .store import validate_stored_api_key, list_api_keys
+        # Local mode: validate against user-created gateway keys (DB-backed)
+        try:
+            from .db.engine import get_session_factory
+            from .store import Store
 
-        has_user_keys = len(list_api_keys()) > 0
+            factory = get_session_factory()
+            async with factory() as session:
+                store = Store(session)  # No user_id filter for key lookup
 
-        if not has_user_keys:
-            # No user-created keys — allow all MCP connections
-            global _warned_no_backend_url
-            if not _warned_no_backend_url:
-                logger.info(
-                    "MCP auth: no API keys configured — MCP accepts all connections. "
-                    "Create an API key in settings to require authentication."
-                )
-                _warned_no_backend_url = True
+                keys = await store.list_api_keys()
+                has_user_keys = len(keys) > 0
+
+                if not has_user_keys:
+                    global _warned_no_backend_url
+                    if not _warned_no_backend_url:
+                        logger.info(
+                            "MCP auth: no API keys configured — MCP accepts all connections. "
+                            "Create an API key in settings to require authentication."
+                        )
+                        _warned_no_backend_url = True
+                    await self._app(scope, receive, send)
+                    return
+
+                raw_key = _extract_bearer_key(scope)
+                if not raw_key:
+                    raw_key = _extract_api_key_header(scope)
+                if not raw_key:
+                    await _send_401(send, "Authentication required. Provide API key via X-API-Key header.")
+                    return
+
+                matched = await store.validate_stored_api_key(raw_key)
+                if matched is None:
+                    await _send_401(send, "Invalid API key.")
+                    return
+
+                if "state" not in scope:
+                    scope["state"] = {}
+                scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name}
+                await self._app(scope, receive, send)
+        except Exception as e:
+            logger.warning("MCP auth: DB error in local validation: %s", e)
+            # If DB isn't ready, allow through in local mode
             await self._app(scope, receive, send)
-            return
-
-        # User has created keys — require one
-        raw_key = _extract_bearer_key(scope)
-        if not raw_key:
-            raw_key = _extract_api_key_header(scope)
-        if not raw_key:
-            await _send_401(send, "Authentication required. Provide API key via X-API-Key header.")
-            return
-
-        matched = validate_stored_api_key(raw_key)
-        if matched is None:
-            await _send_401(send, "Invalid API key.")
-            return
-
-        if "state" not in scope:
-            scope["state"] = {}
-        scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name}
-        await self._app(scope, receive, send)
 
 
 def _extract_bearer_key(scope: dict[str, Any]) -> str | None:

@@ -19,14 +19,10 @@ from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, SecurityHeade
 from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
-from .store import (
-    get_connection_string,
-    get_credential_extras,
-    list_connections,
-    update_connection,
-)
+from .db.engine import init_db, close_db, get_session_factory
+from .store import Store
 from .api import register_routers
-from .api.deps import get_sandbox_client, reset_sandbox_client, _sandbox_client
+from .api.deps import reset_sandbox_client, _sandbox_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +31,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage background tasks: pool cleanup and scheduled schema refresh."""
+    """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
+
+    # Initialize gateway DB tables
+    await init_db()
 
     async def _pool_cleanup_loop():
         while True:
@@ -46,46 +45,49 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(30)
             try:
-                connections = list_connections()
-                now = time.time()
-                for conn_info in connections:
-                    interval = conn_info.schema_refresh_interval
-                    if not interval:
-                        continue
-                    last_refresh = conn_info.last_schema_refresh or 0
-                    if now - last_refresh < interval:
-                        continue
-                    try:
-                        conn_str = get_connection_string(conn_info.name)
-                        if not conn_str:
+                factory = get_session_factory()
+                async with factory() as session:
+                    store = Store(session)  # No user_id = global (all users' connections)
+                    connections = await store.list_connections()
+                    now = time.time()
+                    for conn_info in connections:
+                        interval = conn_info.schema_refresh_interval
+                        if not interval:
                             continue
-                        extras = get_credential_extras(conn_info.name)
-                        async with pool_manager.connection(
-                            conn_info.db_type, conn_str, credential_extras=extras,
-                        ) as connector:
-                            schema = await connector.get_schema()
-                        diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)
-                        update_connection(conn_info.name, ConnectionUpdate(
-                            last_schema_refresh=now,
-                        ))
-                        if diff_result and diff_result.get("has_changes"):
-                            added = len(diff_result.get("added_tables", []))
-                            removed = len(diff_result.get("removed_tables", []))
-                            modified = len(diff_result.get("modified_tables", []))
-                            logger.info(
-                                "Schema change detected for '%s': +%d/-%d tables, %d modified",
-                                conn_info.name, added, removed, modified,
+                        last_refresh = conn_info.last_schema_refresh or 0
+                        if now - last_refresh < interval:
+                            continue
+                        try:
+                            conn_str = await store.get_connection_string(conn_info.name)
+                            if not conn_str:
+                                continue
+                            extras = await store.get_credential_extras(conn_info.name)
+                            async with pool_manager.connection(
+                                conn_info.db_type, conn_str, credential_extras=extras,
+                            ) as connector:
+                                schema = await connector.get_schema()
+                            diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)
+                            await store.update_connection(conn_info.name, ConnectionUpdate(
+                                last_schema_refresh=now,
+                            ))
+                            if diff_result and diff_result.get("has_changes"):
+                                added = len(diff_result.get("added_tables", []))
+                                removed = len(diff_result.get("removed_tables", []))
+                                modified = len(diff_result.get("modified_tables", []))
+                                logger.info(
+                                    "Schema change detected for '%s': +%d/-%d tables, %d modified",
+                                    conn_info.name, added, removed, modified,
+                                )
+                            else:
+                                logger.info(
+                                    "Scheduled schema refresh for '%s': %d tables (no structural changes)",
+                                    conn_info.name, len(schema),
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "Scheduled schema refresh failed for '%s': %s",
+                                conn_info.name, e,
                             )
-                        else:
-                            logger.info(
-                                "Scheduled schema refresh for '%s': %d tables (no structural changes)",
-                                conn_info.name, len(schema),
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            "Scheduled schema refresh failed for '%s': %s",
-                            conn_info.name, e,
-                        )
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 
@@ -106,6 +108,7 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()
+        await close_db()
         from .api.deps import _sandbox_client
         if _sandbox_client:
             await _sandbox_client.close()
@@ -131,6 +134,11 @@ _extra_origins = os.getenv("SP_ALLOWED_ORIGINS", "")
 if _extra_origins:
     _ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
 
+# Middleware stack (last added = outermost = runs first)
+# CORS must be outermost so error responses from auth also get CORS headers
+app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
@@ -138,11 +146,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
     allow_credentials=True,
 )
-
-# Security middleware stack (order matters: outermost runs first)
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30)
-app.add_middleware(APIKeyAuthMiddleware)
 
 # Register all API routers
 register_routers(app)

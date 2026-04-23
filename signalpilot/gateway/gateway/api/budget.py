@@ -8,8 +8,7 @@ from pydantic import BaseModel, Field
 from ..connectors.pool_manager import pool_manager
 from ..governance.annotations import generate_skeleton, load_annotations
 from ..governance.budget import budget_ledger
-from ..store import get_connection, get_connection_string, get_credential_extras
-from .deps import sanitize_db_error
+from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
 
@@ -56,9 +55,9 @@ async def close_budget(session_id: str):
 
 
 @router.get("/connections/{name}/annotations")
-async def get_annotations(name: str):
+async def get_annotations(name: str, store: StoreD):
     """Get schema annotations for a connection (Feature #16)."""
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     annotations = load_annotations(name)
@@ -66,18 +65,18 @@ async def get_annotations(name: str):
 
 
 @router.post("/connections/{name}/annotations/generate")
-async def generate_annotations(name: str):
+async def generate_annotations(name: str, store: StoreD):
     """Generate a starter schema.yml from database introspection (Feature #29)."""
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             schema = await connector.get_schema()
     except Exception as e:

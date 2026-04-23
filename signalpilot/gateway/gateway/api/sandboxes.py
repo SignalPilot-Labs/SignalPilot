@@ -12,11 +12,9 @@ from ..store import (
     delete_sandbox,
     get_sandbox,
     list_sandboxes,
-    load_settings,
     upsert_sandbox,
-    append_audit,
 )
-from .deps import get_sandbox_client
+from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")
 
@@ -27,11 +25,10 @@ async def get_sandboxes():
 
 
 @router.post("/sandboxes", status_code=201)
-async def create_sandbox(req: SandboxCreate):
+async def create_sandbox(req: SandboxCreate, store: StoreD):
     session_token = str(uuid.uuid4())
-    settings = load_settings()
 
-    client = get_sandbox_client()
+    client = await get_sandbox_client_with_store(store)
     sandbox = await client.create_sandbox(
         session_token=session_token,
         connection_name=req.connection_name,
@@ -41,7 +38,7 @@ async def create_sandbox(req: SandboxCreate):
     )
     upsert_sandbox(sandbox)
 
-    await append_audit(AuditEntry(
+    await store.append_audit(AuditEntry(
         id=str(uuid.uuid4()),
         timestamp=time.time(),
         event_type="connect",
@@ -62,20 +59,20 @@ async def get_sandbox_detail(sandbox_id: str):
 
 
 @router.delete("/sandboxes/{sandbox_id}", status_code=204)
-async def kill_sandbox(sandbox_id: str):
+async def kill_sandbox(sandbox_id: str, store: StoreD):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
     if sandbox.vm_id:
-        client = get_sandbox_client()
+        client = await get_sandbox_client_with_store(store)
         await client.kill(sandbox.vm_id)
 
     delete_sandbox(sandbox_id)
 
 
 @router.post("/sandboxes/{sandbox_id}/execute")
-async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
+async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest, store: StoreD):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
@@ -83,10 +80,9 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
     if sandbox.status == "stopped":
         raise HTTPException(status_code=409, detail="Sandbox has been stopped")
 
-    settings = load_settings()
     session_token = str(uuid.uuid4())  # In production, this is tied to the session
 
-    client = get_sandbox_client()
+    client = await get_sandbox_client_with_store(store)
     result = await client.execute(
         sandbox=sandbox,
         code=req.code,
@@ -97,7 +93,7 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
     # Update sandbox state
     upsert_sandbox(sandbox)
 
-    await append_audit(AuditEntry(
+    await store.append_audit(AuditEntry(
         id=str(uuid.uuid4()),
         timestamp=time.time(),
         event_type="execute",

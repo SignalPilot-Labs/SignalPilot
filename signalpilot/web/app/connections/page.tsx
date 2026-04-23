@@ -29,6 +29,10 @@ import {
   Filter,
   Download,
   Upload,
+  Folder,
+  FileText,
+  ArrowLeft,
+  HardDrive,
 } from "lucide-react";
 import {
   getConnections,
@@ -54,6 +58,7 @@ import {
   getConnectionSchemaDiff,
   exploreColumns,
   getConnectionHealthHistory,
+  browseFiles,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -63,6 +68,157 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useConnection } from "@/lib/connection-context";
+
+/* ── DuckDB File Picker ── */
+function DuckDBFilePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [browsing, setBrowsing] = useState(false);
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
+  const [files, setFiles] = useState<{ name: string; path: string; size_bytes: number }[]>([]);
+  const [directories, setDirectories] = useState<{ name: string; path: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const browse = useCallback(async (path?: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await browseFiles(path, "*.duckdb");
+      setCurrentPath(data.path);
+      setFiles(data.files || []);
+      setDirectories(data.directories || []);
+      if (data.error) setError(data.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to browse files");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const openBrowser = useCallback(() => {
+    setBrowsing(true);
+    browse();
+  }, [browse]);
+
+  const selectFile = useCallback((filePath: string) => {
+    onChange(filePath);
+    setBrowsing(false);
+  }, [onChange]);
+
+  const goUp = useCallback(() => {
+    if (!currentPath) return;
+    const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
+    browse(parent);
+  }, [currentPath, browse]);
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  return (
+    <div className="col-span-2">
+      {/* Selected file display + browse button */}
+      <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">database file</label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="/path/to/database.duckdb"
+          className="flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-text-dim)]"
+        />
+        <button
+          type="button"
+          onClick={openBrowser}
+          className="px-3 py-1.5 text-[12px] tracking-wider border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)] transition-all flex items-center gap-1.5"
+        >
+          <HardDrive size={13} />
+          browse
+        </button>
+      </div>
+      <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
+        paste a file path or browse to select a .duckdb file
+      </p>
+
+      {/* File browser modal */}
+      {browsing && (
+        <div className="mt-2 border border-[var(--color-border)] bg-[var(--color-bg-code)]">
+          {/* Header */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]/30">
+            <button
+              type="button"
+              onClick={goUp}
+              className="p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+              title="Go up"
+            >
+              <ArrowLeft size={14} />
+            </button>
+            <span className="text-[11px] text-[var(--color-text-muted)] font-mono truncate flex-1">
+              {currentPath || "..."}
+            </span>
+            <button
+              type="button"
+              onClick={() => setBrowsing(false)}
+              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider"
+            >
+              close
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="max-h-[240px] overflow-y-auto">
+            {loading && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 size={16} className="animate-spin text-[var(--color-text-dim)]" />
+              </div>
+            )}
+
+            {error && (
+              <div className="px-3 py-2 text-[11px] text-red-400 tracking-wider">{error}</div>
+            )}
+
+            {!loading && !error && files.length === 0 && directories.length === 0 && (
+              <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] tracking-wider text-center">
+                no .duckdb files found in this directory
+              </div>
+            )}
+
+            {!loading && directories.map((dir) => (
+              <button
+                key={dir.path}
+                type="button"
+                onClick={() => browse(dir.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-bg)]/50 transition-colors border-b border-[var(--color-border)]/30"
+              >
+                <Folder size={14} className="text-[var(--color-text-dim)] flex-shrink-0" />
+                <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider truncate">{dir.name}/</span>
+              </button>
+            ))}
+
+            {!loading && files.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                onClick={() => selectFile(file.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-accent)]/10 transition-colors border-b border-[var(--color-border)]/30 group"
+              >
+                <FileText size={14} className="text-[var(--color-accent)] flex-shrink-0" />
+                <span className="text-[12px] text-[var(--color-text)] tracking-wider truncate flex-1 group-hover:text-[var(--color-accent)]">
+                  {file.name}
+                </span>
+                <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+                  {formatSize(file.size_bytes)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ── DB type configuration ── */
 interface DBTypeConfig {
@@ -307,7 +463,7 @@ const CONNECTION_PRESETS: ConnectionPreset[] = [
     label: "MotherDuck",
     db_type: "duckdb",
     icon: "🦆",
-    defaults: { database: "md:", description: "MotherDuck cloud DuckDB" },
+    defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" },
   },
   {
     label: "SSH Tunnel (any DB)",
@@ -552,6 +708,7 @@ interface FormState {
   trino_client_key: string;
   trino_krb_service_name: string;
   // DuckDB / MotherDuck
+  duckdb_mode: "local" | "motherduck" | "memory";
   motherduck_token: string;
   // Tags
   tags: string[];
@@ -593,6 +750,7 @@ const defaultForm: FormState = {
   redshift_cluster_id: "", redshift_workgroup: "",
   azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
   trino_https: false, trino_auth_method: "none", trino_jwt_token: "", trino_client_cert: "", trino_client_key: "", trino_krb_service_name: "trino",
+  duckdb_mode: "memory",
   motherduck_token: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
@@ -1365,29 +1523,87 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     );
   }
 
-  // DuckDB/SQLite — just path
-  if (form.db_type === "duckdb" || form.db_type === "sqlite") {
-    const isMotherDuck = form.db_type === "duckdb" && form.database.startsWith("md:");
+  // SQLite — just path
+  if (form.db_type === "sqlite") {
+    return (
+      <FormInput
+        label="database path"
+        value={form.database}
+        onChange={(v) => setForm({ ...form, database: v })}
+        placeholder=":memory: or /path/to/db.sqlite"
+        hint="file path or :memory:"
+        className="col-span-2"
+      />
+    );
+  }
+
+  // DuckDB — mode selector: in-memory, local file, or MotherDuck
+  if (form.db_type === "duckdb") {
     return (
       <>
-        <FormInput
-          label="database path"
-          value={form.database}
-          onChange={(v) => setForm({ ...form, database: v })}
-          placeholder={form.db_type === "duckdb" ? ":memory: or /path/to/db.duckdb or md:my_db" : ":memory: or /path/to/db.sqlite"}
-          hint={form.db_type === "duckdb" ? "file path, :memory:, or md:<db_name> for MotherDuck cloud" : "file path or :memory:"}
-          className="col-span-2"
-        />
-        {isMotherDuck && (
-          <FormInput
-            label="MotherDuck token"
-            value={form.motherduck_token}
-            onChange={(v) => setForm({ ...form, motherduck_token: v })}
-            type="password"
-            placeholder="eyJ..."
-            hint="personal access token from app.motherduck.com"
-            className="col-span-2"
+        <div className="col-span-2 mb-1">
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <div className="flex gap-2">
+            {([
+              { key: "memory", label: "in-memory" },
+              { key: "local", label: "local file" },
+              { key: "motherduck", label: "MotherDuck" },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  const updates: Partial<FormState> = { duckdb_mode: key };
+                  if (key === "memory") updates.database = ":memory:";
+                  else if (key === "motherduck") updates.database = form.database.startsWith("md:") ? form.database : "md:";
+                  else updates.database = form.database === ":memory:" || form.database.startsWith("md:") ? "" : form.database;
+                  setForm({ ...form, ...updates });
+                }}
+                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                  form.duckdb_mode === key
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {form.duckdb_mode === "local" && (
+          <DuckDBFilePicker
+            value={form.database}
+            onChange={(v) => setForm({ ...form, database: v })}
           />
+        )}
+
+        {form.duckdb_mode === "motherduck" && (
+          <>
+            <FormInput
+              label="database name"
+              value={form.database.startsWith("md:") ? form.database.slice(3) : form.database}
+              onChange={(v) => setForm({ ...form, database: `md:${v}` })}
+              placeholder="my_database"
+              hint="MotherDuck database name (without md: prefix)"
+              required
+            />
+            <FormInput
+              label="token"
+              value={form.motherduck_token}
+              onChange={(v) => setForm({ ...form, motherduck_token: v })}
+              type="password"
+              placeholder="eyJ..."
+              hint="personal access token from app.motherduck.com"
+              required
+            />
+          </>
+        )}
+
+        {form.duckdb_mode === "memory" && (
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts. Use MotherDuck for persistent cloud-hosted DuckDB.
+          </div>
         )}
       </>
     );

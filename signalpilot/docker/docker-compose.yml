@@ -46,9 +46,13 @@ services:
     cap_add:
       - SYS_PTRACE
       - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
     environment:
       - SP_GATEWAY_URL=http://gateway:3300
-      - SP_MAX_VMS=10  # kept for sandbox_manager.py compat (not in repo)
+      - SP_MAX_VMS=10
+    volumes:
+      - ${HOST_DATA_DIR:-~}:/host-data:ro   # host filesystem for local DB file access
     restart: unless-stopped
 
   postgres:

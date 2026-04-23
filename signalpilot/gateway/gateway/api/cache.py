@@ -7,8 +7,7 @@ from fastapi import APIRouter, HTTPException
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
-from ..store import get_connection, get_connection_string, get_credential_extras
-from .deps import sanitize_db_error
+from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
 
@@ -27,18 +26,18 @@ async def invalidate_cache(connection_name: str | None = None):
 
 
 @router.post("/connections/{name}/detect-pii")
-async def detect_pii(name: str):
+async def detect_pii(name: str, store: StoreD):
     """Auto-detect PII columns in a database schema based on naming patterns.
 
     Returns suggested PII rules for columns with names matching known
     PII patterns (email, ssn, phone, etc.). Results should be reviewed
     and saved to schema.yml annotations.
     """
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
@@ -46,7 +45,7 @@ async def detect_pii(name: str):
     cached_schema = schema_cache.get(name)
     if cached_schema is None:
         try:
-            extras = get_credential_extras(name)
+            extras = await store.get_credential_extras(name)
             async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                 cached_schema = await connector.get_schema()
             schema_cache.put(name, cached_schema)

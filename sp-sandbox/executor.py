@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -46,7 +47,8 @@ class GVisorExecutor:
         self._workdirs: dict[str, Path] = {}
 
     async def execute(
-        self, code: str, vm_id: str, timeout: int
+        self, code: str, vm_id: str, timeout: int,
+        file_mounts: list[dict] | None = None,
     ) -> ExecutionResult:
         """Run code in a gVisor sandbox using `runsc --rootless do`."""
         start = _now_ms()
@@ -54,18 +56,36 @@ class GVisorExecutor:
         workdir = Path(tempfile.mkdtemp(prefix=f"sp-sandbox-{vm_id[:8]}-"))
         self._workdirs[vm_id] = workdir
 
+        # Create symlinks for file mounts (host file → sandbox workdir)
+        if file_mounts:
+            for mount in file_mounts:
+                host_path = Path(mount["host_path"])
+                sandbox_path = workdir / mount["sandbox_path"]
+                sandbox_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    sandbox_path.symlink_to(host_path)
+                except OSError as e:
+                    logger.warning("Failed to symlink %s → %s: %s", host_path, sandbox_path, e)
+
         script_path = workdir / "user_code.py"
         script_path.write_text(code, encoding="utf-8")
 
+        # Run Python directly — the container itself provides gVisor isolation
+        # (via Docker runtime). No need for runsc inside the container.
         cmd = [
-            RUNSC_PATH,
-            "--rootless",
-            "do",
-            "--",
             PYTHON_PATH,
             "-u",
             str(script_path),
         ]
+
+        # Strip sensitive env vars before spawning subprocess
+        safe_env = {
+            k: v for k, v in os.environ.items()
+            if k.upper() not in (
+                "DATABASE_URL", "CLERK_SECRET_KEY", "CLERK_PUBLISHABLE_KEY",
+                "SP_ENCRYPTION_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+            )
+        }
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -73,6 +93,7 @@ class GVisorExecutor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workdir),
+                env=safe_env,
             )
             self._active[vm_id] = proc
 
@@ -95,8 +116,8 @@ class GVisorExecutor:
             stdout = stdout_bytes[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
             stderr = stderr_bytes[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
 
-            stdout = _strip_gvisor_warnings(stdout)
-            stderr = _strip_gvisor_warnings(stderr)
+            stdout = stdout.strip()
+            stderr = stderr.strip()
 
             success = proc.returncode == 0
             error = stderr.strip() if not success and stderr.strip() else None

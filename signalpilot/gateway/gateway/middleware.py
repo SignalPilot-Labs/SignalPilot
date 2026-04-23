@@ -1,17 +1,9 @@
 """
 SignalPilot Gateway Middleware — authentication, rate limiting, security headers.
-
-Addresses:
-  CRIT-01: Zero authentication on all endpoints
-  CRIT-02: CORS allow-all enabling cross-origin attacks
-  CRIT-03: Unauthenticated settings tampering
-  HIGH-05: No rate limiting
-  HIGH-06: Error message information leakage
 """
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import time
 from collections import defaultdict
@@ -31,40 +23,43 @@ PUBLIC_PATHS = frozenset({
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Validates API key from Authorization header or X-API-Key header.
 
-    When the gateway has an api_key configured in settings, all non-public
-    endpoints require a valid key. When no key is configured (dev mode),
-    all requests are allowed with a warning header.
+    In local mode (no SP_BACKEND_URL), uses the local dev key for browser auth.
+    MCP auth is handled separately by MCPAuthMiddleware.
+    API key validation against DB is done by MCPAuthMiddleware or auth dependency.
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Always allow preflight CORS requests
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # Public paths don't require auth
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
 
-        # Load the configured static API key, local key, and stored keys
-        from .store import load_settings, validate_stored_api_key, list_api_keys, get_local_api_key
-        settings = load_settings()
-        expected_key = settings.api_key
+        # MCP endpoints have their own auth (MCPAuthMiddleware) — skip
+        if request.url.path.startswith("/mcp"):
+            return await call_next(request)
+
+        from .store import get_local_api_key
+
         local_key = get_local_api_key()
-        has_stored_keys = len(list_api_keys()) > 0
 
-        # If no static key AND no stored keys AND no local key, allow all
-        if not expected_key and not has_stored_keys and not local_key:
-            response = await call_next(request)
-            response.headers["X-SignalPilot-Auth"] = "none"
-            return response
-
-        # Extract key from Authorization: Bearer <key> or X-API-Key: <key>
+        # Extract key from headers
         provided_key = None
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             provided_key = auth_header[7:].strip()
         if not provided_key:
             provided_key = request.headers.get("x-api-key", "").strip()
+
+        # Check for Clerk JWT (__session cookie) — let it through for resolve_user_id
+        session_cookie = request.cookies.get("__session")
+        if session_cookie and not provided_key:
+            # Clerk JWT present, no API key — let resolve_user_id handle auth
+            return await call_next(request)
+
+        # If Bearer token is a JWT (not sp_ prefixed), let resolve_user_id handle it
+        if provided_key and not provided_key.startswith("sp_"):
+            return await call_next(request)
 
         if not provided_key:
             return Response(
@@ -73,21 +68,29 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        # Try stored API keys first
-        matched = validate_stored_api_key(provided_key)
-        if matched:
-            response = await call_next(request)
-            return response
-
-        # Fall back to static settings.api_key
-        if expected_key and hmac.compare_digest(provided_key, expected_key):
-            response = await call_next(request)
-            return response
-
-        # Fall back to local dev key
+        # Local dev key check (fast, no DB needed)
         if local_key and hmac.compare_digest(provided_key, local_key):
-            response = await call_next(request)
-            return response
+            request.state.auth = {"user_id": "local", "auth_method": "local_key"}
+            return await call_next(request)
+
+        # For stored API keys, validate against DB
+        try:
+            from .db.engine import get_session_factory
+            from .store import Store
+            factory = get_session_factory()
+            async with factory() as session:
+                store = Store(session)  # No user_id filter for validation
+                matched = await store.validate_stored_api_key(provided_key)
+                if matched:
+                    request.state.auth = {
+                        "user_id": matched.user_id if hasattr(matched, 'user_id') else "local",
+                        "key_id": matched.id,
+                        "key_name": matched.name,
+                        "auth_method": "api_key",
+                    }
+                    return await call_next(request)
+        except Exception:
+            pass  # DB not ready yet, fall through
 
         return Response(
             content='{"detail":"Invalid API key."}',
@@ -97,39 +100,31 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple in-memory sliding window rate limiter.
-
-    Limits requests per IP address. Separate limits for
-    expensive endpoints (query, execute) vs general API calls.
-    """
+    """Simple in-memory sliding window rate limiter."""
 
     def __init__(self, app, general_rpm: int = 120, expensive_rpm: int = 30):
         super().__init__(app)
         self.general_rpm = general_rpm
         self.expensive_rpm = expensive_rpm
-        # {ip: [timestamp, ...]}
         self._general_hits: dict[str, list[float]] = defaultdict(list)
         self._expensive_hits: dict[str, list[float]] = defaultdict(list)
 
-    # Paths that count as "expensive" (DB queries, code execution)
     EXPENSIVE_PATHS = frozenset({
         "/api/query",
-        "/api/sandboxes",  # POST creates a sandbox
+        "/api/sandboxes",
     })
 
     def _is_expensive(self, request: Request) -> bool:
         path = request.url.path
         if path in self.EXPENSIVE_PATHS and request.method == "POST":
             return True
-        # Sandbox execute endpoints
         if "/execute" in path and request.method == "POST":
             return True
         return False
 
     def _check_rate(self, hits: list[float], limit: int) -> bool:
         now = time.monotonic()
-        window = now - 60  # 1-minute window
-        # Prune old entries
+        window = now - 60
         while hits and hits[0] < window:
             hits.pop(0)
         if len(hits) >= limit:
@@ -138,13 +133,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return True
 
     def _cleanup_stale_ips(self):
-        """Remove IP entries with no recent hits to prevent memory leaks."""
         now = time.monotonic()
-        window = now - 120  # 2-minute stale threshold
-        for store in (self._general_hits, self._expensive_hits):
-            stale_ips = [ip for ip, hits in store.items() if not hits or hits[-1] < window]
+        window = now - 120
+        for store_dict in (self._general_hits, self._expensive_hits):
+            stale_ips = [ip for ip, hits in store_dict.items() if not hits or hits[-1] < window]
             for ip in stale_ips:
-                del store[ip]
+                del store_dict[ip]
 
     def _client_ip(self, request: Request) -> str:
         forwarded = request.headers.get("x-forwarded-for")
@@ -156,7 +150,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # Periodic cleanup of stale IP tracking (every ~100 requests)
         total_tracked = len(self._general_hits) + len(self._expensive_hits)
         if total_tracked > 100:
             self._cleanup_stale_ips()
@@ -180,8 +173,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": "60"},
             )
 
-        response = await call_next(request)
-        return response
+        return await call_next(request)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

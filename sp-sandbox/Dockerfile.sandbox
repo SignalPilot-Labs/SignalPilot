@@ -28,8 +28,8 @@ COPY models.py /opt/signalpilot/
 COPY executor.py /opt/signalpilot/
 COPY sandbox_manager.py /opt/signalpilot/
 
-# Install Python deps for sandbox manager
-RUN pip3 install --no-cache-dir aiohttp
+# Install Python deps for sandbox manager + DuckDB for local file queries
+RUN pip3 install --no-cache-dir aiohttp duckdb
 
 EXPOSE 8080
 

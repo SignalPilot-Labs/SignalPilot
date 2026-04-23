@@ -205,7 +205,12 @@ class PoolManager:
                     del self._tunnels[key]
                 del self._pools[key]
 
-            connector = get_connector(db_type)
+            # Use sandboxed connector for local DuckDB files (host path, not :memory: or md:)
+            if db_type == "duckdb" and connection_string and not connection_string.startswith("md:") and connection_string != ":memory:":
+                from .sandboxed_duckdb import SandboxedDuckDBConnector
+                connector = SandboxedDuckDBConnector()
+            else:
+                connector = get_connector(db_type)
 
             # Pass credential extras to connector via standardized interface.
             # Each connector's set_credential_extras() extracts what it needs

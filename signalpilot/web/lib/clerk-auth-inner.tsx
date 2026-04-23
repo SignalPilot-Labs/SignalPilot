@@ -1,14 +1,22 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useAuth, useUser } from "@clerk/nextjs";
 import { AuthContext, type AppAuth, type AppUser } from "./auth-context";
+import { setClerkTokenGetter } from "./api";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 export function ClerkAuthInner({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn, signOut } = useAuth();
+  const { isLoaded, isSignedIn, signOut, getToken } = useAuth();
   const { user: clerkUser } = useUser();
+
+  // Wire Clerk's getToken into the gateway API client
+  useEffect(() => {
+    if (isLoaded && isSignedIn && getToken) {
+      setClerkTokenGetter(getToken);
+    }
+  }, [isLoaded, isSignedIn, getToken]);
 
   const user: AppUser | null =
     isSignedIn && clerkUser

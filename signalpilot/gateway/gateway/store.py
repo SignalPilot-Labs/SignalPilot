@@ -206,6 +206,41 @@ def _validate_encryption_health() -> bool:
         return False
 
 
+# ─── Local DB path validation ────────────────────────────────────────────────
+
+def _validate_local_db_path(path: str) -> str:
+    """Validate that a DuckDB/SQLite path is within DATA_DIR.
+
+    Allowed special values:
+      - ":memory:"       — in-memory database
+      - paths starting with "md:" — MotherDuck cloud connection
+
+    All other paths are resolved to an absolute canonical form and must fall
+    within DATA_DIR. Using Path.resolve() canonicalizes ".." traversal and
+    symlinks.
+
+    Note: TOCTOU risk — a symlink could be created after validation but before
+    DuckDB opens the file. Accepted risk: the attacker would need write access
+    within DATA_DIR to exploit this.
+
+    Raises:
+        ValueError: if the resolved path is not within DATA_DIR.
+    """
+    if path == ":memory:" or path.startswith("md:"):
+        return path
+
+    resolved = Path(path).resolve()
+    allowed_base = DATA_DIR.resolve()
+
+    try:
+        resolved.relative_to(allowed_base)
+        return path
+    except ValueError:
+        raise ValueError(
+            f"Database path not allowed: must be within the data directory ({DATA_DIR})"
+        )
+
+
 # ─── Connection string builder (pure function) ──────────────────────────────
 
 def _build_connection_string(conn: ConnectionCreate) -> str:
@@ -593,6 +628,11 @@ class Store:
 
         # Store encrypted credentials
         raw_cred = conn.connection_string or _build_connection_string(conn)
+        # Chokepoint: validate DuckDB/SQLite paths regardless of how raw_cred was set.
+        # This catches the bypass where connection_string is provided directly,
+        # skipping _validate_connection_params() and _build_connection_string().
+        if conn.db_type in (DBType.duckdb, DBType.sqlite):
+            _validate_local_db_path(raw_cred)
         extras = _extract_credential_extras(conn)
         cred = GatewayCredential(
             user_id=uid,
@@ -669,6 +709,8 @@ class Store:
             try:
                 create_obj = ConnectionCreate(**merged)
                 raw_cred = create_obj.connection_string or _build_connection_string(create_obj)
+                if create_obj.db_type in ("duckdb", "sqlite"):
+                    _validate_local_db_path(raw_cred)
                 extras = _extract_credential_extras(create_obj)
                 # Update credential row
                 cred_result = await self.session.execute(
@@ -789,8 +831,10 @@ class Store:
             (project_dir / d / ".gitkeep").touch()
         (project_dir / "dbt_project.yml").write_text(
             _DBT_PROJECT_YML_TEMPLATE.format(name=proj.name))
-        (project_dir / "profiles.yml").write_text(
-            self._generate_profiles_yml(proj.name, connection))
+        profiles_path = project_dir / "profiles.yml"
+        profiles_path.write_text(self._generate_profiles_yml(proj.name, connection))
+        os.chmod(str(profiles_path), 0o600)
+        os.chmod(str(project_dir), 0o700)
         (project_dir / "packages.yml").write_text(_PACKAGES_YML_TEMPLATE)
         return ProjectInfo(
             id=str(uuid.uuid4()), name=proj.name,

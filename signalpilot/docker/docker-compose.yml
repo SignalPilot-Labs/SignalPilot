@@ -55,10 +55,15 @@ services:
       - ${HOST_DATA_DIR:-~}:/host-data:ro   # host filesystem for local DB file access
     restart: unless-stopped
 
+  # -- Development-only database --
+  # WARNING: This Postgres instance uses a hardcoded password and is
+  # intended ONLY for local development and testing. Do NOT use this
+  # configuration in production. For production, use managed Postgres
+  # with strong credentials via environment variables.
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_PASSWORD: testpass
+      POSTGRES_PASSWORD: testpass   # DEV ONLY -- never use in production
       POSTGRES_DB: testdb
     ports:
       - "5600:5432"

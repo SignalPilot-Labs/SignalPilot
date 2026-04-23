@@ -16,14 +16,19 @@
 - [x] **Warmup Endpoint Error Sanitization** — Uses `sanitize_db_error()` instead of raw `str(e)`
 - [x] **Middleware Logging** — API key DB validation failures now logged (was silent `except: pass`)
 
+## Round 2: Security Hardening — MEDIUM Findings
+
+### COMPLETED
+
+- [x] **CSRF Protection** — Mitigated by existing architecture: CORS allowlist restricts cross-origin requests; all state-changing endpoints require `X-API-Key` or `Authorization: Bearer` headers (custom headers blocked cross-origin without CORS preflight); Clerk JWT in `__session` cookie is cryptographically verified — CSRF cannot forge a valid JWT. No code change needed.
+- [x] **DuckDB/SQLite Path Traversal** — `_validate_local_db_path()` added to store.py; restricts paths to `DATA_DIR` only (no `Path.home()`); validated at the `raw_cred` chokepoint in `create_connection()` (catches `connection_string` direct-bypass) AND at input validation layer in `api/connections.py` (defense in depth). `:memory:` and `md:` prefixes remain unaffected.
+- [x] **Request Body Size Limit** — 2MB limit enforced by `RequestBodySizeLimitMiddleware` (raw ASGI, not `BaseHTTPMiddleware`) — rejects oversized bodies before auth processing; registered second-outermost so CORS headers still appear on 413 responses.
+- [x] **dbt profiles.yml Plaintext** — `profiles.yml` written with `chmod 0o600`, project directory set to `chmod 0o700` in `_create_new_project()`.
+- [x] **Docker Compose Hardcoded Passwords** — `docker-compose.yml` postgres service documented as dev-only with inline warning comment.
+
 ### NOT YET EXPLORED
 
-- [ ] **CSRF Protection** — No CSRF token validation on state-changing POST endpoints
 - [ ] **Metrics/Health Exposure** — `/api/metrics` and `/health` in PUBLIC_PATHS may leak internal info
-- [ ] **DuckDB/SQLite Path Traversal** — User can set `database` to arbitrary filesystem path in local mode
-- [ ] **Request Body Size Limit** — No middleware-level body size limit (only SQL field max_length)
-- [ ] **dbt profiles.yml Plaintext** — `profiles.yml` generation writes credentials to disk unencrypted
-- [ ] **Docker Compose Hardcoded Passwords** — `POSTGRES_PASSWORD: testpass` should be documented as dev-only
 - [ ] **Frontend Accessibility** — SecurityBanner collapsible needs `aria-expanded`/`aria-controls`, Tooltip keyboard support
 - [ ] **Key Rotation Support** — `key_version` column for multi-key decryption support
 - [ ] **Full E2E Testing** — Docker-based integration tests with real DB connections

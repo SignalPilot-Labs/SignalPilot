@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import time
 
+import httpx
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ..models import ProjectCreate, ProjectUpdate
-from ..store import (
+from ..project_store import (
     create_project,
     delete_project,
     get_project,
@@ -60,11 +62,56 @@ async def remove_project(name: str):
 
 
 @router.post("/projects/{name}/scan")
-async def scan_project(name: str):
-    """Re-scan a dbt project (placeholder — updates last_scanned_at)."""
+async def scan_project_endpoint(name: str):
+    """Re-scan a dbt project: count models, update metadata."""
+    from ..dbt.inventory import scan_project as dbt_scan
+
     proj = get_project(name)
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+
+    project_map = dbt_scan(proj.project_dir)
     now = time.time()
-    update_project(name, ProjectUpdate(last_scanned_at=now))
-    return {"project": name, "scanned_at": now, "model_count": proj.model_count, "status": "ok"}
+    update_project(name, ProjectUpdate(
+        last_scanned_at=now,
+        model_count=project_map.model_count,
+    ))
+    return {
+        "project": name,
+        "scanned_at": now,
+        "model_count": project_map.model_count,
+        "status": "ok",
+    }
+
+
+class DbtCloudDiscoverRequest(BaseModel):
+    """Request to discover projects from a dbt Cloud account."""
+    token: str = Field(..., min_length=1)
+    account_id: str = Field(..., min_length=1, pattern=r"^[0-9]+$")
+    host: str = Field(default="cloud.getdbt.com", max_length=255)
+
+
+@router.post("/dbt-cloud/projects")
+async def discover_dbt_cloud_projects(req: DbtCloudDiscoverRequest):
+    """Fetch project list from dbt Cloud API (proxied to avoid CORS)."""
+    url = f"https://{req.host}/api/v2/accounts/{req.account_id}/projects/"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={"Authorization": f"Token {req.token}"})
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid dbt Cloud API token")
+        raise HTTPException(status_code=e.response.status_code, detail="dbt Cloud API error")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail="Cannot reach dbt Cloud API")
+
+    data = resp.json().get("data", [])
+    return [
+        {
+            "id": p["id"],
+            "name": p.get("name", ""),
+            "git_url": (p.get("repository") or {}).get("remote_url"),
+        }
+        for p in data
+    ]

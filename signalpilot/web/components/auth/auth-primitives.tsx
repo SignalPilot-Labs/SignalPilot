@@ -34,9 +34,11 @@ export interface FieldRowProps {
   name: string;
   type?: string;
   label: string;
+  /** Optional ref forwarded to the underlying Clerk.Input render slot */
+  inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-export function FieldRow({ name, type = "text", label }: FieldRowProps) {
+export function FieldRow({ name, type = "text", label, inputRef }: FieldRowProps) {
   return (
     <Clerk.Field name={name} className="flex flex-col gap-1">
       <Clerk.Label className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
@@ -44,6 +46,7 @@ export function FieldRow({ name, type = "text", label }: FieldRowProps) {
       </Clerk.Label>
       <Clerk.Input
         type={type}
+        ref={inputRef}
         className="px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-border-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:border-[var(--color-text)] w-full"
       />
       <Clerk.FieldError className="text-[11px] text-[var(--color-error)] tracking-wider" />
@@ -71,9 +74,19 @@ export function OtpInput({ name }: { name: string }) {
 // Action buttons
 // ---------------------------------------------------------------------------
 
-const PRIMARY_BTN_CLASS =
+export const FIELD_INPUT_CLASS =
+  "px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-border-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:border-[var(--color-text)] w-full";
+export const PRIMARY_BTN_CLASS =
   "px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] uppercase tracking-wider hover:opacity-90 transition-opacity disabled:opacity-40 font-mono w-full focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
-const SECONDARY_BTN_CLASS =
+// Shared typography class constants — used across security sections.
+// Defined once here to prevent drift across files.
+export const LABEL_CLASS =
+  "text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]";
+export const ERROR_CLASS =
+  "text-[11px] text-[var(--color-error)] tracking-wider";
+export const NEUTRAL_CLASS =
+  "text-[11px] text-[var(--color-text-dim)] tracking-wider";
+export const SECONDARY_BTN_CLASS =
   "text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider underline underline-offset-2 transition-colors font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)]";
 
 export function PrimaryAction({

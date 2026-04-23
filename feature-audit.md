@@ -178,3 +178,12 @@
 - [x] **HIGH: Next.js DoS (GHSA-q4gf-8mx6-v5v3, CVSS 7.5)** — `next` bumped from `16.2.1` to `16.2.4` in `signalpilot/web/package.json`. Denial of Service via Server Components (CWE-770). `eslint-config-next` also bumped to `16.2.4` to maintain version sync. `npm audit` reports 0 vulnerabilities.
 - [x] **Python runtime dependencies: CLEAN** — `pip-audit` found no vulnerabilities in fastapi, uvicorn, httpx, cryptography, PyJWT, sqlalchemy, or any other runtime dependency.
 - [x] **pip 25.0.1 CVEs noted** — CVE-2025-8869 and CVE-2026-1703 affect pip itself (build tool only, not production runtime). Not actionable in application code.
+
+## Round 17: Technology Fingerprinting Suppression & Frontend HSTS
+
+### COMPLETED
+
+- [x] **Uvicorn Server header suppressed (`cli.py`)** — Added `server_header=False` to `uvicorn.run()` in `gateway/cli.py`. Prevents uvicorn from sending `Server: uvicorn` on every HTTP response, removing a passive reconnaissance vector revealing the ASGI server identity.
+- [x] **Uvicorn Server header suppressed (`mcp_server.py`)** — Added `server_header=False` to `uvicorn.run()` in `gateway/mcp_server.py` (streamable-HTTP transport path). Same fix applied to the MCP server entry point.
+- [x] **Next.js X-Powered-By header suppressed** — Added `poweredByHeader: false` to `next.config.ts`. Prevents Next.js from sending `X-Powered-By: Next.js` on every response.
+- [x] **Frontend HSTS header added** — `applySecurityHeaders()` in `middleware.ts` now sets `Strict-Transport-Security: max-age=63072000; includeSubDomains` when `x-forwarded-proto === "https"`. Matches the backend `SecurityHeadersMiddleware` HSTS policy (same `max-age`, no `preload`).

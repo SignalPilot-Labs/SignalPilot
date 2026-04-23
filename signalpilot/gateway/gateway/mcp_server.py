@@ -3293,7 +3293,7 @@ def main():
         port = int(_entry_os.environ.get("SP_MCP_PORT", "8000"))
         starlette_app = mcp.streamable_http_app()
         authenticated_app = MCPAuthMiddleware(starlette_app)
-        uvicorn.run(authenticated_app, host="0.0.0.0", port=port)
+        uvicorn.run(authenticated_app, host="0.0.0.0", port=port, server_header=False)
     else:
         mcp.run(transport="stdio")
 

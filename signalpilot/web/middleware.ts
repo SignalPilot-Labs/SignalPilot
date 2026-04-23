@@ -19,7 +19,8 @@ const clerkEnabled = IS_CLOUD_MODE;
 
 function applySecurityHeaders(
   response: NextResponse,
-  withClerk: boolean
+  withClerk: boolean,
+  request: NextRequest
 ): void {
   const gatewayUrl =
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
@@ -68,6 +69,13 @@ function applySecurityHeaders(
     "Permissions-Policy",
     "camera=(), microphone=(), geolocation=(), interest-cohort=()"
   );
+
+  if (request.headers.get("x-forwarded-proto") === "https") {
+    response.headers.set(
+      "Strict-Transport-Security",
+      "max-age=63072000; includeSubDomains"
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,13 +104,13 @@ if (clerkEnabled) {
       await auth.protect();
     }
     const response = NextResponse.next();
-    applySecurityHeaders(response, true);
+    applySecurityHeaders(response, true, req);
     return response;
   });
 } else {
-  middlewareExport = (_req: NextRequest) => {
+  middlewareExport = (req: NextRequest) => {
     const response = NextResponse.next();
-    applySecurityHeaders(response, false);
+    applySecurityHeaders(response, false, req);
     return response;
   };
 }

@@ -23,7 +23,6 @@ class TestByokProviderConfigInvalidJSON:
     @pytest.mark.asyncio
     async def test_invalid_json_raises_system_exit(self):
         """When SP_BYOK_PROVIDER_CONFIG is not valid JSON, lifespan must raise SystemExit."""
-        import contextlib
         from gateway.main import lifespan, app
 
         with patch.dict(os.environ, {"SP_BYOK_PROVIDER_CONFIG": "{not: valid json!!!"}):
@@ -37,7 +36,6 @@ class TestByokProviderConfigInvalidJSON:
     @pytest.mark.asyncio
     async def test_valid_json_does_not_raise(self):
         """When SP_BYOK_PROVIDER_CONFIG is valid JSON, startup proceeds normally."""
-        import contextlib
         from gateway.main import lifespan, app
 
         valid_config = '{"provider": "local"}'
@@ -49,7 +47,7 @@ class TestByokProviderConfigInvalidJSON:
             with patch("gateway.main.init_db", new_callable=AsyncMock):
                 with patch("gateway.main._validate_encryption_health", return_value=True):
                     with patch("gateway.main.make_provider") as mock_make:
-                        from gateway.byok import LocalBYOKProvider, DEKCache
+                        from gateway.byok import LocalBYOKProvider
                         mock_make.return_value = LocalBYOKProvider()
                         with patch("gateway.main.configure_byok"):
                             with patch("gateway.main.pool_manager") as mock_pm:
@@ -113,7 +111,6 @@ class TestExtractRegionFromArnSanitized:
 
     def test_invalid_arn_logs_full_arn_server_side(self):
         """The full ARN must appear in the server-side error log (for debugging)."""
-        import logging
 
         bad_arn = "notanarn"
         with patch("gateway.byok_aws.logger") as mock_logger:
@@ -154,7 +151,6 @@ class TestSecurityStatusOrgScoping:
         from gateway.api.security import security_status
         from gateway.byok import LocalBYOKProvider, DEKCache
         from gateway.store import configure_byok
-        from sqlalchemy import and_
 
         provider = LocalBYOKProvider()
         cache = DEKCache(ttl_seconds=300)
@@ -245,7 +241,6 @@ class TestSecurityStatusOrgScoping:
         from gateway.api.security import security_status
         from gateway.byok import LocalBYOKProvider, DEKCache
         from gateway.store import configure_byok
-        from gateway.db.models import GatewayCredential
 
         provider = LocalBYOKProvider()
         cache = DEKCache(ttl_seconds=300)

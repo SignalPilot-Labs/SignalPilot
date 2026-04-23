@@ -345,6 +345,99 @@ async def migrate_to_byok(
     return migrated, failed, errors
 
 
+async def rotate_byok_key(
+    session: AsyncSession,
+    provider: BYOKProvider,
+    org_id: str,
+    old_key_id: str,
+    old_key_alias: str,
+    new_key_id: str,
+    new_key_alias: str,
+    cache: DEKCache | None = None,
+) -> tuple[int, int, list[str]]:
+    """Re-wrap all DEKs for credentials using old_key_id to new_key_id.
+
+    Loads all eligible BYOK credential rows in one query (join with connections),
+    then processes each individually. Per-credential atomicity: each row commits
+    independently so partial rotation is safe to resume.
+
+    Returns:
+        (rotated_count, failed_count, error_messages)
+    """
+    result = await session.execute(
+        select(GatewayCredential, GatewayConnection).join(
+            GatewayConnection,
+            (GatewayConnection.user_id == GatewayCredential.user_id)
+            & (GatewayConnection.name == GatewayCredential.connection_name),
+        ).where(
+            GatewayConnection.org_id == org_id,
+            GatewayCredential.byok_key_id == old_key_id,
+            GatewayCredential.encryption_mode == ENCRYPTION_MODE_BYOK,
+        )
+    )
+    rows = result.all()
+
+    rotated = 0
+    failed = 0
+    errors: list[str] = []
+
+    for cred_row, conn_row in rows:
+        try:
+            if cred_row.wrapped_dek is None:
+                raise ValueError("Credential is BYOK mode but has no wrapped_dek")
+
+            conn_string_plain = await decrypt_envelope(
+                provider=provider,
+                org_id=org_id,
+                key_alias=old_key_alias,
+                wrapped_dek=cred_row.wrapped_dek,
+                ciphertext=cred_row.connection_string_enc,
+                cache=cache,
+                credential_id=cred_row.id,
+            )
+
+            extras_plain = "{}"
+            if cred_row.extras_enc:
+                extras_plain = await decrypt_envelope(
+                    provider=provider,
+                    org_id=org_id,
+                    key_alias=old_key_alias,
+                    wrapped_dek=cred_row.wrapped_dek,
+                    ciphertext=cred_row.extras_enc,
+                    cache=cache,
+                    credential_id=cred_row.id,
+                )
+
+            ciphertexts, wrapped_dek = await encrypt_fields_envelope(
+                provider, org_id, new_key_alias, [conn_string_plain, extras_plain]
+            )
+
+            cred_row.connection_string_enc = ciphertexts[0]
+            cred_row.extras_enc = ciphertexts[1]
+            cred_row.wrapped_dek = wrapped_dek
+            cred_row.byok_key_id = new_key_id
+
+            conn_row.byok_key_alias = new_key_alias
+
+            if cache is not None:
+                cache.invalidate(cred_row.id)
+
+            await session.commit()
+            rotated += 1
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "Failed to rotate credential for connection '%s' (user '%s')",
+                cred_row.connection_name,
+                cred_row.user_id,
+            )
+            error_msg = f"Failed to rotate credential {cred_row.id}: rotation error"
+            errors.append(error_msg)
+            failed += 1
+
+    return rotated, failed, errors
+
+
 async def revert_to_managed(
     session: AsyncSession,
     provider: BYOKProvider,

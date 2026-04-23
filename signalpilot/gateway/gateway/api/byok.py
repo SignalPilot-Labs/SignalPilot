@@ -21,19 +21,23 @@ from ..byok import (
     encrypt_envelope,
     migrate_to_byok,
     revert_to_managed,
+    rotate_byok_key,
 )
-from ..db.models import GatewayBYOKKey, GatewayCredential, GatewayOrg
+from ..db.models import GatewayBYOKKey, GatewayConnection, GatewayCredential, GatewayOrg
 from ..models import (
     BYOKKeyCreate,
     BYOKKeyResponse,
     BYOKKeyUpdate,
     BYOKMigrateRequest,
     BYOKMigrateResponse,
+    BYOKMigrationStatusResponse,
+    BYOKRotateRequest,
+    BYOKRotateResponse,
 )
 from ..scope_guard import RequireScope
 from ..store import _decrypt_with_migration, _encrypt
 from .deps import StoreD
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -308,3 +312,104 @@ async def revert_credentials_to_managed(
         cache=cache,
     )
     return BYOKMigrateResponse(migrated=migrated, failed=failed, errors=errors)
+
+
+@router.post("/byok/keys/{key_id}/rotate", dependencies=[RequireScope("admin")])
+async def rotate_byok_key_endpoint(
+    key_id: str,
+    body: BYOKRotateRequest,
+    store: StoreD,
+    org_id: OrgID,
+) -> BYOKRotateResponse:
+    """Rotate credentials from one BYOK key to another.
+
+    org_id is derived from JWT. key_id is the OLD key to rotate FROM.
+    """
+    from ..store import _byok_provider as provider, _dek_cache as cache
+
+    if provider is None:
+        raise HTTPException(status_code=503, detail="BYOK provider not configured")
+
+    if body.new_key_id == key_id:
+        raise HTTPException(status_code=400, detail="new_key_id must differ from key_id")
+
+    old_key_result = await store.session.execute(
+        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+    )
+    old_key = old_key_result.scalar_one_or_none()
+    if old_key is None or old_key.org_id != org_id or old_key.status not in ("active", "rotating"):
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    new_key_result = await store.session.execute(
+        select(GatewayBYOKKey).where(GatewayBYOKKey.id == body.new_key_id)
+    )
+    new_key = new_key_result.scalar_one_or_none()
+    if new_key is None or new_key.org_id != org_id or new_key.status != "active":
+        raise HTTPException(status_code=404, detail="Target key not found")
+
+    old_key.status = "rotating"
+    await store.session.commit()
+
+    rotated, failed, errors = await rotate_byok_key(
+        session=store.session,
+        provider=provider,
+        org_id=org_id,
+        old_key_id=key_id,
+        old_key_alias=old_key.key_alias,
+        new_key_id=body.new_key_id,
+        new_key_alias=new_key.key_alias,
+        cache=cache,
+    )
+
+    if failed == 0:
+        old_key.status = "inactive"
+        await store.session.commit()
+
+    return BYOKRotateResponse(rotated=rotated, failed=failed, errors=errors)
+
+
+@router.get("/byok/migrate/status", dependencies=[RequireScope("admin")])
+async def get_migration_status(
+    db: DBSession,
+    _user_id: UserID,
+    org_id: OrgID,
+) -> BYOKMigrationStatusResponse:
+    """Return migration status for org credentials.
+
+    Counts credentials by encryption_mode and derives a status string.
+    """
+    result = await db.execute(
+        select(func.count(), GatewayCredential.encryption_mode)
+        .join(
+            GatewayConnection,
+            (GatewayConnection.user_id == GatewayCredential.user_id)
+            & (GatewayConnection.name == GatewayCredential.connection_name),
+        )
+        .where(GatewayConnection.org_id == org_id)
+        .group_by(GatewayCredential.encryption_mode)
+    )
+    rows = result.all()
+
+    byok_count = 0
+    managed_count = 0
+    for count, mode in rows:
+        if mode == "byok":
+            byok_count = count
+        else:
+            managed_count += count
+
+    total = byok_count + managed_count
+
+    if total == 0 or byok_count == 0:
+        status = "none"
+    elif managed_count == 0:
+        status = "complete"
+    else:
+        status = "partial"
+
+    return BYOKMigrationStatusResponse(
+        total=total,
+        byok=byok_count,
+        managed=managed_count,
+        status=status,
+    )

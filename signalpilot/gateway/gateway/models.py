@@ -512,6 +512,23 @@ class BYOKMigrateResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class BYOKRotateRequest(BaseModel):
+    new_key_id: str = Field(..., min_length=1)
+
+
+class BYOKRotateResponse(BaseModel):
+    rotated: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class BYOKMigrationStatusResponse(BaseModel):
+    total: int
+    byok: int
+    managed: int
+    status: str
+
+
 _MCP_ARGUMENTS_MAX_DEPTH: int = 20
 _MCP_ARGUMENTS_MAX_SIZE_BYTES: int = 100_000
 

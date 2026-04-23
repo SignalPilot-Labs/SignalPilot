@@ -1,0 +1,91 @@
+# SignalPilot — self-contained local stack
+#
+# Usage: docker compose up --build
+#
+# Starts: Postgres + Gateway + Web + Sandbox
+# No external dependencies, no .env required.
+
+name: signalpilot
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: signalpilot
+      POSTGRES_PASSWORD: signalpilot
+      POSTGRES_DB: signalpilot
+    ports:
+      - "5601:5432"
+    volumes:
+      - signalpilot-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signalpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./signalpilot/gateway
+      dockerfile: ../../Dockerfile.gateway
+    ports:
+      - "3300:3300"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalpilot:signalpilot@db:5432/signalpilot
+      SP_DATA_DIR: /data
+      SP_SANDBOX_MANAGER_URL: http://sandbox:8080
+      SP_DEPLOYMENT_MODE: local
+      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-shared:/shared
+    command: >
+      sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
+             uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
+    depends_on:
+      db:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./signalpilot/web
+      dockerfile: ../../Dockerfile.web
+    ports:
+      - "3200:3200"
+    volumes:
+      - signalpilot-shared:/shared:ro
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  sandbox:
+    build:
+      context: ./sp-sandbox
+      dockerfile: ../Dockerfile.sandbox
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 256
+    environment:
+      SP_GATEWAY_URL: http://gateway:3300
+      SP_MAX_VMS: "10"
+    volumes:
+      - ${HOST_DATA_DIR:-~}:/host-data:ro
+    restart: unless-stopped
+
+volumes:
+  signalpilot-pg-data:
+  signalpilot-data:
+  signalpilot-shared:

@@ -1,54 +1,127 @@
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import type { NextMiddleware, NextRequest } from "next/server";
 
 /**
- * Next.js middleware — adds security headers to all responses.
- * Addresses LOW-05 from the security audit (missing CSP, X-Frame-Options).
+ * Next.js middleware — security headers + optional Clerk auth.
+ *
+ * When Clerk keys are present (cloud mode or local-with-keys), routes through
+ * clerkMiddleware for session management. When absent, applies security headers
+ * only. The conditional dynamic import avoids loading @clerk/nextjs/server
+ * when CLERK_SECRET_KEY is absent — clerkMiddleware() will throw without it.
  */
-export function middleware(request: NextRequest) {
-  const response = NextResponse.next();
 
-  // Content Security Policy — restrict loading to same-origin + gateway
-  const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+const clerkEnabled = IS_CLOUD_MODE;
+
+// ---------------------------------------------------------------------------
+// Security header helper — applied in BOTH paths
+// ---------------------------------------------------------------------------
+
+function applySecurityHeaders(
+  response: NextResponse,
+  withClerk: boolean,
+  request: NextRequest
+): void {
+  const gatewayUrl =
+    process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+
+  let connectSrc = `'self' ${gatewayUrl}`;
+  let scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'";
+  let imgSrc = "'self' data: blob:";
+  // Fix JetBrains Mono CSP bug: cdn.jsdelivr.net was not in font-src
+  const fontSrc = "'self' data: https://cdn.jsdelivr.net";
+
+  let workerSrc = "'self'";
+
+  if (withClerk) {
+    connectSrc +=
+      " https://*.clerk.accounts.dev https://clerk-telemetry.com";
+    scriptSrc += " https://*.clerk.accounts.dev";
+    imgSrc += " https://img.clerk.com";
+    workerSrc += " blob:";
+  }
+
+  const backendUrl =
+    process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  connectSrc += ` ${backendUrl}`;
+
   response.headers.set(
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      `connect-src 'self' ${gatewayUrl}`,
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      `connect-src ${connectSrc}`,
+      `script-src ${scriptSrc}`,
+      `worker-src ${workerSrc}`,
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
-      "font-src 'self' data:",
+      `img-src ${imgSrc}`,
+      `font-src ${fontSrc}`,
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
     ].join("; ")
   );
 
-  // Prevent clickjacking
   response.headers.set("X-Frame-Options", "DENY");
-
-  // Prevent MIME type sniffing
   response.headers.set("X-Content-Type-Options", "nosniff");
-
-  // XSS protection (legacy browser support)
-  response.headers.set("X-XSS-Protection", "1; mode=block");
-
-  // Referrer policy
+  response.headers.set("X-XSS-Protection", "0");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-
-  // Permissions policy — disable unnecessary browser features
   response.headers.set(
     "Permissions-Policy",
     "camera=(), microphone=(), geolocation=(), interest-cohort=()"
   );
 
-  return response;
+  if (request.headers.get("x-forwarded-proto") === "https") {
+    response.headers.set(
+      "Strict-Transport-Security",
+      "max-age=63072000; includeSubDomains"
+    );
+  }
 }
 
-// Apply to all routes except static assets and Next.js internals
+// ---------------------------------------------------------------------------
+// Middleware export — conditional on Clerk being enabled.
+// Top-level await works in Next.js 16 middleware (edge runtime).
+// When clerkEnabled is false, the dynamic import is skipped entirely,
+// so @clerk/nextjs/server is never loaded and CLERK_SECRET_KEY is not needed.
+// ---------------------------------------------------------------------------
+
+let middlewareExport: NextMiddleware;
+
+if (clerkEnabled) {
+  const { clerkMiddleware, createRouteMatcher } = await import(
+    "@clerk/nextjs/server"
+  );
+
+  const isPublicRoute = createRouteMatcher([
+    "/sign-in(.*)",
+    "/sign-up(.*)",
+    "/",
+  ]);
+
+  middlewareExport = clerkMiddleware(async (auth, req) => {
+    // In cloud mode, protect all non-public routes
+    if (IS_CLOUD_MODE && !isPublicRoute(req)) {
+      await auth.protect();
+    }
+    const response = NextResponse.next();
+    applySecurityHeaders(response, true, req);
+    return response;
+  });
+} else {
+  middlewareExport = (req: NextRequest) => {
+    const response = NextResponse.next();
+    applySecurityHeaders(response, false, req);
+    return response;
+  };
+}
+
+export default middlewareExport;
+
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // Skip Next.js internals and all static files (Clerk-recommended pattern)
+    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // Always run for API routes
+    "/(api|trpc)(.*)",
   ],
 };

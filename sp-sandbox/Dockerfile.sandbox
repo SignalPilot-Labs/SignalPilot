@@ -20,16 +20,22 @@ RUN ARCH=$(uname -m) && \
     -o /usr/local/bin/runsc && \
     chmod +x /usr/local/bin/runsc
 
-RUN mkdir -p /opt/signalpilot
+RUN mkdir -p /opt/signalpilot && mkdir -p /tmp && chmod 1777 /tmp
 
 # Copy sandbox manager modules
 COPY constants.py /opt/signalpilot/
 COPY models.py /opt/signalpilot/
 COPY executor.py /opt/signalpilot/
+COPY audit.py /opt/signalpilot/
 COPY sandbox_manager.py /opt/signalpilot/
+COPY sandbox_exec.sh /opt/signalpilot/
+RUN chmod +x /opt/signalpilot/sandbox_exec.sh
 
-# Install Python deps for sandbox manager
-RUN pip3 install --no-cache-dir aiohttp
+# Install Python deps for sandbox manager + DuckDB for local file queries.
+# aiohttp pinned to >=minimum from sp-sandbox/pyproject.toml.
+# duckdb is not in any pyproject.toml; pin to exact version once verified with:
+# docker run --rm signalpilot/sandbox pip3 show duckdb
+RUN pip3 install --no-cache-dir "aiohttp==3.9.0" duckdb
 
 EXPOSE 8080
 

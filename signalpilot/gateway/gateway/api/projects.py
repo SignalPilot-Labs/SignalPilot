@@ -9,70 +9,65 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..models import ProjectCreate, ProjectUpdate
-from ..project_store import (
-    create_project,
-    delete_project,
-    get_project,
-    list_projects,
-    update_project,
-)
+from ..scope_guard import RequireScope
+from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 
 
-@router.get("/projects")
-async def get_projects():
+@router.get("/projects", dependencies=[RequireScope("read")])
+async def get_projects(store: StoreD):
     """List all registered dbt projects."""
-    return list_projects()
+    return await store.list_projects()
 
 
-@router.post("/projects", status_code=201)
-async def add_project(proj: ProjectCreate):
+@router.post("/projects", status_code=201, dependencies=[RequireScope("write")])
+async def add_project(proj: ProjectCreate, store: StoreD):
     """Create a new dbt project."""
     try:
-        info = create_project(proj)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        info = await store.create_project(proj)
+    except ValueError:
+        raise HTTPException(status_code=409, detail="Project already exists")
     return info
 
 
-@router.get("/projects/{name}")
-async def get_project_detail(name: str):
+@router.get("/projects/{name}", dependencies=[RequireScope("read")])
+async def get_project_detail(name: str, store: StoreD):
     """Get a single dbt project by name."""
-    proj = get_project(name)
+    proj = await store.get_project(name)
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     return proj
 
 
-@router.put("/projects/{name}")
-async def edit_project(name: str, update: ProjectUpdate):
+@router.put("/projects/{name}", dependencies=[RequireScope("write")])
+async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
     """Update an existing dbt project."""
-    result = update_project(name, update)
+    result = await store.update_project(name, update)
     if not result:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
     return result
 
 
-@router.delete("/projects/{name}", status_code=204)
-async def remove_project(name: str):
+@router.delete("/projects/{name}", status_code=204, dependencies=[RequireScope("write")])
+async def remove_project(name: str, store: StoreD):
     """Delete a dbt project."""
-    if not delete_project(name):
+    if not await store.delete_project(name):
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
 
 
-@router.post("/projects/{name}/scan")
-async def scan_project_endpoint(name: str):
+@router.post("/projects/{name}/scan", dependencies=[RequireScope("write")])
+async def scan_project(name: str, store: StoreD):
     """Re-scan a dbt project: count models, update metadata."""
     from ..dbt.inventory import scan_project as dbt_scan
 
-    proj = get_project(name)
+    proj = await store.get_project(name)
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
 
     project_map = dbt_scan(proj.project_dir)
     now = time.time()
-    update_project(name, ProjectUpdate(
+    await store.update_project(name, ProjectUpdate(
         last_scanned_at=now,
         model_count=project_map.model_count,
     ))
@@ -91,7 +86,7 @@ class DbtCloudDiscoverRequest(BaseModel):
     host: str = Field(default="cloud.getdbt.com", max_length=255)
 
 
-@router.post("/dbt-cloud/projects")
+@router.post("/dbt-cloud/projects", dependencies=[RequireScope("admin")])
 async def discover_dbt_cloud_projects(req: DbtCloudDiscoverRequest):
     """Fetch project list from dbt Cloud API (proxied to avoid CORS)."""
     url = f"https://{req.host}/api/v2/accounts/{req.account_id}/projects/"

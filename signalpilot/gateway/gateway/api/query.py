@@ -17,14 +17,8 @@ from ..governance.annotations import load_annotations
 from ..governance.budget import budget_ledger
 from ..governance.cache import query_cache
 from ..models import AuditEntry
-from ..store import (
-    append_audit,
-    get_connection,
-    get_connection_string,
-    get_credential_extras,
-    load_settings,
-)
-from .deps import SQLGLOT_DIALECTS, sanitize_db_error
+from ..scope_guard import RequireScope
+from .deps import SQLGLOT_DIALECTS, StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
 
@@ -36,13 +30,13 @@ class DirectQueryRequest(BaseModel):
     timeout_seconds: int | None = Field(default=None, ge=1, le=300)
 
 
-@router.post("/query")
-async def query_database(req: DirectQueryRequest):
-    info = get_connection(req.connection_name)
+@router.post("/query", dependencies=[RequireScope("query")])
+async def query_database(req: DirectQueryRequest, store: StoreD):
+    info = await store.get_connection(req.connection_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
 
-    settings = load_settings()
+    settings = await store.load_settings()
     timeout = req.timeout_seconds or settings.default_timeout_seconds
 
     # Load annotations for blocked tables check (Feature #19)
@@ -59,7 +53,7 @@ async def query_database(req: DirectQueryRequest):
     # Validate SQL (with blocked tables from annotations + settings)
     validation = validate_sql(req.sql, blocked_tables=blocked_tables or None, dialect=dialect)
     if not validation.ok:
-        await append_audit(AuditEntry(
+        await store.append_audit(AuditEntry(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
             event_type="block",
@@ -76,7 +70,7 @@ async def query_database(req: DirectQueryRequest):
     # Check query cache (Feature #30) — same normalized query returns cached result
     cached = query_cache.get(req.connection_name, req.sql, req.row_limit)
     if cached:
-        await append_audit(AuditEntry(
+        await store.append_audit(AuditEntry(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
             event_type="query",
@@ -96,12 +90,12 @@ async def query_database(req: DirectQueryRequest):
             "cache_hit": True,
         }
 
-    conn_str = get_connection_string(req.connection_name)
+    conn_str = await store.get_connection_string(req.connection_name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
     # Acquire connector once for both cost estimation and query execution (perf optimization)
-    extras = get_credential_extras(req.connection_name)
+    extras = await store.get_credential_extras(req.connection_name)
     connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
 
     try:
@@ -114,7 +108,7 @@ async def query_database(req: DirectQueryRequest):
             # Check budget before executing expensive queries
             if cost_estimate.is_expensive and cost_estimate.estimated_usd > 0:
                 # Warn in audit log but don't block (policy-based blocking is a future feature)
-                await append_audit(AuditEntry(
+                await store.append_audit(AuditEntry(
                     id=str(uuid.uuid4()),
                     timestamp=time.time(),
                     event_type="query",
@@ -146,11 +140,15 @@ async def query_database(req: DirectQueryRequest):
     elapsed_ms = (time.monotonic() - start) * 1000
     health_monitor.record(req.connection_name, elapsed_ms, True, db_type=info.db_type)
 
-    # Apply PII redaction from annotations (Feature #15)
+    # Apply PII redaction if enabled on this connection (Feature #15)
     from ..governance.pii import PIIRedactor
     pii_redactor = PIIRedactor()
-    pii_columns = annotations.pii_columns
-    for col_name, rule in pii_columns.items():
+    # Load rules from DB-stored PII config (toggled per-connection)
+    if info.pii_enabled and info.pii_rules:
+        for col_name, rule in info.pii_rules.items():
+            pii_redactor.add_rule(col_name, rule)
+    # Also load from YAML annotations (legacy/manual overrides)
+    for col_name, rule in annotations.pii_columns.items():
         pii_redactor.add_rule(col_name, rule)
     if pii_redactor.has_rules():
         rows = pii_redactor.redact_rows(rows)
@@ -170,7 +168,7 @@ async def query_database(req: DirectQueryRequest):
     query_cost_usd = (elapsed_ms / 1000) * 0.000014
     budget_ledger.charge("default", query_cost_usd)
 
-    await append_audit(AuditEntry(
+    await store.append_audit(AuditEntry(
         id=str(uuid.uuid4()),
         timestamp=time.time(),
         event_type="query",
@@ -211,18 +209,18 @@ async def query_database(req: DirectQueryRequest):
     return response
 
 
-@router.post("/query/explain")
-async def explain_query(req: DirectQueryRequest):
+@router.post("/query/explain", dependencies=[RequireScope("query")])
+async def explain_query(req: DirectQueryRequest, store: StoreD):
     """Explain a query without executing it — returns the query plan and cost estimate.
 
     This is the pre-flight check for the Spider2.0 agent: understand the query plan
     and cost before committing to execution. Matches HEX's "Explain" button behavior.
     """
-    info = get_connection(req.connection_name)
+    info = await store.get_connection(req.connection_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
 
-    conn_str = get_connection_string(req.connection_name)
+    conn_str = await store.get_connection_string(req.connection_name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
@@ -230,7 +228,7 @@ async def explain_query(req: DirectQueryRequest):
     dialect = SQLGLOT_DIALECTS.get(info.db_type, "postgres")
     annotations = load_annotations(req.connection_name)
     blocked_tables = list(annotations.blocked_tables)
-    settings = load_settings()
+    settings = await store.load_settings()
     if settings.blocked_tables:
         blocked_tables.extend(t for t in settings.blocked_tables if t not in blocked_tables)
     validation = validate_sql(req.sql, blocked_tables=blocked_tables or None, dialect=dialect)
@@ -240,7 +238,7 @@ async def explain_query(req: DirectQueryRequest):
     safe_sql = inject_limit(req.sql, req.row_limit, dialect=dialect)
 
     try:
-        extras = get_credential_extras(req.connection_name)
+        extras = await store.get_credential_extras(req.connection_name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             from ..governance.cost_estimator import CostEstimator
             cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)

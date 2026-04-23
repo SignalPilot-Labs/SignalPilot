@@ -8,19 +8,21 @@ import time
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from ..store import read_audit
+from ..scope_guard import RequireScope
+from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 
 
-@router.get("/audit")
+@router.get("/audit", dependencies=[RequireScope("admin")])
 async def get_audit(
-    limit: int = Query(default=100, le=500),
-    offset: int = Query(default=0),
-    connection_name: str | None = None,
-    event_type: str | None = None,
+    store: StoreD,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    connection_name: str | None = Query(default=None, max_length=64),
+    event_type: str | None = Query(default=None, max_length=64),
 ):
-    entries = await read_audit(
+    entries = await store.read_audit(
         limit=limit,
         offset=offset,
         connection_name=connection_name,
@@ -29,10 +31,11 @@ async def get_audit(
     return {"entries": entries, "total": len(entries)}
 
 
-@router.get("/audit/export")
+@router.get("/audit/export", dependencies=[RequireScope("admin")])
 async def export_audit(
-    connection_name: str | None = None,
-    event_type: str | None = None,
+    store: StoreD,
+    connection_name: str | None = Query(default=None, max_length=64),
+    event_type: str | None = Query(default=None, max_length=64),
     format: str = Query(default="json", pattern=r"^(json|csv)$"),
 ):
     """Export full audit trail for compliance (Feature #45).
@@ -40,7 +43,7 @@ async def export_audit(
     Returns a downloadable JSON or CSV file with all audit entries
     matching the filter criteria. Suitable for SOC 2, HIPAA, or EU AI Act reporting.
     """
-    entries = await read_audit(
+    entries = await store.read_audit(
         limit=10_000,
         offset=0,
         connection_name=connection_name,

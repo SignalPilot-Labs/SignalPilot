@@ -9,25 +9,25 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "16.2.1",
+    "@clerk/nextjs": "^7.2.4",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.475.0",
+    "next": "16.2.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "lucide-react": "^0.475.0",
     "recharts": "^2.15.0",
-    "swr": "^2.3.3",
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^3.0.2",
-    "@xterm/xterm": "^5.5.0",
-    "@xterm/addon-fit": "^0.10.0"
+    "tailwind-merge": "^3.0.2"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "typescript": "^5",
-    "tailwindcss": "^4.0.0",
-    "@tailwindcss/postcss": "^4.0.0",
     "eslint": "^9",
-    "eslint-config-next": "16.2.1"
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5"
   }
 }

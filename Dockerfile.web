@@ -1,0 +1,30 @@
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ARG NEXT_PUBLIC_DEPLOYMENT_MODE=local
+ARG NEXT_PUBLIC_GATEWAY_URL=http://localhost:3300
+
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_DEPLOYMENT_MODE=$NEXT_PUBLIC_DEPLOYMENT_MODE
+ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
+
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+RUN mkdir -p /app/public
+COPY --from=builder /app/public/ ./public/
+
+# Entrypoint: wait for local API key from shared volume, then start
+RUN printf '#!/bin/sh\n# Wait up to 30s for gateway to write the local API key\ni=0\nwhile [ ! -f /shared/local_api_key ] && [ "$i" -lt 30 ]; do\n  sleep 1\n  i=$((i+1))\ndone\nif [ -f /shared/local_api_key ]; then\n  export SP_LOCAL_API_KEY="$(cat /shared/local_api_key)"\nfi\nexec npm start -- --port 3200\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+EXPOSE 3200
+CMD ["/app/entrypoint.sh"]

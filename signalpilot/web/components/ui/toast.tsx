@@ -74,6 +74,7 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
           setTimeout(() => onRemove(toast.id), 200);
         }}
         className="ml-auto text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+        aria-label="Dismiss notification"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
           <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
@@ -99,7 +100,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ toast: addToast }}>
       {children}
       {/* Toast container */}
-      <div className="fixed bottom-4 right-4 z-[90] space-y-2 max-w-sm">
+      <div className="fixed bottom-4 right-4 z-[90] space-y-2 max-w-sm" role="status" aria-live="polite">
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onRemove={removeToast} />
         ))}

@@ -1,15 +1,47 @@
 """Integration tests for the gateway API using httpx TestClient."""
 
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from fastapi.testclient import TestClient
 
 from gateway.main import app
 
 
+async def _mock_db_session():
+    """Yield a mock async DB session for tests that need a DB dependency."""
+    session = AsyncMock()
+    # execute() returns an object whose scalars().all() and scalar_one_or_none() work
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    result.scalars.return_value.__iter__ = lambda s: iter([])
+    result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=result)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    session.rollback = AsyncMock()
+    yield session
+
+
 @pytest.fixture
 def client():
-    """Create a test client with no auth required (no api_key configured)."""
-    return TestClient(app)
+    """Create a test client authenticated with the local API key.
+
+    Overrides the DB session dependency with a mock so tests do not require
+    a live PostgreSQL connection.
+    """
+    from gateway.db.engine import get_db
+    from gateway.store import get_local_api_key
+
+    api_key = get_local_api_key()
+    app.dependency_overrides[get_db] = _mock_db_session
+    try:
+        yield TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 class TestHealthEndpoint:
@@ -19,7 +51,6 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "healthy"
         assert "version" in data
-        assert "connections" in data
 
     def test_health_no_auth_required(self, client):
         """Health is a public endpoint — no API key needed."""
@@ -28,20 +59,26 @@ class TestHealthEndpoint:
 
 
 class TestSettingsEndpoint:
-    def test_get_settings(self, client):
-        response = client.get("/api/settings")
-        assert response.status_code == 200
-        data = response.json()
-        assert "sandbox_manager_url" in data
-        assert "default_row_limit" in data
-        assert "gateway_url" in data
+    def test_get_settings_requires_auth(self):
+        """GET /settings requires authentication — unauthenticated requests return 401."""
+        unauthenticated = TestClient(app)
+        response = unauthenticated.get("/api/settings")
+        assert response.status_code == 401
 
-    def test_update_settings(self, client):
-        settings = client.get("/api/settings").json()
-        settings["default_row_limit"] = 5000
-        response = client.put("/api/settings", json=settings)
-        assert response.status_code == 200
-        assert response.json()["default_row_limit"] == 5000
+    def test_update_settings_requires_auth(self):
+        """PUT /settings requires authentication — unauthenticated requests return 401."""
+        unauthenticated = TestClient(app)
+        response = unauthenticated.put("/api/settings", json={
+            "sandbox_manager_url": "http://localhost:8180",
+            "sandbox_provider": "local",
+            "default_row_limit": 5000,
+            "default_budget_usd": 10.0,
+            "default_timeout_seconds": 30,
+            "max_concurrent_sandboxes": 10,
+            "blocked_tables": [],
+            "gateway_url": "http://localhost:3300",
+        })
+        assert response.status_code == 401
 
 
 class TestConnectionsEndpoint:

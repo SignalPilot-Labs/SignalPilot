@@ -10,10 +10,15 @@ macros, current_date hazards, and pre-computed tables (if DuckDB file found).
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import sys
 from pathlib import Path
+
+# Force UTF-8 output on Windows (prevents mojibake on em dashes, arrows, etc.)
+if sys.stdout.encoding != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 SKIP_DIRS = (".claude", "dbt_packages", "target", "macros", "__pycache__")
 
@@ -272,7 +277,7 @@ def scan_packages(work_dir: Path) -> str:
 
 def main():
     # Find the dbt project directory
-    work_dir = Path.cwd()
+    work_dir = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
 
     # Look for dbt_project.yml to confirm we're in a dbt project
     if not (work_dir / "dbt_project.yml").exists():

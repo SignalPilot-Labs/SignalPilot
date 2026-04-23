@@ -20,6 +20,7 @@ def serve(
         port=port,
         reload=reload,
         log_level="info",
+        server_header=False,
     )
 
 

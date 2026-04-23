@@ -33,7 +33,7 @@ _MAX_CODE_LENGTH = 1_000_000
 def _quote_table(name: str) -> str:
     """Quote a table name for SQL, handling schema-qualified names like main.track."""
     parts = name.split(".")
-    return ".".join(f'"{p}"' for p in parts)
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def _validate_connection_name(name: str) -> str | None:
@@ -51,17 +51,18 @@ def _validate_sql(sql: str) -> str | None:
         return f"SQL query exceeds maximum length ({_MAX_SQL_LENGTH} characters)."
     return None
 
+from contextlib import asynccontextmanager
+
 from .engine import inject_limit, validate_sql as engine_validate_sql
 from .errors import query_error_hint
+from .mcp_errors import sanitize_mcp_error, sanitize_proxy_response
 from .models import AuditEntry
-from .store import (
-    append_audit,
-    get_connection,
-    get_connection_string,
-    list_connections,
-    list_sandboxes,
-    load_settings,
-)
+import contextvars
+from .store import list_sandboxes, Store
+from .db.engine import get_session_factory
+
+# Context variable set by MCPAuthMiddleware with the authenticated user_id
+mcp_user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_id", default=None)
 from .dbt import (
     build_project_map as _build_project_map,
     format_validation_result as _format_validation_result,
@@ -73,6 +74,20 @@ from .dbt.nondeterminism_fixer import (
     build_table_columns_from_schema,
     generate_nondeterminism_fixes,
 )
+
+@asynccontextmanager
+async def _store_session(user_id: str | None = None):
+    """Create a Store with a managed DB session for MCP tool calls.
+
+    If user_id is not provided, reads from the context variable set by
+    MCPAuthMiddleware during key validation.
+    """
+    if user_id is None:
+        user_id = mcp_user_id_var.get(None)
+    factory = get_session_factory()
+    async with factory() as session:
+        yield Store(session, user_id)
+
 
 def _gateway_url() -> str:
     """Get the gateway API URL for internal MCP→REST calls."""
@@ -107,8 +122,9 @@ mcp = FastMCP(
 
 
 
-def _get_sandbox_url() -> str:
-    settings = load_settings()
+async def _get_sandbox_url() -> str:
+    async with _store_session() as store:
+        settings = await store.load_settings()
     return settings.sandbox_manager_url
 
 
@@ -140,7 +156,7 @@ async def execute_code(code: str, timeout: int = 30) -> str:
     if timeout < 1 or timeout > 300:
         return "Error: Timeout must be between 1 and 300 seconds."
 
-    sandbox_url = _get_sandbox_url()
+    sandbox_url = await _get_sandbox_url()
 
     async with httpx.AsyncClient(timeout=timeout + 10) as client:
         try:
@@ -154,22 +170,23 @@ async def execute_code(code: str, timeout: int = 30) -> str:
             )
             data = resp.json()
         except httpx.ConnectError:
-            return f"Error: Cannot connect to sandbox manager at {sandbox_url}. Is the sandbox manager running?"
+            return "Error: Cannot connect to sandbox manager. Is the sandbox manager running?"
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Sandbox execution failed: {sanitize_mcp_error(str(e))}"
 
     # Log to audit
-    await append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="execute",
-        metadata={
-            "code_preview": code[:200],
-            "success": data.get("success", False),
-            "execution_ms": data.get("execution_ms"),
-            "restore_ms": data.get("restore_ms"),
-        },
-    ))
+    async with _store_session() as store:
+        await store.append_audit(AuditEntry(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            event_type="execute",
+            metadata={
+                "code_preview": code[:200],
+                "success": data.get("success", False),
+                "execution_ms": data.get("execution_ms"),
+                "restore_ms": data.get("restore_ms"),
+            },
+        ))
 
     if data.get("success"):
         output = data.get("output", "").strip()
@@ -182,7 +199,7 @@ async def execute_code(code: str, timeout: int = 30) -> str:
         return output + suffix if output else f"(no output){suffix}"
     else:
         error = data.get("error", "Unknown error")
-        return f"Error:\n{error}"
+        return f"Error:\n{sanitize_mcp_error(str(error))}"
 
 
 @mcp.tool()
@@ -213,125 +230,141 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     from .connectors.registry import get_connector
     from .governance.annotations import load_annotations
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    # Load annotations for blocked tables (Feature #19)
-    annotations = load_annotations(connection_name)
-    blocked_tables = annotations.blocked_tables
+        # Load annotations for blocked tables (Feature #19)
+        annotations = load_annotations(connection_name)
+        blocked_tables = annotations.blocked_tables
 
-    # Validate SQL (with blocked tables from annotations)
-    validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None)
-    if not validation.ok:
-        await append_audit(AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="block",
-            connection_name=connection_name,
-            sql=sql,
-            blocked=True,
-            block_reason=validation.blocked_reason,
-        ))
-        return f"Query blocked: {validation.blocked_reason}"
+        # Validate SQL (with blocked tables from annotations)
+        validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None)
+        if not validation.ok:
+            await store.append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="block",
+                connection_name=connection_name,
+                sql=sql,
+                blocked=True,
+                block_reason=validation.blocked_reason,
+            ))
+            return f"Query blocked: {validation.blocked_reason}"
 
-    # Inject LIMIT
-    row_limit = min(row_limit, 10_000)
-    safe_sql = inject_limit(sql, row_limit)
+        # Inject LIMIT
+        row_limit = min(row_limit, 10_000)
+        safe_sql = inject_limit(sql, row_limit)
 
-    # Check query cache (Feature #30)
-    from .governance.cache import query_cache
+        # Check query cache (Feature #30)
+        from .governance.cache import query_cache
 
-    cached = query_cache.get(connection_name, sql, row_limit)
-    if cached:
-        await append_audit(AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="query",
-            connection_name=connection_name,
-            sql=sql,
-            tables=cached.tables,
-            rows_returned=len(cached.rows),
-            duration_ms=0.0,
-            metadata={"cache_hit": True},
-        ))
-        rows = cached.rows
-        elapsed_ms = cached.execution_ms
-    else:
-        conn_str = get_connection_string(connection_name)
-        if not conn_str:
-            return "Error: No credentials stored for this connection (restart gateway to reload)"
+        cached = query_cache.get(connection_name, sql, row_limit)
+        if cached:
+            await store.append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="query",
+                connection_name=connection_name,
+                sql=sql,
+                tables=cached.tables,
+                rows_returned=len(cached.rows),
+                duration_ms=0.0,
+                metadata={"cache_hit": True},
+            ))
+            rows = cached.rows
+            elapsed_ms = cached.execution_ms
+        else:
+            conn_str = await store.get_connection_string(connection_name)
+            if not conn_str:
+                return "Error: No credentials stored for this connection (restart gateway to reload)"
 
-        # Use pool manager for connection reuse (MED-06 fix)
-        from .connectors.pool_manager import pool_manager
-        from .connectors.health_monitor import health_monitor
-        from .store import get_credential_extras as _get_extras
+            # Use pool manager for connection reuse (MED-06 fix)
+            from .connectors.pool_manager import pool_manager
+            from .connectors.health_monitor import health_monitor
 
-        extras = _get_extras(connection_name)
-        start = time.monotonic()
-        try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                rows = await connector.execute(safe_sql)
-        except Exception as e:
-            elapsed_err = (time.monotonic() - start) * 1000
-            health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
-            # Structured error feedback for agent self-correction (Spider2.0 SOTA pattern)
-            err_str = str(e)
-            hint = query_error_hint(err_str, conn_info.db_type)
-            return f"Query error: {err_str}" + (f"\n\nHint: {hint}" if hint else "")
+            extras = await store.get_credential_extras(connection_name)
+            start = time.monotonic()
+            try:
+                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                    rows = await connector.execute(safe_sql)
+            except Exception as e:
+                elapsed_err = (time.monotonic() - start) * 1000
+                health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
+                # Structured error feedback for agent self-correction (Spider2.0 SOTA pattern)
+                err_str = str(e)
+                hint = query_error_hint(err_str, conn_info.db_type)
+                sanitized = sanitize_mcp_error(err_str, cap=300)
+                return f"Query error: {sanitized}" + (f"\n\nHint: {hint}" if hint else "")
 
-        elapsed_ms = (time.monotonic() - start) * 1000
-        health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
+            elapsed_ms = (time.monotonic() - start) * 1000
+            health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
 
-        # Apply PII redaction from annotations (Feature #15)
-        from .governance.pii import PIIRedactor
-        pii_redactor = PIIRedactor()
-        for col_name, rule in annotations.pii_columns.items():
-            pii_redactor.add_rule(col_name, rule)
-        if pii_redactor.has_rules():
-            rows = pii_redactor.redact_rows(rows)
+            # Apply PII redaction if enabled on this connection (Feature #15)
+            from .governance.pii import PIIRedactor
+            pii_redactor = PIIRedactor()
+            # Load rules from DB-stored PII config (toggled per-connection)
+            if conn_info.pii_enabled and conn_info.pii_rules:
+                for col_name, rule in conn_info.pii_rules.items():
+                    pii_redactor.add_rule(col_name, rule)
+            # Also load from YAML annotations (legacy/manual overrides)
+            for col_name, rule in annotations.pii_columns.items():
+                pii_redactor.add_rule(col_name, rule)
+            if pii_redactor.has_rules():
+                rows = pii_redactor.redact_rows(rows)
 
-        # Store in cache after PII redaction
-        query_cache.put(
-            connection_name=connection_name,
-            sql=sql,
-            row_limit=row_limit,
-            rows=rows,
-            tables=validation.tables,
-            execution_ms=elapsed_ms,
-            sql_executed=safe_sql,
-        )
+            # Store in cache after PII redaction
+            query_cache.put(
+                connection_name=connection_name,
+                sql=sql,
+                row_limit=row_limit,
+                rows=rows,
+                tables=validation.tables,
+                execution_ms=elapsed_ms,
+                sql_executed=safe_sql,
+            )
 
-        # Charge query cost to budget (Feature #11 + #12)
-        from .governance.budget import budget_ledger
-        # Cost formula: duration_sec × $0.000014 per vCPU (simplified for DB queries)
-        query_cost_usd = (elapsed_ms / 1000) * 0.000014
-        # Budget check uses "default" session if no specific session
-        budget_ok = budget_ledger.charge("default", query_cost_usd)
-        if not budget_ok:
-            meta_parts_budget = [f"${query_cost_usd:.6f} cost"]
-            return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
+            # Charge query cost to budget (Feature #11 + #12)
+            from .governance.budget import budget_ledger
+            # Cost formula: duration_sec × $0.000014 per vCPU (simplified for DB queries)
+            query_cost_usd = (elapsed_ms / 1000) * 0.000014
+            # Budget check uses "default" session if no specific session
+            budget_ok = budget_ledger.charge("default", query_cost_usd)
+            if not budget_ok:
+                meta_parts_budget = [f"${query_cost_usd:.6f} cost"]
+                return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
 
-        await append_audit(AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="query",
-            connection_name=connection_name,
-            sql=sql,
-            tables=validation.tables,
-            rows_returned=len(rows),
-            duration_ms=elapsed_ms,
-            cost_usd=query_cost_usd,
-        ))
+            await store.append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="query",
+                connection_name=connection_name,
+                sql=sql,
+                tables=validation.tables,
+                rows_returned=len(rows),
+                duration_ms=elapsed_ms,
+                cost_usd=query_cost_usd,
+            ))
 
     # Build status footer
     meta_parts = [f"{len(rows)} rows", f"{elapsed_ms:.0f}ms"]
     if cached:
         meta_parts.append("cache hit")
 
+    # PII redaction notice for the LLM
+    redaction_notice = ""
+    if pii_redactor.last_redacted_columns:
+        redacted_cols = ", ".join(pii_redactor.last_redacted_columns)
+        redaction_notice = (
+            f"\n\n[PII REDACTED] The following columns were redacted by policy: {redacted_cols}. "
+            f"Values shown as ***** (hide), sha256:... (hash), or partially masked. "
+            f"Do not attempt to reverse or infer the original values."
+        )
+
     if not rows:
-        return f"Query returned 0 rows ({', '.join(meta_parts)})"
+        return f"Query returned 0 rows ({', '.join(meta_parts)})" + redaction_notice
 
     # Format as readable table
     columns = list(rows[0].keys())
@@ -342,7 +375,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     if len(rows) > 50:
         lines.append(f"... ({len(rows)} rows total, showing first 50)")
 
-    return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]"
+    return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]" + redaction_notice
 
 
 @mcp.tool()
@@ -353,7 +386,8 @@ async def list_database_connections() -> str:
     Returns connection names, types, hosts, and status.
     Use the connection name with query_database to run SQL.
     """
-    connections = list_connections()
+    async with _store_session() as store:
+        connections = await store.list_connections()
     if not connections:
         return "No database connections configured. Add one via the SignalPilot UI at http://localhost:3200/connections"
 
@@ -372,18 +406,19 @@ async def sandbox_status() -> str:
 
     Returns sandbox manager health and active sandbox count.
     """
-    settings = load_settings()
+    async with _store_session() as store:
+        settings = await store.load_settings()
     sandbox_url = settings.sandbox_manager_url
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{sandbox_url}/health")
             health = resp.json()
-    except Exception as e:
-        return f"Sandbox manager at {sandbox_url}: OFFLINE ({e})"
+    except Exception:
+        return "Sandbox manager: OFFLINE (connection failed)"
 
     lines = [
-        f"Sandbox Manager: {sandbox_url}",
+        "Sandbox Manager: connected",
         f"Status: {health.get('status', 'unknown')}",
         f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
     ]
@@ -419,14 +454,17 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     from .connectors.registry import get_connector
     from .governance.annotations import load_annotations
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     # Check schema cache first (Feature #18)
     from .connectors.schema_cache import schema_cache
@@ -434,13 +472,11 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
-        from .store import get_credential_extras as _get_extras
-        extras = _get_extras(connection_name)
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
         schema_cache.put(connection_name, schema)
 
     # Find the table (case-insensitive)
@@ -502,26 +538,27 @@ async def list_tables(connection_name: str) -> str:
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.schema_cache import schema_cache
     schema = schema_cache.get(connection_name)
     if schema is None:
         from .connectors.pool_manager import pool_manager
-        from .store import get_credential_extras as _get_extras
         try:
-            extras = _get_extras(connection_name)
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
         schema_cache.put(connection_name, schema)
 
     # Build FK lookup
@@ -585,18 +622,18 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
     """
     from .connectors.schema_cache import schema_cache
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        raise ValueError(f"Connection '{connection_name}' not found. Available: {available}")
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            raise ValueError(f"Connection '{connection_name}' not found. Available: {available}")
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        raise ValueError("No credentials stored for this connection")
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            raise ValueError("No credentials stored for this connection")
 
-    extras = _get_extras(connection_name)
+        extras = await store.get_credential_extras(connection_name)
 
     schema = schema_cache.get(connection_name)
     if schema is None:
@@ -632,10 +669,11 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
         select_parts = []
         for col in date_cols:
             col_name = col["name"]
-            quoted = f'"{col_name}"'
-            select_parts.append(f'MIN({quoted}) AS "min_{col_name}", MAX({quoted}) AS "max_{col_name}"')
+            safe_col_name = col_name.replace('"', '""')
+            quoted = f'"{safe_col_name}"'
+            select_parts.append(f'MIN({quoted}) AS "min_{safe_col_name}", MAX({quoted}) AS "max_{safe_col_name}"')
 
-        quoted_table = f'"{table_schema}"."{table_name}"' if table_schema else f'"{table_name}"'
+        quoted_table = _quote_table(full_name)
         sql = f'SELECT {", ".join(select_parts)} FROM {quoted_table}'
 
         try:
@@ -710,7 +748,7 @@ async def get_date_boundaries(connection_name: str) -> str:
     try:
         result = await _fetch_date_boundaries(connection_name)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not result.found_any:
         return f"Date boundaries for: {connection_name} ({result.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
@@ -799,12 +837,13 @@ async def _find_hazard_table_date(
     if not project.date_hazards:
         return None
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        return None
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return None
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            return None
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return None
 
     # Collect model names from hazards (the tables we want to check).
     model_names = [h.get("model_name", "") for h in project.date_hazards if h.get("model_name")]
@@ -894,7 +933,7 @@ async def fix_date_spine_hazards(
         try:
             boundaries = await _fetch_date_boundaries(connection_name)
         except Exception as e:
-            return f"Error fetching date boundaries: {e}"
+            return f"Error fetching date boundaries: {sanitize_mcp_error(str(e))}"
 
         if not boundaries.found_any:
             return (
@@ -934,7 +973,7 @@ async def fix_date_spine_hazards(
     try:
         fixes = generate_date_spine_fixes(project_path, hazards, resolved_date, add_day_offset)
     except OSError as e:
-        return f"Error reading source files: {e}"
+        return f"Error reading source files: {sanitize_mcp_error(str(e))}"
 
     # Write files.
     written: list[str] = []
@@ -950,7 +989,7 @@ async def fix_date_spine_hazards(
             fix.output_path.write_text(fix.content, encoding="utf-8")
             written.append(fix.output_path.name.removesuffix(".sql"))
         except OSError as e:
-            errors.append(f"{fix.output_path}: {e}")
+            errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
 
     # Build markdown report.
     report_lines = [f"## Date spine hazards fixed ({len([f for f in fixes if not f.already_overridden])} files)", ""]
@@ -1044,23 +1083,28 @@ async def fix_nondeterminism_hazards(
     table_columns: dict[str, list[str]] = {}
     schema_error: str = ""
 
-    conn_info = get_connection(connection_name)
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            conn_str = None
+            extras = None
+        else:
+            conn_str = await store.get_connection_string(connection_name)
+            extras = await store.get_credential_extras(connection_name) if conn_str else None
+
     if not conn_info:
-        available = [c.name for c in list_connections()]
         schema_error = (
             f"Connection '{connection_name}' not found (available: {available}). "
             "Tiebreaker selection skipped — all patterns will need manual fixes."
         )
     else:
-        conn_str = get_connection_string(connection_name)
         if not conn_str:
             schema_error = "No credentials stored for this connection. Tiebreaker selection skipped."
         else:
             from .connectors.pool_manager import pool_manager
             from .connectors.schema_cache import schema_cache
-            from .store import get_credential_extras as _get_extras
 
-            extras = _get_extras(connection_name)
             schema = schema_cache.get(connection_name)
             if schema is None:
                 try:
@@ -1068,7 +1112,7 @@ async def fix_nondeterminism_hazards(
                         schema = await connector.get_schema()
                     schema_cache.put(connection_name, schema)
                 except Exception as e:
-                    schema_error = f"Could not fetch schema: {e}. Tiebreaker selection skipped."
+                    schema_error = f"Could not fetch schema: {sanitize_mcp_error(str(e))}. Tiebreaker selection skipped."
                     schema = {}
             table_columns = build_table_columns_from_schema(schema)
 
@@ -1076,7 +1120,7 @@ async def fix_nondeterminism_hazards(
     try:
         fixes = generate_nondeterminism_fixes(project_path, nd_warnings, table_columns)
     except OSError as e:
-        return f"Error reading source files: {e}"
+        return f"Error reading source files: {sanitize_mcp_error(str(e))}"
 
     # Write files.
     written: list[str] = []
@@ -1100,7 +1144,7 @@ async def fix_nondeterminism_hazards(
             fix.output_path.write_text(fix.content, encoding="utf-8")
             written.append(fix.output_path.name.removesuffix(".sql"))
         except OSError as e:
-            errors.append(f"{fix.output_path}: {e}")
+            errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
 
     # Build markdown report.
     total_fixed = len([f for f in fixes if f.fixes_applied and not f.already_overridden])
@@ -1268,7 +1312,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
             params={"from_table": from_table, "to_table": to_table, "max_hops": max_hops, "include_implicit": "true"},
         )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
     paths = data.get("paths", [])
@@ -1308,7 +1352,7 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
             params={"format": format},
         )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
     if format == "compact":
@@ -1350,7 +1394,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
             params={"table": table_name, "include_samples": True},
         )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
     lines = [f"Table: {data.get('table', table_name)}"]
@@ -1422,7 +1466,7 @@ async def schema_overview(connection_name: str) -> str:
         async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
             resp = await client.get(f"/api/connections/{connection_name}/schema/overview")
             if resp.status_code != 200:
-                return f"Error: {resp.text}"
+                return sanitize_proxy_response(resp.status_code, resp.text)
             data = resp.json()
 
         lines = [
@@ -1447,27 +1491,28 @@ async def schema_overview(connection_name: str) -> str:
         pass
 
     # Fallback: use local connector when gateway is unavailable
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.schema_cache import schema_cache
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
 
     schema = schema_cache.get(connection_name)
     if schema is None:
-        extras = _get_extras(connection_name)
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
         schema_cache.put(connection_name, schema)
 
     fk_map: dict[str, str] = {}
@@ -1523,7 +1568,7 @@ async def connector_capabilities(connection_name: str = "") -> str:
         else:
             r = await client.get(f"{gw}/api/connectors/capabilities")
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     lines = ["Connector Capabilities:"]
@@ -1571,7 +1616,7 @@ async def schema_diff(connection_name: str) -> str:
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.get(f"{gw}/api/connections/{connection_name}/schema/diff")
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     lines = [f"Schema Diff for {connection_name}:"]
@@ -1640,7 +1685,7 @@ async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool 
             params={"max_tables": max_tables, "compress": compress},
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     compressed = data.get("compressed_tables", 0)
@@ -1684,7 +1729,7 @@ async def schema_link(connection_name: str, question: str, format: str = "ddl", 
             params={"question": question, "format": format, "max_tables": max_tables},
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     linked = data.get("linked_tables", 0)
@@ -1733,7 +1778,7 @@ async def explain_query(connection_name: str, sql: str) -> str:
             json={"connection_name": connection_name, "sql": sql},
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:300]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     parts = [f"-- EXPLAIN for: {connection_name}"]
@@ -1813,12 +1858,12 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             except Exception:
                 pass
             hint = query_error_hint(error_text, db_type)
-            parts = [f"INVALID ✗\n{error_text}"]
+            parts = [f"INVALID ✗\n{sanitize_mcp_error(error_text, cap=500)}"]
             if hint:
                 parts.append(f"\nSuggested fix: {hint}")
             return "\n".join(parts)
     except Exception as e:
-        return f"Validation error: {e}"
+        return f"Validation error: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -1851,7 +1896,7 @@ async def query_history(connection_name: str, limit: int = 10) -> str:
             },
         )
     if r.status_code != 200:
-        return f"Error ({r.status_code}): {r.text[:200]}"
+        return sanitize_proxy_response(r.status_code, r.text)
 
     data = r.json()
     entries = data.get("entries", [])
@@ -1951,7 +1996,7 @@ async def explore_columns(
         if resp.status_code == 404:
             return f"Table '{table}' not found. Check the table name with schema_link first."
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
 
         data = resp.json()
         explored_cols = data.get("columns", [])
@@ -2008,7 +2053,7 @@ async def explore_columns(
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error exploring columns: {e}"
+        return f"Error exploring columns: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2029,7 +2074,7 @@ async def schema_statistics(connection_name: str) -> str:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(f"{gw}/api/connections/{connection_name}/schema/overview")
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
 
         data = resp.json()
         lines = [
@@ -2076,7 +2121,7 @@ async def schema_statistics(connection_name: str) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2117,7 +2162,7 @@ async def explore_column(
                 params=params,
             )
         if resp.status_code != 200:
-            return f"Error: {resp.text}"
+            return sanitize_proxy_response(resp.status_code, resp.text)
 
         data = resp.json()
         lines = [f"Column: {table}.{column}"]
@@ -2143,7 +2188,7 @@ async def explore_column(
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2180,7 +2225,7 @@ async def estimate_query_cost(connection_name: str, sql: str) -> str:
                 },
             )
             if resp.status_code != 200:
-                return f"Error: {resp.text}"
+                return sanitize_proxy_response(resp.status_code, resp.text)
             data = resp.json()
 
         lines = [f"Cost Estimate for: {connection_name}", ""]
@@ -2198,7 +2243,7 @@ async def estimate_query_cost(connection_name: str, sql: str) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error estimating cost: {e}"
+        return f"Error estimating cost: {sanitize_mcp_error(str(e))}"
 
 
 @mcp.tool()
@@ -2288,7 +2333,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                     lines.append(f"Sample: {preview}")
             else:
                 error_text = resp.text[:300]
-                lines.append(f"ERROR ✗: {error_text}")
+                lines.append(f"ERROR ✗: {sanitize_mcp_error(error_text, cap=300)}")
                 # Get hint
                 try:
                     async with httpx.AsyncClient(timeout=5) as client2:
@@ -2302,7 +2347,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                     pass
 
         except Exception as e:
-            lines.append(f"ERROR: {e}")
+            lines.append(f"ERROR: {sanitize_mcp_error(str(e))}")
 
         lines.append("")
 
@@ -2322,9 +2367,9 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
             data = resp.json()
             lines.append(f"OK ✓ — {data.get('row_count', 0)} rows returned")
         else:
-            lines.append(f"ERROR ✗: {resp.text[:300]}")
+            lines.append(f"ERROR ✗: {sanitize_mcp_error(resp.text[:300], cap=300)}")
     except Exception as e:
-        lines.append(f"ERROR: {e}")
+        lines.append(f"ERROR: {sanitize_mcp_error(str(e))}")
 
     return "\n".join(lines)
 
@@ -2356,24 +2401,25 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     if not expected:
         return "Error: No column names found in yml_columns."
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
 
-    extras = _get_extras(connection_name)
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not rows:
         return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
@@ -2558,24 +2604,25 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     if not table_name or not _MODEL_NAME_RE.match(table_name):
         return f"Error: Invalid table name '{table_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
 
-    extras = _get_extras(connection_name)
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}')
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     total_rows: int = count_rows[0].get("total_rows", 0) if count_rows else 0
 
@@ -2590,7 +2637,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 pragma_rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         except Exception as e:
-            return f"Error fetching schema: {e}"
+            return f"Error fetching schema: {sanitize_mcp_error(str(e))}"
         id_cols = [
             r.get("name", "")
             for r in pragma_rows
@@ -2610,7 +2657,8 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 for key in keys:
                     try:
-                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{key}") as distinct_count FROM {_quote_table(table_name)}')
+                        safe_key = key.replace('"', '""')
+                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{safe_key}") as distinct_count FROM {_quote_table(table_name)}')
                         distinct_count: int = dist_rows[0].get("distinct_count", 0) if dist_rows else 0
                         if distinct_count == total_rows:
                             lines.append(f"    {key}: {distinct_count:,} distinct (UNIQUE - this is likely the grain)")
@@ -2619,9 +2667,9 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
                             fan_out = total_rows / distinct_count if distinct_count > 0 else 0
                             lines.append(f"    {key}: {distinct_count:,} distinct (NOT unique - fan-out factor ~{fan_out:.1f}x)")
                     except Exception as e:
-                        lines.append(f"    {key}: error checking distinctness ({e})")
+                        lines.append(f"    {key}: error checking distinctness ({sanitize_mcp_error(str(e), cap=100)})")
         except Exception as e:
-            lines.append(f"    error opening connection: {e}")
+            lines.append(f"    error opening connection: {sanitize_mcp_error(str(e), cap=100)}")
 
     if not keys:
         lines.append("    (no candidate keys found or provided)")
@@ -2662,24 +2710,25 @@ async def validate_model_output(
     if not model_name or not _MODEL_NAME_RE.match(model_name):
         return f"Error: Invalid model name '{model_name}'. Use only letters, numbers, underscores, dots (1-256 chars)."
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
 
-    extras = _get_extras(connection_name)
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     model_rows: int = model_rows_result[0].get("row_count", 0) if model_rows_result else 0
 
@@ -2693,7 +2742,7 @@ async def validate_model_output(
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
-            source_error = str(e)
+            source_error = sanitize_mcp_error(str(e))
 
     lines = [
         f"Model output validation: '{model_name}'",
@@ -2757,26 +2806,26 @@ async def audit_model_sources(
     if not source_tables or not source_tables.strip():
         return "Error: source_tables cannot be empty. Provide at least one upstream table name."
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
-
-    extras = _get_extras(connection_name)
 
     # Step 1: Get model row count.
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
-        return f"Error: could not query model '{model_name}': {e}"
+        return f"Error: could not query model '{model_name}': {sanitize_mcp_error(str(e))}"
 
     model_rows: int = model_result[0].get("row_count", 0) if model_result else 0
 
@@ -2798,7 +2847,7 @@ async def audit_model_sources(
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(src)}')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
-            source_lines.append(f"  {src}:  ERROR: {e}")
+            source_lines.append(f"  {src}:  ERROR: {sanitize_mcp_error(str(e), cap=100)}")
             continue
 
         if src_rows == 0:
@@ -2878,7 +2927,7 @@ async def audit_model_sources(
                             f"  [OK]  {col_label}  {dist_count:>8,} distinct, {null_count:,} nulls"
                         )
                 except Exception as e:
-                    col_scan_lines.append(f"  [--] {col}: error ({e})")
+                    col_scan_lines.append(f"  [--] {col}: error ({sanitize_mcp_error(str(e), cap=100)})")
 
         except Exception:
             col_scan_header = "Column scan: unavailable (PRAGMA table_info failed)"
@@ -2946,19 +2995,19 @@ async def compare_join_types(
         if err := _validate_sql(where_clause):
             return f"Error: {err}"
 
-    conn_info = get_connection(connection_name)
-    if not conn_info:
-        available = [c.name for c in list_connections()]
-        return f"Error: Connection '{connection_name}' not found. Available: {available}"
+    async with _store_session() as store:
+        conn_info = await store.get_connection(connection_name)
+        if not conn_info:
+            available = [c.name for c in await store.list_connections()]
+            return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
-    conn_str = get_connection_string(connection_name)
-    if not conn_str:
-        return "Error: No credentials stored for this connection"
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection"
+
+        extras = await store.get_credential_extras(connection_name)
 
     from .connectors.pool_manager import pool_manager
-    from .store import get_credential_extras as _get_extras
-
-    extras = _get_extras(connection_name)
 
     # Extract left and right columns from the first join key for NULL detection.
     # join_keys like "a.id = b.id" — extract "a.id" and "b.id"
@@ -3023,7 +3072,7 @@ SELECT
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
             result = await connector.execute(sql)
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not result:
         return "Error: Query returned no results."
@@ -3127,7 +3176,6 @@ async def dbt_project_map(
 @mcp.tool()
 async def dbt_project_validate(
     project_dir: str,
-    dbt_bin: str = "",
     timeout: int = 60,
 ) -> str:
     """
@@ -3149,23 +3197,42 @@ async def dbt_project_validate(
 
     Args:
         project_dir: absolute path to the dbt project root
-        dbt_bin: optional path to the dbt executable (default: search PATH)
-        timeout: subprocess timeout in seconds (default 60)
+        timeout: subprocess timeout in seconds (default 60, clamped to 1-300)
 
     Returns:
         markdown-formatted validation report
     """
     import asyncio
+    from pathlib import Path as _Path
 
     if not project_dir or not project_dir.strip():
         return "Error: project_dir is required"
+
+    clean_dir = project_dir.strip()
+
+    # Require absolute path to prevent relative path confusion.
+    if not _Path(clean_dir).is_absolute():
+        return "Error: project_dir must be an absolute path"
+
+    # Reject path traversal — check resolved path for .. segments.
+    try:
+        resolved = _Path(clean_dir).resolve()
+    except (ValueError, OSError) as exc:
+        return f"Error: invalid project_dir: {exc}"
+
+    # Reject if any part of the original (unresolved) path contains .. segments.
+    if ".." in _Path(clean_dir).parts:
+        return "Error: project_dir must not contain '..' segments"
+
+    # Clamp timeout to a safe range: minimum 1s, maximum 300s (5 minutes).
+    clamped_timeout = max(1, min(timeout, 300))
+
     # _validate_project calls subprocess.run, which would block this handler's
     # event loop and can stall MCP heartbeats on Windows. Offload to a thread.
     result = await asyncio.to_thread(
         _validate_project,
-        project_dir.strip(),
-        dbt_bin.strip() or None,
-        timeout,
+        str(resolved),
+        clamped_timeout,
     )
     return _format_validation_result(result)
 
@@ -3187,7 +3254,7 @@ async def create_project(name: str, connection_name: str) -> str:
         )
         info = project_store.create_project(proj)
     except ValueError as e:
-        return f"Error: {e}"
+        return f"Error: {sanitize_mcp_error(str(e))}"
     return (
         f"Created project '{info.name}' at {info.project_dir}\n"
         f"  connection: {info.connection_name}\n"
@@ -3245,8 +3312,25 @@ async def get_project(name: str) -> str:
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main():
-    """Run the MCP server over stdio."""
-    mcp.run(transport="stdio")
+    """Run the MCP server.
+
+    Transport is selected via SP_MCP_TRANSPORT env var (default: stdio).
+    When running as streamable-http, wraps the Starlette app with
+    MCPAuthMiddleware and serves it with uvicorn.
+    """
+    import os as _entry_os
+    transport = _entry_os.environ.get("SP_MCP_TRANSPORT", "stdio")
+
+    if transport == "streamable-http":
+        import uvicorn
+        from .mcp_auth import MCPAuthMiddleware
+
+        port = int(_entry_os.environ.get("SP_MCP_PORT", "8000"))
+        starlette_app = mcp.streamable_http_app()
+        authenticated_app = MCPAuthMiddleware(starlette_app)
+        uvicorn.run(authenticated_app, host="0.0.0.0", port=port, server_header=False)
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

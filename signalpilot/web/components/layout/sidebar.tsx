@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
+import { KeyRound, CreditCard, Plug, BarChart3, Shield } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useAppAuth } from "@/lib/auth-context";
+
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
   const s = active ? "currentColor" : "currentColor";
@@ -92,15 +96,18 @@ type NavIconComponent = React.FC<{ active: boolean }>;
 
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
-  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "2" },
+  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
   { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "5" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "6" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "7" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "8" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
 ];
+
+/** Routes where the sidebar should be hidden */
+const AUTH_ROUTE_PREFIXES = ["/sign-in", "/sign-up"];
 
 function SignalPilotLogo() {
   return (
@@ -170,6 +177,154 @@ function NavBadge({ count, color = "var(--color-success)" }: { count: number; co
   );
 }
 
+/** User section rendered between nav links and status footer */
+function UserSection() {
+  const { clerkEnabled, isAuthenticated, user } = useAppAuth();
+
+  if (!clerkEnabled) {
+    // Local mode without Clerk — no auth UI, existing behavior
+    return null;
+  }
+
+  if (isAuthenticated && user) {
+    const displayName =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.email ||
+      "user";
+
+    return (
+      <div className="px-3 py-2 border-t border-[var(--color-border)]">
+        <ClerkUserButton displayName={displayName} />
+      </div>
+    );
+  }
+
+  // Clerk enabled but not signed in
+  return (
+    <div className="px-3 py-2 border-t border-[var(--color-border)]">
+      <Link
+        href="/sign-in"
+        className="flex items-center gap-2 px-3 py-1.5 text-[12px] tracking-wider uppercase text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all"
+      >
+        <KeyRound size={12} className="flex-shrink-0" />
+        <span>sign in</span>
+      </Link>
+    </div>
+  );
+}
+
+/**
+ * Thin wrapper around Clerk's UserButton — dynamically imported so
+ * @clerk/nextjs is never loaded until ClerkProvider has mounted.
+ */
+const ClerkUserButton = dynamic(
+  () => import("@/components/layout/clerk-user-button"),
+  { ssr: false }
+);
+
+/** API Keys nav link — available in both local and cloud mode */
+function ApiKeysNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/api-keys");
+
+  return (
+    <Link
+      href="/settings/api-keys"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <KeyRound size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">api keys</span>
+    </Link>
+  );
+}
+
+/** Billing nav link — only rendered in cloud mode, nested under /settings */
+function BillingNavLink({ pathname }: { pathname: string }) {
+  const { isCloudMode } = useAppAuth();
+
+  if (!isCloudMode) return null;
+
+  const active = pathname.startsWith("/settings/billing");
+
+  return (
+    <Link
+      href="/settings/billing"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <CreditCard size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">billing</span>
+    </Link>
+  );
+}
+
+/** Usage nav link — only rendered in cloud mode, nested under /settings */
+function UsageNavLink({ pathname }: { pathname: string }) {
+  const { isCloudMode } = useAppAuth();
+
+  if (!isCloudMode) return null;
+
+  const active = pathname.startsWith("/settings/usage");
+
+  return (
+    <Link
+      href="/settings/usage"
+      aria-label="view usage analytics"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <BarChart3 size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">usage</span>
+    </Link>
+  );
+}
+
+/** MCP Connect nav link — available in both local and cloud mode */
+function McpConnectNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/mcp-connect");
+
+  return (
+    <Link
+      href="/settings/mcp-connect"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <Plug size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">mcp connect</span>
+    </Link>
+  );
+}
+
+function ByokNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/byok");
+
+  return (
+    <Link
+      href="/settings/byok"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <Shield size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">security</span>
+    </Link>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -179,7 +334,7 @@ export default function Sidebar() {
 
   // Poll for active sandbox count and connection health
   const fetchCounts = useCallback(() => {
-    const url = typeof window !== "undefined" ? localStorage.getItem("sp_gateway_url") || "http://localhost:3300" : "";
+    const url = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
     const key = typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
     const headers: Record<string, string> = {};
     if (key) headers["Authorization"] = `Bearer ${key}`;
@@ -195,7 +350,7 @@ export default function Sidebar() {
         setProjectCount(projects.length);
       })
       .catch(() => {});
-    fetch(`${url}/api/health/connections`, { headers })
+    fetch(`${url}/api/connections/health`, { headers })
       .then((r) => r.ok ? r.json() : { connections: [] })
       .then((data: { connections: { status: string }[] }) => {
         const conns = data.connections || [];
@@ -226,6 +381,11 @@ export default function Sidebar() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [router]);
+
+  // Hide sidebar on auth pages — checked after all hooks are called
+  if (AUTH_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return null;
+  }
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
@@ -292,7 +452,20 @@ export default function Sidebar() {
             </Link>
           );
         })}
+        {/* API Keys sub-link — cloud mode only */}
+        <ApiKeysNavLink pathname={pathname} />
+        {/* Usage sub-link — cloud mode only */}
+        <UsageNavLink pathname={pathname} />
+        {/* Billing sub-link — cloud mode only */}
+        <BillingNavLink pathname={pathname} />
+        {/* MCP Connect sub-link */}
+        <McpConnectNavLink pathname={pathname} />
+        {/* Security sub-link */}
+        <ByokNavLink pathname={pathname} />
       </nav>
+
+      {/* User section — Clerk UserButton or sign-in link */}
+      <UserSection />
 
       {/* Status footer */}
       <div className="px-4 py-3 border-t border-[var(--color-border)] space-y-2.5">

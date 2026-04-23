@@ -29,6 +29,10 @@ import {
   Filter,
   Download,
   Upload,
+  Folder,
+  FileText,
+  ArrowLeft,
+  HardDrive,
 } from "lucide-react";
 import {
   getConnections,
@@ -41,6 +45,9 @@ import {
   searchConnectionSchema,
   getConnectionsHealth,
   detectPII,
+  getPIIConfig,
+  setPIIConfig,
+  detectAndSavePII,
   refreshConnectionSchema,
   getSchemaEndorsements,
   setSchemaEndorsements,
@@ -54,6 +61,7 @@ import {
   getConnectionSchemaDiff,
   exploreColumns,
   getConnectionHealthHistory,
+  browseFiles,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
@@ -63,6 +71,157 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useConnection } from "@/lib/connection-context";
+
+/* ── Local DB File Picker (DuckDB / SQLite) ── */
+function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder = "/path/to/database.duckdb", hint = "paste a file path or browse to select a file" }: { value: string; onChange: (v: string) => void; pattern?: string; placeholder?: string; hint?: string }) {
+  const [browsing, setBrowsing] = useState(false);
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
+  const [files, setFiles] = useState<{ name: string; path: string; size_bytes: number }[]>([]);
+  const [directories, setDirectories] = useState<{ name: string; path: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const browse = useCallback(async (path?: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await browseFiles(path, pattern);
+      setCurrentPath(data.path);
+      setFiles(data.files || []);
+      setDirectories(data.directories || []);
+      if (data.error) setError(data.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to browse files");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const openBrowser = useCallback(() => {
+    setBrowsing(true);
+    browse();
+  }, [browse]);
+
+  const selectFile = useCallback((filePath: string) => {
+    onChange(filePath);
+    setBrowsing(false);
+  }, [onChange]);
+
+  const goUp = useCallback(() => {
+    if (!currentPath) return;
+    const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
+    browse(parent);
+  }, [currentPath, browse]);
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  return (
+    <div className="col-span-2">
+      {/* Selected file display + browse button */}
+      <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">database file</label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-text-dim)]"
+        />
+        <button
+          type="button"
+          onClick={openBrowser}
+          className="px-3 py-1.5 text-[12px] tracking-wider border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)] transition-all flex items-center gap-1.5"
+        >
+          <HardDrive size={13} />
+          browse
+        </button>
+      </div>
+      <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
+        {hint}
+      </p>
+
+      {/* File browser modal */}
+      {browsing && (
+        <div className="mt-2 border border-[var(--color-border)] bg-[var(--color-bg-code)]">
+          {/* Header */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]/30">
+            <button
+              type="button"
+              onClick={goUp}
+              className="p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+              title="Go up"
+            >
+              <ArrowLeft size={14} />
+            </button>
+            <span className="text-[11px] text-[var(--color-text-muted)] font-mono truncate flex-1">
+              {currentPath || "..."}
+            </span>
+            <button
+              type="button"
+              onClick={() => setBrowsing(false)}
+              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider"
+            >
+              close
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="max-h-[240px] overflow-y-auto">
+            {loading && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 size={16} className="animate-spin text-[var(--color-text-dim)]" />
+              </div>
+            )}
+
+            {error && (
+              <div className="px-3 py-2 text-[11px] text-red-400 tracking-wider">{error}</div>
+            )}
+
+            {!loading && !error && files.length === 0 && directories.length === 0 && (
+              <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] tracking-wider text-center">
+                no matching files found in this directory
+              </div>
+            )}
+
+            {!loading && directories.map((dir) => (
+              <button
+                key={dir.path}
+                type="button"
+                onClick={() => browse(dir.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-bg)]/50 transition-colors border-b border-[var(--color-border)]/30"
+              >
+                <Folder size={14} className="text-[var(--color-text-dim)] flex-shrink-0" />
+                <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider truncate">{dir.name}/</span>
+              </button>
+            ))}
+
+            {!loading && files.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                onClick={() => selectFile(file.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-accent)]/10 transition-colors border-b border-[var(--color-border)]/30 group"
+              >
+                <FileText size={14} className="text-[var(--color-accent)] flex-shrink-0" />
+                <span className="text-[12px] text-[var(--color-text)] tracking-wider truncate flex-1 group-hover:text-[var(--color-accent)]">
+                  {file.name}
+                </span>
+                <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+                  {formatSize(file.size_bytes)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ── DB type configuration ── */
 interface DBTypeConfig {
@@ -307,7 +466,7 @@ const CONNECTION_PRESETS: ConnectionPreset[] = [
     label: "MotherDuck",
     db_type: "duckdb",
     icon: "🦆",
-    defaults: { database: "md:", description: "MotherDuck cloud DuckDB" },
+    defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" },
   },
   {
     label: "SSH Tunnel (any DB)",
@@ -431,20 +590,34 @@ function FormInput({
   label: string; value: string; onChange: (v: string) => void;
   type?: string; placeholder?: string; hint?: string; required?: boolean; className?: string; error?: string;
 }) {
+  const [visible, setVisible] = useState(false);
+  const isSecret = type === "password";
   return (
     <div className={className}>
       <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
         {label}{required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </label>
-      <input
-        type={type}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
-          error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
-        }`}
-      />
+      <div className="relative">
+        <input
+          type={isSecret && !visible ? "password" : "text"}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full px-3 py-2 ${isSecret ? "pr-9" : ""} bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
+            error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
+          }`}
+        />
+        {isSecret && (
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => setVisible(!visible)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
+          >
+            {visible ? <EyeOff className="w-3.5 h-3.5" strokeWidth={1.5} /> : <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />}
+          </button>
+        )}
+      </div>
       {error && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
       {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
     </div>
@@ -552,6 +725,7 @@ interface FormState {
   trino_client_key: string;
   trino_krb_service_name: string;
   // DuckDB / MotherDuck
+  duckdb_mode: "local" | "motherduck" | "memory";
   motherduck_token: string;
   // Tags
   tags: string[];
@@ -593,6 +767,7 @@ const defaultForm: FormState = {
   redshift_cluster_id: "", redshift_workgroup: "",
   azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
   trino_https: false, trino_auth_method: "none", trino_jwt_token: "", trino_client_cert: "", trino_client_key: "", trino_krb_service_name: "trino",
+  duckdb_mode: "memory",
   motherduck_token: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
@@ -661,13 +836,20 @@ function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
   try {
     if (dbType === "postgres" || dbType === "mysql" || dbType === "redshift" || dbType === "clickhouse" || dbType === "mssql") {
       const parsed = new URL(url.replace(/^(postgresql|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver):/, "http:"));
-      return {
+      const result: Partial<FormState> = {
         host: parsed.hostname || "",
         port: parsed.port || String(DB_CONFIGS[dbType].defaultPort),
         database: parsed.pathname.replace(/^\//, "") || "",
         username: decodeURIComponent(parsed.username || ""),
         password: decodeURIComponent(parsed.password || ""),
       };
+      // Extract SSL mode from query params (e.g., ?sslmode=require)
+      const sslmode = parsed.searchParams.get("sslmode");
+      if (sslmode && sslmode !== "disable") {
+        result.ssl_enabled = true;
+        result.ssl_mode = sslmode as FormState["ssl_mode"];
+      }
+      return result;
     }
     if (dbType === "snowflake") {
       // snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
@@ -791,18 +973,23 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     description: form.description,
   };
 
-  if (form.connectionMode === "url" && form.connection_string) {
+  const isUrlMode = form.connectionMode === "url" && form.connection_string;
+
+  if (isUrlMode) {
     payload.connection_string = form.connection_string;
   }
 
   const config = DB_CONFIGS[form.db_type];
 
-  // Common host/port fields
-  if (config.fields.includes("host")) payload.host = form.host;
-  if (config.fields.includes("port")) payload.port = parseInt(form.port) || config.defaultPort;
-  if (config.fields.includes("database")) payload.database = form.database;
-  if (config.fields.includes("username")) payload.username = form.username;
-  if (config.fields.includes("password")) payload.password = form.password;
+  // Common host/port fields — skip when using connection_string to avoid
+  // overwriting parsed values with form defaults (e.g., "localhost:5432").
+  if (!isUrlMode) {
+    if (config.fields.includes("host")) payload.host = form.host;
+    if (config.fields.includes("port")) payload.port = parseInt(form.port) || config.defaultPort;
+    if (config.fields.includes("database")) payload.database = form.database;
+    if (config.fields.includes("username")) payload.username = form.username;
+    if (config.fields.includes("password")) payload.password = form.password;
+  }
 
   // Snowflake
   if (config.fields.includes("account")) payload.account = form.account;
@@ -1365,29 +1552,126 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     );
   }
 
-  // DuckDB/SQLite — just path
-  if (form.db_type === "duckdb" || form.db_type === "sqlite") {
-    const isMotherDuck = form.db_type === "duckdb" && form.database.startsWith("md:");
+  // SQLite — mode selector: local file or in-memory
+  if (form.db_type === "sqlite") {
+    const sqliteMode = form.database === ":memory:" ? "memory" : "local";
     return (
       <>
-        <FormInput
-          label="database path"
-          value={form.database}
-          onChange={(v) => setForm({ ...form, database: v })}
-          placeholder={form.db_type === "duckdb" ? ":memory: or /path/to/db.duckdb or md:my_db" : ":memory: or /path/to/db.sqlite"}
-          hint={form.db_type === "duckdb" ? "file path, :memory:, or md:<db_name> for MotherDuck cloud" : "file path or :memory:"}
-          className="col-span-2"
-        />
-        {isMotherDuck && (
-          <FormInput
-            label="MotherDuck token"
-            value={form.motherduck_token}
-            onChange={(v) => setForm({ ...form, motherduck_token: v })}
-            type="password"
-            placeholder="eyJ..."
-            hint="personal access token from app.motherduck.com"
-            className="col-span-2"
+        <div className="col-span-2 mb-1">
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <div className="flex gap-2">
+            {([
+              { key: "local", label: "local file" },
+              { key: "memory", label: "in-memory" },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  if (key === "memory") setForm({ ...form, database: ":memory:" });
+                  else setForm({ ...form, database: form.database === ":memory:" ? "" : form.database });
+                }}
+                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                  sqliteMode === key
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {sqliteMode === "local" && (
+          <LocalDBFilePicker
+            value={form.database}
+            onChange={(v) => setForm({ ...form, database: v })}
+            pattern="*.sqlite,*.db"
+            placeholder="/path/to/database.sqlite"
+            hint="paste a file path or browse to select a .sqlite or .db file"
           />
+        )}
+
+        {sqliteMode === "memory" && (
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts.
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // DuckDB — mode selector: in-memory, local file, or MotherDuck
+  if (form.db_type === "duckdb") {
+    return (
+      <>
+        <div className="col-span-2 mb-1">
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <div className="flex gap-2">
+            {([
+              { key: "local", label: "local file" },
+              { key: "motherduck", label: "MotherDuck" },
+              { key: "memory", label: "in-memory" },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  const updates: Partial<FormState> = { duckdb_mode: key };
+                  if (key === "memory") updates.database = ":memory:";
+                  else if (key === "motherduck") updates.database = form.database.startsWith("md:") ? form.database : "md:";
+                  else updates.database = form.database === ":memory:" || form.database.startsWith("md:") ? "" : form.database;
+                  setForm({ ...form, ...updates });
+                }}
+                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                  form.duckdb_mode === key
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {form.duckdb_mode === "local" && (
+          <LocalDBFilePicker
+            value={form.database}
+            onChange={(v) => setForm({ ...form, database: v })}
+            pattern="*.duckdb"
+            placeholder="/path/to/database.duckdb"
+            hint="paste a file path or browse to select a .duckdb file"
+          />
+        )}
+
+        {form.duckdb_mode === "motherduck" && (
+          <>
+            <FormInput
+              label="database name"
+              value={form.database.startsWith("md:") ? form.database.slice(3) : form.database}
+              onChange={(v) => setForm({ ...form, database: `md:${v}` })}
+              placeholder="my_database"
+              hint="MotherDuck database name (without md: prefix)"
+              required
+            />
+            <FormInput
+              label="token"
+              value={form.motherduck_token}
+              onChange={(v) => setForm({ ...form, motherduck_token: v })}
+              type="password"
+              placeholder="eyJ..."
+              hint="personal access token from app.motherduck.com"
+              required
+            />
+          </>
+        )}
+
+        {form.duckdb_mode === "memory" && (
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts. Use MotherDuck for persistent cloud-hosted DuckDB.
+          </div>
         )}
       </>
     );
@@ -1744,6 +2028,7 @@ export default function ConnectionsPage() {
   const { refreshConnections: syncGlobalConnections } = useConnection();
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [securityBannerExpanded, setSecurityBannerExpanded] = useState(false);
   const [editingConnection, setEditingConnection] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { status: string; message: string; phases?: { phase: string; status: string; message: string; duration_ms?: number }[]; total_duration_ms?: number }>>({});
@@ -1756,6 +2041,7 @@ export default function ConnectionsPage() {
   const [healthData, setHealthData] = useState<Record<string, ConnectionHealthStats>>({});
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
+  const [piiConfig, setPiiConfig] = useState<Record<string, { enabled: boolean; rules: Record<string, string> }>>({});
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState<Record<string, string>>({});
   const [schemaSearchResults, setSchemaSearchResults] = useState<Record<string, { result_count: number; total_tables: number; tables: Record<string, any> }>>({});
@@ -1782,6 +2068,12 @@ export default function ConnectionsPage() {
   const refresh = useCallback(() => {
     getConnections().then((conns) => {
       setConnections(conns);
+      // Load PII config for connections that have it
+      for (const conn of conns) {
+        if ((conn as any).pii_enabled || (conn as any).pii_rules) {
+          setPiiConfig((prev) => ({ ...prev, [conn.name]: { enabled: (conn as any).pii_enabled || false, rules: (conn as any).pii_rules || {} } }));
+        }
+      }
       // Fetch latency sparkline history for each connection (background)
       for (const conn of conns) {
         getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
@@ -1977,6 +2269,7 @@ export default function ConnectionsPage() {
 
   async function handleTest(name: string) {
     setTesting(name);
+    setDiagResults((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
       const result = await testConnection(name);
       setTestResult((prev) => ({ ...prev, [name]: result }));
@@ -1998,6 +2291,7 @@ export default function ConnectionsPage() {
 
   async function handleDiagnose(name: string) {
     setDiagnosing(name);
+    setTestResult((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
       const result = await diagnoseConnection(name);
       setDiagResults((prev) => ({ ...prev, [name]: result }));
@@ -2063,10 +2357,42 @@ export default function ConnectionsPage() {
   async function handleScanPII(name: string) {
     setPiiLoading(name);
     try {
-      const data = await detectPII(name);
-      setPiiData((prev) => ({ ...prev, [name]: data }));
-    } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
+      const data = await detectAndSavePII(name);
+      // Update PII display data
+      const detections: Record<string, Record<string, string>> = {};
+      for (const [col, rule] of Object.entries(data.rules)) {
+        const table = "_all";
+        if (!detections[table]) detections[table] = {};
+        detections[table][col] = rule;
+      }
+      setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: Object.keys(detections).length, detections } }));
+      setPiiConfig((prev) => ({ ...prev, [name]: { enabled: data.enabled, rules: data.rules } }));
+      toast(`${name}: ${data.columns_flagged} PII columns detected and redaction enabled`, "success");
+    } catch {
+      // Fallback to detect-only
+      try {
+        const data = await detectPII(name);
+        setPiiData((prev) => ({ ...prev, [name]: data }));
+      } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
+    }
     finally { setPiiLoading(null); }
+  }
+
+  async function handleTogglePII(name: string) {
+    const current = piiConfig[name];
+    if (!current) {
+      // No config yet — run detection first
+      await handleScanPII(name);
+      return;
+    }
+    const newEnabled = !current.enabled;
+    try {
+      const result = await setPIIConfig(name, { enabled: newEnabled, rules: current.rules });
+      setPiiConfig((prev) => ({ ...prev, [name]: result }));
+      toast(`${name}: PII redaction ${newEnabled ? "enabled" : "disabled"}`, newEnabled ? "success" : "info");
+    } catch (e) {
+      toast(`Failed to toggle PII: ${e instanceof Error ? e.message : "unknown error"}`, "error");
+    }
   }
 
   const searchTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -2178,6 +2504,48 @@ export default function ConnectionsPage() {
           <span className="text-[var(--color-text-dim)]">registered: <code className="text-[12px] text-[var(--color-text)]">{connections.length}</code></span>
         </div>
       </TerminalBar>
+
+      {/* ─── Security Banner ─── */}
+      <div className="mb-4 border border-emerald-500/20 bg-emerald-500/5">
+        <button
+          type="button"
+          onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)}
+          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-emerald-500/5 transition-colors"
+          aria-expanded={securityBannerExpanded}
+          aria-controls="security-banner-details"
+        >
+          <Shield className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" strokeWidth={1.5} />
+          <span className="flex-1 text-[11px] text-emerald-400/90 tracking-wider leading-relaxed">
+            All database credentials are encrypted at rest using AES-128 with HMAC-SHA256 authentication. Passwords and secrets never leave this server unencrypted.
+          </span>
+          {securityBannerExpanded
+            ? <ChevronDown className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />}
+        </button>
+        {securityBannerExpanded && (
+          <div
+            id="security-banner-details"
+            role="region"
+            aria-label="Security details"
+            className="px-4 pb-3 border-t border-emerald-500/10 animate-fade-in"
+          >
+            <ul className="mt-2.5 space-y-1.5">
+              {[
+                "Credentials are encrypted before storage using Fernet symmetric encryption",
+                "Encryption keys are derived using PBKDF2 with 600,000 iterations",
+                "Connection strings, passwords, API keys, and private keys are all encrypted",
+                "Credentials are only decrypted in-memory when establishing database connections",
+                "Audit logging tracks all credential access",
+              ].map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-[11px] text-emerald-400/70 tracking-wider">
+                  <Lock className="w-2.5 h-2.5 mt-0.5 flex-shrink-0 text-emerald-500/50" strokeWidth={1.5} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
 
       {/* ─── Create Connection Form ─── */}
       {showForm && (
@@ -2650,8 +3018,11 @@ export default function ConnectionsPage() {
             {(() => {
               const warnings: string[] = [];
               const cfg = DB_CONFIGS[form.db_type];
-              // Warn if SSL not enabled on a production-capable connector
-              if (cfg.supportsSSL && !form.ssl_enabled && !["duckdb", "sqlite"].includes(form.db_type)) {
+              // Warn if SSL not enabled on a production-capable connector.
+              // In URL mode, check the connection string for sslmode= param.
+              const urlHasSsl = form.connectionMode === "url" && form.connection_string &&
+                /[?&]sslmode=(require|verify-ca|verify-full|prefer|allow)/i.test(form.connection_string);
+              if (cfg.supportsSSL && !form.ssl_enabled && !urlHasSsl && !["duckdb", "sqlite"].includes(form.db_type)) {
                 warnings.push("SSL/TLS is not enabled. Recommended for production databases to encrypt traffic in transit.");
               }
               // Warn if using password auth for Snowflake (key-pair is preferred per HEX)
@@ -2754,9 +3125,14 @@ export default function ConnectionsPage() {
             const tables = schemaData[conn.name]?.tables;
             const connConfig = DB_CONFIGS[conn.db_type as DBType] || DB_CONFIGS.postgres;
 
-            // Build display string
+            // Build display string — prefer connection_string for URL-mode connections
             let displayStr = "";
-            if (conn.host && conn.port) {
+            if ((conn as any).connection_string && !conn.host) {
+              try {
+                const u = new URL((conn as any).connection_string.replace(/^(postgresql|postgres|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver|trino(\+https)?|snowflake|databricks):/, "http:"));
+                displayStr = `${u.hostname}${u.port ? `:${u.port}` : ""}${u.pathname !== "/" ? u.pathname : ""}`;
+              } catch { displayStr = "(connection string)"; }
+            } else if (conn.host && conn.port) {
               displayStr = `${conn.host}:${conn.port}/${conn.database || ""}`;
             } else if (conn.account) {
               displayStr = `${conn.account}/${conn.database || ""}`;
@@ -2796,6 +3172,20 @@ export default function ConnectionsPage() {
                           {CONNECTOR_TIERS[conn.db_type as DBType]?.label || "T3"}
                         </span>
                       </Tooltip>
+                      <Tooltip content="Credentials encrypted at rest with AES-128 + HMAC-SHA256" position="top">
+                        <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-emerald-500/30 text-emerald-400/80 tracking-wider cursor-default">
+                          <Lock className="w-2.5 h-2.5" strokeWidth={1.5} />
+                          encrypted
+                        </span>
+                      </Tooltip>
+                      {(conn as any).byok_key_alias && (
+                        <Tooltip content={`Credentials encrypted with your key: ${(conn as any).byok_key_alias}`} position="top">
+                          <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-purple-500/30 text-purple-400/80 tracking-wider cursor-default">
+                            <Shield className="w-2.5 h-2.5" strokeWidth={1.5} />
+                            byok
+                          </span>
+                        </Tooltip>
+                      )}
                       {conn.ssl && (
                         <span className="text-[11px] px-1 py-0.5 border border-[var(--color-success)]/30 text-[var(--color-success)] tracking-wider">ssl</span>
                       )}
@@ -2960,10 +3350,15 @@ export default function ConnectionsPage() {
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
-                      {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" strokeWidth={1.5} />}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider"
+                      title={piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
+                    >
+                      {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className={`w-3 h-3 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : ""}`} strokeWidth={1.5} />}
                       pii
-                      {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
+                      {piiConfig[conn.name]?.enabled && (
+                        <span className="ml-1 px-1 py-0.5 border border-emerald-500/30 text-emerald-400 text-[11px]">on</span>
+                      )}
+                      {!piiConfig[conn.name]?.enabled && piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
                         <span className="ml-1 px-1 py-0.5 border badge-warning text-[11px] tabular-nums">
                           {piiData[conn.name].tables_with_pii}
                         </span>
@@ -3302,34 +3697,63 @@ export default function ConnectionsPage() {
                 )}
 
                 {/* PII Detection Results */}
-                {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
+                {(piiConfig[conn.name] || (piiData[conn.name] && piiData[conn.name].tables_with_pii > 0)) && (
                   <div className="border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Shield className="w-3.5 h-3.5 text-[var(--color-warning)]" strokeWidth={1.5} />
-                      <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
-                        pii detected: {piiData[conn.name].tables_with_pii} table{piiData[conn.name].tables_with_pii > 1 ? "s" : ""}
-                      </span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Shield className={`w-3.5 h-3.5 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : "text-[var(--color-warning)]"}`} strokeWidth={1.5} />
+                        <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                          pii redaction — {Object.keys(piiConfig[conn.name]?.rules || {}).length} columns
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleTogglePII(conn.name)}
+                        className={`px-2.5 py-1 text-[11px] tracking-wider border transition-all ${
+                          piiConfig[conn.name]?.enabled
+                            ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        {piiConfig[conn.name]?.enabled ? "redaction on" : "redaction off"}
+                      </button>
                     </div>
-                    <div className="space-y-2">
-                      {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
-                        <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
-                          <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
-                          <div className="flex flex-wrap gap-2">
-                            {Object.entries(columns).map(([col, rule]) => (
-                              <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
-                                rule === "drop" ? "badge-error" :
-                                rule === "hash" ? "border-purple-500/30 text-purple-400" :
-                                "badge-warning"
-                              }`}>
-                                {col} ({rule})
-                              </span>
-                            ))}
+                    {piiConfig[conn.name]?.rules && Object.keys(piiConfig[conn.name].rules).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {Object.entries(piiConfig[conn.name].rules).map(([col, rule]) => (
+                          <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                            rule === "hide" ? "badge-warning" :
+                            rule === "hash" ? "border-purple-500/30 text-purple-400" :
+                            "badge-warning"
+                          }`}>
+                            {col} ({rule})
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {piiData[conn.name] && Object.keys(piiData[conn.name].detections).length > 0 && (
+                      <div className="space-y-2">
+                        {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
+                          <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
+                            <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
+                            <div className="flex flex-wrap gap-2">
+                              {Object.entries(columns).map(([col, rule]) => (
+                                <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                  rule === "hide" ? "badge-warning" :
+                                  rule === "hash" ? "border-purple-500/30 text-purple-400" :
+                                  "badge-warning"
+                                }`}>
+                                  {col} ({rule})
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                     <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
-                      add these rules to schema.yml annotations for automatic pii redaction.
+                      {piiConfig[conn.name]?.enabled
+                        ? "queries will automatically redact flagged columns (hash, mask, or drop)."
+                        : "click the toggle to activate automatic pii redaction on query results."}
                     </p>
                   </div>
                 )}

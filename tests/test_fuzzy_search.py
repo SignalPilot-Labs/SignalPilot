@@ -1,12 +1,8 @@
 """Tests for fuzzy matching in schema search."""
 
 import pytest
-import sys
-import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", "gateway"))
-
-from gateway.main import _fuzzy_match, _levenshtein
+from signalpilot.gateway.gateway.api.schema import _fuzzy_match, _levenshtein
 
 
 class TestLevenshtein:

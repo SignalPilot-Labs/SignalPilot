@@ -9,54 +9,80 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .deps import get_sandbox_client, load_settings, schema_cache
-from ..governance.cache import query_cache
-from ..store import get_connection, list_connections, list_sandboxes
+from ..auth import UserID
+from ..scope_guard import RequireScope
+from ..store import list_sandboxes
+from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")
+
+# ─── SSE resource-limit constants ────────────────────────────────────────────
+
+MAX_SSE_CONNECTIONS: int = 20
+SSE_MAX_DURATION_SECONDS: int = 3600
+_SSE_RETRY_AFTER_SECONDS: int = 30
+
+_sse_semaphore = asyncio.Semaphore(MAX_SSE_CONNECTIONS)
 
 # ─── SSE metrics stream ──────────────────────────────────────────────────────
 
 
-@router.get("/metrics")
-async def metrics_stream():
-    """Server-Sent Events stream of live gateway metrics."""
+@router.get("/metrics", dependencies=[RequireScope("read")])
+async def metrics_stream(store: StoreD) -> StreamingResponse:
+    """Server-Sent Events stream of live gateway metrics.
+
+    Returns operational metrics only. Internal details (sandbox manager URL,
+    query/schema cache stats) are intentionally omitted to prevent infrastructure
+    topology leakage to authenticated but potentially untrusted callers.
+
+    Enforces a global cap of MAX_SSE_CONNECTIONS concurrent streams. Streams
+    automatically close after SSE_MAX_DURATION_SECONDS; clients should reconnect.
+    """
+    if _sse_semaphore.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many concurrent SSE connections. Try again later.",
+            headers={"Retry-After": str(_SSE_RETRY_AFTER_SECONDS)},
+        )
 
     async def generate():
-        while True:
-            settings = load_settings()
-            sandboxes = list_sandboxes()
-            running = sum(1 for s in sandboxes if s.status == "running")
+        await _sse_semaphore.acquire()
+        try:
+            deadline = time.monotonic() + SSE_MAX_DURATION_SECONDS
+            while time.monotonic() < deadline:
+                sandboxes = list_sandboxes()
+                running = sum(1 for s in sandboxes if s.status == "running")
 
-            sandbox_health = "unknown"
-            try:
-                client = get_sandbox_client()
-                data = await client.health()
-                sandbox_health = data.get("status", "unknown")
-                sandbox_available = data.get("kvm_available", False)
-                active_sandbox_instances = data.get("active_vms", 0)
-                max_sandbox_instances = data.get("max_vms", 10)
-            except Exception:
-                sandbox_available = False
-                active_sandbox_instances = 0
-                max_sandbox_instances = 10
+                sandbox_health = "unknown"
+                try:
+                    client = await get_sandbox_client_with_store(store)
+                    data = await client.health()
+                    sandbox_health = data.get("status", "unknown")
+                    sandbox_available = data.get("status") == "healthy"
+                    active_sandbox_instances = data.get("active_vms", 0)
+                    max_sandbox_instances = data.get("max_vms", 10)
+                except Exception:
+                    sandbox_available = False
+                    active_sandbox_instances = 0
+                    max_sandbox_instances = 10
 
-            payload = {
-                "timestamp": time.time(),
-                "sandbox_manager": settings.sandbox_manager_url,
-                "sandbox_health": sandbox_health,
-                "sandbox_available": sandbox_available,
-                "active_sandboxes": len(sandboxes),
-                "running_sandboxes": running,
-                "active_sandbox_instances": active_sandbox_instances,
-                "max_sandbox_instances": max_sandbox_instances,
-                "connections": len(list_connections()),
-                "query_cache": query_cache.stats(),
-                "schema_cache": schema_cache.stats(),
-            }
+                connections = await store.list_connections()
 
-            yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(5)
+                payload = {
+                    "timestamp": time.time(),
+                    "sandbox_health": sandbox_health,
+                    "sandbox_available": sandbox_available,
+                    "active_sandboxes": len(sandboxes),
+                    "running_sandboxes": running,
+                    "active_sandbox_instances": active_sandbox_instances,
+                    "max_sandbox_instances": max_sandbox_instances,
+                    "connections": len(connections),
+                }
+
+                yield f"data: {json.dumps(payload)}\n\n"
+                await asyncio.sleep(5)
+        finally:
+            _sse_semaphore.release()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -218,8 +244,8 @@ _CONNECTOR_TIERS = {
 }
 
 
-@router.get("/connectors/capabilities")
-async def get_connector_capabilities(db_type: str | None = None):
+@router.get("/connectors/capabilities", dependencies=[RequireScope("read")])
+async def get_connector_capabilities(_: UserID, db_type: str | None = None):
     """Return connector tier classification and feature matrix.
 
     HEX-style tier system showing which features each connector supports.
@@ -261,13 +287,13 @@ async def get_connector_capabilities(db_type: str | None = None):
     }
 
 
-@router.get("/connections/{name}/capabilities")
-async def get_connection_capabilities(name: str):
+@router.get("/connections/{name}/capabilities", dependencies=[RequireScope("read")])
+async def get_connection_capabilities(name: str, store: StoreD):
     """Return capabilities for a specific connection based on its db_type.
 
     Combines tier info with live connection status for a complete picture.
     """
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 

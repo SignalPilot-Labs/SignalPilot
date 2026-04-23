@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..connectors.pool_manager import pool_manager
+from ..scope_guard import RequireScope
 from ..connectors.schema_cache import schema_cache
 from ..schema_utils import (
     TYPE_COMPRESSION_MAP,
@@ -23,14 +24,9 @@ from ..schema_utils import (
 )
 from ..store import (
     DATA_DIR,
-    get_connection,
-    get_connection_string,
-    get_credential_extras,
-    get_schema_endorsements,
-    set_schema_endorsements,
-    apply_endorsement_filter,
 )
 from .deps import (
+    StoreD,
     get_filtered_schema,
     get_or_fetch_schema,
     apply_filters,
@@ -45,6 +41,23 @@ _re_link = re
 _re_refine = re
 
 router = APIRouter(prefix="/api")
+
+_FILTER_PATTERN_MAX_LEN = 200
+
+
+# Mirrors BaseConnector._quote_identifier (base.py:63-68).
+# Duplicated here because the API layer does not have a connector instance
+# at the point of SQL construction.
+def _quote_identifier(name: str, quote_char: str) -> str:
+    """Quote a single SQL identifier, escaping embedded quote characters."""
+    if quote_char == '[':
+        return '[' + name.replace(']', ']]') + ']'
+    return quote_char + name.replace(quote_char, quote_char + quote_char) + quote_char
+
+
+def _quote_table_name(table: str, quote_char: str) -> str:
+    """Quote a possibly schema-qualified table name (e.g., 'public.users')."""
+    return '.'.join(_quote_identifier(p, quote_char) for p in table.split('.'))
 
 # ---------------------------------------------------------------------------
 # Semantic model helpers (needed by agent-context endpoint)
@@ -79,11 +92,12 @@ def _load_semantic_model(name: str) -> dict:
 # GET /connections/{name}/schema
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema")
+@router.get("/connections/{name}/schema", dependencies=[RequireScope("read")])
 async def get_connection_schema(
     name: str,
+    store: StoreD,
     compact: bool = Query(default=False, description="Return compressed schema optimized for LLM context windows"),
-    filter: str = Query(default="", description="Filter tables by name pattern (case-insensitive substring match, comma-separated)"),
+    filter: str = Query(default="", max_length=1000, description="Filter tables by name pattern (case-insensitive substring match, comma-separated)"),
 ):
     """Retrieve the full schema for a database connection (Feature #18: schema caching).
 
@@ -92,9 +106,9 @@ async def get_connection_schema(
     With filter, returns only tables matching the given patterns.
     This is critical for Spider2.0 benchmark performance on large schemas.
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
@@ -103,7 +117,7 @@ async def get_connection_schema(
     is_cached = cached is not None
     if cached is None:
         try:
-            extras = get_credential_extras(name)
+            extras = await store.get_credential_extras(name)
             async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                 cached = await connector.get_schema()
         except Exception as e:
@@ -111,8 +125,8 @@ async def get_connection_schema(
         schema_cache.put(name, cached)
 
     # Apply endorsement filter (HEX Data Browser pattern — curate tables for AI agents)
-    filtered = apply_endorsement_filter(name, cached)
-    sf_include, sf_exclude = get_schema_filters(name)
+    filtered = await store.apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = await get_schema_filters(store, name)
     filtered = apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # Apply table name filter if provided (additional narrowing)
@@ -149,9 +163,10 @@ async def get_connection_schema(
 # GET /connections/{name}/schema/grouped
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/grouped")
+@router.get("/connections/{name}/schema/grouped", dependencies=[RequireScope("read")])
 async def get_grouped_schema(
     name: str,
+    store: StoreD,
     sample_limit: int = Query(default=3, ge=1, le=10),
 ):
     """Return schema organized by table groups — optimized for large schemas.
@@ -160,14 +175,14 @@ async def get_grouped_schema(
     together. This helps AI agents understand table relationships and reduces
     schema linking errors in text-to-SQL tasks.
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             cached = schema_cache.get(name)
             if cached is None:
@@ -202,10 +217,11 @@ async def get_grouped_schema(
 # GET /connections/{name}/schema/samples
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/samples")
+@router.get("/connections/{name}/schema/samples", dependencies=[RequireScope("read")])
 async def get_schema_samples(
     name: str,
-    tables: str = Query(default="", description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
+    store: StoreD,
+    tables: str = Query(default="", max_length=2000, description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
     """Get sample distinct values for columns — critical for Spider2.0 schema linking.
@@ -214,9 +230,9 @@ async def get_schema_samples(
     and improve schema-to-question matching. Returns up to `limit` distinct
     values per column for the specified tables.
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
@@ -224,7 +240,7 @@ async def get_schema_samples(
     cached = schema_cache.get(name)
     if cached is None:
         try:
-            extras = get_credential_extras(name)
+            extras = await store.get_credential_extras(name)
             async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                 cached = await connector.get_schema()
                 schema_cache.put(name, cached)
@@ -237,7 +253,7 @@ async def get_schema_samples(
     table_keys = table_keys[:10]
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             samples: dict[str, dict[str, list]] = {}
             for table_key in table_keys:
@@ -271,11 +287,12 @@ async def get_schema_samples(
 # POST /connections/{name}/schema/explore
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.post("/connections/{name}/schema/explore")
+@router.post("/connections/{name}/schema/explore", dependencies=[RequireScope("write")])
 async def explore_column_values(
     name: str,
-    table: str = Query(..., description="Full table name (e.g., 'public.users')"),
-    column: str = Query(..., description="Column to explore"),
+    store: StoreD,
+    table: str = Query(..., max_length=256, description="Full table name (e.g., 'public.users')"),
+    column: str = Query(..., max_length=128, description="Column to explore"),
     limit: int = Query(default=20, ge=1, le=100, description="Max distinct values"),
     filter_pattern: str = Query(default="", description="LIKE pattern to filter values (e.g., '%active%')"),
 ):
@@ -288,9 +305,12 @@ async def explore_column_values(
 
     Returns distinct values, value counts, and NULL statistics.
     """
-    info = require_connection(name)
+    if filter_pattern and len(filter_pattern) > _FILTER_PATTERN_MAX_LEN:
+        raise HTTPException(status_code=422, detail=f"filter_pattern must be at most {_FILTER_PATTERN_MAX_LEN} characters")
 
-    conn_str = get_connection_string(name)
+    info = await require_connection(store, name)
+
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
@@ -299,19 +319,34 @@ async def explore_column_values(
     quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino", "duckdb", "sqlite") else '`'
     if db_type == "mssql":
         quote = '['
-        close_quote = ']'
-    else:
-        close_quote = quote
 
-    q_col = f"{quote}{column}{close_quote}"
+    q_col = _quote_identifier(column, quote)
+    q_table = _quote_table_name(table, quote)
 
-    # Construct safe exploration query
-    parts = []
+    # Construct safe exploration query using parameterized queries to prevent
+    # SQL injection. Different connectors use different placeholder styles.
+    _PARAM_PLACEHOLDER = {
+        "postgres": "$1", "redshift": "%s", "mysql": "%s", "mssql": "%s",
+        "snowflake": "%s", "clickhouse": "%s", "databricks": "%s",
+        "duckdb": "?", "sqlite": "?",
+        # Trino's connector doesn't pass params to cursor.execute — fall back
+        # to manual escaping (backslash + quote-doubling) for safety.
+    }
+
+    where_clause = ""
+    explore_params: list | None = None
     if filter_pattern:
         like_op = "ILIKE" if db_type in ("postgres", "redshift", "snowflake") else "LIKE"
-        parts.append(f"WHERE {q_col} {like_op} :pattern")
-
-    where_clause = parts[0] if parts else ""
+        placeholder = _PARAM_PLACEHOLDER.get(db_type)
+        if placeholder:
+            where_clause = f"WHERE {q_col} {like_op} {placeholder}"
+            explore_params = [filter_pattern]
+        else:
+            # Manual escaping for connectors without param support (Trino).
+            # Escape backslashes first to prevent MySQL-style backslash-quote
+            # bypass (e.g., \' defeating quote-doubling).
+            safe_pattern = filter_pattern.replace("\\", "\\\\").replace("'", "''")
+            where_clause = f"WHERE {q_col} {like_op} '{safe_pattern}'"
 
     # Build the query — dialect-aware LIMIT/TOP
     if db_type == "mssql":
@@ -319,7 +354,7 @@ async def explore_column_values(
 SELECT TOP {limit}
     {q_col} AS value,
     COUNT(*) AS [count]
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY [count] DESC
@@ -329,7 +364,7 @@ ORDER BY [count] DESC
 SELECT
     {q_col} AS value,
     COUNT(*) AS count
-FROM {table}
+FROM {q_table}
 {where_clause}
 GROUP BY {q_col}
 ORDER BY count DESC
@@ -342,16 +377,15 @@ SELECT
     COUNT(*) AS total_rows,
     SUM(CASE WHEN {q_col} IS NULL THEN 1 ELSE 0 END) AS null_count,
     COUNT(DISTINCT {q_col}) AS distinct_count
-FROM {table}
+FROM {q_table}
 """
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
-            # Replace :pattern placeholder with parameterized query
-            actual_sql = explore_sql.replace(":pattern", f"'{filter_pattern}'") if filter_pattern else explore_sql
+            actual_sql = explore_sql
 
-            values_rows = await connector.execute(actual_sql, timeout=30)
+            values_rows = await connector.execute(actual_sql, params=explore_params, timeout=30)
             stats_rows = await connector.execute(null_sql, timeout=30)
 
         stats = stats_rows[0] if stats_rows else {}
@@ -376,9 +410,10 @@ FROM {table}
 # GET /connections/{name}/schema/enriched
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/enriched")
+@router.get("/connections/{name}/schema/enriched", dependencies=[RequireScope("read")])
 async def get_enriched_schema(
     name: str,
+    store: StoreD,
     sample_limit: int = Query(default=3, ge=1, le=10, description="Max sample values per column"),
 ):
     """Return enriched compact schema optimized for Spider2.0 text-to-SQL.
@@ -387,14 +422,14 @@ async def get_enriched_schema(
     This is the recommended endpoint for AI agents — provides everything needed
     for accurate schema linking in a single request with minimal token count.
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             # Get or use cached schema
             cached = schema_cache.get(name)
@@ -403,8 +438,8 @@ async def get_enriched_schema(
                 schema_cache.put(name, cached)
 
             # Apply endorsement filter and schema filters
-            filtered = apply_endorsement_filter(name, cached)
-            sf_include, sf_exclude = get_schema_filters(name)
+            filtered = await store.apply_endorsement_filter(name, cached)
+            sf_include, sf_exclude = await get_schema_filters(store, name)
             filtered = apply_schema_filter(filtered, sf_include, sf_exclude)
 
             # ReFoRCE-style: deduplicate partitioned table families
@@ -490,9 +525,10 @@ async def get_enriched_schema(
 # GET /connections/{name}/schema/compact
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/compact")
+@router.get("/connections/{name}/schema/compact", dependencies=[RequireScope("read")])
 async def get_compact_schema(
     name: str,
+    store: StoreD,
     max_tables: int = Query(default=50, ge=1, le=500, description="Maximum tables to include"),
     include_fk: bool = Query(default=True, description="Include foreign key relationships"),
     include_types: bool = Query(default=True, description="Include column type info"),
@@ -511,20 +547,20 @@ async def get_compact_schema(
         public.customers (10000 rows): customer_id* INT, name VARCHAR, email VARCHAR
         public.orders (50000 rows): order_id* INT, customer_id->customers.customer_id INT, total DECIMAL
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     cached = schema_cache.get(name)
     if cached is None:
-        conn_str = get_connection_string(name)
+        conn_str = await store.get_connection_string(name)
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             cached = await connector.get_schema()
             schema_cache.put(name, cached)
 
-    filtered = apply_endorsement_filter(name, cached)
-    sf_include, sf_exclude = get_schema_filters(name)
+    filtered = await store.apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = await get_schema_filters(store, name)
     filtered = apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # ReFoRCE-style: deduplicate date-partitioned table families before compression
@@ -673,9 +709,10 @@ async def get_compact_schema(
 # GET /connections/{name}/schema/ddl
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/ddl")
+@router.get("/connections/{name}/schema/ddl", dependencies=[RequireScope("read")])
 async def get_schema_ddl(
     name: str,
+    store: StoreD,
     max_tables: int = Query(default=50, ge=1, le=500, description="Maximum tables to include"),
     include_fk: bool = Query(default=True, description="Include foreign key constraints"),
     compress: bool = Query(default=False, description="Enable ReFoRCE-style table grouping for large schemas"),
@@ -695,20 +732,20 @@ async def get_schema_ddl(
             email VARCHAR
         );
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     cached = schema_cache.get(name)
     if cached is None:
-        conn_str = get_connection_string(name)
+        conn_str = await store.get_connection_string(name)
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             cached = await connector.get_schema()
         schema_cache.put(name, cached)
 
-    filtered = apply_endorsement_filter(name, cached)
-    sf_include, sf_exclude = get_schema_filters(name)
+    filtered = await store.apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = await get_schema_filters(store, name)
     filtered = apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # ReFoRCE-style: deduplicate partitioned table families
@@ -912,10 +949,11 @@ async def get_schema_ddl(
 # GET /connections/{name}/schema/agent-context
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.get("/connections/{name}/schema/agent-context")
+@router.get("/connections/{name}/schema/agent-context", dependencies=[RequireScope("read")])
 async def get_agent_context(
     name: str,
-    question: str = Query(default="", description="Optional question for schema linking — omit for full schema"),
+    store: StoreD,
+    question: str = Query(default="", max_length=2000, description="Optional question for schema linking — omit for full schema"),
     max_tables: int = Query(default=30, ge=1, le=100, description="Max tables to include"),
     include_samples: bool = Query(default=True, description="Include cached sample values for string columns"),
     progressive: bool = Query(default=False, description="Progressive disclosure: full DDL for top tables, compact one-liners for the rest (saves 40-60%% tokens)"),
@@ -939,20 +977,20 @@ async def get_agent_context(
     - Inferred joins fill gaps in FK-free databases (ClickHouse, BigQuery)
     - Progressive disclosure: broad recall + focused detail (CHESS pattern)
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     cached = schema_cache.get(name)
     if cached is None:
-        conn_str = get_connection_string(name)
+        conn_str = await store.get_connection_string(name)
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             cached = await connector.get_schema()
         schema_cache.put(name, cached)
 
-    filtered = apply_endorsement_filter(name, cached)
-    sf_include, sf_exclude = get_schema_filters(name)
+    filtered = await store.apply_endorsement_filter(name, cached)
+    sf_include, sf_exclude = await get_schema_filters(store, name)
     filtered = apply_schema_filter(filtered, sf_include, sf_exclude)
 
     # ReFoRCE-style: deduplicate date-partitioned table families
@@ -1332,10 +1370,11 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
 }
 
 
-@router.get("/connections/{name}/schema/link")
+@router.get("/connections/{name}/schema/link", dependencies=[RequireScope("read")])
 async def schema_link(
     name: str,
-    question: str = Query(..., description="Natural language question to link schema for"),
+    store: StoreD,
+    question: str = Query(..., max_length=2000, description="Natural language question to link schema for"),
     format: str = Query(default="ddl", pattern="^(ddl|compact|json|condensed)$", description="Output format: ddl (full), condensed (pruned columns), compact (one-line), json"),
     max_tables: int = Query(default=20, ge=1, le=100, description="Max tables in linked schema"),
     prune_columns: bool = Query(default=False, description="Drop columns with 0 relevance from low-scoring tables (reduces token count 30-60%%)"),
@@ -1351,8 +1390,8 @@ async def schema_link(
     Based on EDBT 2026 research: recall matters more than precision for schema linking.
     Better to include extra tables than miss a relevant one.
     """
-    info = require_connection(name)
-    filtered = await get_filtered_schema(name, info)
+    info = await require_connection(store, name)
+    filtered = await get_filtered_schema(store, name, info)
 
     # ── Small-schema bypass (OpenReview "Death of Schema Linking?" finding) ──
     # When the full schema is small enough to fit the context window, skip scoring
@@ -1978,9 +2017,9 @@ async def schema_link(
 
     if missing_samples:
         try:
-            conn_str = get_connection_string(name)
+            conn_str = await store.get_connection_string(name)
             if conn_str:
-                extras = get_credential_extras(name)
+                extras = await store.get_credential_extras(name)
                 async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                     for key, t, sample_cols in missing_samples[:5]:  # Cap at 5 tables
                         table_name = f"{t.get('schema', '')}.{t['name']}" if t.get("schema") else t["name"]
@@ -2088,9 +2127,10 @@ def _save_semantic_model(name: str, model: dict) -> None:
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 
-@router.post("/connections/{name}/schema/refine")
+@router.post("/connections/{name}/schema/refine", dependencies=[RequireScope("write")])
 async def refine_schema(
     name: str,
+    store: StoreD,
     request: Request,
 ):
     """Two-pass schema refinement -- Spider2.0 SOTA technique.
@@ -2106,7 +2146,7 @@ async def refine_schema(
     Research shows this reduces hallucinated columns by 40-60% and improves
     execution accuracy by 3-5% on Spider2.0-Lite.
     """
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     body = await request.json()
     draft_sql = body.get("draft_sql", "")
@@ -2116,7 +2156,7 @@ async def refine_schema(
     if not draft_sql:
         raise HTTPException(status_code=400, detail="draft_sql is required")
 
-    filtered = await get_filtered_schema(name, info)
+    filtered = await get_filtered_schema(store, name, info)
 
     sql_clean = draft_sql
 
@@ -2261,17 +2301,18 @@ async def refine_schema(
     }
 
 
-@router.get("/connections/{name}/schema/explore-table")
+@router.get("/connections/{name}/schema/explore-table", dependencies=[RequireScope("read")])
 async def explore_table(
     name: str,
-    table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
+    store: StoreD,
+    table: str = Query(..., max_length=256, description="Full table name (e.g., 'public.customers')"),
     include_samples: bool = Query(default=True, description="Include sample distinct values for string/enum columns"),
     include_stats: bool = Query(default=True, description="Include column-level statistics"),
     sample_limit: int = Query(default=5, ge=1, le=20, description="Max sample values per column"),
 ):
     """Deep column exploration for a single table -- ReFoRCE-style iterative schema linking."""
-    info = require_connection(name)
-    cached = await get_or_fetch_schema(name, info)
+    info = await require_connection(store, name)
+    cached = await get_or_fetch_schema(store, name, info)
 
     # Find the table
     table_data = cached.get(table)
@@ -2340,9 +2381,9 @@ async def explore_table(
             result["sample_values"] = cached_samples
         else:
             try:
-                conn_str = get_connection_string(name)
+                conn_str = await store.get_connection_string(name)
                 if conn_str:
-                    extras = get_credential_extras(name)
+                    extras = await store.get_credential_extras(name)
                     async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                         samples = await connector.get_sample_values(table, string_cols[:10], limit=sample_limit)
                     if samples:
@@ -2354,11 +2395,11 @@ async def explore_table(
     return result
 
 
-@router.get("/connections/{name}/schema/overview")
-async def get_schema_overview(name: str):
+@router.get("/connections/{name}/schema/overview", dependencies=[RequireScope("read")])
+async def get_schema_overview(name: str, store: StoreD):
     """Quick database overview -- table count, total columns, total rows, FK graph density."""
-    info = require_connection(name)
-    filtered = await get_filtered_schema(name, info)
+    info = await require_connection(store, name)
+    filtered = await get_filtered_schema(store, name, info)
 
     total_tables = len(filtered)
     total_columns = 0
@@ -2435,17 +2476,17 @@ async def get_schema_overview(name: str):
     }
 
 
-@router.get("/connections/{name}/schema/diff")
-async def get_schema_diff(name: str):
+@router.get("/connections/{name}/schema/diff", dependencies=[RequireScope("read")])
+async def get_schema_diff(name: str, store: StoreD):
     """Compare current database schema against cached version."""
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             new_schema = await connector.get_schema()
     except Exception as e:
@@ -2473,10 +2514,10 @@ async def get_schema_diff(name: str):
     }
 
 
-@router.get("/connections/{name}/schema/refresh-status")
-async def get_schema_refresh_status(name: str):
+@router.get("/connections/{name}/schema/refresh-status", dependencies=[RequireScope("read")])
+async def get_schema_refresh_status(name: str, store: StoreD):
     """Get schema refresh schedule status for a connection."""
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     cached_stats = schema_cache.get(name)
     return {
@@ -2494,10 +2535,10 @@ async def get_schema_refresh_status(name: str):
     }
 
 
-@router.get("/connections/{name}/schema/diff-history")
-async def get_schema_diff_history(name: str):
+@router.get("/connections/{name}/schema/diff-history", dependencies=[RequireScope("read")])
+async def get_schema_diff_history(name: str, store: StoreD):
     """Get schema change history for a connection."""
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     history = schema_cache.get_diff_history(name)
     return {
@@ -2507,7 +2548,7 @@ async def get_schema_diff_history(name: str):
     }
 
 
-@router.get("/schema/changes")
+@router.get("/schema/changes", dependencies=[RequireScope("read")])
 async def get_all_schema_changes():
     """Get recent schema changes across all connections."""
     history = schema_cache.get_diff_history()
@@ -2517,17 +2558,18 @@ async def get_all_schema_changes():
     }
 
 
-@router.get("/connections/{name}/schema/filter")
+@router.get("/connections/{name}/schema/filter", dependencies=[RequireScope("read")])
 async def get_filtered_schema_endpoint(
     name: str,
+    store: StoreD,
     schema_prefix: str = Query(default="", description="Filter by schema/database prefix (e.g., 'public', 'analytics')"),
     table_prefix: str = Query(default="", description="Filter by table name prefix"),
     include_columns: bool = Query(default=True, description="Include column details"),
     max_tables: int = Query(default=100, ge=1, le=1000, description="Maximum tables to return"),
 ):
     """Filter schema by database/schema prefix and table prefix."""
-    info = require_connection(name)
-    filtered = await get_filtered_schema(name, info)
+    info = await require_connection(store, name)
+    filtered = await get_filtered_schema(store, name, info)
 
     # Apply prefix filters
     result: dict[str, Any] = {}
@@ -2561,9 +2603,10 @@ async def get_filtered_schema_endpoint(
     }
 
 
-@router.get("/connections/{name}/schema/relationships")
+@router.get("/connections/{name}/schema/relationships", dependencies=[RequireScope("read")])
 async def get_schema_relationships(
     name: str,
+    store: StoreD,
     format: str = Query(
         default="compact",
         pattern=r"^(compact|full|graph)$",
@@ -2575,8 +2618,8 @@ async def get_schema_relationships(
     ),
 ):
     """Extract all foreign key relationships from schema -- ERD summary for AI agents."""
-    info = require_connection(name)
-    filtered = await get_filtered_schema(name, info)
+    info = await require_connection(store, name)
+    filtered = await get_filtered_schema(store, name, info)
 
     # Extract all FK relationships (explicit)
     relationships: list[dict] = []
@@ -2659,17 +2702,18 @@ async def get_schema_relationships(
         }
 
 
-@router.get("/connections/{name}/schema/join-paths")
+@router.get("/connections/{name}/schema/join-paths", dependencies=[RequireScope("read")])
 async def get_join_paths(
     name: str,
-    from_table: str = Query(..., description="Source table (e.g., 'public.orders')"),
-    to_table: str = Query(..., description="Target table (e.g., 'public.products')"),
+    store: StoreD,
+    from_table: str = Query(..., max_length=256, description="Source table (e.g., 'public.orders')"),
+    to_table: str = Query(..., max_length=256, description="Target table (e.g., 'public.products')"),
     max_hops: int = Query(default=4, ge=1, le=6, description="Maximum FK hops to search"),
     include_implicit: bool = Query(default=True, description="Include inferred joins from column naming conventions"),
 ):
     """Find all join paths between two tables -- critical for Spider2.0 multi-hop queries."""
-    info = require_connection(name)
-    filtered = await get_filtered_schema(name, info)
+    info = await require_connection(store, name)
+    filtered = await get_filtered_schema(store, name, info)
 
     # Build bidirectional adjacency list with join info
     edges: dict[str, list[tuple[str, str, str, str]]] = {}
@@ -2774,15 +2818,16 @@ async def get_join_paths(
     }
 
 
-@router.get("/connections/{name}/schema/sample-values")
+@router.get("/connections/{name}/schema/sample-values", dependencies=[RequireScope("read")])
 async def get_cached_sample_values(
     name: str,
+    store: StoreD,
     table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
-    columns: str = Query(default="", description="Comma-separated column names. Empty = auto-select string/enum columns"),
+    columns: str = Query(default="", max_length=2000, description="Comma-separated column names. Empty = auto-select string/enum columns"),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
     """Get cached sample values for schema linking optimization."""
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
     # Check sample cache first
     cached_samples = schema_cache.get_sample_values(name, table)
@@ -2794,12 +2839,12 @@ async def get_cached_sample_values(
             "sample_values": cached_samples,
         }
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
     try:
-        extras = get_credential_extras(name)
+        extras = await store.get_credential_extras(name)
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             col_list: list[str] = []
             if columns:
@@ -2838,21 +2883,22 @@ async def get_cached_sample_values(
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
 
 
-@router.get("/connections/{name}/schema/search")
+@router.get("/connections/{name}/schema/search", dependencies=[RequireScope("read")])
 async def search_schema(
     name: str,
-    q: str = Query(..., min_length=1, description="Search query -- matches table names, column names, column comments"),
+    store: StoreD,
+    q: str = Query(..., min_length=1, max_length=500, description="Search query -- matches table names, column names, column comments"),
     include_samples: bool = Query(default=False, description="Include sample values for matched columns"),
     limit: int = Query(default=20, ge=1, le=100, description="Max tables to return"),
 ):
     """Semantic search across schema metadata for AI agent schema linking."""
-    info = require_connection(name)
+    info = await require_connection(store, name)
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
-    cached = await get_or_fetch_schema(name, info)
+    cached = await get_or_fetch_schema(store, name, info)
 
     # Parse HEX-style prefix filters
     prefix_filters: dict[str, list[str]] = {"schema": [], "table": [], "column": [], "database": []}
@@ -2960,7 +3006,7 @@ async def search_schema(
 
     if include_samples and results:
         try:
-            extras = get_credential_extras(name)
+            extras = await store.get_credential_extras(name)
             async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
                 for key, table in results.items():
                     matched_cols = table.get("_matched_columns", [])
@@ -2991,24 +3037,36 @@ async def search_schema(
 # ─── Schema Endorsements (HEX Data Browser pattern) ────────────────────────
 
 
-@router.get("/connections/{name}/schema/endorsements")
-async def get_endorsements(name: str):
+@router.get("/connections/{name}/schema/endorsements", dependencies=[RequireScope("read")])
+async def get_endorsements(name: str, store: StoreD):
     """Get schema endorsement config for a connection."""
-    require_connection(name)
-    return get_schema_endorsements(name)
+    await require_connection(store, name)
+    return await store.get_schema_endorsements(name)
 
 
-@router.put("/connections/{name}/schema/endorsements")
-async def update_endorsements(name: str, body: dict):
+@router.put("/connections/{name}/schema/endorsements", dependencies=[RequireScope("write")])
+async def update_endorsements(name: str, store: StoreD, body: dict):
     """Set schema endorsement config for a connection.
 
     Body: {"endorsed": ["schema.table", ...], "hidden": ["schema.table", ...], "mode": "all|endorsed_only"}
     """
-    require_connection(name)
+    await require_connection(store, name)
     mode = body.get("mode", "all")
     if mode not in ("all", "endorsed_only"):
         raise HTTPException(status_code=422, detail="mode must be 'all' or 'endorsed_only'")
-    result = set_schema_endorsements(name, body)
+    endorsed = body.get("endorsed", [])
+    hidden = body.get("hidden", [])
+    if len(endorsed) > 1000:
+        raise HTTPException(status_code=422, detail="endorsed list must have at most 1000 items")
+    if len(hidden) > 1000:
+        raise HTTPException(status_code=422, detail="hidden list must have at most 1000 items")
+    for item in endorsed:
+        if isinstance(item, str) and len(item) > 256:
+            raise HTTPException(status_code=422, detail="Each endorsed item must be at most 256 characters")
+    for item in hidden:
+        if isinstance(item, str) and len(item) > 256:
+            raise HTTPException(status_code=422, detail="Each hidden item must be at most 256 characters")
+    result = await store.set_schema_endorsements(name, body)
     schema_cache.invalidate(name)
     return result
 
@@ -3016,15 +3074,15 @@ async def update_endorsements(name: str, body: dict):
 # ─── Semantic Model (HEX inline schema editing) ───────────────────────────
 
 
-@router.get("/connections/{name}/semantic-model")
-async def get_semantic_model(name: str):
+@router.get("/connections/{name}/semantic-model", dependencies=[RequireScope("read")])
+async def get_semantic_model(name: str, store: StoreD):
     """Get the semantic model for a connection."""
-    require_connection(name)
+    await require_connection(store, name)
     return _load_semantic_model(name)
 
 
-@router.put("/connections/{name}/semantic-model")
-async def update_semantic_model(name: str, body: dict):
+@router.put("/connections/{name}/semantic-model", dependencies=[RequireScope("write")])
+async def update_semantic_model(name: str, store: StoreD, body: dict):
     """Update the semantic model for a connection.
 
     Body: {
@@ -3033,7 +3091,7 @@ async def update_semantic_model(name: str, body: dict):
         "glossary": { "revenue": "orders.total_amount", ... }
     }
     """
-    require_connection(name)
+    await require_connection(store, name)
 
     model = _load_semantic_model(name)
     if "tables" in body:
@@ -3058,11 +3116,11 @@ async def update_semantic_model(name: str, body: dict):
     return model
 
 
-@router.post("/connections/{name}/semantic-model/generate")
-async def generate_semantic_model(name: str):
+@router.post("/connections/{name}/semantic-model/generate", dependencies=[RequireScope("write")])
+async def generate_semantic_model(name: str, store: StoreD):
     """Auto-generate a semantic model skeleton from the database schema."""
-    info = require_connection(name)
-    cached = await get_or_fetch_schema(name, info)
+    info = await require_connection(store, name)
+    cached = await get_or_fetch_schema(store, name, info)
 
     model = _load_semantic_model(name)
 
@@ -3136,22 +3194,23 @@ async def generate_semantic_model(name: str):
 # ─── Column Name Correction (Spider2.0 hallucination fix) ──────────────────
 
 
-@router.post("/connections/{name}/schema/correct-columns")
-async def correct_columns(name: str, body: dict):
+@router.post("/connections/{name}/schema/correct-columns", dependencies=[RequireScope("write")])
+async def correct_columns(name: str, store: StoreD, body: dict):
     """Suggest corrections for hallucinated column names.
 
     Body: {"table": "public.customers", "columns": ["customer_name", "email_addr"]}
     """
-    info = require_connection(name)
-
     table_key = body.get("table", "")
     candidate_columns = body.get("columns", [])
     threshold = body.get("threshold", 0.5)
 
     if not table_key or not candidate_columns:
         raise HTTPException(status_code=422, detail="table and columns are required")
+    if len(candidate_columns) > 100:
+        raise HTTPException(status_code=422, detail="columns list must have at most 100 items")
 
-    cached = await get_or_fetch_schema(name, info)
+    info = await require_connection(store, name)
+    cached = await get_or_fetch_schema(store, name, info)
 
     table_info = cached.get(table_key)
     if not table_info:
@@ -3203,8 +3262,8 @@ async def correct_columns(name: str, body: dict):
 # ─── Column Exploration (ReFoRCE pattern) ────────────────────────────────────
 
 
-@router.post("/connections/{name}/schema/explore-columns")
-async def explore_columns_deep(name: str, body: dict):
+@router.post("/connections/{name}/schema/explore-columns", dependencies=[RequireScope("write")])
+async def explore_columns_deep(name: str, store: StoreD, body: dict):
     """Deep column exploration for complex Spider2.0 queries.
 
     Body: {
@@ -3215,8 +3274,6 @@ async def explore_columns_deep(name: str, body: dict):
         "value_limit": 10
     }
     """
-    info = require_connection(name)
-
     table_key = body.get("table", "")
     requested_cols = body.get("columns", [])
     include_stats = body.get("include_stats", True)
@@ -3225,8 +3282,11 @@ async def explore_columns_deep(name: str, body: dict):
 
     if not table_key:
         raise HTTPException(status_code=422, detail="table is required")
+    if len(requested_cols) > 50:
+        raise HTTPException(status_code=422, detail="columns list must have at most 50 items")
 
-    cached = await get_or_fetch_schema(name, info)
+    info = await require_connection(store, name)
+    cached = await get_or_fetch_schema(store, name, info)
 
     table_info = cached.get(table_key)
     if not table_info:
@@ -3247,10 +3307,10 @@ async def explore_columns_deep(name: str, body: dict):
         "Int32", "Int64", "INTEGER", "BIGINT", "FLOAT64", "NUMERIC", "DECIMAL",
     }
 
-    conn_str = get_connection_string(name)
+    conn_str = await store.get_connection_string(name)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
-    extras = get_credential_extras(name)
+    extras = await store.get_credential_extras(name)
 
     result_cols: list[dict] = []
 
@@ -3287,9 +3347,10 @@ async def explore_columns_deep(name: str, body: dict):
                     stat_parts.append(f"MAX({qo}{safe}{qc})")
                     stat_parts.append(f"AVG(CAST({qo}{safe}{qc} AS FLOAT))")
                 try:
-                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {table_key}"
+                    q_table_key = _quote_table_name(table_key, q)
+                    stat_sql = f"SELECT {', '.join(stat_parts)} FROM {q_table_key}"
                     if db_type == "mssql":
-                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {table_key}"
+                        stat_sql = f"SELECT TOP 1000000 {', '.join(stat_parts)} FROM {q_table_key}"
                     rows = await connector.execute(stat_sql, timeout=15)
                     if rows:
                         row = rows[0]

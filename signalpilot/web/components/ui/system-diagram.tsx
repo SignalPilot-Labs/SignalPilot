@@ -102,8 +102,13 @@ export function SystemDiagram({
           {/* Databases */}
           <g>
             <rect x="490" y="30" width="120" height="80" stroke="var(--color-border-hover)" strokeWidth="1.5" fill="var(--color-bg)" />
+            {/* Stacked disk / cylinder icon */}
             <ellipse cx="550" cy="46" rx="42" ry="10" stroke="var(--color-text-dim)" strokeWidth="1" fill="none" />
-            <text x="550" y="88" textAnchor="middle" fill="var(--color-text-dim)" fontSize="13" fontFamily="monospace" letterSpacing="0.1em">
+            <line x1="508" y1="46" x2="508" y2="70" stroke="var(--color-text-dim)" strokeWidth="1" />
+            <line x1="592" y1="46" x2="592" y2="70" stroke="var(--color-text-dim)" strokeWidth="1" />
+            <ellipse cx="550" cy="58" rx="42" ry="10" stroke="var(--color-text-dim)" strokeWidth="0.5" fill="none" opacity="0.35" />
+            <ellipse cx="550" cy="70" rx="42" ry="10" stroke="var(--color-text-dim)" strokeWidth="1" fill="none" />
+            <text x="550" y="96" textAnchor="middle" fill="var(--color-text-dim)" fontSize="13" fontFamily="monospace" letterSpacing="0.1em">
               DB × {connections}
             </text>
           </g>

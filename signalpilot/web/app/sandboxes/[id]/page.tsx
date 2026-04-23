@@ -39,6 +39,42 @@ interface HistoryEntry {
   htmlContent?: string;
 }
 
+// Pure allowlist sanitizer for pandas DataFrame HTML tables.
+// Keeps only known-safe table elements and a minimal set of safe attributes.
+// Any element or attribute not in the allowlist is removed — this is NOT a
+// denylist; we do not enumerate bad things, we enumerate the only good things.
+// style is intentionally excluded: it is a CSS injection vector even without JS.
+const ALLOWED_TABLE_ELEMENTS = new Set([
+  "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col",
+]);
+const ALLOWED_TABLE_ATTRS = new Set(["colspan", "rowspan", "class"]);
+
+function sanitizeTableHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  // Walk every element in the document. Collect in reverse document order so
+  // removing a node does not invalidate the iteration of its ancestors.
+  const allElements = Array.from(doc.body.querySelectorAll("*")).reverse();
+  for (const el of allElements) {
+    if (!ALLOWED_TABLE_ELEMENTS.has(el.tagName.toLowerCase())) {
+      // Replace disallowed element with its text content so we don't silently
+      // swallow visible text that happened to be wrapped in a bad tag.
+      el.replaceWith(document.createTextNode(el.textContent ?? ""));
+      continue;
+    }
+    // Strip disallowed attributes from allowed elements.
+    const attrNames = Array.from(el.attributes).map((a) => a.name);
+    for (const attr of attrNames) {
+      if (!ALLOWED_TABLE_ATTRS.has(attr.toLowerCase())) {
+        el.removeAttribute(attr);
+      }
+    }
+  }
+
+  // Serialize only the body content back to a string.
+  return doc.body.innerHTML;
+}
+
 function extractRichOutput(output: string): {
   text: string;
   images: string[];
@@ -57,7 +93,7 @@ function extractRichOutput(output: string): {
 
   const htmlTableMatch = output.match(/<table[\s\S]*?<\/table>/i);
   if (htmlTableMatch) {
-    html = htmlTableMatch[0];
+    html = sanitizeTableHtml(htmlTableMatch[0]);
     text = text.replace(htmlTableMatch[0], "[HTML Table]");
   }
 

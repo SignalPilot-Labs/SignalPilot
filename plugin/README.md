@@ -1,24 +1,44 @@
 # signalpilot-dbt
 
-Claude Code plugin for governed AI database access. Adds SignalPilot MCP tools, dbt skills, and verification agents to your normal Claude Code session.
+Claude Code plugin for governed AI database access. Adds SignalPilot MCP tools, dbt skills, and verification agents to your Claude Code session.
 
 ## Install
 
 ```bash
-# From GitHub
-claude plugin install github:SignalPilot-Labs/signalpilot
+# 1. Add the marketplace
+/plugin marketplace add ./plugin
 
-# From local clone
-claude plugin add ./plugin
+# 2. Install the plugin
+/plugin install signalpilot-dbt@signalpilot
+
+# 3. Reload
+/reload-plugins
 ```
 
-When prompted:
-- **SignalPilot URL** → `http://localhost:8080` (Docker) or your hosted instance URL
-- **API token** → leave blank for local, or paste your token for hosted
+### Connect the MCP server
+
+Add a `.mcp.json` to your project root:
+
+```json
+{
+  "mcpServers": {
+    "signalpilot": {
+      "type": "http",
+      "url": "http://localhost:3300/mcp"
+    }
+  }
+}
+```
+
+Replace `localhost:3300` with your hosted instance URL if not running locally.
+
+> **Note:** The plugin defines a `.mcp.json` with `userConfig` variables for URL/token,
+> but the userConfig prompt does not currently fire on install (known Claude Code bug).
+> Use the project-level `.mcp.json` above as a workaround.
 
 ## What You Get
 
-### MCP Tools (available automatically)
+### MCP Tools (available when server is connected)
 All SignalPilot database tools appear in your session:
 - `query_database` — governed read-only SQL execution
 - `dbt_project_map` / `dbt_project_validate` — dbt project analysis
@@ -26,10 +46,12 @@ All SignalPilot database tools appear in your session:
 - `find_join_path` / `compare_join_types` — relationship analysis
 - `check_model_schema` / `validate_model_output` — model verification
 - `get_date_boundaries` / `debug_cte_query` — debugging utilities
+- `execute_code` — run Python in an isolated Firecracker microVM
 
-### Skills (auto-invoked by Claude when relevant)
+### Skills (invoked by Claude when relevant)
 | Skill | When |
 |-------|------|
+| `signalpilot` | Any mention of dbt, SQL, database, or data pipeline |
 | `dbt-workflow` | Starting any dbt project work |
 | `dbt-write` | Writing SQL models |
 | `dbt-debugging` | dbt run/parse failures |
@@ -43,14 +65,13 @@ All SignalPilot database tools appear in your session:
 ### Agents (invoked as subagents during dbt workflow)
 | Agent | Purpose |
 |-------|---------|
-| `explorer` | Snapshots reference tables before dbt run |
 | `verifier` | 7-check verification of all built models |
 
 ## How It Works
 
 1. You ask Claude to build a dbt project or write SQL
-2. Claude auto-loads the relevant skill (e.g., `dbt-workflow`)
-3. The skill orchestrates a 5-step workflow using SignalPilot MCP tools
+2. Claude loads the `signalpilot` skill (tools overview + skill router)
+3. For dbt projects, `dbt-workflow` orchestrates a 5-step workflow using SignalPilot MCP tools
 4. At Step 5, the `verifier` agent checks all models for correctness
 5. You get a verified, working dbt project
 

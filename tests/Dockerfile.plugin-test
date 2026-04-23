@@ -1,6 +1,7 @@
 FROM node:22-slim
 
 # Install Claude Code CLI
+# TODO: pin @anthropic-ai/claude-code to an exact version (run: npm show @anthropic-ai/claude-code version)
 RUN npm install -g @anthropic-ai/claude-code
 
 # Create test workspace

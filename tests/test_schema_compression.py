@@ -7,7 +7,7 @@ import os
 # Add gateway to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", "gateway"))
 
-from gateway.main import _deduplicate_partitioned_tables, _group_tables
+from gateway.schema_utils import _deduplicate_partitioned_tables, _group_tables
 
 
 class TestDeduplicatePartitionedTables:

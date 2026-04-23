@@ -498,7 +498,7 @@ def get_local_api_key() -> str:
             return key
     key = "sp_local_" + secrets.token_hex(16)
     key_file.write_text(key)
-    logger.info("Generated local API key: %s...", key[:12])
+    logger.info("Generated new local API key (stored in %s)", key_file)
     return key
 
 

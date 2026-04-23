@@ -20,7 +20,7 @@ from .deps import StoreD, get_sandbox_client_with_store
 router = APIRouter(prefix="/api")
 
 
-@router.get("/sandboxes")
+@router.get("/sandboxes", dependencies=[RequireScope("read")])
 async def get_sandboxes():
     return list_sandboxes()
 
@@ -51,7 +51,7 @@ async def create_sandbox(req: SandboxCreate, store: StoreD):
     return sandbox
 
 
-@router.get("/sandboxes/{sandbox_id}")
+@router.get("/sandboxes/{sandbox_id}", dependencies=[RequireScope("read")])
 async def get_sandbox_detail(sandbox_id: str):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:

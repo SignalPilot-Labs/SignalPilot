@@ -27,20 +27,24 @@ class TestHealthEndpoint:
 
 
 class TestSettingsEndpoint:
-    def test_get_settings(self, client):
+    def test_get_settings_requires_auth(self, client):
+        """GET /settings requires authentication — unauthenticated requests return 401."""
         response = client.get("/api/settings")
-        assert response.status_code == 200
-        data = response.json()
-        assert "sandbox_manager_url" in data
-        assert "default_row_limit" in data
-        assert "gateway_url" in data
+        assert response.status_code == 401
 
-    def test_update_settings(self, client):
-        settings = client.get("/api/settings").json()
-        settings["default_row_limit"] = 5000
-        response = client.put("/api/settings", json=settings)
-        assert response.status_code == 200
-        assert response.json()["default_row_limit"] == 5000
+    def test_update_settings_requires_auth(self, client):
+        """PUT /settings requires authentication — unauthenticated requests return 401."""
+        response = client.put("/api/settings", json={
+            "sandbox_manager_url": "http://localhost:8180",
+            "sandbox_provider": "local",
+            "default_row_limit": 5000,
+            "default_budget_usd": 10.0,
+            "default_timeout_seconds": 30,
+            "max_concurrent_sandboxes": 10,
+            "blocked_tables": [],
+            "gateway_url": "http://localhost:3300",
+        })
+        assert response.status_code == 401
 
 
 class TestConnectionsEndpoint:

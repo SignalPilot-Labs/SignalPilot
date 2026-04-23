@@ -443,6 +443,65 @@ class TestProjectsWriteScope:
         assert response.status_code != 403
 
 
+# ─── TestSandboxReadScope ─────────────────────────────────────────────────────
+
+
+class TestSandboxReadScope:
+    """GET /api/sandboxes and GET /api/sandboxes/{id} require 'read' scope."""
+
+    def test_list_sandboxes_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/sandboxes")
+        assert response.status_code == 403
+
+    def test_list_sandboxes_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/sandboxes")
+        assert response.status_code != 403
+
+    def test_list_sandboxes_returns_403_with_only_execute_scope(self, client):
+        _set_scopes(["execute"])
+        response = client.get("/api/sandboxes")
+        assert response.status_code == 403
+
+    def test_get_sandbox_detail_returns_403_without_read_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/sandboxes/some-sandbox-id")
+        assert response.status_code == 403
+
+    def test_get_sandbox_detail_passes_with_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/sandboxes/nonexistent-sandbox-id")
+        assert response.status_code != 403
+
+    def test_get_sandbox_detail_returns_403_with_only_execute_scope(self, client):
+        _set_scopes(["execute"])
+        response = client.get("/api/sandboxes/some-sandbox-id")
+        assert response.status_code == 403
+
+
+# ─── TestGetSettingsAdminScopeEnforcement ─────────────────────────────────────
+
+
+class TestGetSettingsAdminScopeEnforcement:
+    """GET /api/settings requires 'admin' scope."""
+
+    def test_get_settings_returns_403_without_admin_scope(self, client):
+        _set_scopes([])
+        response = client.get("/api/settings")
+        assert response.status_code == 403
+
+    def test_get_settings_passes_with_admin_scope(self, client):
+        _set_scopes(["admin"])
+        response = client.get("/api/settings")
+        assert response.status_code != 403
+
+    def test_get_settings_returns_403_with_only_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/settings")
+        assert response.status_code == 403
+
+
 # ─── TestParseUrlEndpointsUnauthenticated ─────────────────────────────────────
 
 

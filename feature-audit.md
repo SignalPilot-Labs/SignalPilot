@@ -103,3 +103,14 @@
 - [x] **Session Token Leak Fix** — `list_vms_handler()` in `sandbox_manager.py` now returns `token[:8] + "..."` instead of the full token in `/vms` responses. Prevents session token enumeration by anyone reaching the sandbox manager.
 - [x] **Session Token Length Validation** — `execute_handler()` rejects `session_token` longer than 128 chars with `400 {"error": "Invalid session token"}` before any audit logging or dict storage. Prevents memory exhaustion from oversized tokens stored as dict keys.
 - [x] **16 new tests** — 10 CGNAT/6to4 tests in `test_ssrf_validation.py` (including IPv4-mapped bypass, edge cases at range boundaries, `SP_ALLOW_PRIVATE_CONNECTIONS` always-blocked behavior) + 6 sandbox session tests in `sp-sandbox/test/test_sandbox_session.py` (token truncation format, empty sessions, oversized rejection, audit-logging not called before rejection). All 53 SSRF tests + 6 sandbox tests pass.
+
+## Round 11: Settings Secret Redaction, Sandbox Scope Guards, Log Sanitization
+
+### COMPLETED
+
+- [x] **GET /settings Secret Redaction + Scope Guard** — `GET /api/settings` now requires `admin` scope (previously unguarded, any authenticated user could read). Response masks `api_key` and `sandbox_api_key` to `"****"` (if set) or `null` (if unset). No raw key material returned in API responses.
+- [x] **PUT /settings Secret Redaction + Mask Round-Trip Protection** — `PUT /api/settings` response also masks secrets. Critical: if client sends `"****"` back (GET→modify→PUT cycle), the endpoint preserves the existing stored key instead of overwriting with the mask string.
+- [x] **Local API Key Log Sanitization** — `store.py` no longer logs `key[:12]` at generation time (exposed first 3 chars of secret portion). Now logs only the key file path.
+- [x] **Sandbox GET Scope Guards** — `GET /api/sandboxes` and `GET /api/sandboxes/{sandbox_id}` now require `read` scope. Previously any authenticated user could list/inspect all sandboxes regardless of API key scopes.
+- [x] **Pre-existing test_get_settings Fix** — Updated `test_api.py::TestSettingsEndpoint` to expect 401 for unauthenticated requests (was previously broken since R8).
+- [x] **29 new tests** — 20 settings security tests (scope enforcement, secret masking, null handling, PUT redaction, mask round-trip preservation) + 9 scope enforcement tests (sandbox read scope, settings admin scope). All pass.

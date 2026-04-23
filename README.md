@@ -179,7 +179,7 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 
 ---
 
-## MCP Tools (39 Tools)
+## MCP Tools (40 Tools)
 
 ### Data Exploration (9 tools)
 

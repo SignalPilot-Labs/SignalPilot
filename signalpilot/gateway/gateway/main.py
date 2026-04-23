@@ -24,7 +24,9 @@ from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import init_db, close_db, get_session_factory
-from .store import Store, _validate_encryption_health
+from .byok import DEKCache
+from .byok_factory import make_provider
+from .store import Store, _validate_encryption_health, configure_byok
 from .api import register_routers
 from .api.deps import reset_sandbox_client, _sandbox_client
 
@@ -48,6 +50,24 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info("STARTUP: Encryption health check passed.")
+
+    # Configure BYOK provider — type and config are read from env vars at startup.
+    # SP_BYOK_PROVIDER: provider type string (default: "local")
+    # SP_BYOK_PROVIDER_CONFIG: JSON-encoded provider config dict (optional)
+    byok_provider_type = os.getenv("SP_BYOK_PROVIDER", "local")
+    byok_provider_config_raw = os.getenv("SP_BYOK_PROVIDER_CONFIG")
+    byok_provider_config: dict | None = None
+    if byok_provider_config_raw:
+        import json as _json
+        try:
+            byok_provider_config = _json.loads(byok_provider_config_raw)
+        except _json.JSONDecodeError:
+            logger.error("STARTUP FATAL: SP_BYOK_PROVIDER_CONFIG contains invalid JSON")
+            raise SystemExit(1)
+    byok_provider = make_provider(byok_provider_type, byok_provider_config)
+    dek_cache = DEKCache(ttl_seconds=300)
+    configure_byok(byok_provider, dek_cache)
+    logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
 
     async def _pool_cleanup_loop():
         while True:
@@ -121,6 +141,7 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()
+        dek_cache.clear()
         await close_db()
         from .api.deps import _sandbox_client
         if _sandbox_client:

@@ -77,7 +77,7 @@ class ApiKeyCreate(BaseModel):
     def validate_expires_at(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        from datetime import datetime, timezone
+        from datetime import datetime
         try:
             parsed = datetime.fromisoformat(v)
         except (ValueError, TypeError):
@@ -249,6 +249,11 @@ class ConnectionCreate(BaseModel):
         default=None, ge=0, le=600,
         description="Keepalive ping interval in seconds. 0 = disabled.",
     )
+    # ─── BYOK ───────────────────────────────────────────────────────────
+    org_id: str | None = Field(default=None, max_length=100)
+    byok_key_alias: str | None = Field(
+        default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$"
+    )
 
 
 class ConnectionUpdate(BaseModel):
@@ -340,8 +345,11 @@ class ConnectionInfo(BaseModel):
     last_used: float | None = None
     status: str = "unknown"  # healthy | error | unknown
     # PII redaction
-    pii_rules: dict[str, str] | None = None  # {column_name: "hash"|"mask"|"drop"}
+    pii_rules: dict[str, str] | None = None  # {column_name: "hash"|"mask"|"hide"}
     pii_enabled: bool = False  # toggle to activate PII redaction at query time
+    # BYOK scaffolding (Phase 1: always None; Phase 2 populates on encrypt)
+    org_id: str | None = None
+    byok_key_alias: str | None = None
 
 
 # ─── Projects ─────────────────────────────────────────────────────────────────
@@ -480,6 +488,57 @@ class AuditEntry(BaseModel):
     duration_ms: float | None = None
     agent_id: str | None = None
     metadata: dict[str, Any] = {}
+
+
+# ─── BYOK API models ─────────────────────────────────────────────────────────
+
+class BYOKKeyCreate(BaseModel):
+    key_alias: str = Field(..., min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+    provider_type: str = Field(..., pattern=r"^(local|aws_kms|gcp_kms|azure_kv)$")
+    provider_config: dict[str, Any] | None = None
+
+
+class BYOKKeyUpdate(BaseModel):
+    key_alias: str | None = Field(default=None, min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+    status: str | None = Field(default=None, pattern=r"^(active|revoked)$")
+
+
+class BYOKKeyResponse(BaseModel):
+    id: str
+    org_id: str
+    key_alias: str
+    provider_type: str
+    provider_config: dict[str, Any] | None = None
+    status: str
+    created_at: float
+    revoked_at: float | None = None
+
+
+class BYOKMigrateRequest(BaseModel):
+    key_id: str = Field(..., min_length=1, max_length=2048)
+
+
+class BYOKMigrateResponse(BaseModel):
+    migrated: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class BYOKRotateRequest(BaseModel):
+    new_key_id: str = Field(..., min_length=1, max_length=2048)
+
+
+class BYOKRotateResponse(BaseModel):
+    rotated: int
+    failed: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class BYOKMigrationStatusResponse(BaseModel):
+    total: int
+    byok: int
+    managed: int
+    status: Literal["none", "partial", "complete"]
 
 
 _MCP_ARGUMENTS_MAX_DEPTH: int = 20

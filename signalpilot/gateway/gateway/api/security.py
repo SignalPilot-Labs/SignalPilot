@@ -6,9 +6,10 @@ import logging
 import os
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
-from ..db.models import GatewayCredential
+from ..auth import OrgID
+from ..db.models import GatewayBYOKKey, GatewayCredential
 from ..store import CURRENT_KEY_VERSION, _validate_encryption_health
 from .deps import StoreD
 
@@ -33,7 +34,7 @@ def _require_admin(store: StoreD) -> None:
 
 
 @router.get("/security/status")
-async def security_status(store: StoreD):
+async def security_status(store: StoreD, org_id: OrgID):
     """Return encryption health and credential storage statistics.
 
     Admin-only: accessible only to user IDs listed in SP_ADMIN_USER_IDS
@@ -55,12 +56,68 @@ async def security_status(store: StoreD):
     # Global count across all users (admin view)
     total_pending_rotation = await store.get_credentials_needing_rotation()
 
+    # ─── BYOK provider info ───────────────────────────────────────────────────
+
+    # Read the module-level provider — import at function scope to pick up the
+    # current value (configure_byok may have been called after module import).
+    from ..store import _byok_provider as current_provider  # noqa: PLC0415
+
+    byok_provider_type = (
+        type(current_provider).__name__ if current_provider is not None else "none"
+    )
+
+    # ─── BYOK key counts ──────────────────────────────────────────────────────
+
+    active_result = await store.session.execute(
+        select(func.count()).select_from(GatewayBYOKKey).where(
+            GatewayBYOKKey.status == "active",
+            GatewayBYOKKey.org_id == org_id,
+        )
+    )
+    byok_keys_active: int = active_result.scalar_one()
+
+    revoked_result = await store.session.execute(
+        select(func.count()).select_from(GatewayBYOKKey).where(
+            GatewayBYOKKey.status == "revoked",
+            GatewayBYOKKey.org_id == org_id,
+        )
+    )
+    byok_keys_revoked: int = revoked_result.scalar_one()
+
+    byok_keys_total = byok_keys_active + byok_keys_revoked
+
+    # ─── Credential encryption mode counts ───────────────────────────────────
+
+    # Treat NULL encryption_mode as "managed" — pre-BYOK rows may have NULL
+    # if the server_default was not applied retroactively.
+    managed_result = await store.session.execute(
+        select(func.count()).select_from(GatewayCredential).where(
+            GatewayCredential.user_id == store.user_id,
+            or_(
+                GatewayCredential.encryption_mode == "managed",
+                GatewayCredential.encryption_mode.is_(None),
+            ),
+        )
+    )
+    credentials_managed: int = managed_result.scalar_one()
+
+    byok_result = await store.session.execute(
+        select(func.count()).select_from(GatewayCredential).where(
+            GatewayCredential.user_id == store.user_id,
+            GatewayCredential.encryption_mode == "byok",
+        )
+    )
+    credentials_byok: int = byok_result.scalar_one()
+
     logger.info(
-        "Security status requested by user %s: healthy=%s, credentials=%d, pending_rotation=%d",
+        "Security status requested by user %s: healthy=%s, credentials=%d, "
+        "pending_rotation=%d, byok_provider=%s, byok_keys_total=%d",
         store.user_id,
         encryption_healthy,
         credentials_encrypted,
         total_pending_rotation,
+        byok_provider_type,
+        byok_keys_total,
     )
 
     return {
@@ -70,4 +127,10 @@ async def security_status(store: StoreD):
         "credentials_encrypted": credentials_encrypted,
         "current_key_version": CURRENT_KEY_VERSION,
         "total_credentials_pending_rotation": total_pending_rotation,
+        "byok_provider": byok_provider_type,
+        "byok_keys_total": byok_keys_total,
+        "byok_keys_active": byok_keys_active,
+        "byok_keys_revoked": byok_keys_revoked,
+        "credentials_managed": credentials_managed,
+        "credentials_byok": credentials_byok,
     }

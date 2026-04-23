@@ -72,9 +72,12 @@ class GatewayConnection(GatewayBase):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     # Schema endorsements stored inline
     endorsements: Mapped[dict | None] = mapped_column(JSON)
-    # PII redaction: {column_name: "hash"|"mask"|"drop", ...}
+    # PII redaction: {column_name: "hash"|"mask"|"hide", ...}
     pii_rules: Mapped[dict | None] = mapped_column(JSON)
     pii_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # BYOK scaffolding columns (Phase 1: always NULL; Phase 2 populates on encrypt)
+    org_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    byok_key_alias: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("user_id", "name", name="uq_gw_conn_user_name"),
@@ -117,7 +120,36 @@ class GatewayConnection(GatewayBase):
             "created_at": self.created_at,
             "pii_rules": self.pii_rules,
             "pii_enabled": self.pii_enabled or False,
+            "org_id": self.org_id,
+            "byok_key_alias": self.byok_key_alias,
         }
+
+
+class GatewayBYOKKey(GatewayBase):
+    """Registry of BYOK key-encryption-keys (KEKs) per org.
+
+    Phase 1: table is created but not yet populated via API (read path only).
+    Phase 2 will add the encrypt path and API endpoints for key management.
+    """
+
+    __tablename__ = "gateway_byok_keys"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    key_alias: Mapped[str] = mapped_column(String(200), nullable=False)
+    # "local", "aws_kms", "gcp_kms", "azure_kv"
+    provider_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # KMS ARN, key URI, etc. — provider-specific config blob
+    provider_config: Mapped[dict | None] = mapped_column(JSON)
+    # "active", "revoked", "rotating"
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    revoked_at: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "key_alias", name="uq_gw_byok_org_alias"),
+        Index("ix_gw_byok_org_id", "org_id"),
+    )
 
 
 class GatewayCredential(GatewayBase):
@@ -129,6 +161,15 @@ class GatewayCredential(GatewayBase):
     connection_string_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     extras_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # BYOK columns (Phase 1: read path only; Phase 2 adds write path and API)
+    # "managed" (existing Fernet) or "byok" (envelope encryption)
+    encryption_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="managed"
+    )
+    # Wrapped (KMS-encrypted) DEK — only set for BYOK mode
+    wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # FK-like reference to gateway_byok_keys.id — only set for BYOK mode
+    byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("user_id", "connection_name", name="uq_gw_cred_user_conn"),
@@ -195,6 +236,22 @@ class GatewayProject(GatewayBase):
         UniqueConstraint("user_id", "name", name="uq_gw_proj_user_name"),
         Index("ix_gw_proj_user_id", "user_id"),
     )
+
+
+class GatewayOrg(GatewayBase):
+    """Organization record for BYOK key management.
+
+    org_id is the primary key — it is the same string used in
+    GatewayConnection.org_id and GatewayBYOKKey.org_id, eliminating any
+    identity ambiguity between a UUID id and a name.
+    """
+
+    __tablename__ = "gateway_orgs"
+
+    org_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    byok_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    default_byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class GatewayApiKey(GatewayBase):

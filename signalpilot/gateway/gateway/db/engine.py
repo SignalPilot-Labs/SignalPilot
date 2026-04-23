@@ -121,6 +121,56 @@ async def _ensure_expires_at_column(engine) -> None:
     logger.info("Ensured expires_at column on gateway_api_keys")
 
 
+async def _ensure_byok_columns(engine) -> None:
+    """Add BYOK columns to gateway_credentials and gateway_connections if they do not exist.
+
+    SQLAlchemy's create_all does not add columns to existing tables, so this
+    idempotent ALTER TABLE handles existing deployments. Postgres-only (no
+    SQLite fallback — the gateway DB is always Postgres).
+
+    gateway_credentials gains:
+      - encryption_mode TEXT NOT NULL DEFAULT 'managed'
+      - wrapped_dek BYTEA
+      - byok_key_id TEXT
+
+    gateway_connections gains:
+      - org_id TEXT
+      - byok_key_alias TEXT
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_credentials "
+                "ADD COLUMN IF NOT EXISTS encryption_mode TEXT NOT NULL DEFAULT 'managed'"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_credentials "
+                "ADD COLUMN IF NOT EXISTS wrapped_dek BYTEA"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_credentials "
+                "ADD COLUMN IF NOT EXISTS byok_key_id TEXT"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_connections "
+                "ADD COLUMN IF NOT EXISTS org_id TEXT"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_connections "
+                "ADD COLUMN IF NOT EXISTS byok_key_alias TEXT"
+            )
+        )
+    logger.info("Ensured BYOK columns on gateway_credentials and gateway_connections")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -128,6 +178,7 @@ async def init_db() -> None:
         await conn.run_sync(GatewayBase.metadata.create_all)
     await _ensure_key_version_column(engine)
     await _ensure_expires_at_column(engine)
+    await _ensure_byok_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

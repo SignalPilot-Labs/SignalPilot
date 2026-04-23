@@ -24,11 +24,14 @@ from sqlalchemy import delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .byok import BYOKProvider, DEKCache, decrypt_envelope, encrypt_fields_envelope
 from .db.models import (
     GatewayApiKey,
     GatewayAuditLog,
+    GatewayBYOKKey,
     GatewayConnection,
     GatewayCredential,
+    GatewayOrg,
     GatewayProject,
     GatewaySetting,
 )
@@ -74,6 +77,64 @@ class CredentialEncryptionError(Exception):
 # Module-level key cache — populated on first call, reused thereafter.
 # Avoids re-running PBKDF2 (≈200 ms) on every encrypt/decrypt call.
 _CACHED_KEY: bytes | None = None
+
+# Module-level BYOK state — set by configure_byok() before any BYOK credentials
+# are decrypted. Phase 2 will call configure_byok() from the application lifespan
+# handler (main.py startup). Phase 1 only adds the decrypt routing; the globals
+# remain None unless explicitly configured.
+_byok_provider: BYOKProvider | None = None
+_dek_cache: DEKCache | None = None
+
+
+def configure_byok(provider: BYOKProvider, cache: DEKCache | None = None) -> None:
+    """Set the module-level BYOK provider and optional DEK cache.
+
+    Call this during application startup before any requests are served.
+    Phase 2 will wire this into the FastAPI lifespan handler in main.py.
+    """
+    global _byok_provider, _dek_cache
+    _byok_provider = provider
+    _dek_cache = cache
+
+
+async def _resolve_byok_key(
+    session: AsyncSession,
+    org_id: str,
+    key_alias: str | None = None,
+) -> GatewayBYOKKey | None:
+    """Resolve the active BYOK key for an org.
+
+    If key_alias is provided, looks up by org_id + key_alias + status='active'.
+    If key_alias is None, looks up the org's default_byok_key_id from GatewayOrg,
+    then loads that key.
+
+    Returns the GatewayBYOKKey row or None if not found.
+    """
+    if key_alias is not None:
+        result = await session.execute(
+            select(GatewayBYOKKey).where(
+                GatewayBYOKKey.org_id == org_id,
+                GatewayBYOKKey.key_alias == key_alias,
+                GatewayBYOKKey.status == "active",
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # No alias: look up the org's default key
+    org_result = await session.execute(
+        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
+    )
+    org_row = org_result.scalar_one_or_none()
+    if org_row is None or not org_row.default_byok_key_id:
+        return None
+
+    key_result = await session.execute(
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == org_row.default_byok_key_id,
+            GatewayBYOKKey.status == "active",
+        )
+    )
+    return key_result.scalar_one_or_none()
 
 
 # ─── Atomic file helper ──────────────────────────────────────────────────────
@@ -663,6 +724,8 @@ class Store:
             query_timeout=conn.query_timeout,
             keepalive_interval=conn.keepalive_interval,
             created_at=time.time(),
+            org_id=conn.org_id,
+            byok_key_alias=conn.byok_key_alias,
         )
         self.session.add(db_conn)
 
@@ -677,13 +740,40 @@ class Store:
             if not is_sandboxed:
                 _validate_local_db_path(raw_cred)
         extras = _extract_credential_extras(conn)
-        cred = GatewayCredential(
-            user_id=uid,
-            connection_name=conn.name,
-            connection_string_enc=_encrypt(raw_cred),
-            extras_enc=_encrypt(json.dumps(extras)),
-            key_version=CURRENT_KEY_VERSION,
-        )
+
+        # BYOK encrypt path: use envelope encryption when org has BYOK configured
+        byok_key = None
+        if conn.org_id and _byok_provider is not None:
+            byok_key = await _resolve_byok_key(
+                self.session, conn.org_id, conn.byok_key_alias
+            )
+
+        if byok_key is not None and _byok_provider is not None:
+            ciphertexts, wrapped_dek = await encrypt_fields_envelope(
+                _byok_provider,
+                conn.org_id,  # type: ignore[arg-type]
+                byok_key.key_alias,
+                [raw_cred, json.dumps(extras)],
+            )
+            db_conn.byok_key_alias = byok_key.key_alias
+            cred = GatewayCredential(
+                user_id=uid,
+                connection_name=conn.name,
+                connection_string_enc=ciphertexts[0],
+                extras_enc=ciphertexts[1],
+                key_version=CURRENT_KEY_VERSION,
+                encryption_mode="byok",
+                wrapped_dek=wrapped_dek,
+                byok_key_id=byok_key.id,
+            )
+        else:
+            cred = GatewayCredential(
+                user_id=uid,
+                connection_name=conn.name,
+                connection_string_enc=_encrypt(raw_cred),
+                extras_enc=_encrypt(json.dumps(extras)),
+                key_version=CURRENT_KEY_VERSION,
+            )
         self.session.add(cred)
         try:
             await self.session.commit()
@@ -774,9 +864,31 @@ class Store:
                 )
                 cred_row = cred_result.scalar_one_or_none()
                 if cred_row:
-                    cred_row.connection_string_enc = _encrypt(raw_cred)
-                    cred_row.extras_enc = _encrypt(json.dumps(extras))
-                    cred_row.key_version = CURRENT_KEY_VERSION
+                    # BYOK encrypt path: use envelope encryption if org has BYOK configured
+                    org_id = row.org_id
+                    key_alias = row.byok_key_alias
+                    byok_key = None
+                    if org_id and _byok_provider is not None:
+                        byok_key = await _resolve_byok_key(self.session, org_id, key_alias)
+
+                    if byok_key is not None and _byok_provider is not None:
+                        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
+                            _byok_provider,
+                            org_id,  # type: ignore[arg-type]
+                            byok_key.key_alias,
+                            [raw_cred, json.dumps(extras)],
+                        )
+                        cred_row.connection_string_enc = ciphertexts[0]
+                        cred_row.extras_enc = ciphertexts[1]
+                        cred_row.key_version = CURRENT_KEY_VERSION
+                        cred_row.encryption_mode = "byok"
+                        cred_row.wrapped_dek = wrapped_dek
+                        cred_row.byok_key_id = byok_key.id
+                        row.byok_key_alias = byok_key.key_alias
+                    else:
+                        cred_row.connection_string_enc = _encrypt(raw_cred)
+                        cred_row.extras_enc = _encrypt(json.dumps(extras))
+                        cred_row.key_version = CURRENT_KEY_VERSION
             except Exception as e:
                 logger.error(
                     "Credential encryption failed for connection %s: %s", name, e
@@ -792,52 +904,117 @@ class Store:
     async def get_connection_string(self, name: str) -> str | None:
         uid = self.user_id or "local"
         result = await self.session.execute(
-            select(GatewayCredential).where(
+            select(GatewayCredential, GatewayConnection).join(
+                GatewayConnection,
+                (GatewayConnection.user_id == GatewayCredential.user_id)
+                & (GatewayConnection.name == GatewayCredential.connection_name),
+                isouter=True,
+            ).where(
                 GatewayCredential.user_id == uid,
                 GatewayCredential.connection_name == name,
             )
         )
-        row = result.scalar_one_or_none()
-        if not row:
+        row_pair = result.first()
+        if not row_pair:
             return None
-        plaintext, needs_migration = _decrypt_with_migration(row.connection_string_enc)
+        cred_row, conn_row = row_pair
+
+        if cred_row.encryption_mode == "byok":
+            if _byok_provider is None:
+                raise CredentialEncryptionError("BYOK provider not configured")
+            if cred_row.wrapped_dek is None:
+                raise CredentialEncryptionError(
+                    "Credential is in BYOK mode but has no wrapped DEK"
+                )
+            org_id = conn_row.org_id if conn_row else None
+            key_alias = conn_row.byok_key_alias if conn_row else None
+            if not org_id or not key_alias:
+                raise CredentialEncryptionError(
+                    "Connection is missing BYOK configuration for decryption"
+                )
+            return await decrypt_envelope(
+                provider=_byok_provider,
+                org_id=org_id,
+                key_alias=key_alias,
+                wrapped_dek=cred_row.wrapped_dek,
+                ciphertext=cred_row.connection_string_enc,
+                cache=_dek_cache,
+                credential_id=cred_row.id,
+            )
+
+        # Managed (default) path — existing Fernet-based decryption
+        plaintext, needs_migration = _decrypt_with_migration(cred_row.connection_string_enc)
         # Re-encrypt if using legacy key derivation OR if key_version is behind current.
         # Concurrent reads may both re-encrypt — this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
-        needs_version_upgrade = row.key_version != CURRENT_KEY_VERSION
+        needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
-            row.connection_string_enc = _encrypt(plaintext)
+            cred_row.connection_string_enc = _encrypt(plaintext)
             # Re-encrypt extras_enc too so key_version covers both fields
-            if row.extras_enc:
-                extras_plain, _ = _decrypt_with_migration(row.extras_enc)
-                row.extras_enc = _encrypt(extras_plain)
-            row.key_version = CURRENT_KEY_VERSION
+            if cred_row.extras_enc:
+                extras_plain, _ = _decrypt_with_migration(cred_row.extras_enc)
+                cred_row.extras_enc = _encrypt(extras_plain)
+            cred_row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
         uid = self.user_id or "local"
         result = await self.session.execute(
-            select(GatewayCredential).where(
+            select(GatewayCredential, GatewayConnection).join(
+                GatewayConnection,
+                (GatewayConnection.user_id == GatewayCredential.user_id)
+                & (GatewayConnection.name == GatewayCredential.connection_name),
+                isouter=True,
+            ).where(
                 GatewayCredential.user_id == uid,
                 GatewayCredential.connection_name == name,
             )
         )
-        row = result.scalar_one_or_none()
-        if not row or not row.extras_enc:
+        row_pair = result.first()
+        if not row_pair:
             return {}
-        plaintext, needs_migration = _decrypt_with_migration(row.extras_enc)
+        cred_row, conn_row = row_pair
+        if not cred_row.extras_enc:
+            return {}
+
+        if cred_row.encryption_mode == "byok":
+            if _byok_provider is None:
+                raise CredentialEncryptionError("BYOK provider not configured")
+            if cred_row.wrapped_dek is None:
+                raise CredentialEncryptionError(
+                    "Credential is in BYOK mode but has no wrapped DEK"
+                )
+            org_id = conn_row.org_id if conn_row else None
+            key_alias = conn_row.byok_key_alias if conn_row else None
+            if not org_id or not key_alias:
+                raise CredentialEncryptionError(
+                    "Connection is missing BYOK configuration for decryption"
+                )
+            extras_json = await decrypt_envelope(
+                provider=_byok_provider,
+                org_id=org_id,
+                key_alias=key_alias,
+                wrapped_dek=cred_row.wrapped_dek,
+                ciphertext=cred_row.extras_enc,
+                cache=_dek_cache,
+                credential_id=cred_row.id,
+            )
+            return json.loads(extras_json)
+
+        # Managed (default) path — existing Fernet-based decryption
+        plaintext, needs_migration = _decrypt_with_migration(cred_row.extras_enc)
         # Re-encrypt if using legacy key derivation OR if key_version is behind current.
         # Concurrent reads may both re-encrypt — this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
-        needs_version_upgrade = row.key_version != CURRENT_KEY_VERSION
+        needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
-            row.extras_enc = _encrypt(plaintext)
+            cred_row.extras_enc = _encrypt(plaintext)
             # Re-encrypt connection_string_enc too so key_version covers both fields
-            if row.connection_string_enc:
-                cs_plain, _ = _decrypt_with_migration(row.connection_string_enc)
-                row.connection_string_enc = _encrypt(cs_plain)
-            row.key_version = CURRENT_KEY_VERSION
+            if cred_row.connection_string_enc:
+                cs_plain, _ = _decrypt_with_migration(cred_row.connection_string_enc)
+                cred_row.connection_string_enc = _encrypt(cs_plain)
+            cred_row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
         return json.loads(plaintext)
 

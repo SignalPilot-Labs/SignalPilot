@@ -1,8 +1,8 @@
 """User identity resolution for the gateway.
 
-Resolves every request to a user_id:
-- Cloud mode (CLERK_PUBLISHABLE_KEY set): Clerk JWT → real user ID
-- Local mode: user_id = "local" (constant)
+Resolves every request to a user_id and org_id:
+- Cloud mode (CLERK_PUBLISHABLE_KEY set): Clerk JWT → real user ID and org_id
+- Local mode: user_id = "local", org_id = "local" (constants)
 - MCP requests: API key validation (handled by mcp_auth.py, sets scope state)
 """
 
@@ -22,6 +22,7 @@ from .db.engine import get_db
 logger = logging.getLogger(__name__)
 
 LOCAL_USER_ID = "local"
+LOCAL_ORG_ID = "local"
 
 # Cached JWKS client
 _jwks_client = None
@@ -71,13 +72,25 @@ async def resolve_user_id(request: Request) -> str:
     - MCP requests: user_id is set by MCPAuthMiddleware in scope state.
     - Cloud browser requests: verify Clerk JWT.
     - Local mode: return "local".
+
+    Side effect: caches decoded JWT claims on request.state._jwt_claims for
+    resolve_org_id. Both functions must share this state to avoid decoding the
+    JWT twice. resolve_org_id depends on UserID (which triggers this function)
+    and then reads request.state._jwt_claims.
     """
     # Check if MCP auth already resolved user_id
     auth_state = getattr(request.state, "auth", None)
     if auth_state and isinstance(auth_state, dict) and "user_id" in auth_state:
+        # Cache minimal claims for resolve_org_id
+        request.state._jwt_claims = {
+            "sub": auth_state["user_id"],
+            "org_id": auth_state.get("org_id"),
+        }
         return auth_state["user_id"]
 
     if not _is_cloud_mode():
+        # Local mode: set synthetic claims so resolve_org_id can read them
+        request.state._jwt_claims = {"sub": LOCAL_USER_ID, "org_id": LOCAL_ORG_ID}
         return LOCAL_USER_ID
 
     # Cloud mode: verify Clerk JWT
@@ -101,6 +114,8 @@ async def resolve_user_id(request: Request) -> str:
         user_id = claims.get("sub")
         if not user_id:
             raise HTTPException(status_code=401, detail="Token missing sub claim")
+        # Cache full claims for resolve_org_id
+        request.state._jwt_claims = claims
         return user_id
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
@@ -109,6 +124,43 @@ async def resolve_user_id(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
+async def resolve_org_id(request: Request, _user_id: UserID) -> str:
+    """Resolve the current org_id from the request.
+
+    Depends on UserID (resolve_user_id) to guarantee JWT is decoded exactly once.
+    Reads cached claims from request.state._jwt_claims set by resolve_user_id.
+
+    - Local mode: returns LOCAL_ORG_ID ("local").
+    - Cloud mode: extracts org_id claim from JWT. Raises 403 if missing.
+    - MCP requests: uses org_id from auth_state. Raises 403 in cloud mode if absent.
+    """
+    claims = getattr(request.state, "_jwt_claims", None)
+    if claims is None:
+        # Should never happen since _user_id dependency ran first
+        raise HTTPException(status_code=500, detail="JWT claims not available")
+
+    org_id = claims.get("org_id")
+
+    if not _is_cloud_mode():
+        # Local mode: always returns LOCAL_ORG_ID regardless of claims
+        return LOCAL_ORG_ID
+
+    # MCP / API-key auth state: require org_id in cloud mode
+    auth_state = getattr(request.state, "auth", None)
+    if auth_state and isinstance(auth_state, dict):
+        if org_id:
+            return org_id
+        raise HTTPException(
+            status_code=403, detail="Organization context required"
+        )
+
+    # Cloud mode: org_id claim is required for BYOK endpoints
+    if not org_id:
+        raise HTTPException(status_code=403, detail="Organization context required")
+    return org_id
+
+
 # FastAPI dependency aliases
 UserID = Annotated[str, Depends(resolve_user_id)]
+OrgID = Annotated[str, Depends(resolve_org_id)]
 DBSession = Annotated[AsyncSession, Depends(get_db)]

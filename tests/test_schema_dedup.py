@@ -12,7 +12,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", "gateway"))
-from gateway.main import _deduplicate_partitioned_tables
+from gateway.schema_utils import _deduplicate_partitioned_tables
 
 
 def _table(name: str, schema: str = "public", columns=None, row_count: int = 100):

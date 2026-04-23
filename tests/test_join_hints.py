@@ -8,7 +8,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", "gateway"))
-from gateway.main import _infer_implicit_joins
+from gateway.schema_utils import _infer_implicit_joins
 
 
 def _table(name: str, schema: str = "public", columns=None, fks=None, row_count=100):

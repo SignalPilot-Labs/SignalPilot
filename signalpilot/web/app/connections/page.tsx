@@ -148,9 +148,11 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
         </button>
       </div>
       {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
-      <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
-        {hint}
-      </p>
+      {!error && (
+        <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
+          {hint}
+        </p>
+      )}
 
       {/* File browser modal */}
       {browsing && (

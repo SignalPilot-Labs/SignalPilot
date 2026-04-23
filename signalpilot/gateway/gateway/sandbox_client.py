@@ -85,7 +85,8 @@ class SandboxClient:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            return {"error": str(e), "files": [], "directories": []}
+            logger.error("Sandbox browse_files error: %s", e)
+            return {"error": "Sandbox communication error", "files": [], "directories": []}
 
     async def execute(
         self,

@@ -187,3 +187,14 @@
 - [x] **Uvicorn Server header suppressed (`mcp_server.py`)** — Added `server_header=False` to `uvicorn.run()` in `gateway/mcp_server.py` (streamable-HTTP transport path). Same fix applied to the MCP server entry point.
 - [x] **Next.js X-Powered-By header suppressed** — Added `poweredByHeader: false` to `next.config.ts`. Prevents Next.js from sending `X-Powered-By: Next.js` on every response.
 - [x] **Frontend HSTS header added** — `applySecurityHeaders()` in `middleware.ts` now sets `Strict-Transport-Security: max-age=63072000; includeSubDomains` when `x-forwarded-proto === "https"`. Matches the backend `SecurityHeadersMiddleware` HSTS policy (same `max-age`, no `preload`).
+
+## Round 18: REST API Error Response Sanitization
+
+### COMPLETED
+
+- [x] **Global exception handler** — `@app.exception_handler(Exception)` registered in `main.py`. Re-raises `HTTPException` and `StarletteHTTPException` so intentional 4xx/5xx errors pass through unchanged. All other unhandled exceptions return `{"detail": "Internal server error"}` with status 500; actual exception is logged server-side with `logger.exception()`.
+- [x] **connections.py: 10 sites sanitized** — Line 379 (duplicate connection 409): generic "Connection already exists or invalid parameters". Lines 843/848 (test_credentials invalid params/build error): generic static messages. Line 909 (network unreachable): exception message capped at 100 chars. Line 920 (catch-all network): generic "Could not verify network connectivity". Line 1087 (parse-url): generic "Invalid URL format". Line 1182 (build-url): generic "Failed to build URL". Lines 1456/1477/1509 (diagnose_connection DNS/TCP/TLS errors): exception messages capped at 100 chars.
+- [x] **projects.py: line 28** — `detail=str(e)` replaced with `"Project already exists"`.
+- [x] **sandbox_client.py: line 88** — `str(e)` replaced with `"Sandbox communication error"`; actual exception logged at ERROR level.
+- [x] **engine/__init__.py: line 95** — SQL parse error now `f"SQL parse error: {str(e)[:100]}"` — preserves user-diagnostic value (reflects user-supplied SQL) while capping length.
+- [x] **13 new tests** in `test_error_sanitization.py` — Global handler 500 behavior (5 tests), HTTPException pass-through (not swallowed as 500), SQL parse error cap (3 tests), connections/projects endpoint message sanitization (5 tests, skip when auth middleware blocks).

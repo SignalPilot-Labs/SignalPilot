@@ -12,8 +12,11 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .correlation import RequestCorrelationMiddleware
 from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware
@@ -176,6 +179,25 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
     allow_credentials=True,
 )
+
+# ─── Global Exception Handler ─────────────────────────────────────────────────
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Safety net: return a generic 500 for any unhandled exception.
+
+    HTTPException variants (intentional 4xx/5xx) are re-raised so FastAPI's
+    built-in handler processes them normally and they reach the client unchanged.
+    """
+    if isinstance(exc, (HTTPException, StarletteHTTPException)):
+        raise exc
+    logger.exception(
+        "Unhandled exception in %s %s",
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 # Register all API routers
 register_routers(app)

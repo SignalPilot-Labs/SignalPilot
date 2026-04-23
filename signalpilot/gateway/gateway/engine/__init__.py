@@ -92,7 +92,7 @@ def validate_sql(
     try:
         statements = sqlglot.parse(sql, dialect=dialect)
     except Exception as e:
-        return ValidationResult(ok=False, blocked_reason=f"SQL parse error: {e}")
+        return ValidationResult(ok=False, blocked_reason=f"SQL parse error: {str(e)[:100]}")
 
     if len(statements) > 1:
         return ValidationResult(

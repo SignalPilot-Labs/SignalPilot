@@ -24,8 +24,8 @@ async def add_project(proj: ProjectCreate, store: StoreD):
     """Create a new dbt project."""
     try:
         info = await store.create_project(proj)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=409, detail="Project already exists")
     return info
 
 

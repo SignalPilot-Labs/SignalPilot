@@ -375,8 +375,8 @@ async def add_connection(conn: ConnectionCreate, store: StoreD):
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
     try:
         info = await store.create_connection(conn)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=409, detail="Connection already exists or invalid parameters")
 
     asyncio.create_task(_auto_schema_refresh(info.name, info.db_type, store))
     return info
@@ -839,13 +839,13 @@ async def test_credentials(request: Request):
 
     try:
         conn = ConnectionCreate(**body)
-    except Exception as e:
-        return {"status": "error", "message": f"Invalid connection parameters: {e}", "phases": []}
+    except Exception:
+        return {"status": "error", "message": "Invalid connection parameters", "phases": []}
 
     try:
         conn_str = conn.connection_string or _build_connection_string(conn)
-    except Exception as e:
-        return {"status": "error", "message": f"Could not build connection string: {e}", "phases": []}
+    except Exception:
+        return {"status": "error", "message": "Could not build connection string", "phases": []}
 
     # SSRF validation: check host before opening any TCP connection.
     # test_credentials accepts raw user-supplied host/port and never goes through
@@ -906,7 +906,7 @@ async def test_credentials(request: Request):
             except (socket.timeout, socket.error, OSError) as e:
                 phases.append({
                     "phase": "network", "status": "error",
-                    "message": f"Cannot reach {host}:{port} — {e}",
+                    "message": f"Cannot reach {host}:{port} — {str(e)[:100]}",
                     "hint": _connection_error_hint(db_type, str(e)),
                     "duration_ms": round((time.monotonic() - t1) * 1000, 1),
                 })
@@ -914,10 +914,10 @@ async def test_credentials(request: Request):
                     "status": "error", "message": f"Network unreachable: {host}:{port}",
                     "phases": phases, "total_duration_ms": round((time.monotonic() - t0) * 1000, 1),
                 }
-        except Exception as e:
+        except Exception:
             phases.append({
                 "phase": "network", "status": "warning",
-                "message": f"Could not verify network: {e}",
+                "message": "Could not verify network connectivity",
                 "duration_ms": round((time.monotonic() - t1) * 1000, 1),
             })
 
@@ -1083,8 +1083,8 @@ async def validate_connection_url(body: dict):
                 warnings.append("Databricks URLs should start with databricks://")
 
         return {"valid": True, "parsed": parsed_info, "warnings": warnings}
-    except Exception as e:
-        return {"valid": False, "error": f"Invalid URL format: {e}"}
+    except Exception:
+        return {"valid": False, "error": "Invalid URL format"}
 
 
 @router.post("/connections/build-url", dependencies=[RequireScope("read")])
@@ -1178,8 +1178,8 @@ async def build_connection_url(body: dict):
             masked = masked.replace(quote_plus(password), "****")
 
         return {"url": url, "masked_url": masked, "db_type": db_type}
-    except Exception as e:
-        return {"url": "", "error": f"Failed to build URL: {e}"}
+    except Exception:
+        return {"url": "", "error": "Failed to build URL"}
 
 
 @router.post("/connections/{name}/test", dependencies=[RequireScope("read")])
@@ -1453,7 +1453,7 @@ async def diagnose_connection(name: str, store: StoreD):
     except socket.gaierror as e:
         diagnostics.append({
             "check": "dns", "status": "error",
-            "message": f"DNS resolution failed for {host}: {e}",
+            "message": f"DNS resolution failed for {host}: {str(e)[:100]}",
             "hint": "Check the hostname spelling and ensure DNS is configured correctly",
             "duration_ms": round((time.monotonic() - t0) * 1000, 1),
         })
@@ -1474,7 +1474,7 @@ async def diagnose_connection(name: str, store: StoreD):
     except (socket.timeout, ConnectionRefusedError, OSError) as e:
         diagnostics.append({
             "check": "tcp", "status": "error",
-            "message": f"TCP connection to {host}:{port} failed: {e}",
+            "message": f"TCP connection to {host}:{port} failed: {str(e)[:100]}",
             "hint": "Check firewall rules, security groups, and ensure the database is running and accepting connections on this port",
             "duration_ms": round((time.monotonic() - t1) * 1000, 1),
         })
@@ -1506,7 +1506,7 @@ async def diagnose_connection(name: str, store: StoreD):
         except Exception as e:
             diagnostics.append({
                 "check": "tls", "status": "warning",
-                "message": f"TLS handshake issue: {e}",
+                "message": f"TLS handshake issue: {str(e)[:100]}",
                 "hint": "The database may not support TLS on this port, or certificates may be misconfigured",
                 "duration_ms": round((time.monotonic() - t2) * 1000, 1),
             })

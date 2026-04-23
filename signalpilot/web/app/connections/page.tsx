@@ -75,25 +75,25 @@ import { useConnection } from "@/lib/connection-context";
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 /* ── Local DB File Picker (DuckDB / SQLite) ── */
-function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder = "/path/to/database.duckdb", hint = "paste a file path or browse to select a file" }: { value: string; onChange: (v: string) => void; pattern?: string; placeholder?: string; hint?: string }) {
+function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder = "/path/to/database.duckdb", hint = "paste a file path or browse to select a file", id, inputRef, error }: { value: string; onChange: (v: string) => void; pattern?: string; placeholder?: string; hint?: string; id?: string; inputRef?: React.Ref<HTMLInputElement>; error?: string }) {
   const [browsing, setBrowsing] = useState(false);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [files, setFiles] = useState<{ name: string; path: string; size_bytes: number }[]>([]);
   const [directories, setDirectories] = useState<{ name: string; path: string }[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [browseError, setBrowseError] = useState<string | null>(null);
 
   const browse = useCallback(async (path?: string) => {
     setLoading(true);
-    setError(null);
+    setBrowseError(null);
     try {
       const data = await browseFiles(path, pattern);
       setCurrentPath(data.path);
       setFiles(data.files || []);
       setDirectories(data.directories || []);
-      if (data.error) setError(data.error);
+      if (data.error) setBrowseError(data.error);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to browse files");
+      setBrowseError(e instanceof Error ? e.message : "Failed to browse files");
     } finally {
       setLoading(false);
     }
@@ -125,14 +125,18 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
   return (
     <div className="col-span-2">
       {/* Selected file display + browse button */}
-      <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">database file</label>
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">database file</label>
       <div className="flex gap-2">
         <input
+          id={id}
+          ref={inputRef}
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-text-dim)]"
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={error && id ? `${id}-error` : undefined}
+          className={`flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none${error ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`}
         />
         <button
           type="button"
@@ -143,6 +147,7 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
           browse
         </button>
       </div>
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
       <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
         {hint}
       </p>
@@ -180,11 +185,11 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
               </div>
             )}
 
-            {error && (
-              <div className="px-3 py-2 text-[11px] text-red-400 tracking-wider">{error}</div>
+            {browseError && (
+              <div className="px-3 py-2 text-[11px] text-red-400 tracking-wider">{browseError}</div>
             )}
 
-            {!loading && !error && files.length === 0 && directories.length === 0 && (
+            {!loading && !browseError && files.length === 0 && directories.length === 0 && (
               <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] tracking-wider text-center">
                 no matching files found in this directory
               </div>
@@ -1654,8 +1659,8 @@ function ConnectionFieldsForm({
               pattern="*.sqlite,*.db"
               placeholder="/path/to/database.sqlite"
               hint="paste a file path or browse to select a .sqlite or .db file"
+              {...fieldProps("database", formErrors, fieldRefs)}
             />
-            {formErrors.database && <p id="database-error" role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{formErrors.database}</p>}
           </div>
         )}
 
@@ -1710,8 +1715,8 @@ function ConnectionFieldsForm({
               pattern="*.duckdb"
               placeholder="/path/to/database.duckdb"
               hint="paste a file path or browse to select a .duckdb file"
+              {...fieldProps("database", formErrors, fieldRefs)}
             />
-            {formErrors.database && <p id="database-error" role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{formErrors.database}</p>}
           </div>
         )}
 
@@ -3081,20 +3086,30 @@ export default function ConnectionsPage() {
                           </div>
                           <div className="grid grid-cols-3 gap-4">
                             <div>
-                              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection timeout</label>
+                              {(() => { const { id: ctId, inputRef: ctRef, error: ctError } = fieldProps("connection_timeout", formErrors, fieldRefs); return (
+                              <>
+                              <label htmlFor={ctId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection timeout</label>
                               <div className="flex items-center gap-1.5">
-                                <input type="number" min="1" max="300" value={form.connection_timeout} onChange={(e) => setForm({ ...form, connection_timeout: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
+                                <input type="number" min="1" max="300" id={ctId} ref={ctRef as React.Ref<HTMLInputElement>} aria-invalid={ctError ? "true" : undefined} aria-describedby={ctError ? `${ctId}-error` : undefined} value={form.connection_timeout} onChange={(e) => setForm({ ...form, connection_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tabular-nums${ctError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
                                 <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">sec</span>
                               </div>
+                              {ctError && <p id={`${ctId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{ctError}</p>}
                               <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max time to establish connection</p>
+                              </>
+                              ); })()}
                             </div>
                             <div>
-                              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">query timeout</label>
+                              {(() => { const { id: qtId, inputRef: qtRef, error: qtError } = fieldProps("query_timeout", formErrors, fieldRefs); return (
+                              <>
+                              <label htmlFor={qtId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">query timeout</label>
                               <div className="flex items-center gap-1.5">
-                                <input type="number" min="1" max="3600" value={form.query_timeout} onChange={(e) => setForm({ ...form, query_timeout: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
+                                <input type="number" min="1" max="3600" id={qtId} ref={qtRef as React.Ref<HTMLInputElement>} aria-invalid={qtError ? "true" : undefined} aria-describedby={qtError ? `${qtId}-error` : undefined} value={form.query_timeout} onChange={(e) => setForm({ ...form, query_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tabular-nums${qtError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
                                 <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">sec</span>
                               </div>
+                              {qtError && <p id={`${qtId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{qtError}</p>}
                               <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max query execution time</p>
+                              </>
+                              ); })()}
                             </div>
                             <div>
                               <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">keepalive interval</label>

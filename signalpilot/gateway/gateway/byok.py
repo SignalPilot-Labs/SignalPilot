@@ -112,7 +112,7 @@ class LocalBYOKProvider:
             raise BYOKKeyError(
                 org_id=org_id,
                 key_alias=key_alias,
-                message=f"Key not found for org={org_id!r} alias={key_alias!r}",
+                message="Key not found",
             )
         return Fernet(kek)
 
@@ -130,7 +130,7 @@ class LocalBYOKProvider:
             raise BYOKKeyError(
                 org_id=org_id,
                 key_alias=key_alias,
-                message=f"Failed to unwrap DEK for org={org_id!r} alias={key_alias!r}: invalid token",
+                message="Failed to unwrap DEK",
             ) from exc
 
     async def generate_dek(self) -> bytes:

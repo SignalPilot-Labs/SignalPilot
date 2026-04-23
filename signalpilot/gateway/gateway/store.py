@@ -902,13 +902,13 @@ class Store:
                 raise CredentialEncryptionError("BYOK provider not configured")
             if cred_row.wrapped_dek is None:
                 raise CredentialEncryptionError(
-                    f"Credential for connection '{name}' is BYOK mode but has no wrapped_dek"
+                    "Credential is in BYOK mode but has no wrapped DEK"
                 )
             org_id = conn_row.org_id if conn_row else None
             key_alias = conn_row.byok_key_alias if conn_row else None
             if not org_id or not key_alias:
                 raise CredentialEncryptionError(
-                    f"Connection '{name}' is missing org_id or byok_key_alias for BYOK decryption"
+                    "Connection is missing BYOK configuration for decryption"
                 )
             return await decrypt_envelope(
                 provider=_byok_provider,
@@ -961,13 +961,13 @@ class Store:
                 raise CredentialEncryptionError("BYOK provider not configured")
             if cred_row.wrapped_dek is None:
                 raise CredentialEncryptionError(
-                    f"Credential for connection '{name}' is BYOK mode but has no wrapped_dek"
+                    "Credential is in BYOK mode but has no wrapped DEK"
                 )
             org_id = conn_row.org_id if conn_row else None
             key_alias = conn_row.byok_key_alias if conn_row else None
             if not org_id or not key_alias:
                 raise CredentialEncryptionError(
-                    f"Connection '{name}' is missing org_id or byok_key_alias for BYOK decryption"
+                    "Connection is missing BYOK configuration for decryption"
                 )
             extras_json = await decrypt_envelope(
                 provider=_byok_provider,

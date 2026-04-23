@@ -13,8 +13,8 @@ router = APIRouter(prefix="/api")
 @router.get("/files/browse", dependencies=[RequireScope("read")])
 async def browse_files(
     store: StoreD,
-    path: str | None = Query(default=None, description="Directory to browse"),
-    pattern: str = Query(default="*.duckdb", description="File glob pattern"),
+    path: str | None = Query(default=None, max_length=4096, description="Directory to browse"),
+    pattern: str = Query(default="*.duckdb", max_length=256, description="File glob pattern"),
 ):
     """Browse the host filesystem for database files.
 

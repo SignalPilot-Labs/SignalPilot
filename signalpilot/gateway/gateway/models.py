@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+
+def _validate_string_list(v: list[str], max_item_len: int, field_name: str) -> list[str]:
+    """Validate that each item in a string list does not exceed max_item_len."""
+    for item in v:
+        if len(item) > max_item_len:
+            raise ValueError(
+                f"Each item in {field_name} must be at most {max_item_len} characters"
+            )
+    return v
 
 
 # ─── Settings ────────────────────────────────────────────────────────────────
@@ -19,7 +29,7 @@ class SandboxProvider(str, Enum):
 class GatewaySettings(BaseModel):
     # Sandbox configuration (BYOS -- Bring Your Own Sandbox)
     sandbox_provider: SandboxProvider = SandboxProvider.local
-    sandbox_manager_url: str = "http://localhost:8180"
+    sandbox_manager_url: str = Field(default="http://localhost:8180", max_length=2048)
     sandbox_api_key: str | None = None
 
     # Governance defaults
@@ -29,11 +39,16 @@ class GatewaySettings(BaseModel):
     max_concurrent_sandboxes: int = 10
 
     # Governance — blocked tables (Feature #19)
-    blocked_tables: list[str] = Field(default_factory=list)
+    blocked_tables: list[str] = Field(default_factory=list, max_length=500)
 
     # Gateway
-    gateway_url: str = "http://localhost:3300"
+    gateway_url: str = Field(default="http://localhost:3300", max_length=2048)
     api_key: str | None = None
+
+    @field_validator("blocked_tables")
+    @classmethod
+    def validate_blocked_tables(cls, v: list[str]) -> list[str]:
+        return _validate_string_list(v, 256, "blocked_tables")
 
 
 # ─── API Keys ────────────────────────────────────────────────────────────────
@@ -122,7 +137,7 @@ class SSHTunnelConfig(BaseModel):
     host: str | None = Field(default=None, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=128)
-    auth_method: str = "password"  # password | key | agent
+    auth_method: Literal["password", "key", "agent"] = "password"
     password: str | None = Field(default=None, max_length=1024)
     private_key: str | None = Field(default=None, max_length=16384)
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
@@ -134,7 +149,7 @@ class SSHTunnelConfig(BaseModel):
 class SSLConfig(BaseModel):
     """SSL/TLS configuration for database connections."""
     enabled: bool = False
-    mode: str = "require"  # disable | allow | prefer | require | verify-ca | verify-full
+    mode: Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] = "require"
     ca_cert: str | None = Field(default=None, max_length=32768)  # PEM-encoded CA certificate
     client_cert: str | None = Field(default=None, max_length=32768)  # PEM-encoded client certificate
     client_key: str | None = Field(default=None, max_length=32768)  # PEM-encoded client private key
@@ -184,16 +199,28 @@ class ConnectionCreate(BaseModel):
     motherduck_token: str | None = Field(default=None, max_length=2048)  # MotherDuck personal access token
     # ─── Metadata ───────────────────────────────────────────────────
     description: str = Field(default="", max_length=500)
-    tags: list[str] = Field(default_factory=list)  # organizational tags
+    tags: list[str] = Field(default_factory=list, max_length=50)  # organizational tags
     # ─── Schema filtering (HEX pattern) ────────────────────────────
     schema_filter_include: list[str] = Field(
         default_factory=list,
+        max_length=100,
         description="Only include these schemas (empty = include all). Glob patterns supported.",
     )
     schema_filter_exclude: list[str] = Field(
         default_factory=list,
+        max_length=100,
         description="Exclude these schemas from AI introspection. Common: staging, dev, raw, tmp.",
     )
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: list[str]) -> list[str]:
+        return _validate_string_list(v, 64, "tags")
+
+    @field_validator("schema_filter_include", "schema_filter_exclude")
+    @classmethod
+    def validate_schema_filters(cls, v: list[str]) -> list[str]:
+        return _validate_string_list(v, 256, "schema_filter")
     # ─── Scheduled schema refresh (HEX pattern) ───────────────────
     schema_refresh_interval: int | None = Field(
         default=None, ge=60, le=86400,
@@ -241,9 +268,23 @@ class ConnectionUpdate(BaseModel):
     private_key: str | None = Field(default=None, max_length=16384)
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
     description: str | None = Field(default=None, max_length=500)
-    tags: list[str] | None = None
-    schema_filter_include: list[str] | None = None
-    schema_filter_exclude: list[str] | None = None
+    tags: list[str] | None = Field(default=None, max_length=50)
+    schema_filter_include: list[str] | None = Field(default=None, max_length=100)
+    schema_filter_exclude: list[str] | None = Field(default=None, max_length=100)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        return _validate_string_list(v, 64, "tags")
+
+    @field_validator("schema_filter_include", "schema_filter_exclude")
+    @classmethod
+    def validate_schema_filters(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        return _validate_string_list(v, 256, "schema_filter")
     schema_refresh_interval: int | None = Field(default=None, ge=60, le=86400)
     last_schema_refresh: float | None = None  # internal — set by scheduler
     connection_timeout: int | None = Field(default=None, ge=1, le=300)
@@ -317,27 +358,39 @@ class ProjectStatus(str, Enum):
 class ProjectCreate(BaseModel):
     """Payload for creating a new dbt project."""
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    connection_name: str = Field(..., min_length=1)
+    connection_name: str = Field(..., min_length=1, max_length=64)
     source: ProjectSource = ProjectSource.new
     # For source="local"
-    local_path: str | None = None
-    link_mode: str = "link"  # "link" | "copy"
+    local_path: str | None = Field(default=None, max_length=4096)
+    link_mode: Literal["link", "copy"] = "link"
     # For source="github"
-    git_url: str | None = None
-    git_branch: str | None = None
+    git_url: str | None = Field(default=None, max_length=2048)
+    git_branch: str | None = Field(default=None, max_length=256)
     description: str = Field(default="", max_length=500)
-    tags: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: list[str]) -> list[str]:
+        return _validate_string_list(v, 64, "tags")
 
 
 class ProjectUpdate(BaseModel):
     """Partial update for an existing dbt project."""
-    connection_name: str | None = None
+    connection_name: str | None = Field(default=None, max_length=64)
     description: str | None = Field(default=None, max_length=500)
-    tags: list[str] | None = None
-    git_remote: str | None = None
-    git_branch: str | None = None
-    status: str | None = None
+    tags: list[str] | None = Field(default=None, max_length=50)
+    git_remote: str | None = Field(default=None, max_length=2048)
+    git_branch: str | None = Field(default=None, max_length=256)
+    status: ProjectStatus | None = None
     last_scanned_at: float | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        return _validate_string_list(v, 64, "tags")
 
 
 class ProjectInfo(BaseModel):
@@ -363,11 +416,11 @@ class ProjectInfo(BaseModel):
 # ─── Sandboxes ────────────────────────────────────────────────────────────────
 
 class SandboxCreate(BaseModel):
-    connection_name: str | None = None
-    row_limit: int = 10_000
-    budget_usd: float = 10.0
-    timeout_seconds: int = 300
-    label: str = ""
+    connection_name: str | None = Field(default=None, max_length=64)
+    row_limit: int = Field(default=10_000, ge=1, le=100_000)
+    budget_usd: float = Field(default=10.0, ge=0.01, le=10_000.0)
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    label: str = Field(default="", max_length=128)
 
 
 class SandboxInfo(BaseModel):
@@ -419,6 +472,6 @@ class AuditEntry(BaseModel):
 # ─── MCP ─────────────────────────────────────────────────────────────────────
 
 class MCPToolCall(BaseModel):
-    tool: str
+    tool: str = Field(..., max_length=128)
     arguments: dict[str, Any] = {}
-    session_id: str | None = None
+    session_id: str | None = Field(default=None, max_length=128)

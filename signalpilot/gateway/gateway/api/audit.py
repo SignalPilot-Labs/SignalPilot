@@ -17,10 +17,10 @@ router = APIRouter(prefix="/api")
 @router.get("/audit", dependencies=[RequireScope("admin")])
 async def get_audit(
     store: StoreD,
-    limit: int = Query(default=100, le=500),
-    offset: int = Query(default=0),
-    connection_name: str | None = None,
-    event_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    connection_name: str | None = Query(default=None, max_length=64),
+    event_type: str | None = Query(default=None, max_length=64),
 ):
     entries = await store.read_audit(
         limit=limit,
@@ -34,8 +34,8 @@ async def get_audit(
 @router.get("/audit/export", dependencies=[RequireScope("admin")])
 async def export_audit(
     store: StoreD,
-    connection_name: str | None = None,
-    event_type: str | None = None,
+    connection_name: str | None = Query(default=None, max_length=64),
+    event_type: str | None = Query(default=None, max_length=64),
     format: str = Query(default="json", pattern=r"^(json|csv)$"),
 ):
     """Export full audit trail for compliance (Feature #45).

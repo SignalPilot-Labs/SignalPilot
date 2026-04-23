@@ -513,6 +513,8 @@ async def export_connections(
 async def import_connections(manifest: dict, store: StoreD):
     """Import connections from an exported JSON manifest."""
     connections = manifest.get("connections", [])
+    if len(connections) > 500:
+        raise HTTPException(status_code=422, detail="Maximum 500 connections per import")
     results = {"imported": 0, "skipped": [], "errors": []}
 
     for entry in connections:
@@ -752,6 +754,8 @@ async def parse_connection_url(request: Request):
     url = body.get("url", "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
+    if len(url) > 4096:
+        raise HTTPException(status_code=422, detail="URL must be at most 4096 characters")
 
     db_type = body.get("db_type", "")
     _scheme_map = {
@@ -999,6 +1003,8 @@ async def validate_connection_url(body: dict):
 
     if not url:
         return {"valid": False, "error": "Connection string is empty"}
+    if len(url) > 4096:
+        raise HTTPException(status_code=422, detail="connection_string must be at most 4096 characters")
     if not db_type:
         return {"valid": False, "error": "db_type is required"}
 
@@ -1090,6 +1096,14 @@ async def validate_connection_url(body: dict):
         return {"valid": False, "error": "Invalid URL format"}
 
 
+_BUILD_URL_FIELD_LIMITS: dict[str, int] = {
+    "host": 255,
+    "database": 128,
+    "username": 128,
+    "password": 1024,
+}
+
+
 @router.post("/connections/build-url", dependencies=[RequireScope("read")])
 async def build_connection_url(body: dict):
     """Build a connection string from individual fields."""
@@ -1102,6 +1116,14 @@ async def build_connection_url(body: dict):
 
     if not db_type:
         return {"url": "", "error": "db_type is required"}
+
+    for field_name, max_len in _BUILD_URL_FIELD_LIMITS.items():
+        value = body.get(field_name, "")
+        if isinstance(value, str) and len(value) > max_len:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field_name} must be at most {max_len} characters",
+            )
 
     try:
         userpass = ""

@@ -97,7 +97,7 @@ async def get_connection_schema(
     name: str,
     store: StoreD,
     compact: bool = Query(default=False, description="Return compressed schema optimized for LLM context windows"),
-    filter: str = Query(default="", description="Filter tables by name pattern (case-insensitive substring match, comma-separated)"),
+    filter: str = Query(default="", max_length=1000, description="Filter tables by name pattern (case-insensitive substring match, comma-separated)"),
 ):
     """Retrieve the full schema for a database connection (Feature #18: schema caching).
 
@@ -221,7 +221,7 @@ async def get_grouped_schema(
 async def get_schema_samples(
     name: str,
     store: StoreD,
-    tables: str = Query(default="", description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
+    tables: str = Query(default="", max_length=2000, description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
     """Get sample distinct values for columns — critical for Spider2.0 schema linking.
@@ -291,8 +291,8 @@ async def get_schema_samples(
 async def explore_column_values(
     name: str,
     store: StoreD,
-    table: str = Query(..., description="Full table name (e.g., 'public.users')"),
-    column: str = Query(..., description="Column to explore"),
+    table: str = Query(..., max_length=256, description="Full table name (e.g., 'public.users')"),
+    column: str = Query(..., max_length=128, description="Column to explore"),
     limit: int = Query(default=20, ge=1, le=100, description="Max distinct values"),
     filter_pattern: str = Query(default="", description="LIKE pattern to filter values (e.g., '%active%')"),
 ):
@@ -935,7 +935,7 @@ async def get_schema_ddl(
 async def get_agent_context(
     name: str,
     store: StoreD,
-    question: str = Query(default="", description="Optional question for schema linking — omit for full schema"),
+    question: str = Query(default="", max_length=2000, description="Optional question for schema linking — omit for full schema"),
     max_tables: int = Query(default=30, ge=1, le=100, description="Max tables to include"),
     include_samples: bool = Query(default=True, description="Include cached sample values for string columns"),
     progressive: bool = Query(default=False, description="Progressive disclosure: full DDL for top tables, compact one-liners for the rest (saves 40-60%% tokens)"),
@@ -1356,7 +1356,7 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
 async def schema_link(
     name: str,
     store: StoreD,
-    question: str = Query(..., description="Natural language question to link schema for"),
+    question: str = Query(..., max_length=2000, description="Natural language question to link schema for"),
     format: str = Query(default="ddl", pattern="^(ddl|compact|json|condensed)$", description="Output format: ddl (full), condensed (pruned columns), compact (one-line), json"),
     max_tables: int = Query(default=20, ge=1, le=100, description="Max tables in linked schema"),
     prune_columns: bool = Query(default=False, description="Drop columns with 0 relevance from low-scoring tables (reduces token count 30-60%%)"),
@@ -2287,7 +2287,7 @@ async def refine_schema(
 async def explore_table(
     name: str,
     store: StoreD,
-    table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
+    table: str = Query(..., max_length=256, description="Full table name (e.g., 'public.customers')"),
     include_samples: bool = Query(default=True, description="Include sample distinct values for string/enum columns"),
     include_stats: bool = Query(default=True, description="Include column-level statistics"),
     sample_limit: int = Query(default=5, ge=1, le=20, description="Max sample values per column"),
@@ -2688,8 +2688,8 @@ async def get_schema_relationships(
 async def get_join_paths(
     name: str,
     store: StoreD,
-    from_table: str = Query(..., description="Source table (e.g., 'public.orders')"),
-    to_table: str = Query(..., description="Target table (e.g., 'public.products')"),
+    from_table: str = Query(..., max_length=256, description="Source table (e.g., 'public.orders')"),
+    to_table: str = Query(..., max_length=256, description="Target table (e.g., 'public.products')"),
     max_hops: int = Query(default=4, ge=1, le=6, description="Maximum FK hops to search"),
     include_implicit: bool = Query(default=True, description="Include inferred joins from column naming conventions"),
 ):
@@ -2805,7 +2805,7 @@ async def get_cached_sample_values(
     name: str,
     store: StoreD,
     table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
-    columns: str = Query(default="", description="Comma-separated column names. Empty = auto-select string/enum columns"),
+    columns: str = Query(default="", max_length=2000, description="Comma-separated column names. Empty = auto-select string/enum columns"),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
     """Get cached sample values for schema linking optimization."""
@@ -2869,7 +2869,7 @@ async def get_cached_sample_values(
 async def search_schema(
     name: str,
     store: StoreD,
-    q: str = Query(..., min_length=1, description="Search query -- matches table names, column names, column comments"),
+    q: str = Query(..., min_length=1, max_length=500, description="Search query -- matches table names, column names, column comments"),
     include_samples: bool = Query(default=False, description="Include sample values for matched columns"),
     limit: int = Query(default=20, ge=1, le=100, description="Max tables to return"),
 ):
@@ -3036,6 +3036,18 @@ async def update_endorsements(name: str, store: StoreD, body: dict):
     mode = body.get("mode", "all")
     if mode not in ("all", "endorsed_only"):
         raise HTTPException(status_code=422, detail="mode must be 'all' or 'endorsed_only'")
+    endorsed = body.get("endorsed", [])
+    hidden = body.get("hidden", [])
+    if len(endorsed) > 1000:
+        raise HTTPException(status_code=422, detail="endorsed list must have at most 1000 items")
+    if len(hidden) > 1000:
+        raise HTTPException(status_code=422, detail="hidden list must have at most 1000 items")
+    for item in endorsed:
+        if isinstance(item, str) and len(item) > 256:
+            raise HTTPException(status_code=422, detail="Each endorsed item must be at most 256 characters")
+    for item in hidden:
+        if isinstance(item, str) and len(item) > 256:
+            raise HTTPException(status_code=422, detail="Each hidden item must be at most 256 characters")
     result = await store.set_schema_endorsements(name, body)
     schema_cache.invalidate(name)
     return result
@@ -3170,15 +3182,16 @@ async def correct_columns(name: str, store: StoreD, body: dict):
 
     Body: {"table": "public.customers", "columns": ["customer_name", "email_addr"]}
     """
-    info = await require_connection(store, name)
-
     table_key = body.get("table", "")
     candidate_columns = body.get("columns", [])
     threshold = body.get("threshold", 0.5)
 
     if not table_key or not candidate_columns:
         raise HTTPException(status_code=422, detail="table and columns are required")
+    if len(candidate_columns) > 100:
+        raise HTTPException(status_code=422, detail="columns list must have at most 100 items")
 
+    info = await require_connection(store, name)
     cached = await get_or_fetch_schema(store, name, info)
 
     table_info = cached.get(table_key)
@@ -3243,8 +3256,6 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
         "value_limit": 10
     }
     """
-    info = await require_connection(store, name)
-
     table_key = body.get("table", "")
     requested_cols = body.get("columns", [])
     include_stats = body.get("include_stats", True)
@@ -3253,7 +3264,10 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
 
     if not table_key:
         raise HTTPException(status_code=422, detail="table is required")
+    if len(requested_cols) > 50:
+        raise HTTPException(status_code=422, detail="columns list must have at most 50 items")
 
+    info = await require_connection(store, name)
     cached = await get_or_fetch_schema(store, name, info)
 
     table_info = cached.get(table_key)

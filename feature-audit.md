@@ -221,3 +221,21 @@
 - [x] **Clone Connection 409 Fix** — `clone_connection()` catches `ValueError` from `store.create_connection()` and returns proper `HTTPException(409)` instead of 500.
 - [x] **Concurrency Audit (clean areas)** — Budget ledger, schema cache, query cache (all `threading.Lock`), pool manager (`asyncio.Lock`), API key management (UUID PKs), sandbox dict (asyncio single-threaded) — all already properly protected.
 - [x] **18 new tests** in `test_concurrency.py` — Atomic file creation (6), salt convergence (2), key convergence (2), local API key convergence (2), IntegrityError handling for connections (3), IntegrityError handling for projects (2), clone connection 409 (1). All pass.
+
+## Round 21: Input Validation Sweep
+
+### COMPLETED
+
+- [x] **Enum Bypass Prevention** — `SSHTunnelConfig.auth_method` constrained to `Literal["password", "key", "agent"]`, `SSLConfig.mode` to `Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]`, `ProjectCreate.link_mode` to `Literal["link", "copy"]`, `ProjectUpdate.status` to existing `ProjectStatus` enum. Previously accepted any string.
+- [x] **String Length Limits (Models)** — Added `max_length` to 14 string fields across `ProjectCreate`, `ProjectUpdate`, `SandboxCreate`, `MCPToolCall`, `GatewaySettings` models. Prevents oversized values that bypass the 2MB body limit via many small fields.
+- [x] **Numeric Bounds (SandboxCreate)** — `budget_usd` bounded `ge=0.01, le=10_000.0`, `row_limit` bounded `ge=1, le=100_000`, `timeout_seconds` bounded `ge=1, le=3600`. Prevents nonsensical values.
+- [x] **List Size Caps** — `tags` capped at 50 items (64 chars each), `schema_filter_include/exclude` at 100 items (256 chars each), `blocked_tables` at 500 items (256 chars each). Prevents memory exhaustion via unbounded list growth.
+- [x] **Import Array DoS Prevention** — `/connections/import` capped at 500 connections per request (previously unlimited).
+- [x] **URL/String Length Caps (Endpoints)** — `parse_connection_url` URL capped at 4096, `validate_connection_url` at 4096, `build_connection_url` fields capped (host 255, database 128, username 128, password 1024).
+- [x] **Schema Query Param Limits** — `max_length` added to 12 query parameters across schema.py (table, column, filter, question, search, etc.).
+- [x] **Endorsements/Columns List Caps** — `update_endorsements` capped at 1000 items per list (256 chars each), `correct_columns` at 100, `explore_columns_deep` at 50.
+- [x] **Audit/Files Query Param Limits** — `limit` bounded `ge=1`, `offset` bounded `ge=0`, `connection_name`/`event_type` capped at 64 chars. Files `path` at 4096, `pattern` at 256.
+- [x] **Cookie Security Audit: CLEAN** — Gateway never sets cookies; only reads Clerk-managed `__session` cookie (HttpOnly/Secure/SameSite set by Clerk JS SDK).
+- [x] **Session Fixation Audit: CLEAN** — Gateway is stateless (JWT + API key hash per-request). No server-side sessions to fixate.
+- [x] **ReDoS Audit: CLEAN** — All regex patterns use simple constructs without nested quantifiers.
+- [x] **72 new tests** in `test_input_validation.py` — Enum validation (6), string length limits (8), list size limits (4), import array cap (1), untyped dict validation (3), numeric bounds (3), query param limits (API-level). All pass.

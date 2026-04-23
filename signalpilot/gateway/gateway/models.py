@@ -481,7 +481,6 @@ class AuditEntry(BaseModel):
 # ─── BYOK API models ─────────────────────────────────────────────────────────
 
 class BYOKKeyCreate(BaseModel):
-    org_id: str = Field(..., min_length=1, max_length=100)
     key_alias: str = Field(..., min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
     provider_type: str = Field(..., pattern=r"^(local|aws_kms|gcp_kms|azure_kv)$")
     provider_config: dict[str, Any] | None = None
@@ -504,12 +503,7 @@ class BYOKKeyResponse(BaseModel):
 
 
 class BYOKMigrateRequest(BaseModel):
-    org_id: str = Field(..., min_length=1, max_length=100)
     key_id: str = Field(..., min_length=1)
-
-
-class BYOKRevertRequest(BaseModel):
-    org_id: str = Field(..., min_length=1, max_length=100)
 
 
 class BYOKMigrateResponse(BaseModel):

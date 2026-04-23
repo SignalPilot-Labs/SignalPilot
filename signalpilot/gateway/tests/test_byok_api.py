@@ -229,7 +229,9 @@ class TestMigrateToByok:
         assert migrated == 1
         assert failed == 1
         assert len(errors) == 1
-        assert "bad-conn" in errors[0]
+        # Error message uses credential ID (not connection name) to avoid info leak (H2)
+        assert "bad-conn" not in errors[0]
+        assert "migration error" in errors[0]
 
     @pytest.mark.asyncio
     async def test_migrate_empty_org_returns_zero(self):
@@ -534,12 +536,12 @@ class TestBYOKPydanticModels:
 
     def test_byok_key_create_valid(self):
         from gateway.models import BYOKKeyCreate
+        # org_id is no longer user-supplied in BYOKKeyCreate (derived from JWT)
         obj = BYOKKeyCreate(
-            org_id="org1",
             key_alias="my-key",
             provider_type="local",
         )
-        assert obj.org_id == "org1"
+        assert obj.key_alias == "my-key"
         assert obj.provider_config is None
 
     def test_byok_key_create_invalid_provider_type(self):

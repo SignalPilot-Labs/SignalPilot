@@ -338,10 +338,7 @@ async def migrate_to_byok(
                 cred_row.connection_name,
                 cred_row.user_id,
             )
-            error_msg = (
-                f"Failed to migrate credential for connection "
-                f"'{cred_row.connection_name}': migration error"
-            )
+            error_msg = f"Failed to migrate credential {cred_row.id}: migration error"
             errors.append(error_msg)
             failed += 1
 
@@ -431,10 +428,7 @@ async def revert_to_managed(
                 cred_row.connection_name,
                 cred_row.user_id,
             )
-            error_msg = (
-                f"Failed to revert credential for connection "
-                f"'{cred_row.connection_name}': revert error"
-            )
+            error_msg = f"Failed to revert credential {cred_row.id}: revert error"
             errors.append(error_msg)
             failed += 1
 

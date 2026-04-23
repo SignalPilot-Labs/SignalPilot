@@ -387,6 +387,10 @@ class ProjectCreate(BaseModel):
     # For source="github"
     git_url: str | None = Field(default=None, max_length=2048)
     git_branch: str | None = Field(default=None, max_length=256)
+    # For source="dbt-cloud"
+    dbt_cloud_token: str | None = None
+    dbt_cloud_account_id: str | None = None
+    dbt_cloud_project_id: str | None = None
     description: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list, max_length=50)
 
@@ -405,6 +409,7 @@ class ProjectUpdate(BaseModel):
     git_branch: str | None = Field(default=None, max_length=256)
     status: ProjectStatus | None = None
     last_scanned_at: float | None = None
+    model_count: int | None = None
 
     @field_validator("tags")
     @classmethod
@@ -430,6 +435,8 @@ class ProjectInfo(BaseModel):
     last_scanned_at: float | None = None
     git_remote: str | None = None
     git_branch: str | None = None
+    dbt_cloud_account_id: str | None = None
+    dbt_cloud_project_id: str | None = None
     description: str = ""
     tags: list[str] = Field(default_factory=list)
 

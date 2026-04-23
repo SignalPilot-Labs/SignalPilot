@@ -3244,7 +3244,7 @@ async def dbt_project_validate(
 async def create_project(name: str, connection_name: str) -> str:
     """Create a new dbt project wired to an existing connection."""
     from .models import ProjectCreate, ProjectSource
-    from . import store
+    from . import project_store
 
     try:
         proj = ProjectCreate(
@@ -3252,7 +3252,7 @@ async def create_project(name: str, connection_name: str) -> str:
             connection_name=connection_name,
             source=ProjectSource.new,
         )
-        info = store.create_project(proj)
+        info = project_store.create_project(proj)
     except ValueError as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
     return (
@@ -3266,9 +3266,9 @@ async def create_project(name: str, connection_name: str) -> str:
 @mcp.tool()
 async def list_projects() -> str:
     """List all configured dbt projects."""
-    from . import store
+    from . import project_store
 
-    projects = store.list_projects()
+    projects = project_store.list_projects()
     if not projects:
         return "No projects configured."
     lines = [f"Found {len(projects)} project(s):\n"]
@@ -3283,9 +3283,9 @@ async def list_projects() -> str:
 @mcp.tool()
 async def get_project(name: str) -> str:
     """Get dbt project detail including path and model count."""
-    from . import store
+    from . import project_store
 
-    proj = store.get_project(name)
+    proj = project_store.get_project(name)
     if not proj:
         return f"Error: Project '{name}' not found."
     lines = [

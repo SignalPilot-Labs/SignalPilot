@@ -239,3 +239,15 @@
 - [x] **Session Fixation Audit: CLEAN** — Gateway is stateless (JWT + API key hash per-request). No server-side sessions to fixate.
 - [x] **ReDoS Audit: CLEAN** — All regex patterns use simple constructs without nested quantifiers.
 - [x] **72 new tests** in `test_input_validation.py` — Enum validation (6), string length limits (8), list size limits (4), import array cap (1), untyped dict validation (3), numeric bounds (3), query param limits (API-level). All pass.
+
+## Round 22: Docker Build Reproducibility — Dependency Pinning
+
+### COMPLETED
+
+- [x] **Secret Scanning: CLEAN** — No real API keys, tokens, or private keys found in committed code. Hardcoded passwords in tests are for local Docker containers only (non-standard ports, `host.docker.internal`). AWS example key (`AKIAIOSFODNN7EXAMPLE`) is the official docs placeholder. `.env.example` contains only commented-out placeholder patterns.
+- [x] **Dockerfile.web: `npm ci` + lockfile** — Changed `npm install` to `npm ci` on the builder stage. Added `package-lock.json` to the `COPY` instruction so `npm ci` has the lockfile present. Build context is `signalpilot/web/` (verified via docker-compose.yml), so `package-lock.json` is available in context.
+- [x] **Dockerfile.gateway: inline pip version pins** — Pinned `clickhouse-driver`, `sshtunnel`, `cryptography`, `snowflake-connector-python`, and `google-cloud-bigquery` to their `>=` minimum versions from `gateway/pyproject.toml`. `duckdb` and `clickhouse-connect` are absent from pyproject.toml and not installed in the build environment; left with TODO comments to pin once verified inside a built container. Core deps installed via `pip install -e .` remain range-pinned (pyproject.toml change is out of scope).
+- [x] **Dockerfile.sandbox: `aiohttp` pinned** — Pinned `aiohttp==3.9.0` from `sp-sandbox/pyproject.toml` minimum. `duckdb` absent from pyproject.toml; left with TODO comment.
+- [x] **Dockerfile.dbt-agent: pip packages pinned** — Pinned `claude-agent-sdk`, `httpx`, `mcp`, `aiofiles`, `pydantic`, `sqlglot` to installed environment versions. `dbt-duckdb`, `duckdb`, `pandas`, `pyarrow` not installed in build environment; left with TODO comment. `@anthropic-ai/claude-code` npm package left with TODO comment (no version reference found in codebase).
+- [x] **Dockerfile.plugin-test: npm TODO comment** — `@anthropic-ai/claude-code` pinning noted with TODO comment pending version verification.
+- [x] **No tests added** — Dockerfile changes cannot be unit-tested in this environment; a `docker build` smoke test is the appropriate verification.

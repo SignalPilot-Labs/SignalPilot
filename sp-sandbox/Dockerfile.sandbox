@@ -31,8 +31,11 @@ COPY sandbox_manager.py /opt/signalpilot/
 COPY sandbox_exec.sh /opt/signalpilot/
 RUN chmod +x /opt/signalpilot/sandbox_exec.sh
 
-# Install Python deps for sandbox manager + DuckDB for local file queries
-RUN pip3 install --no-cache-dir aiohttp duckdb
+# Install Python deps for sandbox manager + DuckDB for local file queries.
+# aiohttp pinned to >=minimum from sp-sandbox/pyproject.toml.
+# duckdb is not in any pyproject.toml; pin to exact version once verified with:
+# docker run --rm signalpilot/sandbox pip3 show duckdb
+RUN pip3 install --no-cache-dir "aiohttp==3.9.0" duckdb
 
 EXPOSE 8080
 

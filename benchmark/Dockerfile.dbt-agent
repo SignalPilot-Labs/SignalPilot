@@ -11,20 +11,24 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Claude Code CLI
+# TODO: pin @anthropic-ai/claude-code to an exact version (run: npm show @anthropic-ai/claude-code version)
 RUN npm install -g @anthropic-ai/claude-code
 
 # Python: dbt-duckdb + data tools + Claude Agent SDK + MCP + gateway deps
+# Versions pinned to those installed in this environment (pip show <pkg>).
+# dbt-duckdb, duckdb, pandas, pyarrow: not installed in build env;
+# pin to exact version once verified with: pip show <pkg> inside a built container.
 RUN pip install --no-cache-dir \
     dbt-duckdb \
     duckdb \
     pandas \
     pyarrow \
-    claude-agent-sdk \
-    httpx \
-    "mcp[cli]" \
-    aiofiles \
-    pydantic \
-    sqlglot
+    "claude-agent-sdk==0.1.59" \
+    "httpx==0.28.1" \
+    "mcp[cli]==1.27.0" \
+    "aiofiles==25.1.0" \
+    "pydantic==2.13.0" \
+    "sqlglot==30.6.0"
 
 # Non-root user (Claude CLI requires this)
 RUN useradd -m agentuser \

@@ -278,6 +278,7 @@ class ProjectUpdate(BaseModel):
     git_branch: str | None = None
     status: str | None = None
     last_scanned_at: float | None = None
+    model_count: int | None = None
 
 
 class ProjectInfo(BaseModel):

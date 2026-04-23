@@ -62,14 +62,26 @@ async def remove_project(name: str):
 
 
 @router.post("/projects/{name}/scan")
-async def scan_project(name: str):
-    """Re-scan a dbt project (placeholder — updates last_scanned_at)."""
+async def scan_project_endpoint(name: str):
+    """Re-scan a dbt project: count models, update metadata."""
+    from ..dbt.inventory import scan_project as dbt_scan
+
     proj = get_project(name)
     if not proj:
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+
+    project_map = dbt_scan(proj.project_dir)
     now = time.time()
-    update_project(name, ProjectUpdate(last_scanned_at=now))
-    return {"project": name, "scanned_at": now, "model_count": proj.model_count, "status": "ok"}
+    update_project(name, ProjectUpdate(
+        last_scanned_at=now,
+        model_count=project_map.model_count,
+    ))
+    return {
+        "project": name,
+        "scanned_at": now,
+        "model_count": project_map.model_count,
+        "status": "ok",
+    }
 
 
 class DbtCloudDiscoverRequest(BaseModel):

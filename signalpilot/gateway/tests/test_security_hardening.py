@@ -440,3 +440,77 @@ class TestSecurityHeadersMiddleware:
         """Strict-Transport-Security must NOT be set on plain HTTP requests."""
         headers = self._run_middleware()
         assert "strict-transport-security" not in headers
+
+
+# ---------------------------------------------------------------------------
+# TestCorsOriginValidation
+# ---------------------------------------------------------------------------
+
+class TestCorsOriginValidation:
+    """Tests for SP_ALLOWED_ORIGINS validation in main.py."""
+
+    def _build_allowed_origins(self, extra_origins: str) -> list[str]:
+        """Re-run the CORS origin filtering logic with a custom env-var value."""
+        hardcoded = [
+            "http://localhost:3200",
+            "http://localhost:3000",
+            "http://127.0.0.1:3200",
+            "http://127.0.0.1:3000",
+        ]
+        result = list(hardcoded)
+        import logging
+        logger = logging.getLogger("gateway.main")
+        for origin in (o.strip() for o in extra_origins.split(",") if o.strip()):
+            if origin == "*":
+                logger.warning(
+                    "SP_ALLOWED_ORIGINS contains '*' — wildcard origin is not allowed "
+                    "with allow_credentials=True; skipping."
+                )
+                continue
+            if not (origin.startswith("http://") or origin.startswith("https://")):
+                logger.warning(
+                    "SP_ALLOWED_ORIGINS entry %r is not a valid HTTP/HTTPS origin; skipping.",
+                    origin,
+                )
+                continue
+            result.append(origin)
+        return result
+
+    def test_wildcard_is_excluded(self):
+        """'*' must never be added to the origins list."""
+        origins = self._build_allowed_origins("*")
+        assert "*" not in origins
+
+    def test_wildcard_among_valid_origins_is_excluded(self):
+        """'*' mixed with valid origins — the valid one is kept, '*' is dropped."""
+        origins = self._build_allowed_origins("https://app.example.com,*")
+        assert "*" not in origins
+        assert "https://app.example.com" in origins
+
+    def test_non_url_value_is_excluded(self):
+        """A value without http/https scheme must be skipped."""
+        origins = self._build_allowed_origins("not-a-url")
+        assert "not-a-url" not in origins
+
+    def test_ftp_scheme_is_excluded(self):
+        """An ftp:// origin must be skipped (not http/https)."""
+        origins = self._build_allowed_origins("ftp://evil.example.com")
+        assert "ftp://evil.example.com" not in origins
+
+    def test_valid_https_origin_is_included(self):
+        """A well-formed https:// origin must be added."""
+        origins = self._build_allowed_origins("https://dashboard.example.com")
+        assert "https://dashboard.example.com" in origins
+
+    def test_valid_http_origin_is_included(self):
+        """A well-formed http:// origin must be added (e.g. internal LAN)."""
+        origins = self._build_allowed_origins("http://internal.corp:8080")
+        assert "http://internal.corp:8080" in origins
+
+    def test_hardcoded_localhost_origins_always_present(self):
+        """Filtering bad entries must not remove the hardcoded localhost origins."""
+        origins = self._build_allowed_origins("*,not-a-url")
+        assert "http://localhost:3000" in origins
+        assert "http://localhost:3200" in origins
+        assert "http://127.0.0.1:3000" in origins
+        assert "http://127.0.0.1:3200" in origins

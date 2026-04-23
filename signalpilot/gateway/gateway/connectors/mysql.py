@@ -336,9 +336,10 @@ class MySQLConnector(BaseConnector):
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
+                    safe_col = col.replace("`", "``")
                     with self._conn.cursor() as cursor:
                         cursor.execute(
-                            f"SELECT DISTINCT `{col}` FROM {safe_table} WHERE `{col}` IS NOT NULL LIMIT {limit}"
+                            f"SELECT DISTINCT `{safe_col}` FROM {safe_table} WHERE `{safe_col}` IS NOT NULL LIMIT {limit}"
                         )
                         rows = cursor.fetchall()
                         values = [str(r[col]) for r in rows if r[col] is not None]

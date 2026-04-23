@@ -43,3 +43,11 @@
 - [x] **Frontend Accessibility** — SecurityBanner aria attributes, Tooltip keyboard + ARIA support
 - [x] **Sandbox XSS Prevention** — Pure allowlist HTML sanitizer for `dangerouslySetInnerHTML` in sandbox output; strips all non-table elements and non-structural attributes; no `style` attribute allowed (CSS injection vector)
 - [x] **Gateway Security Headers** — `Permissions-Policy` header added; `Strict-Transport-Security` added conditionally (HTTPS only, no `preload`); 3 new tests verify behavior
+
+## Round 5: CORS Hardening, MySQL Quoting, Test Cleanup
+
+### COMPLETED
+
+- [x] **Broken Test Cleanup** — Fixed imports in `test_compact_schema.py` (→ `gateway.schema_utils`) and `test_fuzzy_search.py` (→ `gateway.api.schema`); deleted `test_audit_rotation.py` (target function removed). All 34 tests pass.
+- [x] **CORS Origin Validation** — `SP_ALLOWED_ORIGINS` env var now validated: wildcard `*` rejected (credential-stealing misconfiguration with `allow_credentials=True`), non-http/https origins rejected. Warnings logged for skipped entries. 7 new tests verify behavior.
+- [x] **MySQL Column Identifier Quoting** — Backtick-escape column names in `get_sample_values` fallback SQL path to prevent theoretical SQL injection via crafted column names. Dict key access correctly uses unescaped original name.

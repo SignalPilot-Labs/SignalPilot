@@ -141,7 +141,20 @@ _ALLOWED_ORIGINS = [
 ]
 _extra_origins = os.getenv("SP_ALLOWED_ORIGINS", "")
 if _extra_origins:
-    _ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
+    for _origin in (o.strip() for o in _extra_origins.split(",") if o.strip()):
+        if _origin == "*":
+            logger.warning(
+                "SP_ALLOWED_ORIGINS contains '*' — wildcard origin is not allowed "
+                "with allow_credentials=True; skipping."
+            )
+            continue
+        if not (_origin.startswith("http://") or _origin.startswith("https://")):
+            logger.warning(
+                "SP_ALLOWED_ORIGINS entry %r is not a valid HTTP/HTTPS origin; skipping.",
+                _origin,
+            )
+            continue
+        _ALLOWED_ORIGINS.append(_origin)
 
 # Middleware stack (last added = outermost = runs first)
 # CORS must be outermost so error responses from auth also get CORS headers

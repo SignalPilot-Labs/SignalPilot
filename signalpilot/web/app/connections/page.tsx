@@ -45,6 +45,9 @@ import {
   searchConnectionSchema,
   getConnectionsHealth,
   detectPII,
+  getPIIConfig,
+  setPIIConfig,
+  detectAndSavePII,
   refreshConnectionSchema,
   getSchemaEndorsements,
   setSchemaEndorsements,
@@ -2038,6 +2041,7 @@ export default function ConnectionsPage() {
   const [healthData, setHealthData] = useState<Record<string, ConnectionHealthStats>>({});
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
+  const [piiConfig, setPiiConfig] = useState<Record<string, { enabled: boolean; rules: Record<string, string> }>>({});
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState<Record<string, string>>({});
   const [schemaSearchResults, setSchemaSearchResults] = useState<Record<string, { result_count: number; total_tables: number; tables: Record<string, any> }>>({});
@@ -2064,6 +2068,12 @@ export default function ConnectionsPage() {
   const refresh = useCallback(() => {
     getConnections().then((conns) => {
       setConnections(conns);
+      // Load PII config for connections that have it
+      for (const conn of conns) {
+        if ((conn as any).pii_enabled || (conn as any).pii_rules) {
+          setPiiConfig((prev) => ({ ...prev, [conn.name]: { enabled: (conn as any).pii_enabled || false, rules: (conn as any).pii_rules || {} } }));
+        }
+      }
       // Fetch latency sparkline history for each connection (background)
       for (const conn of conns) {
         getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
@@ -2345,10 +2355,42 @@ export default function ConnectionsPage() {
   async function handleScanPII(name: string) {
     setPiiLoading(name);
     try {
-      const data = await detectPII(name);
-      setPiiData((prev) => ({ ...prev, [name]: data }));
-    } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
+      const data = await detectAndSavePII(name);
+      // Update PII display data
+      const detections: Record<string, Record<string, string>> = {};
+      for (const [col, rule] of Object.entries(data.rules)) {
+        const table = "_all";
+        if (!detections[table]) detections[table] = {};
+        detections[table][col] = rule;
+      }
+      setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: Object.keys(detections).length, detections } }));
+      setPiiConfig((prev) => ({ ...prev, [name]: { enabled: data.enabled, rules: data.rules } }));
+      toast(`${name}: ${data.columns_flagged} PII columns detected and redaction enabled`, "success");
+    } catch {
+      // Fallback to detect-only
+      try {
+        const data = await detectPII(name);
+        setPiiData((prev) => ({ ...prev, [name]: data }));
+      } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
+    }
     finally { setPiiLoading(null); }
+  }
+
+  async function handleTogglePII(name: string) {
+    const current = piiConfig[name];
+    if (!current) {
+      // No config yet — run detection first
+      await handleScanPII(name);
+      return;
+    }
+    const newEnabled = !current.enabled;
+    try {
+      const result = await setPIIConfig(name, { enabled: newEnabled, rules: current.rules });
+      setPiiConfig((prev) => ({ ...prev, [name]: result }));
+      toast(`${name}: PII redaction ${newEnabled ? "enabled" : "disabled"}`, newEnabled ? "success" : "info");
+    } catch (e) {
+      toast(`Failed to toggle PII: ${e instanceof Error ? e.message : "unknown error"}`, "error");
+    }
   }
 
   const searchTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -3298,10 +3340,15 @@ export default function ConnectionsPage() {
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
-                      {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" strokeWidth={1.5} />}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider"
+                      title={piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
+                    >
+                      {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className={`w-3 h-3 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : ""}`} strokeWidth={1.5} />}
                       pii
-                      {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
+                      {piiConfig[conn.name]?.enabled && (
+                        <span className="ml-1 px-1 py-0.5 border border-emerald-500/30 text-emerald-400 text-[11px]">on</span>
+                      )}
+                      {!piiConfig[conn.name]?.enabled && piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
                         <span className="ml-1 px-1 py-0.5 border badge-warning text-[11px] tabular-nums">
                           {piiData[conn.name].tables_with_pii}
                         </span>
@@ -3640,34 +3687,63 @@ export default function ConnectionsPage() {
                 )}
 
                 {/* PII Detection Results */}
-                {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
+                {(piiConfig[conn.name] || (piiData[conn.name] && piiData[conn.name].tables_with_pii > 0)) && (
                   <div className="border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Shield className="w-3.5 h-3.5 text-[var(--color-warning)]" strokeWidth={1.5} />
-                      <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
-                        pii detected: {piiData[conn.name].tables_with_pii} table{piiData[conn.name].tables_with_pii > 1 ? "s" : ""}
-                      </span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Shield className={`w-3.5 h-3.5 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : "text-[var(--color-warning)]"}`} strokeWidth={1.5} />
+                        <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                          pii redaction — {Object.keys(piiConfig[conn.name]?.rules || {}).length} columns
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleTogglePII(conn.name)}
+                        className={`px-2.5 py-1 text-[11px] tracking-wider border transition-all ${
+                          piiConfig[conn.name]?.enabled
+                            ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        {piiConfig[conn.name]?.enabled ? "redaction on" : "redaction off"}
+                      </button>
                     </div>
-                    <div className="space-y-2">
-                      {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
-                        <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
-                          <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
-                          <div className="flex flex-wrap gap-2">
-                            {Object.entries(columns).map(([col, rule]) => (
-                              <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
-                                rule === "drop" ? "badge-error" :
-                                rule === "hash" ? "border-purple-500/30 text-purple-400" :
-                                "badge-warning"
-                              }`}>
-                                {col} ({rule})
-                              </span>
-                            ))}
+                    {piiConfig[conn.name]?.rules && Object.keys(piiConfig[conn.name].rules).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {Object.entries(piiConfig[conn.name].rules).map(([col, rule]) => (
+                          <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                            rule === "hide" ? "badge-warning" :
+                            rule === "hash" ? "border-purple-500/30 text-purple-400" :
+                            "badge-warning"
+                          }`}>
+                            {col} ({rule})
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {piiData[conn.name] && Object.keys(piiData[conn.name].detections).length > 0 && (
+                      <div className="space-y-2">
+                        {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
+                          <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
+                            <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
+                            <div className="flex flex-wrap gap-2">
+                              {Object.entries(columns).map(([col, rule]) => (
+                                <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                  rule === "hide" ? "badge-warning" :
+                                  rule === "hash" ? "border-purple-500/30 text-purple-400" :
+                                  "badge-warning"
+                                }`}>
+                                  {col} ({rule})
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                     <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
-                      add these rules to schema.yml annotations for automatic pii redaction.
+                      {piiConfig[conn.name]?.enabled
+                        ? "queries will automatically redact flagged columns (hash, mask, or drop)."
+                        : "click the toggle to activate automatic pii redaction on query results."}
                     </p>
                   </div>
                 )}

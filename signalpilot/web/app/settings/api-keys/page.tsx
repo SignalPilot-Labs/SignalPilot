@@ -39,6 +39,17 @@ function NewKeyReveal({
   created: ApiKeyCreatedResponse;
   onDismiss: () => void;
 }) {
+  const mcpUrl = `${process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300"}/mcp`;
+  const mcpConfig = JSON.stringify({
+    mcpServers: {
+      signalpilot: {
+        type: "http",
+        url: mcpUrl,
+        headers: { "X-API-Key": created.raw_key },
+      },
+    },
+  }, null, 2);
+
   return (
     <div className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-5 animate-fade-in">
       {/* Warning banner */}
@@ -72,6 +83,20 @@ function NewKeyReveal({
           scopes:{" "}
           <span className="text-[var(--color-text-muted)]">{created.scopes.join(", ")}</span>
         </span>
+      </div>
+
+      {/* MCP connection config */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">mcp connection config</span>
+          <CopyButton text={mcpConfig} />
+        </div>
+        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] tracking-wider font-mono overflow-x-auto whitespace-pre">
+{mcpConfig}
+        </pre>
+        <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">
+          paste into .mcp.json (Claude Code) or .cursor/mcp.json (Cursor)
+        </p>
       </div>
 
       <button

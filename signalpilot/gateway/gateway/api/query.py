@@ -140,11 +140,15 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
     elapsed_ms = (time.monotonic() - start) * 1000
     health_monitor.record(req.connection_name, elapsed_ms, True, db_type=info.db_type)
 
-    # Apply PII redaction from annotations (Feature #15)
+    # Apply PII redaction if enabled on this connection (Feature #15)
     from ..governance.pii import PIIRedactor
     pii_redactor = PIIRedactor()
-    pii_columns = annotations.pii_columns
-    for col_name, rule in pii_columns.items():
+    # Load rules from DB-stored PII config (toggled per-connection)
+    if info.pii_enabled and info.pii_rules:
+        for col_name, rule in info.pii_rules.items():
+            pii_redactor.add_rule(col_name, rule)
+    # Also load from YAML annotations (legacy/manual overrides)
+    for col_name, rule in annotations.pii_columns.items():
         pii_redactor.add_rule(col_name, rule)
     if pii_redactor.has_rules():
         rows = pii_redactor.redact_rows(rows)

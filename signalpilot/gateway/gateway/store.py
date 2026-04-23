@@ -1073,6 +1073,26 @@ class Store:
         await self.session.commit()
         return conn.endorsements
 
+    # ─── PII Redaction Config ──────────────────────────────────────────────
+
+    async def get_pii_config(self, name: str) -> dict:
+        conn = await self._get_conn_row(name)
+        if not conn:
+            return {"enabled": False, "rules": {}}
+        return {
+            "enabled": conn.pii_enabled or False,
+            "rules": conn.pii_rules or {},
+        }
+
+    async def set_pii_config(self, name: str, enabled: bool, rules: dict[str, str]) -> dict:
+        conn = await self._get_conn_row(name)
+        if not conn:
+            raise ValueError(f"Connection '{name}' not found")
+        conn.pii_enabled = enabled
+        conn.pii_rules = rules
+        await self.session.commit()
+        return {"enabled": conn.pii_enabled, "rules": conn.pii_rules}
+
     async def delete_schema_endorsements(self, name: str):
         conn = await self._get_conn_row(name)
         if conn:

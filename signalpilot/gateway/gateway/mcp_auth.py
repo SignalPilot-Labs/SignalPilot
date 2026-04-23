@@ -174,8 +174,14 @@ class MCPAuthMiddleware:
             return
 
         backend_url = os.environ.get("SP_BACKEND_URL")
+        # Only use backend-based auth in cloud mode. In local mode, fall through
+        # to the local key check (or pass-through if no keys exist).
+        is_cloud = (
+            backend_url
+            and os.environ.get("SP_DEPLOYMENT_MODE", "local") == "cloud"
+        )
 
-        if backend_url:
+        if is_cloud:
             # Cloud mode: validate against backend
             raw_key = _extract_bearer_key(scope)
             if not raw_key:
@@ -221,6 +227,12 @@ class MCPAuthMiddleware:
                             "Create an API key in settings to require authentication."
                         )
                         _warned_no_backend_url = True
+                    # Set user_id to "local" so MCP tools can access the store
+                    try:
+                        from .mcp_server import mcp_user_id_var
+                        mcp_user_id_var.set("local")
+                    except Exception:
+                        pass
                     await self._app(scope, receive, send)
                     return
 

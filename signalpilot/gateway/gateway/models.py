@@ -339,6 +339,9 @@ class ConnectionInfo(BaseModel):
     created_at: float = Field(default_factory=time.time)
     last_used: float | None = None
     status: str = "unknown"  # healthy | error | unknown
+    # PII redaction
+    pii_rules: dict[str, str] | None = None  # {column_name: "hash"|"mask"|"drop"}
+    pii_enabled: bool = False  # toggle to activate PII redaction at query time
 
 
 # ─── Projects ─────────────────────────────────────────────────────────────────

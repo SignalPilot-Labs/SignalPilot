@@ -363,6 +363,14 @@ export const detectPII = (name: string) =>
     detections: Record<string, Record<string, string>>;
   }>(`/api/connections/${name}/detect-pii`, { method: "POST" });
 
+// PII Redaction Config
+export const getPIIConfig = (name: string) =>
+  request<{ enabled: boolean; rules: Record<string, string> }>(`/api/connections/${name}/pii`);
+export const setPIIConfig = (name: string, config: { enabled: boolean; rules: Record<string, string> }) =>
+  request<{ enabled: boolean; rules: Record<string, string> }>(`/api/connections/${name}/pii`, { method: "PUT", body: JSON.stringify(config) });
+export const detectAndSavePII = (name: string) =>
+  request<{ connection_name: string; columns_flagged: number; rules: Record<string, string>; enabled: boolean }>(`/api/connections/${name}/detect-and-save-pii`, { method: "POST" });
+
 // Schema Cache
 export const getSchemaCache = () =>
   request<{ cached_connections: number; total_entries: number; ttl_seconds: number }>("/api/schema-cache/stats");

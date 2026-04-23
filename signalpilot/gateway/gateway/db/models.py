@@ -72,6 +72,9 @@ class GatewayConnection(GatewayBase):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     # Schema endorsements stored inline
     endorsements: Mapped[dict | None] = mapped_column(JSON)
+    # PII redaction: {column_name: "hash"|"mask"|"drop", ...}
+    pii_rules: Mapped[dict | None] = mapped_column(JSON)
+    pii_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
         UniqueConstraint("user_id", "name", name="uq_gw_conn_user_name"),
@@ -112,6 +115,8 @@ class GatewayConnection(GatewayBase):
             "last_used": self.last_used,
             "last_schema_refresh": self.last_schema_refresh,
             "created_at": self.created_at,
+            "pii_rules": self.pii_rules,
+            "pii_enabled": self.pii_enabled or False,
         }
 
 

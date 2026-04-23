@@ -302,9 +302,14 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             elapsed_ms = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
 
-            # Apply PII redaction from annotations (Feature #15)
+            # Apply PII redaction if enabled on this connection (Feature #15)
             from .governance.pii import PIIRedactor
             pii_redactor = PIIRedactor()
+            # Load rules from DB-stored PII config (toggled per-connection)
+            if conn_info.pii_enabled and conn_info.pii_rules:
+                for col_name, rule in conn_info.pii_rules.items():
+                    pii_redactor.add_rule(col_name, rule)
+            # Also load from YAML annotations (legacy/manual overrides)
             for col_name, rule in annotations.pii_columns.items():
                 pii_redactor.add_rule(col_name, rule)
             if pii_redactor.has_rules():
@@ -348,8 +353,18 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     if cached:
         meta_parts.append("cache hit")
 
+    # PII redaction notice for the LLM
+    redaction_notice = ""
+    if pii_redactor.last_redacted_columns:
+        redacted_cols = ", ".join(pii_redactor.last_redacted_columns)
+        redaction_notice = (
+            f"\n\n[PII REDACTED] The following columns were redacted by policy: {redacted_cols}. "
+            f"Values shown as ***** (hide), sha256:... (hash), or partially masked. "
+            f"Do not attempt to reverse or infer the original values."
+        )
+
     if not rows:
-        return f"Query returned 0 rows ({', '.join(meta_parts)})"
+        return f"Query returned 0 rows ({', '.join(meta_parts)})" + redaction_notice
 
     # Format as readable table
     columns = list(rows[0].keys())
@@ -360,7 +375,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     if len(rows) > 50:
         lines.append(f"... ({len(rows)} rows total, showing first 50)")
 
-    return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]"
+    return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]" + redaction_notice
 
 
 @mcp.tool()

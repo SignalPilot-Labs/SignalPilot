@@ -620,7 +620,10 @@ async def clone_connection(name: str, store: StoreD, new_name: str = Query(..., 
         create_data["connection_string"] = conn_str
 
     conn = ConnectionCreate(**create_data)
-    result = await store.create_connection(conn)
+    try:
+        result = await store.create_connection(conn)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     return result
 
 

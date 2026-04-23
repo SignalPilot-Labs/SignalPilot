@@ -208,3 +208,16 @@
 - [x] **Reviewer critical issues addressed** — Item 1: 8 untruncated `resp.text` sites wrapped with `sanitize_proxy_response`. Item 2: Lines 2318/2353 (CTE debugger) and line 1844 (validate_query) sanitized. Item 3: `source_error` (line 2728) sanitized before return at line 2740. Item 5: Line 201 sandbox error output wrapped with `sanitize_mcp_error`.
 - [x] **Spider2.0 self-correction preserved** — DB query errors use `cap=300` to retain diagnostic text; `query_error_hint()` pattern matching still uses raw `err_str` (server-side only); sanitized copy returned to client.
 - [x] **28 new tests** in `test_mcp_error_sanitization.py` — Sensitive pattern redaction (6), path stripping (3), traceback stripping (1), length capping (3), clean passthrough (2), empty string (1), proxy response formatting (5), drift guard for `_SENSITIVE_PATTERNS` sync (1), integration tests: sandbox URL not leaked (2), query error diagnostic preserved (3), schema fetch redacted (2).
+
+## Round 20: Race Conditions & TOCTOU Fixes
+
+### COMPLETED
+
+- [x] **Encryption Salt TOCTOU Fix** — `_load_or_create_salt()` replaced `if exists / write_bytes` with `_atomic_create_file()` using `os.O_CREAT | os.O_EXCL | os.O_WRONLY`. Prevents catastrophic data loss where concurrent process starts could overwrite the salt, rendering credentials encrypted with the losing salt undecryptable.
+- [x] **Encryption Key TOCTOU Fix** — `_get_encryption_key()` auto-key path uses same atomic file creation pattern. `.strip()` preserved on read path.
+- [x] **Local API Key TOCTOU Fix** — `get_local_api_key()` uses `_atomic_create_file()` with bytes→str decode. Empty-content guard preserved: if file exists but is empty, unlinks and regenerates.
+- [x] **Connection CRUD Race Fix** — `create_connection()` wraps `session.commit()` in `try/except IntegrityError` with constraint-name filtering (`uq_gw_conn_user_name`, `uq_gw_cred_user_conn`). Converts to clean `ValueError` instead of unhandled 500. Non-uniqueness IntegrityErrors re-raised.
+- [x] **Project CRUD Race Fix** — `create_project()` same pattern, filters on `uq_gw_proj_user_name`.
+- [x] **Clone Connection 409 Fix** — `clone_connection()` catches `ValueError` from `store.create_connection()` and returns proper `HTTPException(409)` instead of 500.
+- [x] **Concurrency Audit (clean areas)** — Budget ledger, schema cache, query cache (all `threading.Lock`), pool manager (`asyncio.Lock`), API key management (UUID PKs), sandbox dict (asyncio single-threaded) — all already properly protected.
+- [x] **18 new tests** in `test_concurrency.py` — Atomic file creation (6), salt convergence (2), key convergence (2), local API key convergence (2), IntegrityError handling for connections (3), IntegrityError handling for projects (2), clone connection 409 (1). All pass.

@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import quote as url_quote
 
 from sqlalchemy import delete, literal, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db.models import (
@@ -75,18 +76,36 @@ class CredentialEncryptionError(Exception):
 _CACHED_KEY: bytes | None = None
 
 
+# ─── Atomic file helper ──────────────────────────────────────────────────────
+
+def _atomic_create_file(path: Path, content: bytes, mode: int = 0o600) -> bytes:
+    """Atomically create a file with content.
+
+    Uses O_CREAT | O_EXCL which is POSIX-atomic: exactly one process wins the
+    creation race. If the file already exists, the existing content is returned.
+    """
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+        try:
+            os.write(fd, content)
+        finally:
+            os.close(fd)
+        return content
+    except FileExistsError:
+        return path.read_bytes()
+
+
 # ─── Encryption ──────────────────────────────────────────────────────────────
 
 def _load_or_create_salt() -> bytes:
-    """Load or create the persistent PBKDF2 salt stored at SP_DATA_DIR/.encryption_salt."""
+    """Load or create the persistent PBKDF2 salt stored at SP_DATA_DIR/.encryption_salt.
+
+    Uses atomic O_CREAT | O_EXCL to prevent TOCTOU: two simultaneous starts
+    cannot each write a different salt and diverge.
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     salt_file = DATA_DIR / SALT_FILE_NAME
-    if salt_file.exists():
-        return salt_file.read_bytes()
-    salt = os.urandom(16)
-    salt_file.write_bytes(salt)
-    os.chmod(str(salt_file), 0o600)
-    return salt
+    return _atomic_create_file(salt_file, os.urandom(16))
 
 
 def _derive_key_pbkdf2(passphrase: str) -> bytes:
@@ -133,13 +152,8 @@ def _get_encryption_key() -> bytes:
     else:
         key_file = DATA_DIR / KEY_FILE_NAME
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        if key_file.exists():
-            _CACHED_KEY = key_file.read_bytes().strip()
-            return _CACHED_KEY
         key = Fernet.generate_key()
-        key_file.write_bytes(key)
-        os.chmod(str(key_file), 0o600)
-        _CACHED_KEY = key
+        _CACHED_KEY = _atomic_create_file(key_file, key).strip()
         return _CACHED_KEY
 
 
@@ -492,14 +506,15 @@ def delete_sandbox(sandbox_id: str) -> bool:
 def get_local_api_key() -> str:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     key_file = DATA_DIR / "local_api_key"
-    if key_file.exists():
-        key = key_file.read_text().strip()
-        if key:
-            return key
-    key = "sp_local_" + secrets.token_hex(16)
-    key_file.write_text(key)
+    new_key = "sp_local_" + secrets.token_hex(16)
+    result = _atomic_create_file(key_file, new_key.encode()).decode().strip()
+    if result:
+        return result
+    # File existed but was empty (should not occur with O_EXCL writes, but guard anyway).
+    key_file.unlink(missing_ok=True)
+    new_key2 = "sp_local_" + secrets.token_hex(16)
     logger.info("Generated new local API key (stored in %s)", key_file)
-    return key
+    return _atomic_create_file(key_file, new_key2.encode()).decode().strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -650,7 +665,14 @@ class Store:
             key_version=CURRENT_KEY_VERSION,
         )
         self.session.add(cred)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as e:
+            await self.session.rollback()
+            orig = str(e.orig) if e.orig is not None else str(e)
+            if "uq_gw_conn_user_name" in orig or "uq_gw_cred_user_conn" in orig:
+                raise ValueError(f"Connection '{conn.name}' already exists") from e
+            raise
         await self.session.refresh(db_conn)
         return ConnectionInfo(**db_conn.to_info_dict())
 
@@ -847,7 +869,14 @@ class Store:
             tags=info.tags,
         )
         self.session.add(db_proj)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as e:
+            await self.session.rollback()
+            orig = str(e.orig) if e.orig is not None else str(e)
+            if "uq_gw_proj_user_name" in orig:
+                raise ValueError(f"Project '{proj.name}' already exists") from e
+            raise
         return info
 
     def _create_new_project(self, proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:

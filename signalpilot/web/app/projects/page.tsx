@@ -47,7 +47,7 @@ export default function ProjectsPage() {
   const [createForm, setCreateForm] = useState({ name: "", connection_name: "" });
   const [importForm, setImportForm] = useState({ name: "", path: "", connection_name: "", mode: "link" as "link" | "copy" });
   const [githubForm, setGithubForm] = useState({ name: "", git_url: "", git_branch: "main", connection_name: "" });
-  const [dbtCloudForm, setDbtCloudForm] = useState({ token: "", account_id: "" });
+  const [dbtCloudForm, setDbtCloudForm] = useState({ token: "", account_id: "", host: "cloud.getdbt.com" });
   const [dbtCloudProjects, setDbtCloudProjects] = useState<{ id: number; name: string; git_url: string | null }[]>([]);
   const [dbtCloudSelected, setDbtCloudSelected] = useState<{ id: number; name: string; git_url: string } | null>(null);
   const [dbtCloudConnection, setDbtCloudConnection] = useState("");
@@ -153,7 +153,7 @@ export default function ProjectsPage() {
     }
     setDbtCloudFetching(true);
     try {
-      const projects = await discoverDbtCloudProjects(dbtCloudForm.token, dbtCloudForm.account_id);
+      const projects = await discoverDbtCloudProjects(dbtCloudForm.token, dbtCloudForm.account_id, dbtCloudForm.host);
       setDbtCloudProjects(projects);
       if (projects.length === 0) toast("no projects found in this account", "error");
     } catch (e) { toast(String(e), "error"); }
@@ -172,9 +172,10 @@ export default function ProjectsPage() {
     setCreating(true);
     try {
       const name = dbtCloudSelected.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
+      const gitUrl = dbtCloudSelected.git_url.replace(/^git:\/\//, "https://");
       const p = await createProject({
         name,
-        git_url: dbtCloudSelected.git_url,
+        git_url: gitUrl,
         git_branch: "main",
         connection_name: dbtCloudConnection,
         source: "dbt-cloud",
@@ -183,7 +184,7 @@ export default function ProjectsPage() {
       });
       setProjects((prev) => [p, ...prev]);
       setShowDbtCloud(false);
-      setDbtCloudForm({ token: "", account_id: "" });
+      setDbtCloudForm({ token: "", account_id: "", host: "cloud.getdbt.com" });
       setDbtCloudProjects([]);
       setDbtCloudSelected(null);
       setDbtCloudConnection("");
@@ -467,8 +468,8 @@ export default function ProjectsPage() {
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">import from dbt cloud</span>
           </div>
           <div className="p-5">
-            {/* Step 1: token + account */}
-            <div className="grid grid-cols-3 gap-4 mb-4">
+            {/* Step 1: token + account + host */}
+            <div className="grid grid-cols-4 gap-4 mb-4">
               <div>
                 <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">api token</label>
                 <input
@@ -487,6 +488,16 @@ export default function ProjectsPage() {
                   value={dbtCloudForm.account_id}
                   onChange={(e) => setDbtCloudForm({ ...dbtCloudForm, account_id: e.target.value })}
                   className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">host</label>
+                <input
+                  type="text"
+                  placeholder="cloud.getdbt.com"
+                  value={dbtCloudForm.host}
+                  onChange={(e) => setDbtCloudForm({ ...dbtCloudForm, host: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
                 />
               </div>
               <div className="flex items-end">

@@ -76,12 +76,13 @@ class DbtCloudDiscoverRequest(BaseModel):
     """Request to discover projects from a dbt Cloud account."""
     token: str = Field(..., min_length=1)
     account_id: str = Field(..., min_length=1, pattern=r"^[0-9]+$")
+    host: str = Field(default="cloud.getdbt.com", max_length=255)
 
 
 @router.post("/dbt-cloud/projects")
 async def discover_dbt_cloud_projects(req: DbtCloudDiscoverRequest):
     """Fetch project list from dbt Cloud API (proxied to avoid CORS)."""
-    url = f"https://cloud.getdbt.com/api/v2/accounts/{req.account_id}/projects/"
+    url = f"https://{req.host}/api/v2/accounts/{req.account_id}/projects/"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, headers={"Authorization": f"Token {req.token}"})

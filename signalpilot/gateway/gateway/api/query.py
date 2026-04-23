@@ -17,6 +17,7 @@ from ..governance.annotations import load_annotations
 from ..governance.budget import budget_ledger
 from ..governance.cache import query_cache
 from ..models import AuditEntry
+from ..scope_guard import RequireScope
 from .deps import SQLGLOT_DIALECTS, StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
@@ -29,7 +30,7 @@ class DirectQueryRequest(BaseModel):
     timeout_seconds: int | None = Field(default=None, ge=1, le=300)
 
 
-@router.post("/query")
+@router.post("/query", dependencies=[RequireScope("query")])
 async def query_database(req: DirectQueryRequest, store: StoreD):
     info = await store.get_connection(req.connection_name)
     if not info:
@@ -204,7 +205,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
     return response
 
 
-@router.post("/query/explain")
+@router.post("/query/explain", dependencies=[RequireScope("query")])
 async def explain_query(req: DirectQueryRequest, store: StoreD):
     """Explain a query without executing it — returns the query plan and cost estimate.
 

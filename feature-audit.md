@@ -80,3 +80,16 @@
 - [x] **API Key user_id Propagation Fix** — `ApiKeyRecord` now includes `user_id` field populated from DB row. Pre-existing bug where all API keys resolved to `user_id="local"` is fixed.
 - [x] **Key Management Scope Protection** — All key management endpoints (`GET /keys`, `POST /keys`, `DELETE /keys/{key_id}`) require `RequireScope("admin")`. Prevents read-only keys from listing, creating, or deleting API keys.
 - [x] **27 new tests** covering scope guard logic, allowlist validation, key expiry, user_id propagation, JWT error redaction, and expires_at validation.
+
+## Round 9: Full Scope Enforcement, SSRF Prevention
+
+### COMPLETED
+
+- [x] **Full Endpoint Scope Enforcement** — `RequireScope()` guards added to 29 endpoints across 8 router files. Write endpoints (connections CRUD, import/export, clone, projects CRUD, cache invalidation, budget, schema mutations) require `write`. Sandbox endpoints require `execute`. Query endpoints require `query`. Settings and key management require `admin`. Read-adjacent endpoints that make outbound connections (test, diagnose) require `read`.
+- [x] **SSRF Host Validation** — New `network_validation.py` module. Resolves ALL DNS records (prevents rebinding), checks every resolved IP against blocked ranges. Blocks loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16 including AWS metadata, fe80::/10), unspecified (0.0.0.0, ::). IPv4-mapped IPv6 bypass prevented (::ffff:169.254.169.254). DNS failure = fail closed. Thread-safe via threading.Lock on socket.setdefaulttimeout.
+- [x] **TCP-only SSRF Validation** — Only applied to TCP-based db_types (postgres, mysql, mssql, redshift, clickhouse, trino). Cloud (snowflake, bigquery, databricks) and embedded (duckdb, sqlite) types skip validation.
+- [x] **SP_ALLOW_PRIVATE_CONNECTIONS** — Env var allows RFC1918 ranges for legitimate internal database deployments. Loopback and link-local (including metadata endpoints) remain blocked even when enabled. Warning logged at startup.
+- [x] **Import Endpoint SSRF Fix** — `import_connections` now validates connection params before storing, preventing SSRF bypass where imported connections targeting internal IPs could be exploited via test/diagnose endpoints.
+- [x] **Fail-closed on missing host** — TCP db_types with no extractable host raise ValueError instead of silently passing SSRF validation.
+- [x] **RequireScope lambda→def fix** — Fixed FastAPI DI issue where lambda-based RequireScope caused 422 errors (Request treated as query parameter).
+- [x] **88 new tests** (43 SSRF validation + 45 scope enforcement endpoints) — all passing. 255 total tests green.

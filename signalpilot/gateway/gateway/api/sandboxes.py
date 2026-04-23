@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 
 from ..models import AuditEntry, ExecuteRequest, SandboxCreate
+from ..scope_guard import RequireScope
 from ..store import (
     delete_sandbox,
     get_sandbox,
@@ -24,7 +25,7 @@ async def get_sandboxes():
     return list_sandboxes()
 
 
-@router.post("/sandboxes", status_code=201)
+@router.post("/sandboxes", status_code=201, dependencies=[RequireScope("execute")])
 async def create_sandbox(req: SandboxCreate, store: StoreD):
     session_token = str(uuid.uuid4())
 
@@ -58,7 +59,7 @@ async def get_sandbox_detail(sandbox_id: str):
     return sandbox
 
 
-@router.delete("/sandboxes/{sandbox_id}", status_code=204)
+@router.delete("/sandboxes/{sandbox_id}", status_code=204, dependencies=[RequireScope("execute")])
 async def kill_sandbox(sandbox_id: str, store: StoreD):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:
@@ -71,7 +72,7 @@ async def kill_sandbox(sandbox_id: str, store: StoreD):
     delete_sandbox(sandbox_id)
 
 
-@router.post("/sandboxes/{sandbox_id}/execute")
+@router.post("/sandboxes/{sandbox_id}/execute", dependencies=[RequireScope("execute")])
 async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest, store: StoreD):
     sandbox = get_sandbox(sandbox_id)
     if not sandbox:

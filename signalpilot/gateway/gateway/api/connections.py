@@ -17,6 +17,8 @@ from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..models import ConnectionCreate, ConnectionUpdate
+from ..network_validation import validate_connection_params
+from ..scope_guard import RequireScope
 from ..store import (
     CredentialEncryptionError,
     _build_connection_string,
@@ -44,7 +46,17 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
                 _validate_local_db_path(conn.connection_string)
             except ValueError as e:
                 errors.append(str(e))
+        else:
+            try:
+                validate_connection_params(conn.host, conn.port, conn.db_type, conn.connection_string)
+            except ValueError as e:
+                errors.append(str(e))
         return errors
+
+    try:
+        validate_connection_params(conn.host, conn.port, conn.db_type, None)
+    except ValueError as e:
+        errors.append(str(e))
 
     db = conn.db_type
 
@@ -356,7 +368,7 @@ async def get_connections(store: StoreD):
     return await store.list_connections()
 
 
-@router.post("/connections", status_code=201)
+@router.post("/connections", status_code=201, dependencies=[RequireScope("write")])
 async def add_connection(conn: ConnectionCreate, store: StoreD):
     errors = _validate_connection_params(conn)
     if errors:
@@ -429,7 +441,7 @@ class ExportRequest(BaseModel):
     confirm: bool
 
 
-@router.post("/connections/export")
+@router.post("/connections/export", dependencies=[RequireScope("write")])
 async def export_connections(
     body: ExportRequest,
     store: StoreD,
@@ -497,7 +509,7 @@ async def export_connections(
     }
 
 
-@router.post("/connections/import")
+@router.post("/connections/import", dependencies=[RequireScope("write")])
 async def import_connections(manifest: dict, store: StoreD):
     """Import connections from an exported JSON manifest."""
     connections = manifest.get("connections", [])
@@ -515,6 +527,10 @@ async def import_connections(manifest: dict, store: StoreD):
 
         try:
             conn = ConnectionCreate(**entry)
+            errors = _validate_connection_params(conn)
+            if errors:
+                results["errors"].append({"name": name, "error": errors[0]})
+                continue
             await store.create_connection(conn)
             results["imported"] += 1
         except Exception as e:
@@ -531,14 +547,14 @@ async def get_connection_detail(name: str, store: StoreD):
     return conn
 
 
-@router.delete("/connections/{name}", status_code=204)
+@router.delete("/connections/{name}", status_code=204, dependencies=[RequireScope("write")])
 async def remove_connection(name: str, store: StoreD):
     if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
 
 
-@router.put("/connections/{name}")
+@router.put("/connections/{name}", dependencies=[RequireScope("write")])
 async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD):
     """Update an existing connection. Only provided fields are changed."""
     existing = await store.get_connection(name)
@@ -577,7 +593,7 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD):
     return result
 
 
-@router.post("/connections/{name}/clone")
+@router.post("/connections/{name}/clone", dependencies=[RequireScope("write")])
 async def clone_connection(name: str, store: StoreD, new_name: str = Query(..., min_length=1, max_length=64)):
     """Clone an existing connection with a new name."""
     existing = await store.get_connection(name)
@@ -608,7 +624,7 @@ async def clone_connection(name: str, store: StoreD, new_name: str = Query(..., 
     return result
 
 
-@router.post("/connections/{name}/schema/refresh")
+@router.post("/connections/{name}/schema/refresh", dependencies=[RequireScope("write")])
 async def refresh_connection_schema(name: str, store: StoreD):
     """Force-refresh the cached schema for a connection."""
     info = await store.get_connection(name)
@@ -641,7 +657,7 @@ async def refresh_connection_schema(name: str, store: StoreD):
     }
 
 
-@router.post("/connections/schema/warmup")
+@router.post("/connections/schema/warmup", dependencies=[RequireScope("write")])
 async def warmup_all_schemas(store: StoreD):
     """Parallel schema warmup for all connections."""
     from ..models import ConnectionInfo  # noqa: F811 — local import for type hint in inner func
@@ -814,7 +830,7 @@ async def parse_connection_url(request: Request):
     return result
 
 
-@router.post("/connections/test-credentials")
+@router.post("/connections/test-credentials", dependencies=[RequireScope("write")])
 async def test_credentials(request: Request):
     """Test connection credentials without saving."""
     body = await request.json()
@@ -830,6 +846,18 @@ async def test_credentials(request: Request):
         conn_str = conn.connection_string or _build_connection_string(conn)
     except Exception as e:
         return {"status": "error", "message": f"Could not build connection string: {e}", "phases": []}
+
+    # SSRF validation: check host before opening any TCP connection.
+    # test_credentials accepts raw user-supplied host/port and never goes through
+    # _validate_connection_params, making it the primary SSRF vector.
+    try:
+        validate_connection_params(conn.host, conn.port, conn.db_type, conn.connection_string)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "phases": [{"phase": "ssrf_check", "status": "error", "message": str(e)}],
+        }
 
     extras = _extract_credential_extras(conn)
     for field_name in ("auth_method", "oauth_access_token", "impersonate_service_account",
@@ -1154,7 +1182,7 @@ async def build_connection_url(body: dict):
         return {"url": "", "error": f"Failed to build URL: {e}"}
 
 
-@router.post("/connections/{name}/test")
+@router.post("/connections/{name}/test", dependencies=[RequireScope("read")])
 async def test_connection(name: str, store: StoreD):
     """Three-phase connection test."""
     info = await store.get_connection(name)
@@ -1354,7 +1382,7 @@ async def network_info():
     return result
 
 
-@router.post("/connections/{name}/diagnose")
+@router.post("/connections/{name}/diagnose", dependencies=[RequireScope("read")])
 async def diagnose_connection(name: str, store: StoreD):
     """Run network-level diagnostics for a connection (DNS, TCP, TLS)."""
     import re as _re

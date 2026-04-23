@@ -7,6 +7,7 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from ..models import ProjectCreate, ProjectUpdate
+from ..scope_guard import RequireScope
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
@@ -18,7 +19,7 @@ async def get_projects(store: StoreD):
     return await store.list_projects()
 
 
-@router.post("/projects", status_code=201)
+@router.post("/projects", status_code=201, dependencies=[RequireScope("write")])
 async def add_project(proj: ProjectCreate, store: StoreD):
     """Create a new dbt project."""
     try:
@@ -37,7 +38,7 @@ async def get_project_detail(name: str, store: StoreD):
     return proj
 
 
-@router.put("/projects/{name}")
+@router.put("/projects/{name}", dependencies=[RequireScope("write")])
 async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
     """Update an existing dbt project."""
     result = await store.update_project(name, update)
@@ -46,14 +47,14 @@ async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
     return result
 
 
-@router.delete("/projects/{name}", status_code=204)
+@router.delete("/projects/{name}", status_code=204, dependencies=[RequireScope("write")])
 async def remove_project(name: str, store: StoreD):
     """Delete a dbt project."""
     if not await store.delete_project(name):
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
 
 
-@router.post("/projects/{name}/scan")
+@router.post("/projects/{name}/scan", dependencies=[RequireScope("write")])
 async def scan_project(name: str, store: StoreD):
     """Re-scan a dbt project (placeholder — updates last_scanned_at)."""
     proj = await store.get_project(name)

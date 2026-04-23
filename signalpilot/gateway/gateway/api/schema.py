@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..connectors.pool_manager import pool_manager
+from ..scope_guard import RequireScope
 from ..connectors.schema_cache import schema_cache
 from ..schema_utils import (
     TYPE_COMPRESSION_MAP,
@@ -269,7 +270,7 @@ async def get_schema_samples(
 # POST /connections/{name}/schema/explore
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.post("/connections/{name}/schema/explore")
+@router.post("/connections/{name}/schema/explore", dependencies=[RequireScope("write")])
 async def explore_column_values(
     name: str,
     store: StoreD,
@@ -2092,7 +2093,7 @@ def _save_semantic_model(name: str, model: dict) -> None:
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 
-@router.post("/connections/{name}/schema/refine")
+@router.post("/connections/{name}/schema/refine", dependencies=[RequireScope("write")])
 async def refine_schema(
     name: str,
     store: StoreD,
@@ -3009,7 +3010,7 @@ async def get_endorsements(name: str, store: StoreD):
     return await store.get_schema_endorsements(name)
 
 
-@router.put("/connections/{name}/schema/endorsements")
+@router.put("/connections/{name}/schema/endorsements", dependencies=[RequireScope("write")])
 async def update_endorsements(name: str, store: StoreD, body: dict):
     """Set schema endorsement config for a connection.
 
@@ -3034,7 +3035,7 @@ async def get_semantic_model(name: str, store: StoreD):
     return _load_semantic_model(name)
 
 
-@router.put("/connections/{name}/semantic-model")
+@router.put("/connections/{name}/semantic-model", dependencies=[RequireScope("write")])
 async def update_semantic_model(name: str, store: StoreD, body: dict):
     """Update the semantic model for a connection.
 
@@ -3069,7 +3070,7 @@ async def update_semantic_model(name: str, store: StoreD, body: dict):
     return model
 
 
-@router.post("/connections/{name}/semantic-model/generate")
+@router.post("/connections/{name}/semantic-model/generate", dependencies=[RequireScope("write")])
 async def generate_semantic_model(name: str, store: StoreD):
     """Auto-generate a semantic model skeleton from the database schema."""
     info = await require_connection(store, name)
@@ -3147,7 +3148,7 @@ async def generate_semantic_model(name: str, store: StoreD):
 # ─── Column Name Correction (Spider2.0 hallucination fix) ──────────────────
 
 
-@router.post("/connections/{name}/schema/correct-columns")
+@router.post("/connections/{name}/schema/correct-columns", dependencies=[RequireScope("write")])
 async def correct_columns(name: str, store: StoreD, body: dict):
     """Suggest corrections for hallucinated column names.
 
@@ -3214,7 +3215,7 @@ async def correct_columns(name: str, store: StoreD, body: dict):
 # ─── Column Exploration (ReFoRCE pattern) ────────────────────────────────────
 
 
-@router.post("/connections/{name}/schema/explore-columns")
+@router.post("/connections/{name}/schema/explore-columns", dependencies=[RequireScope("write")])
 async def explore_columns_deep(name: str, store: StoreD, body: dict):
     """Deep column exploration for complex Spider2.0 queries.
 

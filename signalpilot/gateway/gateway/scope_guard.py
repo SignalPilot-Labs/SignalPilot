@@ -58,4 +58,7 @@ def RequireScope(*scopes: str) -> Any:
         async def my_endpoint(_: None = RequireScope("admin")):
             ...
     """
-    return Depends(lambda request: require_scopes(request, *scopes))
+    def _check(request: Request) -> None:
+        require_scopes(request, *scopes)
+
+    return Depends(_check)

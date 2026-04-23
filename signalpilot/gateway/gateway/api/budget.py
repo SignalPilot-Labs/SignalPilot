@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ..connectors.pool_manager import pool_manager
 from ..governance.annotations import generate_skeleton, load_annotations
 from ..governance.budget import budget_ledger
+from ..scope_guard import RequireScope
 from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
@@ -18,7 +19,7 @@ class BudgetCreateRequest(BaseModel):
     budget_usd: float = Field(default=10.0, ge=0.01, le=10_000.0)
 
 
-@router.post("/budget", status_code=201)
+@router.post("/budget", status_code=201, dependencies=[RequireScope("write")])
 async def create_budget(req: BudgetCreateRequest):
     """Create a budget for a session."""
     budget = budget_ledger.create_session(req.session_id, req.budget_usd)
@@ -43,7 +44,7 @@ async def list_budgets():
     }
 
 
-@router.delete("/budget/{session_id}", status_code=204)
+@router.delete("/budget/{session_id}", status_code=204, dependencies=[RequireScope("write")])
 async def close_budget(session_id: str):
     """Close and remove a session budget."""
     closed = budget_ledger.close_session(session_id)
@@ -64,7 +65,7 @@ async def get_annotations(name: str, store: StoreD):
     return annotations.to_dict()
 
 
-@router.post("/connections/{name}/annotations/generate")
+@router.post("/connections/{name}/annotations/generate", dependencies=[RequireScope("write")])
 async def generate_annotations(name: str, store: StoreD):
     """Generate a starter schema.yml from database introspection (Feature #29)."""
     info = await store.get_connection(name)

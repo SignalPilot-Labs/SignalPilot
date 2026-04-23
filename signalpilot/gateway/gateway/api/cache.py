@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
+from ..scope_guard import RequireScope
 from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
@@ -18,14 +19,14 @@ async def cache_stats():
     return query_cache.stats()
 
 
-@router.post("/cache/invalidate", status_code=200)
+@router.post("/cache/invalidate", status_code=200, dependencies=[RequireScope("write")])
 async def invalidate_cache(connection_name: str | None = None):
     """Invalidate cached query results. Optionally filter by connection."""
     count = query_cache.invalidate(connection_name)
     return {"invalidated": count, "connection_name": connection_name}
 
 
-@router.post("/connections/{name}/detect-pii")
+@router.post("/connections/{name}/detect-pii", dependencies=[RequireScope("write")])
 async def detect_pii(name: str, store: StoreD):
     """Auto-detect PII columns in a database schema based on naming patterns.
 
@@ -83,7 +84,7 @@ async def schema_cache_stats():
     return schema_cache.stats()
 
 
-@router.post("/schema-cache/invalidate", status_code=200)
+@router.post("/schema-cache/invalidate", status_code=200, dependencies=[RequireScope("write")])
 async def invalidate_schema_cache(connection_name: str | None = None):
     """Invalidate cached schema data. Optionally filter by connection."""
     count = schema_cache.invalidate(connection_name)

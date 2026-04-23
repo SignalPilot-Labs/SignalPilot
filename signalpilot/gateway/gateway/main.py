@@ -158,9 +158,11 @@ if _extra_origins:
         _ALLOWED_ORIGINS.append(_origin)
 
 # Middleware stack (last added = outermost = runs first)
-# CORS must be outermost so error responses from auth also get CORS headers
-# RequestCorrelationMiddleware is added first so it is innermost — runs on every
-# request after all other middleware, closest to the application handlers.
+# Execution order (outermost → innermost):
+#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → Auth
+# CORS is outermost so all error responses (including auth errors) get CORS headers.
+# RequestCorrelationMiddleware runs before Auth so auth logs already have a request ID.
+# APIKeyAuthMiddleware is innermost — closest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
 app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30, auth_rpm=10)
@@ -170,7 +172,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
     allow_credentials=True,
 )
 

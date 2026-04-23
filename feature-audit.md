@@ -143,3 +143,12 @@
 - [x] **SandboxClient Header Propagation** — `execute()` and `execute_code_with_mounts()` accept optional `request_id: str | None` parameter. When provided, includes `X-Request-ID` in outbound HTTP requests to sandbox manager for end-to-end tracing.
 - [x] **Auth Middleware Correlation Logging** — `APIKeyAuthMiddleware` logs `INFO "request METHOD PATH user=USER request_id=ID"` on successful authentication (both local_key and stored api_key paths), using `getattr(request.state, "request_id", "unknown")` fallback.
 - [x] **8 new tests** in `test_correlation.py` — UUID4 generation, client ID echo, injection replacement, oversized replacement, empty generation, consistency, alphanumeric acceptance, special char rejection. All pass.
+
+## Round 14: CORS X-Request-ID Exposure & Comment Fix
+
+### COMPLETED
+
+- [x] **CORS expose_headers** — Added `expose_headers=["X-Request-ID"]` to CORSMiddleware config so browser JavaScript can read the correlation ID from cross-origin responses.
+- [x] **CORS allow_headers** — Added `"X-Request-ID"` to `allow_headers` list so browser clients can send client-generated correlation IDs on cross-origin requests.
+- [x] **Middleware ordering comment fix** — Updated stale comment block in `main.py` to accurately describe the actual middleware execution order: CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → Auth.
+- [x] **2 new tests** in `test_cors.py` — CORS expose_headers verification (GET with Origin), CORS allow_headers verification (OPTIONS preflight). Both pass.

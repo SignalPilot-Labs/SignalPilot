@@ -967,10 +967,26 @@ function validateForm(form: FormState): Record<string, string> {
     if (!form.database.trim()) errors.database = "database file path is required";
   }
 
+  // Gap 1+2: database required for standard relational connectors
+  if (["postgres", "mysql", "mssql", "clickhouse", "redshift"].includes(form.db_type) && !form.connection_string) {
+    if (!form.database.trim()) errors.database = "database is required";
+  }
+
   if (form.db_type === "snowflake") {
     if (!form.account.trim()) errors.account = "account identifier is required";
     else if (!form.account.includes(".") && !form.account.includes("-")) {
       errors.account = "use full identifier: org-account or account.region";
+    }
+    // Gap 4: key-pair / OAuth token validation
+    if (form.snowflake_auth_method === "key_pair" && !form.sf_private_key.trim()) {
+      errors.sf_private_key = "private key (PEM) is required for key-pair auth";
+    }
+    if (form.snowflake_auth_method === "key_pair" && form.sf_private_key.trim()
+        && !form.sf_private_key.trim().startsWith("-----BEGIN")) {
+      errors.sf_private_key = "must be a PEM-format private key (-----BEGIN ... PRIVATE KEY-----)";
+    }
+    if (form.snowflake_auth_method === "oauth" && !form.sf_oauth_token.trim()) {
+      errors.sf_oauth_token = "OAuth access token is required";
     }
   }
 
@@ -981,6 +997,17 @@ function validateForm(form: FormState): Record<string, string> {
     } else if (form.bq_auth_method === "service_account" && form.credentials_json.trim()) {
       try { JSON.parse(form.credentials_json); } catch { errors.credentials_json = "invalid JSON format"; }
     }
+    // Gap 5: bq_oauth_token required when OAuth method selected
+    if (form.bq_auth_method === "oauth" && !form.bq_oauth_token.trim()) {
+      errors.bq_oauth_token = "OAuth access token is required";
+    }
+  }
+
+  // Gap 3: Azure AD required fields
+  if (form.db_type === "mssql" && form.azure_ad_auth) {
+    if (!form.azure_tenant_id.trim()) errors.azure_tenant_id = "tenant ID is required for Azure AD auth";
+    if (!form.azure_client_id.trim()) errors.azure_client_id = "client ID is required for Azure AD auth";
+    if (!form.azure_client_secret.trim()) errors.azure_client_secret = "client secret is required for Azure AD auth";
   }
 
   if (form.db_type === "databricks") {
@@ -1005,6 +1032,11 @@ function validateForm(form: FormState): Record<string, string> {
     }
     const sshPort = parseInt(form.ssh_port || "22");
     if (isNaN(sshPort) || sshPort < 1 || sshPort > 65535) errors.ssh_port = "SSH port must be 1-65535";
+  }
+
+  // Gap 7: SSL CA cert required for verify modes
+  if (form.ssl_enabled && form.ssl_mode.startsWith("verify") && !form.ssl_ca_cert.trim()) {
+    errors.ssl_ca_cert = "CA certificate is required for verify-ca / verify-full mode";
   }
 
   // Timeout validation (if provided, must be positive integers)
@@ -1348,12 +1380,13 @@ function ConnectionFieldsForm({
               hint="RSA private key for Snowflake key-pair authentication"
               rows={4}
               className="col-span-2"
+              {...(fieldProps("sf_private_key", formErrors, fieldRefs) as { id: string; inputRef: React.Ref<HTMLTextAreaElement>; error: string | undefined })}
             />
             <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
           </>
         ) : (
           <>
-            <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" />
+            <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" {...fieldProps("sf_oauth_token", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Create a Snowflake security integration (CREATE SECURITY INTEGRATION ... TYPE = EXTERNAL_OAUTH) and configure your IdP to issue tokens.</div>
               <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
@@ -1418,7 +1451,7 @@ function ConnectionFieldsForm({
         )}
         {form.bq_auth_method === "oauth" && (
           <>
-            <FormInput label="OAuth access token" value={form.bq_oauth_token} onChange={(v) => setForm({ ...form, bq_oauth_token: v })} type="password" required className="col-span-2" hint="from Google Cloud OAuth flow or gcloud auth print-access-token" />
+            <FormInput label="OAuth access token" value={form.bq_oauth_token} onChange={(v) => setForm({ ...form, bq_oauth_token: v })} type="password" required className="col-span-2" hint="from Google Cloud OAuth flow or gcloud auth print-access-token" {...fieldProps("bq_oauth_token", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Create an OAuth client in GCP Console → APIs & Services → Credentials → OAuth 2.0 Client ID.</div>
               <div><span className="text-[var(--color-text-muted)]">scopes:</span> Token must include https://www.googleapis.com/auth/bigquery scope.</div>
@@ -1799,7 +1832,7 @@ function ConnectionFieldsForm({
       <>
         <FormInput label="host" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="sqlserver.example.com" hint="hostname or IP — for named instances: host\\INSTANCE" required {...fieldProps("host", formErrors, fieldRefs)} />
         <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder="1433" hint="default 1433 — Azure SQL uses 1433" {...fieldProps("port", formErrors, fieldRefs)} />
-        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="master" required />
+        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="master" required {...fieldProps("database", formErrors, fieldRefs)} />
         {!form.azure_ad_auth && (
           <>
             <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="sa" hint="SQL Server login" required {...fieldProps("username", formErrors, fieldRefs)} />
@@ -1824,9 +1857,9 @@ function ConnectionFieldsForm({
         </div>
         {form.azure_ad_auth && (
           <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-blue-500/20 bg-blue-500/5">
-            <FormInput label="tenant ID" value={form.azure_tenant_id} onChange={(v) => setForm({ ...form, azure_tenant_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="Azure AD directory (tenant) ID" required />
-            <FormInput label="client ID" value={form.azure_client_id} onChange={(v) => setForm({ ...form, azure_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="App registration (client) ID" required />
-            <FormInput label="client secret" value={form.azure_client_secret} onChange={(v) => setForm({ ...form, azure_client_secret: v })} type="password" hint="Service principal client secret" required className="col-span-2" />
+            <FormInput label="tenant ID" value={form.azure_tenant_id} onChange={(v) => setForm({ ...form, azure_tenant_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="Azure AD directory (tenant) ID" required {...fieldProps("azure_tenant_id", formErrors, fieldRefs)} />
+            <FormInput label="client ID" value={form.azure_client_id} onChange={(v) => setForm({ ...form, azure_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="App registration (client) ID" required {...fieldProps("azure_client_id", formErrors, fieldRefs)} />
+            <FormInput label="client secret" value={form.azure_client_secret} onChange={(v) => setForm({ ...form, azure_client_secret: v })} type="password" hint="Service principal client secret" required className="col-span-2" {...fieldProps("azure_client_secret", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Azure Portal → App Registrations → New → Add API Permission for Azure SQL Database. Create a contained DB user: CREATE USER [app-name] FROM EXTERNAL PROVIDER.</div>
               <div><span className="text-[var(--color-text-muted)]">managed identity:</span> For Azure VMs/containers, leave client secret empty to use system-assigned managed identity (coming soon).</div>
@@ -1848,7 +1881,7 @@ function ConnectionFieldsForm({
       <>
         <FormInput label="cluster endpoint" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="my-cluster.abc123xyz.us-east-1.redshift.amazonaws.com" hint="Redshift console → Clusters → Properties → Endpoint" required {...fieldProps("host", formErrors, fieldRefs)} />
         <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder="5439" {...fieldProps("port", formErrors, fieldRefs)} />
-        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="dev" hint="default database is 'dev'" required />
+        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="dev" hint="default database is 'dev'" required {...fieldProps("database", formErrors, fieldRefs)} />
         {!form.iam_auth && (
           <>
             <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="awsuser" required {...fieldProps("username", formErrors, fieldRefs)} />
@@ -1956,7 +1989,12 @@ function ConnectionFieldsForm({
 }
 
 /* ── SSL Config Section ── */
-function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+function SSLSection({ form, setForm, formErrors, fieldRefs }: {
+  form: FormState;
+  setForm: (f: FormState) => void;
+  formErrors: Record<string, string>;
+  fieldRefs: MutableRefObject<Record<string, HTMLElement | null>>;
+}) {
   const config = DB_CONFIGS[form.db_type];
   if (!config.supportsSSL) return null;
 
@@ -2000,7 +2038,7 @@ function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState
           <div />
           {form.ssl_mode !== "disable" && (
             <>
-              <FormTextArea label="ca certificate (pem)" value={form.ssl_ca_cert} onChange={(v) => setForm({ ...form, ssl_ca_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint={form.ssl_mode.startsWith("verify") ? "required for certificate verification" : "optional — root CA for server verification"} rows={3} />
+              <FormTextArea label="ca certificate (pem)" value={form.ssl_ca_cert} onChange={(v) => setForm({ ...form, ssl_ca_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint={form.ssl_mode.startsWith("verify") ? "required for certificate verification" : "optional — root CA for server verification"} rows={3} {...(fieldProps("ssl_ca_cert", formErrors, fieldRefs) as { id: string; inputRef: React.Ref<HTMLTextAreaElement>; error: string | undefined })} />
               <FormTextArea label="client certificate (pem)" value={form.ssl_client_cert} onChange={(v) => setForm({ ...form, ssl_client_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint="optional — for mutual TLS (mTLS) authentication" rows={3} />
               <FormTextArea label="client key (pem)" value={form.ssl_client_key} onChange={(v) => setForm({ ...form, ssl_client_key: v })} placeholder="-----BEGIN PRIVATE KEY-----" hint="required when using client certificate" rows={3} className="col-span-2" />
             </>
@@ -2247,7 +2285,11 @@ export default function ConnectionsPage() {
     "name", "connection_string",
     "host", "port", "account", "project", "credentials_json",
     "http_path", "access_token", "dbx_oauth_client_id", "dbx_oauth_client_secret",
+    "sf_private_key", "sf_oauth_token",
+    "bq_oauth_token",
     "database", "catalog", "username",
+    "azure_tenant_id", "azure_client_id", "azure_client_secret",
+    "ssl_ca_cert",
     "ssh_host", "ssh_port", "ssh_username", "ssh_password", "ssh_private_key",
     "connection_timeout", "query_timeout",
   ] as const;
@@ -2273,7 +2315,8 @@ export default function ConnectionsPage() {
       ["Trino requires a catalog", "catalog"],
       ["requires a host", "host"],
       ["requires a username", "username"],
-      ["requires a database file path", "database"],
+      ["requires a database file path", "database"],   // duckdb/sqlite — must win
+      ["requires a database", "database"],              // pg/mysql/mssql/clickhouse/redshift — generic fallback
     ];
     for (const msg of messages) {
       let matched = false;
@@ -2296,6 +2339,8 @@ export default function ConnectionsPage() {
 
     const isSshField = ["ssh_host", "ssh_port", "ssh_username", "ssh_password", "ssh_private_key"].includes(firstKey);
     const isAdvancedField = ["connection_timeout", "query_timeout"].includes(firstKey);
+    const isSslField = firstKey === "ssl_ca_cert";
+    const isAzureAdField = ["azure_tenant_id", "azure_client_id", "azure_client_secret"].includes(firstKey);
 
     const focusEl = () => {
       requestAnimationFrame(() => {
@@ -2307,13 +2352,18 @@ export default function ConnectionsPage() {
       });
     };
 
-    if (isSshField) {
+    if (isSslField) {
+      if (!showAdvanced) setShowAdvanced(true);
+      setAdvancedTab("security");
+    } else if (isSshField) {
       if (!showAdvanced) setShowAdvanced(true);
       setAdvancedTab("security");
       if (!form.ssh_enabled) setForm((prev) => ({ ...prev, ssh_enabled: true }));
     } else if (isAdvancedField) {
       if (!showAdvanced) setShowAdvanced(true);
       setAdvancedTab("performance");
+    } else if (isAzureAdField) {
+      if (!form.azure_ad_auth) setForm((prev) => ({ ...prev, azure_ad_auth: true }));
     }
 
     // Double-rAF is safe whether or not we just expanded a section
@@ -3003,7 +3053,7 @@ export default function ConnectionsPage() {
                     {/* Security tab */}
                     {advancedTab === "security" && (
                       <div className="animate-fade-in">
-                    <SSLSection form={form} setForm={setForm} />
+                    <SSLSection form={form} setForm={setForm} formErrors={formErrors} fieldRefs={fieldRefs} />
                     <SSHSection form={form} setForm={setForm} serverIp={serverIp} formErrors={formErrors} fieldRefs={fieldRefs} clearServerError={(key) => setServerFieldErrors((prev) => { if (!(key in prev)) return prev; const { [key]: _, ...rest } = prev; return rest; })} />
                     {/* Connection Scope + Read-only (HEX pattern) */}
                     <div className="border-t border-[var(--color-border)] pt-4 mt-4">

@@ -70,6 +70,8 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
             errors.append(f"{db} requires a host")
         if not conn.username:
             errors.append(f"{db} requires a username")
+        if not conn.database:
+            errors.append(f"{db} requires a database")
 
     if db == "trino":
         if not conn.host:

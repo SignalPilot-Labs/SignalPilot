@@ -38,7 +38,15 @@ router = APIRouter(prefix="/api")
 
 def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
     """Validate connection parameters before persisting. Returns list of error messages."""
+    from ..deployment import is_cloud_mode
     errors: list[str] = []
+
+    # Cloud mode: reject file-based local database connections
+    if is_cloud_mode() and conn.db_type in ("duckdb", "sqlite"):
+        db_path = conn.connection_string or conn.database or ""
+        if db_path and db_path != ":memory:" and not db_path.startswith("md:"):
+            errors.append(f"File-based {conn.db_type} connections are not available in cloud mode")
+            return errors
 
     if conn.connection_string:
         if conn.db_type in ("duckdb", "sqlite"):

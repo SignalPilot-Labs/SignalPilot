@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .correlation import RequestCorrelationMiddleware
+from .deployment import is_cloud_mode
 from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
@@ -64,10 +65,21 @@ async def lifespan(app: FastAPI):
         except _json.JSONDecodeError:
             logger.error("STARTUP FATAL: SP_BYOK_PROVIDER_CONFIG contains invalid JSON")
             raise SystemExit(1)
-    byok_provider = make_provider(byok_provider_type, byok_provider_config)
+
+    # In cloud mode, skip local BYOK provider auto-registration
     dek_cache = DEKCache(ttl_seconds=300)
-    configure_byok(byok_provider, dek_cache)
-    logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
+    if is_cloud_mode() and byok_provider_type == "local":
+        logger.info(
+            "STARTUP: Cloud mode — skipping local BYOK provider; "
+            "set SP_BYOK_PROVIDER to aws_kms/gcp_kms/azure_kv"
+        )
+    else:
+        byok_provider = make_provider(byok_provider_type, byok_provider_config)
+        configure_byok(byok_provider, dek_cache)
+        logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
+
+    if is_cloud_mode():
+        logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
 
     async def _pool_cleanup_loop():
         while True:

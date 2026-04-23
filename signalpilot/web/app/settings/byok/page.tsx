@@ -28,6 +28,8 @@ import {
 } from "@/lib/api";
 import type { BYOKKey, BYOKStatus } from "@/lib/api";
 
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+
 export default function BYOKPage() {
   const { toast } = useToast();
   const [keys, setKeys] = useState<BYOKKey[]>([]);
@@ -351,7 +353,7 @@ export default function BYOKPage() {
                           onChange={(e) => setCreateProvider(e.target.value)}
                           className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                         >
-                          <option value="local">local (auto-generated)</option>
+                          {!IS_CLOUD_MODE && <option value="local">local (auto-generated)</option>}
                           <option value="aws_kms">AWS KMS</option>
                           <option value="gcp_kms">GCP Cloud KMS</option>
                           <option value="azure_kv">Azure Key Vault</option>

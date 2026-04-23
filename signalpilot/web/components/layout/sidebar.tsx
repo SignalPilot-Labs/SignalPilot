@@ -111,39 +111,8 @@ const AUTH_ROUTE_PREFIXES = ["/sign-in", "/sign-up"];
 
 function SignalPilotLogo() {
   return (
-    <div className="relative">
-      {/* Status ring */}
-      <svg width="38" height="38" viewBox="0 0 38 38" fill="none" className="absolute -inset-[3px]">
-        <circle cx="19" cy="19" r="17" stroke="var(--color-border)" strokeWidth="0.5" fill="none" />
-        <circle cx="19" cy="19" r="17" stroke="var(--color-success)" strokeWidth="1" fill="none"
-          strokeDasharray="80 27" strokeLinecap="square" opacity="0.3"
-          className="-rotate-90 origin-center"
-        >
-          <animateTransform attributeName="transform" type="rotate" from="0 19 19" to="360 19 19" dur="20s" repeatCount="indefinite" />
-        </circle>
-      </svg>
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        {/* Outer frame */}
-        <rect x="1" y="1" width="30" height="30" fill="white" />
-        <rect x="2" y="2" width="28" height="28" fill="black" />
-        {/* Terminal chevron */}
-        <path
-          d="M8 9L14 16L8 23"
-          stroke="white"
-          strokeWidth="2.5"
-          strokeLinecap="square"
-          strokeLinejoin="miter"
-        />
-        {/* Cursor line */}
-        <line x1="16" y1="23" x2="24" y2="23" stroke="white" strokeWidth="2.5" strokeLinecap="square" />
-        {/* Signal dot with pulse */}
-        <circle cx="24" cy="9" r="3" fill="#00ff88" opacity="0.15">
-          <animate attributeName="r" values="3;5;3" dur="3s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.15;0;0.15" dur="3s" repeatCount="indefinite" />
-        </circle>
-        <circle cx="24" cy="9" r="2" fill="#00ff88" />
-      </svg>
-    </div>
+    /* eslint-disable-next-line @next/next/no-img-element */
+    <img src="/logo.svg" alt="SignalPilot" width={32} height={32} className="rounded-sm" />
   );
 }
 
@@ -328,6 +297,7 @@ function ByokNavLink({ pathname }: { pathname: string }) {
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const { isCloudMode } = useAppAuth();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [projectCount, setProjectCount] = useState(0);
   const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
@@ -368,19 +338,21 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [fetchCounts]);
 
+  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/sandboxes")));
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
         const idx = parseInt(e.key, 10);
-        if (idx >= 1 && idx <= nav.length) {
+        if (idx >= 1 && idx <= filteredNav.length) {
           e.preventDefault();
-          router.push(nav[idx - 1].href);
+          router.push(filteredNav[idx - 1].href);
         }
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [router]);
+  }, [router, filteredNav]);
 
   // Hide sidebar on auth pages — checked after all hooks are called
   if (AUTH_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
@@ -427,7 +399,8 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-2 space-y-0.5">
-        {nav.map(({ href, label, icon: Icon, shortcut }) => {
+        {filteredNav.map(({ href, label, icon: Icon }, filteredIdx) => {
+          const shortcut = String(filteredIdx + 1);
           const active = pathname.startsWith(href);
           const badge = href === "/sandboxes" ? activeSandboxes : href === "/projects" ? projectCount : 0;
           return (

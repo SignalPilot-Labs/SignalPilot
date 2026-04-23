@@ -72,6 +72,8 @@ import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useConnection } from "@/lib/connection-context";
 
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+
 /* ── Local DB File Picker (DuckDB / SQLite) ── */
 function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder = "/path/to/database.duckdb", hint = "paste a file path or browse to select a file" }: { value: string; onChange: (v: string) => void; pattern?: string; placeholder?: string; hint?: string }) {
   const [browsing, setBrowsing] = useState(false);
@@ -1563,7 +1565,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
             {([
               { key: "local", label: "local file" },
               { key: "memory", label: "in-memory" },
-            ] as const).map(({ key, label }) => (
+            ] as const).filter(({ key }) => !(IS_CLOUD_MODE && key === "local")).map(({ key, label }) => (
               <button
                 key={key}
                 type="button"
@@ -1583,7 +1585,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           </div>
         </div>
 
-        {sqliteMode === "local" && (
+        {!IS_CLOUD_MODE && sqliteMode === "local" && (
           <LocalDBFilePicker
             value={form.database}
             onChange={(v) => setForm({ ...form, database: v })}
@@ -1613,7 +1615,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
               { key: "local", label: "local file" },
               { key: "motherduck", label: "MotherDuck" },
               { key: "memory", label: "in-memory" },
-            ] as const).map(({ key, label }) => (
+            ] as const).filter(({ key }) => !(IS_CLOUD_MODE && (key === "local" || key === "memory"))).map(({ key, label }) => (
               <button
                 key={key}
                 type="button"
@@ -1636,7 +1638,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           </div>
         </div>
 
-        {form.duckdb_mode === "local" && (
+        {!IS_CLOUD_MODE && form.duckdb_mode === "local" && (
           <LocalDBFilePicker
             value={form.database}
             onChange={(v) => setForm({ ...form, database: v })}
@@ -2567,7 +2569,7 @@ export default function ConnectionsPage() {
             <div className="mb-5">
               <label className="block text-[12px] text-[var(--color-text-dim)] mb-2 tracking-wider">database type</label>
               <div className="flex flex-wrap gap-1.5">
-                {DB_TYPE_ORDER.map((dbType) => {
+                {DB_TYPE_ORDER.filter((t) => !IS_CLOUD_MODE || t !== "sqlite").map((dbType) => {
                   const cfg = DB_CONFIGS[dbType];
                   const isSelected = form.db_type === dbType;
                   return (

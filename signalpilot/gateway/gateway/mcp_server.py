@@ -148,6 +148,11 @@ async def execute_code(code: str, timeout: int = 30) -> str:
     Returns:
         The stdout output from the code, or an error message.
     """
+    # Cloud mode gate
+    from .deployment import is_cloud_mode
+    if is_cloud_mode():
+        return "Error: Code execution is not available in cloud mode"
+
     # Input validation
     if not code or not code.strip():
         return "Error: Code cannot be empty."
@@ -2466,6 +2471,9 @@ async def dbt_error_parser(error_output: str) -> str:
     Returns:
         Structured error summary with model name, type, location, message, and suggested fix.
     """
+    from .deployment import is_cloud_mode
+    if is_cloud_mode():
+        return "Error: dbt error parsing is not available in cloud mode"
     if not error_output or not error_output.strip():
         return "Error: error_output cannot be empty."
 
@@ -3160,6 +3168,9 @@ async def dbt_project_map(
     """
     import asyncio
 
+    from .deployment import is_cloud_mode
+    if is_cloud_mode():
+        return "Error: dbt project map is not available in cloud mode"
     if not project_dir or not project_dir.strip():
         return "Error: project_dir is required"
     # Offload the sync scan + render to a worker thread so the MCP event loop
@@ -3205,6 +3216,9 @@ async def dbt_project_validate(
     import asyncio
     from pathlib import Path as _Path
 
+    from .deployment import is_cloud_mode
+    if is_cloud_mode():
+        return "Error: dbt project validation is not available in cloud mode"
     if not project_dir or not project_dir.strip():
         return "Error: project_dir is required"
 

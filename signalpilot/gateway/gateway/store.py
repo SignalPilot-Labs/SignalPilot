@@ -194,6 +194,7 @@ def _get_encryption_key() -> bytes:
         return _CACHED_KEY
 
     from cryptography.fernet import Fernet
+    from .deployment import is_cloud_mode
 
     key_str = os.getenv("SP_ENCRYPTION_KEY")
     if key_str:
@@ -207,6 +208,11 @@ def _get_encryption_key() -> bytes:
             _CACHED_KEY = _derive_key_pbkdf2(key_str)
             return _CACHED_KEY
     else:
+        if is_cloud_mode():
+            raise RuntimeError(
+                "SP_ENCRYPTION_KEY environment variable is required in cloud mode. "
+                "Cannot auto-generate encryption key from filesystem."
+            )
         key_file = DATA_DIR / KEY_FILE_NAME
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         key = Fernet.generate_key()
@@ -560,7 +566,10 @@ def delete_sandbox(sandbox_id: str) -> bool:
 
 # ─── Local API Key (file-based, only for local mode) ────────────────────────
 
-def get_local_api_key() -> str:
+def get_local_api_key() -> str | None:
+    from .deployment import is_cloud_mode
+    if is_cloud_mode():
+        return None
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     key_file = DATA_DIR / "local_api_key"
     new_key = "sp_local_" + secrets.token_hex(16)

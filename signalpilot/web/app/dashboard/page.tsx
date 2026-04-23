@@ -466,6 +466,7 @@ export default function DashboardGate() {
 }
 
 function DashboardContent() {
+  const { isCloudMode } = useAppAuth();
   const { toast } = useToast();
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
@@ -548,19 +549,23 @@ function DashboardContent() {
         }
       >
         <div className="flex items-center gap-8 text-xs">
-          <div className="flex items-center gap-2">
-            <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
-            <code className="text-[12px] text-[var(--color-text)]">
-              {metrics?.sandbox_manager || "—"}
-            </code>
-            <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
-          </div>
-          <div className="flex items-center gap-2">
-            <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">sandbox:</span>
-            <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
-          </div>
+          {!isCloudMode && (
+            <div className="flex items-center gap-2">
+              <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
+              <code className="text-[12px] text-[var(--color-text)]">
+                {metrics?.sandbox_manager || "—"}
+              </code>
+              <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
+            </div>
+          )}
+          {!isCloudMode && (
+            <div className="flex items-center gap-2">
+              <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[var(--color-text-dim)]">sandbox:</span>
+              <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
+            </div>
+          )}
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
@@ -577,18 +582,22 @@ function DashboardContent() {
       </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
-        <MetricCard
-          label="active sandboxes"
-          value={metrics?.active_sandboxes ?? "—"}
-          subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
-          icon={Terminal}
-        />
-        <MetricCard
-          label="sandbox instances"
-          value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
-          icon={Cpu}
-        />
+      <div className={`grid ${isCloudMode ? "grid-cols-2" : "grid-cols-4"} gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in`}>
+        {!isCloudMode && (
+          <MetricCard
+            label="active sandboxes"
+            value={metrics?.active_sandboxes ?? "—"}
+            subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
+            icon={Terminal}
+          />
+        )}
+        {!isCloudMode && (
+          <MetricCard
+            label="sandbox instances"
+            value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
+            icon={Cpu}
+          />
+        )}
         <MetricCard
           label="connections"
           value={connections.length}
@@ -697,7 +706,7 @@ function DashboardContent() {
       <div className="mb-8">
         <SystemDiagram
           connections={connections.length}
-          activeSandboxes={metrics?.active_sandboxes ?? 0}
+          activeSandboxes={isCloudMode ? 0 : (metrics?.active_sandboxes ?? 0)}
           governanceActive={true}
         />
       </div>

@@ -232,6 +232,15 @@ class PoolManager:
                     del self._tunnels[key]
                 del self._pools[key]
 
+            # Cloud mode: reject all local database connections (file-based and in-memory)
+            # Only MotherDuck (md:) DuckDB is allowed in cloud mode
+            from ..deployment import is_cloud_mode
+            if is_cloud_mode():
+                if db_type == "sqlite":
+                    raise RuntimeError("SQLite connections are not available in cloud mode")
+                if db_type == "duckdb" and connection_string and not connection_string.startswith("md:"):
+                    raise RuntimeError("Only MotherDuck (md:) DuckDB connections are available in cloud mode")
+
             # Use sandboxed connectors for local file-based databases (DuckDB, SQLite)
             # that live on the host filesystem and can't be opened directly from Docker.
             if db_type == "duckdb" and connection_string and not connection_string.startswith("md:") and connection_string != ":memory:":

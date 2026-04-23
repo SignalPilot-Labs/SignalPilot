@@ -217,8 +217,8 @@ function McpConnectContent() {
         </div>
       </TerminalBar>
 
-      {/* ── Section 1: Endpoint ── */}
-      <section className="mb-8">
+      {/* ── Section 1: Endpoint (hidden if no keys) ── */}
+      {!hasKeys ? null : <section className="mb-8">
         <SectionHeader icon={Plug} title="endpoint" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 space-y-4">
           {/* URL row */}
@@ -250,7 +250,7 @@ function McpConnectContent() {
             </span>
           </div>
         </div>
-      </section>
+      </section>}
 
       {/* ── Section 2: API Key ── */}
       <section className="mb-8">
@@ -314,12 +314,15 @@ function McpConnectContent() {
                 strokeWidth={1.5}
               />
               <div className="flex-1">
-                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-3">
-                  you don&apos;t have any api keys yet. create one to use with mcp clients.
+                <p className="text-[12px] text-[var(--color-warning)] tracking-wider leading-relaxed mb-1 font-medium">
+                  an api key is required to connect mcp clients.
+                </p>
+                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-3">
+                  create an api key first — without one, no mcp client (Claude Code, Cursor, etc.) can authenticate with SignalPilot.
                 </p>
                 <Link
                   href="/settings/api-keys"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-all tracking-wider uppercase font-medium"
                 >
                   <Key className="w-3 h-3" />
                   create api key
@@ -330,8 +333,8 @@ function McpConnectContent() {
         )}
       </section>
 
-      {/* ── Section 3: Client Configuration ── */}
-      <section className="mb-8">
+      {/* ── Section 3: Client Configuration (hidden if no keys) ── */}
+      {!hasKeys ? null : <section className="mb-8">
         <SectionHeader icon={Terminal} title="client configuration" />
 
         {/* Tab selector */}
@@ -397,7 +400,7 @@ function McpConnectContent() {
             </p>
           </div>
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

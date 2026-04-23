@@ -587,20 +587,34 @@ function FormInput({
   label: string; value: string; onChange: (v: string) => void;
   type?: string; placeholder?: string; hint?: string; required?: boolean; className?: string; error?: string;
 }) {
+  const [visible, setVisible] = useState(false);
+  const isSecret = type === "password";
   return (
     <div className={className}>
       <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
         {label}{required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </label>
-      <input
-        type={type}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
-          error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
-        }`}
-      />
+      <div className="relative">
+        <input
+          type={isSecret && !visible ? "password" : "text"}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full px-3 py-2 ${isSecret ? "pr-9" : ""} bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
+            error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
+          }`}
+        />
+        {isSecret && (
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => setVisible(!visible)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
+          >
+            {visible ? <EyeOff className="w-3.5 h-3.5" strokeWidth={1.5} /> : <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />}
+          </button>
+        )}
+      </div>
       {error && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
       {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
     </div>
@@ -819,13 +833,20 @@ function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
   try {
     if (dbType === "postgres" || dbType === "mysql" || dbType === "redshift" || dbType === "clickhouse" || dbType === "mssql") {
       const parsed = new URL(url.replace(/^(postgresql|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver):/, "http:"));
-      return {
+      const result: Partial<FormState> = {
         host: parsed.hostname || "",
         port: parsed.port || String(DB_CONFIGS[dbType].defaultPort),
         database: parsed.pathname.replace(/^\//, "") || "",
         username: decodeURIComponent(parsed.username || ""),
         password: decodeURIComponent(parsed.password || ""),
       };
+      // Extract SSL mode from query params (e.g., ?sslmode=require)
+      const sslmode = parsed.searchParams.get("sslmode");
+      if (sslmode && sslmode !== "disable") {
+        result.ssl_enabled = true;
+        result.ssl_mode = sslmode as FormState["ssl_mode"];
+      }
+      return result;
     }
     if (dbType === "snowflake") {
       // snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
@@ -949,18 +970,23 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     description: form.description,
   };
 
-  if (form.connectionMode === "url" && form.connection_string) {
+  const isUrlMode = form.connectionMode === "url" && form.connection_string;
+
+  if (isUrlMode) {
     payload.connection_string = form.connection_string;
   }
 
   const config = DB_CONFIGS[form.db_type];
 
-  // Common host/port fields
-  if (config.fields.includes("host")) payload.host = form.host;
-  if (config.fields.includes("port")) payload.port = parseInt(form.port) || config.defaultPort;
-  if (config.fields.includes("database")) payload.database = form.database;
-  if (config.fields.includes("username")) payload.username = form.username;
-  if (config.fields.includes("password")) payload.password = form.password;
+  // Common host/port fields — skip when using connection_string to avoid
+  // overwriting parsed values with form defaults (e.g., "localhost:5432").
+  if (!isUrlMode) {
+    if (config.fields.includes("host")) payload.host = form.host;
+    if (config.fields.includes("port")) payload.port = parseInt(form.port) || config.defaultPort;
+    if (config.fields.includes("database")) payload.database = form.database;
+    if (config.fields.includes("username")) payload.username = form.username;
+    if (config.fields.includes("password")) payload.password = form.password;
+  }
 
   // Snowflake
   if (config.fields.includes("account")) payload.account = form.account;
@@ -2909,8 +2935,11 @@ export default function ConnectionsPage() {
             {(() => {
               const warnings: string[] = [];
               const cfg = DB_CONFIGS[form.db_type];
-              // Warn if SSL not enabled on a production-capable connector
-              if (cfg.supportsSSL && !form.ssl_enabled && !["duckdb", "sqlite"].includes(form.db_type)) {
+              // Warn if SSL not enabled on a production-capable connector.
+              // In URL mode, check the connection string for sslmode= param.
+              const urlHasSsl = form.connectionMode === "url" && form.connection_string &&
+                /[?&]sslmode=(require|verify-ca|verify-full|prefer|allow)/i.test(form.connection_string);
+              if (cfg.supportsSSL && !form.ssl_enabled && !urlHasSsl && !["duckdb", "sqlite"].includes(form.db_type)) {
                 warnings.push("SSL/TLS is not enabled. Recommended for production databases to encrypt traffic in transit.");
               }
               // Warn if using password auth for Snowflake (key-pair is preferred per HEX)
@@ -3013,9 +3042,14 @@ export default function ConnectionsPage() {
             const tables = schemaData[conn.name]?.tables;
             const connConfig = DB_CONFIGS[conn.db_type as DBType] || DB_CONFIGS.postgres;
 
-            // Build display string
+            // Build display string — prefer connection_string for URL-mode connections
             let displayStr = "";
-            if (conn.host && conn.port) {
+            if ((conn as any).connection_string && !conn.host) {
+              try {
+                const u = new URL((conn as any).connection_string.replace(/^(postgresql|postgres|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver|trino(\+https)?|snowflake|databricks):/, "http:"));
+                displayStr = `${u.hostname}${u.port ? `:${u.port}` : ""}${u.pathname !== "/" ? u.pathname : ""}`;
+              } catch { displayStr = "(connection string)"; }
+            } else if (conn.host && conn.port) {
               displayStr = `${conn.host}:${conn.port}/${conn.database || ""}`;
             } else if (conn.account) {
               displayStr = `${conn.account}/${conn.database || ""}`;

@@ -754,7 +754,7 @@ async def warmup_all_schemas(store: StoreD):
 
 
 @router.post("/connections/parse-url", dependencies=[RequireScope("read")])
-async def parse_connection_url(_: UserID, request: Request):
+async def parse_url_endpoint(_: UserID, request: Request):
     """Parse a database connection URL into individual credential fields."""
     body = await request.json()
     url = body.get("url", "").strip()
@@ -763,83 +763,10 @@ async def parse_connection_url(_: UserID, request: Request):
     if len(url) > 4096:
         raise HTTPException(status_code=422, detail="URL must be at most 4096 characters")
 
-    db_type = body.get("db_type", "")
-    _scheme_map = {
-        "postgresql": "postgres", "postgres": "postgres",
-        "mysql": "mysql", "mysql+pymysql": "mysql",
-        "mssql": "mssql", "mssql+pymssql": "mssql", "sqlserver": "mssql",
-        "redshift": "redshift",
-        "clickhouse": "clickhouse", "clickhouse+http": "clickhouse", "clickhouse+https": "clickhouse",
-        "clickhouses": "clickhouse",
-        "snowflake": "snowflake",
-        "databricks": "databricks",
-        "trino": "trino", "trino+https": "trino",
-    }
-
-    normalized = url
-    original_scheme = url.split("://")[0] if "://" in url else ""
-
-    if not db_type and original_scheme:
-        db_type = _scheme_map.get(original_scheme, "")
-
-    if "://" in normalized:
-        scheme_part = normalized.split("://")[0]
-        normalized = "http://" + normalized[len(scheme_part) + 3:]
-
-    try:
-        parsed = urlparse(normalized)
-    except Exception:
+    from ..url_parser import parse_connection_url
+    result = parse_connection_url(url, db_type=body.get("db_type", ""))
+    if not result:
         raise HTTPException(status_code=400, detail="Could not parse URL")
-
-    path_parts = [p for p in (parsed.path or "").split("/") if p]
-    query_params = parse_qs(parsed.query or "")
-
-    result: dict[str, Any] = {
-        "db_type": db_type,
-        "host": parsed.hostname or "",
-        "port": parsed.port,
-        "username": unquote(parsed.username or ""),
-        "password": unquote(parsed.password or ""),
-    }
-
-    if db_type == "postgres" or db_type == "redshift":
-        result["database"] = path_parts[0] if path_parts else ""
-        sslmode = query_params.get("sslmode", [""])[0]
-        if sslmode:
-            result["ssl"] = sslmode != "disable"
-            result["ssl_mode"] = sslmode
-    elif db_type == "mysql":
-        result["database"] = path_parts[0] if path_parts else ""
-    elif db_type == "mssql":
-        result["database"] = path_parts[0] if path_parts else "master"
-    elif db_type == "snowflake":
-        result["account"] = parsed.hostname or ""
-        result["host"] = ""
-        result["database"] = path_parts[0] if len(path_parts) > 0 else ""
-        result["schema_name"] = path_parts[1] if len(path_parts) > 1 else ""
-        result["warehouse"] = query_params.get("warehouse", [""])[0]
-        result["role"] = query_params.get("role", [""])[0]
-    elif db_type == "clickhouse":
-        result["database"] = path_parts[0] if path_parts else "default"
-        if "http" in original_scheme:
-            result["protocol"] = "http"
-        else:
-            result["protocol"] = "native"
-    elif db_type == "databricks":
-        result["host"] = parsed.hostname or ""
-        result["access_token"] = unquote(parsed.username or "")
-        result["username"] = ""
-        result["password"] = ""
-        result["http_path"] = "/".join(path_parts) if path_parts else ""
-        result["catalog"] = query_params.get("catalog", [""])[0]
-        result["schema_name"] = query_params.get("schema", [""])[0]
-    elif db_type == "trino":
-        result["catalog"] = path_parts[0] if len(path_parts) > 0 else ""
-        result["schema_name"] = path_parts[1] if len(path_parts) > 1 else ""
-    else:
-        result["database"] = path_parts[0] if path_parts else ""
-
-    result = {k: v for k, v in result.items() if v is not None and v != ""}
     return result
 
 
@@ -850,9 +777,15 @@ async def test_credentials(_: UserID, request: Request):
     t0 = time.monotonic()
     phases: list[dict] = []
 
+    # Name is required by ConnectionCreate but irrelevant for testing —
+    # inject a placeholder so users can test before choosing a name.
+    if not body.get("name"):
+        body["name"] = "_test"
+
     try:
         conn = ConnectionCreate(**body)
-    except Exception:
+    except Exception as e:
+        logger.warning("ConnectionCreate validation failed: %s | keys=%s", e, list(body.keys()))
         return {"status": "error", "message": "Invalid connection parameters", "phases": []}
 
     try:

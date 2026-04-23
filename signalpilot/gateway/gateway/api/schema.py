@@ -323,12 +323,30 @@ async def explore_column_values(
     q_col = _quote_identifier(column, quote)
     q_table = _quote_table_name(table, quote)
 
-    # Construct safe exploration query
+    # Construct safe exploration query using parameterized queries to prevent
+    # SQL injection. Different connectors use different placeholder styles.
+    _PARAM_PLACEHOLDER = {
+        "postgres": "$1", "redshift": "%s", "mysql": "%s", "mssql": "%s",
+        "snowflake": "%s", "clickhouse": "%s", "databricks": "%s",
+        "duckdb": "?", "sqlite": "?",
+        # Trino's connector doesn't pass params to cursor.execute — fall back
+        # to manual escaping (backslash + quote-doubling) for safety.
+    }
+
     where_clause = ""
+    explore_params: list | None = None
     if filter_pattern:
         like_op = "ILIKE" if db_type in ("postgres", "redshift", "snowflake") else "LIKE"
-        safe_pattern = filter_pattern.replace("'", "''")
-        where_clause = f"WHERE {q_col} {like_op} '{safe_pattern}'"
+        placeholder = _PARAM_PLACEHOLDER.get(db_type)
+        if placeholder:
+            where_clause = f"WHERE {q_col} {like_op} {placeholder}"
+            explore_params = [filter_pattern]
+        else:
+            # Manual escaping for connectors without param support (Trino).
+            # Escape backslashes first to prevent MySQL-style backslash-quote
+            # bypass (e.g., \' defeating quote-doubling).
+            safe_pattern = filter_pattern.replace("\\", "\\\\").replace("'", "''")
+            where_clause = f"WHERE {q_col} {like_op} '{safe_pattern}'"
 
     # Build the query — dialect-aware LIMIT/TOP
     if db_type == "mssql":
@@ -367,7 +385,7 @@ FROM {q_table}
         async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
             actual_sql = explore_sql
 
-            values_rows = await connector.execute(actual_sql, timeout=30)
+            values_rows = await connector.execute(actual_sql, params=explore_params, timeout=30)
             stats_rows = await connector.execute(null_sql, timeout=30)
 
         stats = stats_rows[0] if stats_rows else {}

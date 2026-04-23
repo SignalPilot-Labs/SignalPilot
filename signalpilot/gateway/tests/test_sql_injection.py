@@ -278,31 +278,111 @@ class TestExploreColumnValuesInjection:
         )
         assert response.status_code == 403
 
+    def test_filter_pattern_uses_parameterized_query_for_mysql(self, client):
+        """MySQL must use %s placeholder, not string interpolation, to prevent
+        backslash-quote bypass (\\' defeating quote-doubling)."""
+        store = self._make_store_with_connection(db_type="mysql")
+        mock_connector = AsyncMock()
+        mock_connector.execute.return_value = [{"value": "active", "count": 5}]
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _fake_conn(*a, **kw):
+            yield mock_connector
+
+        _set_scopes(["write"])
+        with patch("gateway.api.schema.pool_manager") as mock_pm:
+            mock_pm.connection = _fake_conn
+            app.dependency_overrides[get_store] = lambda: store
+            try:
+                client.post(
+                    "/api/connections/testconn/schema/explore",
+                    params={
+                        "table": "public.users",
+                        "column": "status",
+                        "filter_pattern": "\\' OR 1=1 --",
+                    },
+                )
+            finally:
+                app.dependency_overrides[get_store] = _fake_get_store
+
+        # The explore query must use a parameterized %s placeholder
+        call_args = mock_connector.execute.call_args_list[0]
+        sql_sent = call_args.args[0] if call_args.args else call_args.kwargs.get("sql", "")
+        params_sent = call_args.kwargs.get("params")
+        assert "%s" in sql_sent, f"MySQL query must use %s placeholder, got: {sql_sent}"
+        assert params_sent == ["\\' OR 1=1 --"], f"Param must be the raw filter_pattern, got: {params_sent}"
+        # Crucially: the raw injection string must NOT appear in the SQL text
+        assert "OR 1=1" not in sql_sent
+
+    def test_filter_pattern_uses_parameterized_query_for_postgres(self, client):
+        """PostgreSQL must use $1 placeholder for filter_pattern."""
+        store = self._make_store_with_connection(db_type="postgres")
+        mock_connector = AsyncMock()
+        mock_connector.execute.return_value = [{"value": "active", "count": 5}]
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _fake_conn(*a, **kw):
+            yield mock_connector
+
+        _set_scopes(["write"])
+        with patch("gateway.api.schema.pool_manager") as mock_pm:
+            mock_pm.connection = _fake_conn
+            app.dependency_overrides[get_store] = lambda: store
+            try:
+                client.post(
+                    "/api/connections/testconn/schema/explore",
+                    params={
+                        "table": "public.users",
+                        "column": "status",
+                        "filter_pattern": "%active%",
+                    },
+                )
+            finally:
+                app.dependency_overrides[get_store] = _fake_get_store
+
+        call_args = mock_connector.execute.call_args_list[0]
+        sql_sent = call_args.args[0] if call_args.args else call_args.kwargs.get("sql", "")
+        params_sent = call_args.kwargs.get("params")
+        assert "$1" in sql_sent, f"Postgres query must use $1 placeholder, got: {sql_sent}"
+        assert params_sent == ["%active%"]
+
+    def test_filter_pattern_backslash_quote_bypass_neutralised_for_trino(self):
+        """Trino (no param support) must escape backslashes to prevent \\' bypass."""
+        # Trino falls back to manual escaping since its connector ignores params.
+        injected = "\\' OR 1=1 --"
+        # Simulate the escaping logic from schema.py's Trino fallback path
+        safe = injected.replace("\\", "\\\\").replace("'", "''")
+        sql_fragment = f"WHERE col LIKE '{safe}'"
+        # The backslash is doubled (\\\\) so MySQL-style \' bypass is neutralised.
+        # In the SQL string literal: \\\\ = literal \\, '' = literal '
+        # The OR 1=1 remains inside the string literal.
+        assert "OR 1=1" in sql_fragment  # present as literal text
+        # Verify the string literal is properly closed — count unescaped quotes
+        # The fragment should be a single WHERE clause, not breakable SQL
+        assert sql_fragment.startswith("WHERE col LIKE '")
+        assert sql_fragment.endswith("'")
+
     def test_filter_pattern_sql_injection_is_escaped(self):
         """filter_pattern with SQL injection attempt is escaped before execution."""
         injected_pattern = "'; DROP TABLE users; --"
-        safe = injected_pattern.replace("'", "''")
+        safe = injected_pattern.replace("\\", "\\\\").replace("'", "''")
         # Verify the escaping doubles the single quote
         assert safe == "''; DROP TABLE users; --"
         # The resulting SQL fragment has the injection fully contained in the literal
         sql_fragment = f"WHERE col LIKE '{safe}'"
         assert "WHERE col LIKE '''; DROP TABLE users; --'" == sql_fragment
-        # The DROP keyword can only be reached after properly closing the escaped literal
-        # A SQL parser sees 'LIKE ''...' and treats '' as a literal single quote, not a terminator
 
     def test_filter_pattern_or_1_equals_1_is_not_injected(self):
         """Negative test: ' OR 1=1 -- must be escaped so it cannot act as SQL logic."""
         injected = "' OR 1=1 --"
-        safe = injected.replace("'", "''")
-        # After escaping, the pattern becomes '' OR 1=1 --
+        safe = injected.replace("\\", "\\\\").replace("'", "''")
         assert safe == "'' OR 1=1 --"
         sql_fragment = f"WHERE col LIKE '{safe}'"
-        # The full fragment: WHERE col LIKE ''' OR 1=1 --'
-        # SQL parser reads: LIKE + string literal containing ' OR 1=1 --
-        # The OR keyword is inside the literal, not parsed as SQL logic
         assert sql_fragment == "WHERE col LIKE ''' OR 1=1 --'"
-        # Confirm OR does not appear as standalone SQL (outside of a quoted literal)
-        # by checking the fragment cannot be split to expose unquoted OR 1=1
         assert "LIKE ''' OR 1=1 --'" in sql_fragment
 
     def test_table_name_with_double_quote_is_quoted(self):

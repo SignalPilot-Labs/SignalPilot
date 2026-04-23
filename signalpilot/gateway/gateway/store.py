@@ -604,6 +604,23 @@ class Store:
         if existing:
             raise ValueError(f"Connection '{conn.name}' already exists")
 
+        # When connection_string is provided without individual fields, parse
+        # host/port/database/username from the URL so they're stored as metadata
+        # for display and editing.
+        if conn.connection_string and not conn.host:
+            from .url_parser import parse_connection_url
+            try:
+                db_type_str = conn.db_type.value if hasattr(conn.db_type, 'value') else conn.db_type
+                parsed = parse_connection_url(conn.connection_string, db_type=db_type_str)
+                conn = conn.model_copy(update={
+                    k: v for k, v in parsed.items()
+                    if k in ("host", "port", "database", "username", "ssl", "account",
+                             "warehouse", "schema_name", "role", "catalog", "http_path")
+                    and v  # only backfill non-empty values
+                })
+            except Exception:
+                pass  # URL parsing failed — keep original fields
+
         # Strip sensitive fields from SSH/SSL for metadata storage
         ssh_tunnel_safe = None
         if conn.ssh_tunnel and conn.ssh_tunnel.enabled:

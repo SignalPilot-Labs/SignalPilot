@@ -2,11 +2,21 @@ const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:330
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 // ─── Cloud mode: Clerk token getter ─────────────────────────────────────────
-// Set by auth-context when Clerk is loaded so gateway requests use JWT auth
+// Set by auth-context when Clerk is loaded so gateway requests use JWT auth.
+// _clerkReadyPromise lets early requests wait for Clerk to initialize instead
+// of firing without auth and failing with 401.
 let _clerkGetToken: (() => Promise<string | null>) | null = null;
+let _resolveClerkReady: (() => void) | null = null;
+const _clerkReadyPromise: Promise<void> | null = IS_CLOUD_MODE
+  ? new Promise<void>((resolve) => { _resolveClerkReady = resolve; })
+  : null;
 
 export function setClerkTokenGetter(getter: () => Promise<string | null>) {
   _clerkGetToken = getter;
+  if (_resolveClerkReady) {
+    _resolveClerkReady();
+    _resolveClerkReady = null;
+  }
 }
 
 // ─── Local mode: auto-fetch local API key ───────────────────────────────────
@@ -47,10 +57,16 @@ export function setApiKey(key: string | null) {
 // ─── Unified request function ───────────────────────────────────────────────
 
 async function _getAuthHeader(): Promise<string | null> {
-  // Cloud mode: use Clerk JWT
-  if (IS_CLOUD_MODE && _clerkGetToken) {
-    const token = await _clerkGetToken();
-    if (token) return `Bearer ${token}`;
+  // Cloud mode: wait for Clerk to initialize, then use JWT
+  if (IS_CLOUD_MODE) {
+    if (_clerkReadyPromise && !_clerkGetToken) {
+      // Wait up to 10s for Clerk to load — avoids firing unauthenticated requests
+      await Promise.race([_clerkReadyPromise, new Promise((r) => setTimeout(r, 10_000))]);
+    }
+    if (_clerkGetToken) {
+      const token = await _clerkGetToken();
+      if (token) return `Bearer ${token}`;
+    }
     return null;
   }
   // Local mode: use sp_ API key

@@ -218,6 +218,15 @@ class ConnectionCreate(BaseModel):
     def validate_tags(cls, v: list[str]) -> list[str]:
         return _validate_string_list(v, 64, "tags")
 
+    @field_validator("schema_filter_include", "schema_filter_exclude", mode="before")
+    @classmethod
+    def coerce_schema_filters(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()] if v.strip() else []
+        if v is None:
+            return []
+        return v
+
     @field_validator("schema_filter_include", "schema_filter_exclude")
     @classmethod
     def validate_schema_filters(cls, v: list[str]) -> list[str]:

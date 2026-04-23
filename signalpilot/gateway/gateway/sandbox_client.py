@@ -94,6 +94,7 @@ class SandboxClient:
         session_token: str,
         timeout: int = 30,
         file_mounts: list[dict] | None = None,
+        request_id: str | None = None,
     ) -> ExecuteResult:
         """Execute code in the sandbox's VM, booting it if needed."""
         start = time.monotonic()
@@ -109,9 +110,14 @@ class SandboxClient:
             if file_mounts:
                 payload["file_mounts"] = file_mounts
 
+            extra_headers: dict[str, str] = {}
+            if request_id is not None:
+                extra_headers["X-Request-ID"] = request_id
+
             resp = await self._client.post(
                 "/execute",
                 json=payload,
+                headers=extra_headers,
                 timeout=timeout + 10,
             )
             resp.raise_for_status()
@@ -174,6 +180,7 @@ class SandboxClient:
         code: str,
         file_mounts: list[dict],
         timeout: int = 30,
+        request_id: str | None = None,
     ) -> ExecuteResult:
         """Execute code with file mounts, without needing a sandbox object."""
         start = time.monotonic()
@@ -185,7 +192,16 @@ class SandboxClient:
                 "timeout": timeout,
                 "file_mounts": file_mounts,
             }
-            resp = await self._client.post("/execute", json=payload, timeout=timeout + 10)
+            extra_headers: dict[str, str] = {}
+            if request_id is not None:
+                extra_headers["X-Request-ID"] = request_id
+
+            resp = await self._client.post(
+                "/execute",
+                json=payload,
+                headers=extra_headers,
+                timeout=timeout + 10,
+            )
             resp.raise_for_status()
             data = resp.json()
             return ExecuteResult(

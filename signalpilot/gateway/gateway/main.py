@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .correlation import RequestCorrelationMiddleware
 from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
@@ -158,7 +159,10 @@ if _extra_origins:
 
 # Middleware stack (last added = outermost = runs first)
 # CORS must be outermost so error responses from auth also get CORS headers
+# RequestCorrelationMiddleware is added first so it is innermost — runs on every
+# request after all other middleware, closest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30, auth_rpm=10)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=2_097_152)

@@ -165,6 +165,14 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         # Local dev key check (fast, no DB needed)
         if local_key and hmac.compare_digest(provided_key, local_key):
             request.state.auth = {"user_id": "local", "auth_method": "local_key"}
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "request %s %s user=%s request_id=%s",
+                request.method,
+                request.url.path,
+                "local",
+                request_id,
+            )
             return await call_next(request)
 
         # For stored API keys, validate against DB
@@ -183,6 +191,14 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                         "auth_method": "api_key",
                         "scopes": matched.scopes,
                     }
+                    request_id = getattr(request.state, "request_id", "unknown")
+                    logger.info(
+                        "request %s %s user=%s request_id=%s",
+                        request.method,
+                        request.url.path,
+                        matched.user_id,
+                        request_id,
+                    )
                     return await call_next(request)
         except Exception as e:
             logger.warning("API key DB validation failed: %s", e)

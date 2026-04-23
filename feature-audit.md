@@ -132,3 +132,14 @@
 - [x] **URL Utility POSTs Read-Scoped** — `POST /connections/parse-url`, `POST /connections/validate-url`, `POST /connections/build-url` now require `read` scope. Previously no scope required.
 - [x] **31 new tests** — TestAuditAdminScope (5), TestFilesBrowseReadScope (2), TestNetworkInfoAdminScope (3), TestConnectionsGetReadScope (11), TestProjectsGetReadScope (5), TestSchemaGetReadScope (7), TestBudgetGetReadScope (4), TestCacheStatsReadScope (6), TestMetricsReadScope (2), TestUrlUtilityReadScope (6). 102 total scope enforcement tests pass.
 - [x] **Updated TestParseUrlEndpointsUnauthenticated** — Renamed to TestUrlUtilityReadScope and updated to expect 403 without `read` scope (3 tests updated to reflect new scope requirement).
+
+## Round 13: Request Correlation IDs
+
+### COMPLETED
+
+- [x] **RequestCorrelationMiddleware** — Raw ASGI middleware (matches `RequestBodySizeLimitMiddleware` pattern). Generates a UUID4 correlation ID for every HTTP request. Accepts client-provided `X-Request-ID` only if it passes strict format validation (`re.fullmatch(r'[a-zA-Z0-9\-]{1,64}', value)`); rejects header injection attempts. Stores ID on `scope["state"]["request_id"]` for downstream access. Echoes ID in `X-Request-ID` response header via wrapped `send` callable.
+- [x] **`get_request_id(request)` helper** — Extracts `request.state.request_id` for use in router handlers and logging.
+- [x] **Middleware Stack Registration** — `RequestCorrelationMiddleware` registered as innermost middleware (added first, before `SecurityHeadersMiddleware`). Stack outermost→innermost: CORS → RequestBodySizeLimit → SecurityHeaders → RateLimit → APIKeyAuth → RequestCorrelation.
+- [x] **SandboxClient Header Propagation** — `execute()` and `execute_code_with_mounts()` accept optional `request_id: str | None` parameter. When provided, includes `X-Request-ID` in outbound HTTP requests to sandbox manager for end-to-end tracing.
+- [x] **Auth Middleware Correlation Logging** — `APIKeyAuthMiddleware` logs `INFO "request METHOD PATH user=USER request_id=ID"` on successful authentication (both local_key and stored api_key paths), using `getattr(request.state, "request_id", "unknown")` fallback.
+- [x] **8 new tests** in `test_correlation.py` — UUID4 generation, client ID echo, injection replacement, oversized replacement, empty generation, consistency, alphanumeric acceptance, special char rejection. All pass.

@@ -169,3 +169,12 @@
 - [x] **MEDIUM: Backtick injection in `clickhouse.py` fallback path** — Replaced `` f'`{col}`' `` with `self._quote_identifier(col)`. `ClickHouseConnector` already overrides `_identifier_quote` to return `` ` ``, so the method correctly escapes embedded backticks.
 - [x] **MEDIUM: Single-quote injection in `mssql.py` string literal** — Column name in `SELECT '{col}' AS _col` now escaped with `safe_name = col.replace("'", "''")`. Matches the pattern in `base.py:267`.
 - [x] **26 new tests** in `test_sql_injection.py` — Unit tests for `_quote_identifier`, `_quote_table_name`, `_quote_table`, `ClickHouseConnector._quote_identifier`, MSSQL literal escaping; integration tests for `explore_column_values` scope enforcement and filter_pattern length cap; negative injection tests verifying SQL logic cannot escape the literal context.
+
+## Round 16: Timing Attack Audit & Dependency Vulnerability Scanning
+
+### COMPLETED
+
+- [x] **Constant-time token comparison audit: PASS** — Both secret comparison sites already use `hmac.compare_digest()`: `middleware.py:166` (local dev key) and `store.py:1111` (stored API key hashes). Sandbox manager uses dict hash-table lookups (not string comparisons). MCP auth delegates to `validate_api_key()` which calls `store.validate_stored_api_key()`. No timing attack vectors found.
+- [x] **HIGH: Next.js DoS (GHSA-q4gf-8mx6-v5v3, CVSS 7.5)** — `next` bumped from `16.2.1` to `16.2.4` in `signalpilot/web/package.json`. Denial of Service via Server Components (CWE-770). `eslint-config-next` also bumped to `16.2.4` to maintain version sync. `npm audit` reports 0 vulnerabilities.
+- [x] **Python runtime dependencies: CLEAN** — `pip-audit` found no vulnerabilities in fastapi, uvicorn, httpx, cryptography, PyJWT, sqlalchemy, or any other runtime dependency.
+- [x] **pip 25.0.1 CVEs noted** — CVE-2025-8869 and CVE-2026-1703 affect pip itself (build tool only, not production runtime). Not actionable in application code.

@@ -1,12 +1,18 @@
-"use client";
+/**
+ * Shared wrapper for auth pages.
+ * Chrome lifted verbatim from app/sign-in/[[...sign-in]]/page.tsx:
+ * background grid SVG, SignalPilot logo header, outer layout.
+ */
 
-import { SignUp } from "@clerk/nextjs";
-import Link from "next/link";
-import { clerkAppearance } from "@/lib/clerk-theme";
+import type { ReactNode } from "react";
 
-const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+export interface AuthShellProps {
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}
 
-export default function SignUpPage() {
+export function AuthShell({ title, subtitle, children }: AuthShellProps) {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen -ml-56 relative">
       {/* Background grid — same pattern as boot page */}
@@ -17,7 +23,7 @@ export default function SignUpPage() {
         <svg width="100%" height="100%" className="opacity-[0.025]">
           <defs>
             <pattern
-              id="signup-grid"
+              id="auth-shell-grid"
               width="32"
               height="32"
               patternUnits="userSpaceOnUse"
@@ -29,24 +35,24 @@ export default function SignUpPage() {
                 fill="none"
               />
             </pattern>
-            <radialGradient id="signup-fade" cx="50%" cy="50%" r="40%">
+            <radialGradient id="auth-shell-fade" cx="50%" cy="50%" r="40%">
               <stop offset="0%" stopColor="white" stopOpacity="1" />
               <stop offset="100%" stopColor="white" stopOpacity="0" />
             </radialGradient>
-            <mask id="signup-mask">
-              <rect width="100%" height="100%" fill="url(#signup-fade)" />
+            <mask id="auth-shell-mask">
+              <rect width="100%" height="100%" fill="url(#auth-shell-fade)" />
             </mask>
           </defs>
           <rect
             width="100%"
             height="100%"
-            fill="url(#signup-grid)"
-            mask="url(#signup-mask)"
+            fill="url(#auth-shell-grid)"
+            mask="url(#auth-shell-mask)"
           />
         </svg>
       </div>
 
-      <div className="relative z-10 flex flex-col items-center gap-8">
+      <div className="relative z-10 flex flex-col items-center gap-8 w-full max-w-sm px-4">
         {/* SignalPilot wordmark */}
         <div className="flex flex-col items-center gap-3">
           <svg
@@ -100,20 +106,24 @@ export default function SignUpPage() {
           </div>
         </div>
 
-        {/* Clerk SignUp component */}
-        <SignUp appearance={clerkAppearance} />
-
-        {/* Skip link — local mode only */}
-        {!IS_CLOUD_MODE && (
-          <div className="mt-2 text-center">
-            <Link
-              href="/dashboard"
-              className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
-            >
-              continue without signing in &rarr;
-            </Link>
+        {/* Terminal card */}
+        <div className="w-full border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          {/* Card header bar */}
+          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+            <span className="w-2 h-2 bg-[var(--color-border-hover)]" />
+            <span className="w-2 h-2 bg-[var(--color-border-hover)]" />
+            <span className="w-2 h-2 bg-[var(--color-border-hover)]" />
+            <span className="ml-2 text-[11px] text-[var(--color-text-dim)] tracking-wider font-mono">
+              {title}
+            </span>
           </div>
-        )}
+          <div className="p-6">
+            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mb-5">
+              {subtitle}
+            </p>
+            {children}
+          </div>
+        </div>
       </div>
     </div>
   );

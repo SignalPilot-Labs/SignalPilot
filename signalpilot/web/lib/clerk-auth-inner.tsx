@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { useAuth, useUser } from "@clerk/nextjs";
+import { useAuth, useUser, useOrganization } from "@clerk/nextjs";
 import { AuthContext, type AppAuth, type AppUser } from "./auth-context";
 import { setClerkTokenGetter } from "./api";
 
@@ -10,6 +10,7 @@ const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 export function ClerkAuthInner({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn, signOut, getToken } = useAuth();
   const { user: clerkUser } = useUser();
+  const { organization } = useOrganization();
 
   // Wire Clerk's getToken into the gateway API client
   useEffect(() => {
@@ -37,6 +38,8 @@ export function ClerkAuthInner({ children }: { children: ReactNode }) {
     user,
     isLoaded,
     signOut: signOut ?? null,
+    activeOrgId: organization?.id ?? null,
+    activeOrgName: organization?.name ?? null,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

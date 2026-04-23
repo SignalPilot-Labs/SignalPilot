@@ -161,11 +161,9 @@ function UserSection() {
       user.email ||
       "user";
 
-    return (
-      <div className="px-3 py-2 border-t border-[var(--color-border)]">
-        <ClerkUserButton displayName={displayName} />
-      </div>
-    );
+    // TeamSwitcher is dynamically imported with ssr:false.
+    // Only rendered when clerkEnabled=true — local mode never reaches here.
+    return <TeamSwitcher displayName={displayName} />;
   }
 
   // Clerk enabled but not signed in
@@ -183,11 +181,12 @@ function UserSection() {
 }
 
 /**
- * Thin wrapper around Clerk's UserButton — dynamically imported so
- * @clerk/nextjs is never loaded until ClerkProvider has mounted.
+ * Custom TeamSwitcher — dynamically imported with ssr:false so
+ * @clerk/nextjs hooks never execute on the server or in local mode.
+ * Gated on clerkEnabled in UserSection below.
  */
-const ClerkUserButton = dynamic(
-  () => import("@/components/layout/clerk-user-button"),
+const TeamSwitcher = dynamic(
+  () => import("@/components/layout/team-switcher"),
   { ssr: false }
 );
 

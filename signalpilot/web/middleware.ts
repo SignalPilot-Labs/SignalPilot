@@ -98,10 +98,24 @@ if (clerkEnabled) {
     "/",
   ]);
 
+  const isOnboardingRoute = createRouteMatcher(["/onboarding(.*)"]);
+
   middlewareExport = clerkMiddleware(async (auth, req) => {
     // In cloud mode, protect all non-public routes
     if (IS_CLOUD_MODE && !isPublicRoute(req)) {
       await auth.protect();
+    }
+    // NEW: force team creation before any app route.
+    // Allowlist: onboarding itself, public routes, and API routes.
+    const { userId, orgId } = await auth();
+    if (
+      userId &&
+      !orgId &&
+      !isOnboardingRoute(req) &&
+      !isPublicRoute(req) &&
+      !req.nextUrl.pathname.startsWith("/api")
+    ) {
+      return NextResponse.redirect(new URL("/onboarding", req.url));
     }
     const response = NextResponse.next();
     applySecurityHeaders(response, true, req);

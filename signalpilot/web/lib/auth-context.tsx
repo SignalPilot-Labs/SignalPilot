@@ -35,6 +35,10 @@ export interface AppAuth {
   isLoaded: boolean;
   /** null when Clerk is not loaded or in local mode */
   signOut: (() => Promise<void>) | null;
+  /** Active Clerk organization ID; null in local mode or when no org is active */
+  activeOrgId: string | null;
+  /** Active Clerk organization display name; null in local mode or when no org is active */
+  activeOrgName: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +71,8 @@ function LocalAuthInner({ children }: { children: ReactNode }) {
     user: null,
     isLoaded: true,
     signOut: null,
+    activeOrgId: null,
+    activeOrgName: null,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

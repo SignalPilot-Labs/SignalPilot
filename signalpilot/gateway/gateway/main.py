@@ -59,7 +59,11 @@ async def lifespan(app: FastAPI):
     byok_provider_config: dict | None = None
     if byok_provider_config_raw:
         import json as _json
-        byok_provider_config = _json.loads(byok_provider_config_raw)
+        try:
+            byok_provider_config = _json.loads(byok_provider_config_raw)
+        except _json.JSONDecodeError:
+            logger.error("STARTUP FATAL: SP_BYOK_PROVIDER_CONFIG contains invalid JSON")
+            raise SystemExit(1)
     byok_provider = make_provider(byok_provider_type, byok_provider_config)
     dek_cache = DEKCache(ttl_seconds=300)
     configure_byok(byok_provider, dek_cache)

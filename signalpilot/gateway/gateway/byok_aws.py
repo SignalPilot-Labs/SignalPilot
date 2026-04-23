@@ -201,7 +201,8 @@ def _extract_region_from_arn(arn: str) -> str:
     """
     match = _ARN_REGION_PATTERN.search(arn)
     if not match:
-        raise ValueError(f"Cannot extract region from KMS ARN: {arn!r}")
+        logger.error("Invalid KMS ARN format: %r", arn)
+        raise ValueError("Invalid KMS key ARN format — cannot extract region")
     return match.group(1)
 
 

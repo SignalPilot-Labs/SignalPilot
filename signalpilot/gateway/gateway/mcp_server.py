@@ -125,6 +125,12 @@ _allowed_hosts_with_ports = list(_allowed_hosts)
 for h in _allowed_hosts:
     _allowed_hosts_with_ports.append(f"{h}:3300")
 
+# In cloud mode behind a reverse proxy (Caddy/nginx), disable host validation entirely
+# since the proxy already handles DNS rebinding protection via its own config
+_transport_security: dict | None = None if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" else {
+    "allowed_hosts": _allowed_hosts_with_ports,
+}
+
 mcp = FastMCP(
     "SignalPilot",
     instructions=(
@@ -133,9 +139,7 @@ mcp = FastMCP(
         "Use query_database for read-only SQL with automatic governance (LIMIT injection, "
         "DDL/DML blocking, audit logging). Use list_connections to see available databases."
     ),
-    transport_security={
-        "allowed_hosts": _allowed_hosts_with_ports,
-    },
+    transport_security=_transport_security,
 )
 
 

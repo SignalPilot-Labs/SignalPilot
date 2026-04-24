@@ -106,6 +106,49 @@ If the customer wants IdP group → SignalPilot role mapping:
    otherwise `member`). Currently SignalPilot only uses `admin` and `member`
    roles — anything else collapses to `member`.
 
+## In-app status view
+
+SignalPilot exposes a read-only enterprise SSO status panel inside
+**Settings → Team** (the "enterprise sso" section, between Invitations and
+Danger Zone). Team admins can check connection status without opening the
+Clerk dashboard for routine inquiries.
+
+### What it shows
+
+- Connection name, protocol (SAML or OIDC), email domains, and active/inactive
+  status for every enterprise connection scoped to the current team.
+- For SAML connections: an expandable **IdP handoff details** panel with
+  one-click copy for the SP-side fields the customer's IdP admin needs:
+  - ACS (Assertion Consumer Service) URL
+  - SP Entity ID
+  - SP Metadata URL
+  - IdP Entity ID (as returned by Clerk)
+  - IdP SSO URL (as returned by Clerk)
+- For OIDC connections: protocol, domains, and status only (the OIDC redirect
+  URI hand-off is a one-shot exchange covered in Step 2 above).
+
+### What it does NOT show
+
+- No create, update, or delete controls — all configuration changes must be
+  made in the Clerk dashboard per the ops playbook.
+- No X.509 signing certificates or other private IdP credential material.
+- No OIDC client secrets (the Clerk Backend SDK does not return them on read).
+
+### Route — `GET /api/team/enterprise`
+
+- **Auth model:** requires an active Clerk session (`userId` present) with an
+  active organization (`orgId` present) and the caller must hold
+  `org:admin` role (`orgRole === "org:admin"`). Non-admins receive `403
+  Forbidden`.
+- **Defensive filter:** after the Clerk SDK call, the response is additionally
+  filtered on `organizationId === orgId` so a misconfigured SDK parameter
+  cannot leak another tenant's connections.
+- **Response shape:** a whitelisted DTO (`EnterpriseConnectionDTO`) — no SDK
+  object is spread into the response. Fields not in the DTO are never returned.
+
+Non-admin team members see a "enterprise sso is managed by your team admins"
+stub and no network request is issued.
+
 ## Troubleshooting
 
 | Symptom                                             | Likely cause                                                  |

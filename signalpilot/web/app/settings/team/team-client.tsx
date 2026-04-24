@@ -13,6 +13,7 @@ import { TeamOverviewSection } from "@/components/team/team-overview-section";
 import { TeamMembersSection } from "@/components/team/team-members-section";
 import { TeamInvitationsSection } from "@/components/team/team-invitations-section";
 import { TeamDangerSection } from "@/components/team/team-danger-section";
+import { TeamEnterpriseSection } from "@/components/team/team-enterprise-section";
 import { useTeamPermissions } from "@/lib/team/use-team-permissions";
 
 export default function TeamClient() {
@@ -71,6 +72,7 @@ export default function TeamClient() {
       <TeamOverviewSection org={organization} perms={perms} />
       <TeamMembersSection org={organization} me={membership} perms={perms} />
       <TeamInvitationsSection org={organization} perms={perms} />
+      <TeamEnterpriseSection perms={perms} />
       <TeamDangerSection org={organization} perms={perms} user={user} />
     </div>
   );

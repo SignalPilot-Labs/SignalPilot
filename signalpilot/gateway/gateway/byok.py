@@ -316,7 +316,7 @@ async def migrate_to_byok(
     result = await session.execute(
         select(GatewayCredential, GatewayConnection).join(
             GatewayConnection,
-            (GatewayConnection.user_id == GatewayCredential.user_id)
+            (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
         ).where(
             GatewayConnection.org_id == org_id,
@@ -353,9 +353,9 @@ async def migrate_to_byok(
         except Exception:
             await session.rollback()
             logger.exception(
-                "Failed to migrate credential for connection '%s' (user '%s')",
+                "Failed to migrate credential for connection '%s' (org '%s')",
                 cred_row.connection_name,
-                cred_row.user_id,
+                conn_row.org_id,
             )
             error_msg = "Failed to migrate a credential: migration error"
             errors.append(error_msg)
@@ -386,7 +386,7 @@ async def rotate_byok_key(
     result = await session.execute(
         select(GatewayCredential, GatewayConnection).join(
             GatewayConnection,
-            (GatewayConnection.user_id == GatewayCredential.user_id)
+            (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
         ).where(
             GatewayConnection.org_id == org_id,
@@ -446,9 +446,9 @@ async def rotate_byok_key(
         except Exception:
             await session.rollback()
             logger.exception(
-                "Failed to rotate credential for connection '%s' (user '%s')",
+                "Failed to rotate credential for connection '%s' (org '%s')",
                 cred_row.connection_name,
-                cred_row.user_id,
+                conn_row.org_id,
             )
             error_msg = "Failed to rotate a credential: rotation error"
             errors.append(error_msg)
@@ -476,7 +476,7 @@ async def revert_to_managed(
     result = await session.execute(
         select(GatewayCredential, GatewayConnection).join(
             GatewayConnection,
-            (GatewayConnection.user_id == GatewayCredential.user_id)
+            (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
         ).where(
             GatewayConnection.org_id == org_id,
@@ -536,9 +536,9 @@ async def revert_to_managed(
         except Exception:
             await session.rollback()
             logger.exception(
-                "Failed to revert credential for connection '%s' (user '%s')",
+                "Failed to revert credential for connection '%s' (org '%s')",
                 cred_row.connection_name,
-                cred_row.user_id,
+                conn_row.org_id,
             )
             error_msg = "Failed to revert a credential: revert error"
             errors.append(error_msg)

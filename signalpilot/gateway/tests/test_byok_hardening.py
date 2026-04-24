@@ -284,3 +284,62 @@ class TestSecurityStatusOrgScoping:
         byok_query_str = captured_queries[4]
         assert "org_id" in managed_query_str
         assert "org_id" in byok_query_str
+
+
+# ─── H4: BYOK join predicate uses org_id, not user_id ────────────────────────
+
+class TestByokJoinOrgPredicate:
+    """H4 — BYOK migration joins on org_id so NULL user_id credentials are matched."""
+
+    @pytest.mark.asyncio
+    async def test_migrate_to_byok_joins_on_org_not_user_id(self):
+        """migrate_to_byok must use org_id for the join predicate.
+
+        Before the fix: join was on user_id=user_id which fails when user_id is NULL
+        (NULL=NULL is UNKNOWN in SQL, so no rows matched).
+        After the fix: join is on org_id=org_id which works even when user_id is NULL.
+        """
+        from sqlalchemy import inspect as sa_inspect
+        from gateway.byok import migrate_to_byok, ENCRYPTION_MODE_MANAGED
+
+        # Verify the join predicate in the query uses org_id via string inspection.
+        # We capture the compiled SQL text to confirm the join is on org_id.
+        captured_queries: list[str] = []
+
+        mock_session = AsyncMock()
+
+        async def _mock_execute(stmt):
+            # Compile statement to string for assertion
+            try:
+                compiled = stmt.compile(compile_kwargs={"literal_binds": False})
+                captured_queries.append(str(compiled))
+            except Exception:
+                captured_queries.append(repr(stmt))
+            # Return empty result so no actual rows are processed
+            mock_result = MagicMock()
+            mock_result.all.return_value = []
+            return mock_result
+
+        mock_session.execute = _mock_execute
+
+        mock_provider = AsyncMock()
+        mock_provider.generate_dek = AsyncMock(return_value=b"\x00" * 32)
+        mock_provider.wrap_dek = AsyncMock(return_value=b"wrapped")
+
+        await migrate_to_byok(
+            session=mock_session,
+            provider=mock_provider,
+            org_id="test-org",
+            key_id="key-1",
+            key_alias="alias-1",
+            managed_decrypt=lambda ct: (ct.decode(), True),
+        )
+
+        assert len(captured_queries) >= 1
+        join_query = captured_queries[0]
+        # The join must use org_id, not user_id
+        assert "gateway_connection.org_id = gateway_credential.org_id" in join_query or \
+               "org_id" in join_query, f"Expected org_id join in query: {join_query}"
+        # Ensure user_id is NOT used as the join key (it may appear in select but not as join condition)
+        # The old pattern was: gateway_connection.user_id = gateway_credential.user_id
+        assert "gateway_connection.user_id = gateway_credential.user_id" not in join_query

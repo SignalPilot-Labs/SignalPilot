@@ -16,6 +16,20 @@ def test_org_id() -> str:
     return "test-org"
 
 
+@pytest.fixture(autouse=True)
+def _set_governance_org(test_org_id: str):
+    """Autouse fixture: set the governance contextvar for every test.
+
+    All governance singletons (BudgetLedger, QueryCache, SchemaCache) require
+    current_org_id_var to be set before any method call. This fixture ensures
+    every test runs inside a clean org context and resets it afterward.
+    """
+    from gateway.governance.context import current_org_id_var
+    token = current_org_id_var.set(test_org_id)
+    yield
+    current_org_id_var.reset(token)
+
+
 @pytest.fixture
 def test_user_id() -> str:
     return "test-user"

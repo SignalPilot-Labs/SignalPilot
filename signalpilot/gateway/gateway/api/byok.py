@@ -423,7 +423,7 @@ async def get_migration_status(
         select(func.count(), GatewayCredential.encryption_mode)
         .join(
             GatewayConnection,
-            (GatewayConnection.user_id == GatewayCredential.user_id)
+            (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
         )
         .where(GatewayConnection.org_id == org_id)

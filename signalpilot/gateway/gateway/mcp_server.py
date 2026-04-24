@@ -58,6 +58,7 @@ from .errors import query_error_hint
 from .mcp_errors import sanitize_mcp_error, sanitize_proxy_response
 from .models import AuditEntry
 import contextvars
+from .governance.context import current_org_id_var
 from .store import list_sandboxes, Store
 from .db.engine import get_session_factory
 
@@ -82,14 +83,23 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
 
     If user_id or org_id are not provided, reads from the context variables set
     by MCPAuthMiddleware during key validation.
+
+    Sets current_org_id_var for the duration of the context and resets it on exit.
+    MCP tool calls share the same asyncio task across calls via the FastMCP server
+    loop, so we must use explicit try/finally reset here (unlike HTTP request
+    handlers where FastAPI provides task-level isolation).
     """
     if user_id is None:
         user_id = mcp_user_id_var.get(None)
     if org_id is None:
         org_id = mcp_org_id_var.get(None)
-    factory = get_session_factory()
-    async with factory() as session:
-        yield Store(session, org_id=org_id, user_id=user_id)
+    token = current_org_id_var.set(org_id)
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            yield Store(session, org_id=org_id, user_id=user_id)
+    finally:
+        current_org_id_var.reset(token)
 
 
 def _gateway_url() -> str:
@@ -245,7 +255,8 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             return f"Error: Connection '{connection_name}' not found. Available: {available}"
 
         # Load annotations for blocked tables (Feature #19)
-        annotations = load_annotations(connection_name)
+        from .governance.context import require_org_id
+        annotations = load_annotations(require_org_id(), connection_name)
         blocked_tables = annotations.blocked_tables
 
         # Validate SQL (with blocked tables from annotations)
@@ -463,6 +474,7 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     from .governance.annotations import load_annotations
 
     async with _store_session() as store:
+        tool_org_id: str = store.org_id or "local"
         conn_info = await store.get_connection(connection_name)
         if not conn_info:
             available = [c.name for c in await store.list_connections()]
@@ -474,18 +486,18 @@ async def describe_table(connection_name: str, table_name: str) -> str:
 
         extras = await store.get_credential_extras(connection_name)
 
-    # Check schema cache first (Feature #18)
-    from .connectors.schema_cache import schema_cache
+        # Check schema cache first (Feature #18) — inside session so contextvar is set
+        from .connectors.schema_cache import schema_cache
 
-    schema = schema_cache.get(connection_name)
-    if schema is None:
-        from .connectors.pool_manager import pool_manager
-        try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                schema = await connector.get_schema()
-        except Exception as e:
-            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
-        schema_cache.put(connection_name, schema)
+        schema = schema_cache.get(connection_name)
+        if schema is None:
+            from .connectors.pool_manager import pool_manager
+            try:
+                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                    schema = await connector.get_schema()
+            except Exception as e:
+                return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
+            schema_cache.put(connection_name, schema)
 
     # Find the table (case-insensitive)
     table_data = None
@@ -499,7 +511,7 @@ async def describe_table(connection_name: str, table_name: str) -> str:
         return f"Table '{table_name}' not found. Available tables:\n" + "\n".join(f"  - {t}" for t in sorted(table_names))
 
     # Load annotations for descriptions/PII info
-    annotations = load_annotations(connection_name)
+    annotations = load_annotations(tool_org_id, connection_name)
     table_ann = annotations.get_table(table_name)
 
     lines = [f"Table: {table_data['schema']}.{table_data['name']}"]

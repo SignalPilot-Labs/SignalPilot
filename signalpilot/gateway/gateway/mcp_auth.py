@@ -263,15 +263,12 @@ class MCPAuthMiddleware:
                     "key_id": matched.id,
                     "key_name": matched.name,
                     "user_id": matched.user_id or "local",
-                    "org_id": matched.org_id,
+                    "org_id": "local",  # clamp: matched.org_id may be stale cloud data
                 }
                 # Set user_id and org_id context vars for MCP store access
-                try:
-                    from .mcp_server import mcp_user_id_var, mcp_org_id_var
-                    mcp_user_id_var.set(matched.user_id or "local")
-                    mcp_org_id_var.set(matched.org_id)
-                except Exception:
-                    pass
+                from .mcp_server import mcp_user_id_var, mcp_org_id_var
+                mcp_user_id_var.set(matched.user_id or "local")
+                mcp_org_id_var.set("local")
                 await self._app(scope, receive, send)
         except Exception as e:
             logger.error("MCP auth: DB error in local validation: %s", e)

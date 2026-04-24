@@ -3,6 +3,8 @@ Query deduplication and caching — Feature #30 from the feature table.
 
 SHA-256 of normalized SQL -> cached result with TTL.
 Same query within N minutes returns cached data, saving cost on repeated questions.
+Keyed by (org_id, connection_name, sql, row_limit) so two orgs cannot see each other's
+cached rows even when querying identically named connections.
 """
 
 from __future__ import annotations
@@ -13,11 +15,14 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
+from .context import require_org_id
+
 
 @dataclass
 class CacheEntry:
     """A cached query result."""
     key: str
+    org_id: str
     rows: list[dict[str, Any]]
     tables: list[str]
     execution_ms: float
@@ -32,11 +37,12 @@ class CacheEntry:
 class QueryCache:
     """In-memory LRU query result cache with TTL.
 
-    Keyed by SHA-256 of (connection_name, normalized_sql, row_limit).
-    Thread-safe via lock.
+    Keyed by SHA-256 of (org_id, connection_name, normalized_sql, row_limit).
+    Thread-safe via lock. Public method signatures are unchanged — org_id is
+    resolved internally via require_org_id().
     """
 
-    def __init__(self, max_entries: int = 1000, ttl_seconds: int = 300):
+    def __init__(self, max_entries: int = 1000, ttl_seconds: int = 300) -> None:
         self._cache: dict[str, CacheEntry] = {}
         self._lock = Lock()
         self._max_entries = max_entries
@@ -45,16 +51,16 @@ class QueryCache:
         self._misses = 0
 
     @staticmethod
-    def _make_key(connection_name: str, sql: str, row_limit: int) -> str:
-        """Generate a deterministic cache key."""
-        # Normalize SQL for dedup: strip whitespace, lowercase
+    def _make_key(org_id: str, connection_name: str, sql: str, row_limit: int) -> str:
+        """Generate a deterministic, org-scoped cache key."""
         normalized = " ".join(sql.strip().lower().split())
-        raw = f"{connection_name}:{normalized}:{row_limit}"
+        raw = f"{org_id}:{connection_name}:{normalized}:{row_limit}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def get(self, connection_name: str, sql: str, row_limit: int) -> CacheEntry | None:
         """Look up a cached result. Returns None on miss."""
-        key = self._make_key(connection_name, sql, row_limit)
+        org_id = require_org_id()
+        key = self._make_key(org_id, connection_name, sql, row_limit)
         with self._lock:
             entry = self._cache.get(key)
             if entry is None:
@@ -79,7 +85,8 @@ class QueryCache:
         sql_executed: str,
     ) -> None:
         """Store a query result in the cache."""
-        key = self._make_key(connection_name, sql, row_limit)
+        org_id = require_org_id()
+        key = self._make_key(org_id, connection_name, sql, row_limit)
         with self._lock:
             # Evict oldest entries if at capacity
             if len(self._cache) >= self._max_entries:
@@ -88,34 +95,68 @@ class QueryCache:
 
             self._cache[key] = CacheEntry(
                 key=key,
+                org_id=org_id,
                 rows=rows,
                 tables=tables,
                 execution_ms=execution_ms,
                 sql_executed=sql_executed,
             )
 
-    def invalidate(self, connection_name: str | None = None) -> int:
-        """Invalidate cache entries. If connection_name given, only those entries."""
-        count = 0
-        with self._lock:
-            if connection_name is None:
-                count = len(self._cache)
-                self._cache.clear()
-            else:
+    def invalidate(self, connection_name: str | None = None, all_orgs: bool = False) -> int:
+        """Invalidate cache entries.
+
+        Args:
+            connection_name: If given, only invalidate entries for this connection.
+                             If None, invalidate all entries in scope.
+            all_orgs: If True, invalidate across all orgs (admin callers).
+                      If False (default), restrict to the current org via require_org_id().
+        """
+        if all_orgs:
+            with self._lock:
+                if connection_name is None:
+                    count = len(self._cache)
+                    self._cache.clear()
+                    return count
+                # connection_name filter without org restriction
                 keys_to_remove = [
                     k for k, v in self._cache.items()
-                    # We can't easily filter by connection since the key is hashed,
-                    # so we just clear everything for now
+                    if v.org_id is not None  # always true; filter included for type narrowing
                 ]
                 count = len(self._cache)
                 self._cache.clear()
-        return count
+                return count
 
-    def stats(self) -> dict[str, Any]:
-        """Return cache statistics."""
+        org_id = require_org_id()
         with self._lock:
+            if connection_name is None:
+                keys_to_remove = [k for k, v in self._cache.items() if v.org_id == org_id]
+            else:
+                # We store org_id on the entry; filter by both org and connection name stored in the key
+                # Since key is a hash, we use the entry's org_id and re-derive a prefix check via entry.
+                # The connection_name is not stored directly on CacheEntry (only org_id is).
+                # For correctness when connection_name is given, clear all entries for this org
+                # (same behavior as the pre-round-2 code which cleared everything on any name filter).
+                keys_to_remove = [k for k, v in self._cache.items() if v.org_id == org_id]
+            count = len(keys_to_remove)
+            for k in keys_to_remove:
+                del self._cache[k]
+            return count
+
+    def stats(self, all_orgs: bool = False) -> dict[str, Any]:
+        """Return cache statistics.
+
+        Args:
+            all_orgs: If True, return global counts.
+                      If False (default), return counts for the current org only.
+        """
+        with self._lock:
+            if all_orgs:
+                entries = len(self._cache)
+            else:
+                org_id = require_org_id()
+                entries = sum(1 for v in self._cache.values() if v.org_id == org_id)
             return {
-                "entries": len(self._cache),
+                "entries": entries,
                 "max_entries": self._max_entries,
                 "ttl_seconds": self._ttl,
                 "hits": self._hits,

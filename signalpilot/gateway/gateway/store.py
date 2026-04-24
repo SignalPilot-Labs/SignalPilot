@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .byok import BYOKProvider, DEKCache, decrypt_envelope, encrypt_fields_envelope
+from .governance.context import current_org_id_var
 from .db.models import (
     GatewayApiKey,
     GatewayAuditLog,
@@ -610,6 +611,11 @@ class Store:
         self.org_id = org_id
         self.user_id = user_id
         self._allow_unscoped = allow_unscoped
+        # Intentional: we do not store the token for reset. FastAPI runs each request in a
+        # dedicated asyncio task whose contextvars copy is isolated; the var dies with the task.
+        # Background task usage must set the var explicitly and reset (see main.py schema refresh loop).
+        if self.org_id:
+            current_org_id_var.set(self.org_id)
 
     # ─── Settings ────────────────────────────────────────────────────────
 

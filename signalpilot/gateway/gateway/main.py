@@ -25,6 +25,7 @@ from .models import ConnectionUpdate
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import init_db, close_db, get_session_factory
+from .governance.context import current_org_id_var
 from .byok import DEKCache
 from .byok_factory import make_provider
 from .store import Store, _validate_encryption_health, configure_byok
@@ -102,6 +103,9 @@ async def lifespan(app: FastAPI):
                         last_refresh = conn_info.last_schema_refresh or 0
                         if now - last_refresh < interval:
                             continue
+                        # Outer Store is allow_unscoped; set the governance var per-iteration so
+                        # schema_cache.put resolves to the correct org via require_org_id().
+                        token = current_org_id_var.set(conn_info.org_id)
                         try:
                             conn_str = await store.get_connection_string(conn_info.name)
                             if not conn_str:
@@ -133,6 +137,8 @@ async def lifespan(app: FastAPI):
                                 "Scheduled schema refresh failed for '%s': %s",
                                 conn_info.name, e,
                             )
+                        finally:
+                            current_org_id_var.reset(token)
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 

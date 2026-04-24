@@ -345,3 +345,65 @@ class TestMCPAuthMiddleware:
     def test_extract_bearer_key_non_bearer_scheme_returns_none(self):
         scope = _make_scope(headers=[(b"authorization", b"Basic dXNlcjpwYXNz")])
         assert _extract_bearer_key(scope) is None
+
+    @pytest.mark.asyncio
+    async def test_local_mode_clamps_org_id_to_local(self):
+        """Key-matched local-mode path must clamp org_id to 'local'.
+
+        Even if the matched GatewayApiKey has org_id='stale-cloud-org' (e.g. from
+        cloud sync), the middleware must set scope["state"]["auth"]["org_id"] = "local"
+        and mcp_org_id_var = "local" to prevent stale cloud org data from leaking
+        into the local governance context.
+
+        We verify by inspecting the auth dict written to the ASGI scope by the middleware.
+        The middleware uses inline imports so we patch at the source module level.
+        """
+        from gateway.mcp_server import mcp_org_id_var
+
+        # Simulate a matched API key with a stale cloud org_id
+        stale_key = MagicMock()
+        stale_key.id = "key-id-1"
+        stale_key.name = "test-key"
+        stale_key.user_id = "user-123"
+        stale_key.org_id = "stale-cloud-org"  # Must be clamped to "local"
+
+        captured_scope: dict = {}
+
+        async def capturing_app(scope_arg, receive, send):
+            captured_scope.update(scope_arg)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"{}", "more_body": False})
+
+        capturing_middleware = MCPAuthMiddleware(capturing_app)
+
+        # Build mock store that returns a key with stale org_id and has user keys present
+        mock_store = MagicMock()
+        mock_store.list_api_keys = AsyncMock(return_value=[stale_key])
+        mock_store.validate_stored_api_key = AsyncMock(return_value=stale_key)
+        # Store.__init__ calls current_org_id_var.set; allow_unscoped=True means org_id=None
+        mock_store.org_id = None
+
+        # The session factory yields mock_store through an async context manager
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_cm)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock(return_value=mock_session_cm)
+
+        scope = _make_scope(headers=_bearer_headers("sp_localkey"))
+
+        # Patch at the modules where mcp_auth.py imports from
+        with patch("gateway.db.engine.get_session_factory", return_value=mock_factory):
+            with patch("gateway.store.Store", return_value=mock_store):
+                with patch.dict("os.environ", {}, clear=True):
+                    import os as _os
+                    _os.environ.pop("SP_BACKEND_URL", None)
+                    _os.environ.pop("SP_DEPLOYMENT_MODE", None)
+                    response = await _collect_response(capturing_middleware, scope)
+
+        # The clamped org_id must be "local", not the stale cloud value
+        auth = captured_scope.get("state", {}).get("auth", {})
+        assert auth.get("org_id") == "local", (
+            f"Expected org_id='local' (clamped) but got '{auth.get('org_id')}'"
+        )
+        # mcp_org_id_var must also be "local"
+        assert mcp_org_id_var.get() == "local"

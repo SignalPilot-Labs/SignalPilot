@@ -40,7 +40,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
     timeout = req.timeout_seconds or settings.default_timeout_seconds
 
     # Load annotations for blocked tables check (Feature #19)
-    annotations = load_annotations(req.connection_name)
+    annotations = load_annotations(store.org_id, req.connection_name)
     blocked_tables = list(annotations.blocked_tables)
 
     # Merge with settings-level blocked tables
@@ -226,7 +226,7 @@ async def explain_query(req: DirectQueryRequest, store: StoreD):
 
     # Validate SQL first
     dialect = SQLGLOT_DIALECTS.get(info.db_type, "postgres")
-    annotations = load_annotations(req.connection_name)
+    annotations = load_annotations(store.org_id, req.connection_name)
     blocked_tables = list(annotations.blocked_tables)
     settings = await store.load_settings()
     if settings.blocked_tables:

@@ -9,21 +9,21 @@ from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
 from ..scope_guard import RequireScope
-from .deps import StoreD, sanitize_db_error
+from .deps import StoreD, sanitize_db_error  # noqa: F401 — StoreD used for org context
 
 router = APIRouter(prefix="/api")
 
 
 @router.get("/cache/stats", dependencies=[RequireScope("read")])
-async def cache_stats(_: UserID):
+async def cache_stats(_: UserID, store: StoreD):
     """Get query cache statistics (Feature #30)."""
-    return query_cache.stats()
+    return query_cache.stats(all_orgs=False)
 
 
 @router.post("/cache/invalidate", status_code=200, dependencies=[RequireScope("write")])
-async def invalidate_cache(_: UserID, connection_name: str | None = None):
+async def invalidate_cache(_: UserID, store: StoreD, connection_name: str | None = None):
     """Invalidate cached query results. Optionally filter by connection."""
-    count = query_cache.invalidate(connection_name)
+    count = query_cache.invalidate(connection_name, all_orgs=False)
     return {"invalidated": count, "connection_name": connection_name}
 
 
@@ -149,13 +149,13 @@ async def pool_stats(_: UserID):
 
 
 @router.get("/schema-cache/stats", dependencies=[RequireScope("read")])
-async def schema_cache_stats(_: UserID):
+async def schema_cache_stats(_: UserID, store: StoreD):
     """Get schema cache statistics (Feature #18)."""
-    return schema_cache.stats()
+    return schema_cache.stats(all_orgs=False)
 
 
 @router.post("/schema-cache/invalidate", status_code=200, dependencies=[RequireScope("write")])
-async def invalidate_schema_cache(_: UserID, connection_name: str | None = None):
+async def invalidate_schema_cache(_: UserID, store: StoreD, connection_name: str | None = None):
     """Invalidate cached schema data. Optionally filter by connection."""
-    count = schema_cache.invalidate(connection_name)
+    count = schema_cache.invalidate(connection_name, all_orgs=False)
     return {"invalidated": count, "connection_name": connection_name}

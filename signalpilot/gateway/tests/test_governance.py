@@ -92,7 +92,7 @@ class TestBudgetLedger:
         ledger.create_session("s2", 20.0)
         ledger.charge("s1", 3.0)
         ledger.charge("s2", 7.0)
-        assert ledger.total_spent == 10.0
+        assert ledger.total_spent() == 10.0
 
     def test_get_all_sessions(self):
         ledger = BudgetLedger()

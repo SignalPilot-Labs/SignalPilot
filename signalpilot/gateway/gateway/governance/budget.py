@@ -2,6 +2,7 @@
 Per-session budget ledger — Feature #11 from the feature table.
 
 Tracks USD spending per session/agent. The gateway hard-stops when the budget is hit.
+Scoped per-org via the governance contextvar; two orgs cannot see each other's sessions.
 """
 
 from __future__ import annotations
@@ -9,6 +10,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from threading import Lock
+
+from .context import require_org_id
 
 
 @dataclass
@@ -50,53 +53,73 @@ class SessionBudget:
 
 
 class BudgetLedger:
-    """Global ledger managing all session budgets.
+    """Global ledger managing all session budgets, scoped per-org via contextvar.
 
     Thread-safe via locks. In-memory for MVP — persists to disk later.
+    Org isolation: each public method resolves the current org_id via require_org_id()
+    so two orgs with the same session_id cannot interfere with each other.
     """
 
-    def __init__(self):
-        self._sessions: dict[str, SessionBudget] = {}
+    def __init__(self) -> None:
+        # Key: (org_id, session_id)
+        self._sessions: dict[tuple[str, str], SessionBudget] = {}
         self._lock = Lock()
 
     def create_session(self, session_id: str, budget_usd: float) -> SessionBudget:
+        org_id = require_org_id()
         with self._lock:
-            if session_id in self._sessions:
-                return self._sessions[session_id]
+            key = (org_id, session_id)
+            if key in self._sessions:
+                return self._sessions[key]
             budget = SessionBudget(session_id=session_id, budget_usd=budget_usd)
-            self._sessions[session_id] = budget
+            self._sessions[key] = budget
             return budget
 
     def get_session(self, session_id: str) -> SessionBudget | None:
+        org_id = require_org_id()
         with self._lock:
-            return self._sessions.get(session_id)
+            return self._sessions.get((org_id, session_id))
 
     def charge(self, session_id: str, amount_usd: float) -> bool:
         """Charge an amount to a session. Returns False if over budget or session not found."""
+        org_id = require_org_id()
         with self._lock:
-            budget = self._sessions.get(session_id)
+            budget = self._sessions.get((org_id, session_id))
             if budget is None:
                 return True  # No budget tracking for this session
             return budget.charge(amount_usd)
 
     def get_remaining(self, session_id: str) -> float | None:
         """Get remaining budget for a session. None if no session found."""
+        org_id = require_org_id()
         with self._lock:
-            budget = self._sessions.get(session_id)
+            budget = self._sessions.get((org_id, session_id))
             return budget.remaining_usd if budget else None
 
     def close_session(self, session_id: str) -> SessionBudget | None:
+        org_id = require_org_id()
         with self._lock:
-            return self._sessions.pop(session_id, None)
+            return self._sessions.pop((org_id, session_id), None)
 
     def get_all_sessions(self) -> list[dict]:
+        """Return all sessions for the current org."""
+        org_id = require_org_id()
         with self._lock:
-            return [b.to_dict() for b in self._sessions.values()]
+            return [
+                b.to_dict()
+                for (oid, _sid), b in self._sessions.items()
+                if oid == org_id
+            ]
 
-    @property
     def total_spent(self) -> float:
+        """Return total USD spent across all sessions for the current org."""
+        org_id = require_org_id()
         with self._lock:
-            return sum(b.spent_usd for b in self._sessions.values())
+            return sum(
+                b.spent_usd
+                for (oid, _sid), b in self._sessions.items()
+                if oid == org_id
+            )
 
 
 # Global ledger singleton

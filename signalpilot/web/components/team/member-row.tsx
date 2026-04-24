@@ -12,6 +12,7 @@ import { RoleSelect } from "./role-select";
 import { roleLabel, type TeamRole } from "@/lib/team/roles";
 import type { TeamPermissions } from "@/lib/team/use-team-permissions";
 import { NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
+import { IconButton } from "@/components/ui/icon-button";
 
 export interface MemberRowProps {
   membership: OrganizationMembershipResource;
@@ -89,15 +90,12 @@ export function MemberRow({
 
         {/* Remove button — hidden for self */}
         {!isSelf && perms.canRemove && (
-          <button
-            type="button"
+          <IconButton
+            icon={Trash2}
+            label={`remove ${displayName} from team`}
+            variant="destructive"
             onClick={() => onRemove(membership)}
-            aria-label={`remove ${displayName} from team`}
-            title="remove from team"
-            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]"
-          >
-            <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} aria-hidden="true" />
-          </button>
+          />
         )}
       </div>
     </div>

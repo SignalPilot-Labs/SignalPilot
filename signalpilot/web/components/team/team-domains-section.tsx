@@ -16,6 +16,7 @@ import type {
   OrganizationDomainResource,
   OrganizationEnrollmentMode,
 } from "@clerk/types";
+import { IconButton } from "@/components/ui/icon-button";
 import { SectionHeader } from "@/components/ui/section-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PendingButton } from "@/components/ui/pending-button";
@@ -308,14 +309,12 @@ function DomainRow({ domain: d, onRevalidate }: DomainRowProps) {
           )}
 
           {/* Delete icon-button */}
-          <button
-            type="button"
+          <IconButton
+            icon={Trash2}
+            label={`delete ${d.name}`}
+            variant="destructive"
             onClick={() => setDeleteOpen(true)}
-            aria-label={`delete ${d.name}`}
-            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]"
-          >
-            <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} aria-hidden="true" />
-          </button>
+          />
         </div>
       </div>
 

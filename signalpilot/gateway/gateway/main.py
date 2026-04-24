@@ -103,20 +103,22 @@ async def lifespan(app: FastAPI):
                         last_refresh = conn_info.last_schema_refresh or 0
                         if now - last_refresh < interval:
                             continue
-                        # Outer Store is allow_unscoped; set the governance var per-iteration so
-                        # schema_cache.put resolves to the correct org via require_org_id().
+                        # Outer Store is allow_unscoped; construct a per-org inner Store
+                        # so get_connection_string, get_credential_extras, and update_connection
+                        # are correctly scoped and update_connection's WHERE clause matches.
                         token = current_org_id_var.set(conn_info.org_id)
                         try:
-                            conn_str = await store.get_connection_string(conn_info.name)
+                            inner_store = Store(session, org_id=conn_info.org_id)
+                            conn_str = await inner_store.get_connection_string(conn_info.name)
                             if not conn_str:
                                 continue
-                            extras = await store.get_credential_extras(conn_info.name)
+                            extras = await inner_store.get_credential_extras(conn_info.name)
                             async with pool_manager.connection(
                                 conn_info.db_type, conn_str, credential_extras=extras,
                             ) as connector:
                                 schema = await connector.get_schema()
                             diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)
-                            await store.update_connection(conn_info.name, ConnectionUpdate(
+                            await inner_store.update_connection(conn_info.name, ConnectionUpdate(
                                 last_schema_refresh=now,
                             ))
                             if diff_result and diff_result.get("has_changes"):

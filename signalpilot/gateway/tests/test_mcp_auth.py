@@ -239,8 +239,12 @@ class TestMCPAuthMiddleware:
     """Tests for the pure ASGI MCPAuthMiddleware."""
 
     @pytest.mark.asyncio
-    async def test_db_error_returns_401(self):
-        """When the DB is unavailable during local auth, return 401 (fail closed)."""
+    async def test_db_error_returns_503_not_401(self):
+        """When the DB is unavailable during local auth, return 503 (not 401).
+
+        A DB error is a server-side fault, not an auth failure. Returning 401
+        would confuse clients into rotating valid keys unnecessarily.
+        """
         downstream_called = False
 
         async def downstream_app(scope, receive, send):
@@ -263,13 +267,14 @@ class TestMCPAuthMiddleware:
             response = await _collect_response(middleware, scope)
 
         mcp_auth._warned_no_backend_url = original_warned
-        # Security fix: DB errors must return 401, not pass through
+        # DB errors must return 503 (service unavailable), not 401 (auth failure)
         assert downstream_called is False
-        assert response["status"] == 401
+        assert response["status"] == 503
+        assert "service unavailable" in response["body"]["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_valid_key_passes_through_and_sets_auth(self):
-        auth_info = {"user_id": "u1", "scopes": ["read"], "key_id": "k1", "key_name": "n"}
+        auth_info = {"user_id": "u1", "scopes": ["read"], "key_id": "k1", "key_name": "n", "org_id": "org-1"}
         captured_scope: dict = {}
 
         async def downstream_app(scope, receive, send):
@@ -281,7 +286,7 @@ class TestMCPAuthMiddleware:
         scope = _make_scope(headers=_bearer_headers("sp_validkey123"))
 
         with patch("gateway.mcp_auth.validate_api_key", new=AsyncMock(return_value=auth_info)):
-            with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend"}):
+            with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend", "SP_DEPLOYMENT_MODE": "cloud"}):
                 response = await _collect_response(middleware, scope)
 
         assert response["status"] == 200
@@ -296,7 +301,7 @@ class TestMCPAuthMiddleware:
         scope = _make_scope(headers=_bearer_headers("sp_badkey"))
 
         with patch("gateway.mcp_auth.validate_api_key", new=AsyncMock(return_value=None)):
-            with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend"}):
+            with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend", "SP_DEPLOYMENT_MODE": "cloud"}):
                 response = await _collect_response(middleware, scope)
 
         assert response["status"] == 401
@@ -310,7 +315,7 @@ class TestMCPAuthMiddleware:
         middleware = MCPAuthMiddleware(downstream_app)
         scope = _make_scope(headers=[])  # no Authorization header
 
-        with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend"}):
+        with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend", "SP_DEPLOYMENT_MODE": "cloud"}):
             response = await _collect_response(middleware, scope)
 
         assert response["status"] == 401

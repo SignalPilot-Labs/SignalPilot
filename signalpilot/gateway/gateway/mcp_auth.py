@@ -203,20 +203,19 @@ class MCPAuthMiddleware:
                 scope["state"] = {}
             scope["state"]["auth"] = auth_info
             # Set context variables so MCP tools can access the user_id and org_id
-            try:
-                from .mcp_server import mcp_user_id_var, mcp_org_id_var
-                mcp_user_id_var.set(auth_info.get("user_id"))
-                mcp_org_id_var.set(auth_info.get("org_id"))
-            except Exception:
-                pass
+            from .mcp_server import mcp_user_id_var, mcp_org_id_var
+            mcp_user_id_var.set(auth_info.get("user_id"))
+            mcp_org_id_var.set(auth_info.get("org_id"))
             await self._app(scope, receive, send)
             return
 
         # Local mode: validate against user-created gateway keys (DB-backed)
-        try:
-            from .db.engine import get_session_factory
-            from .store import Store
+        from .db.engine import get_session_factory
+        from .mcp_server import mcp_user_id_var, mcp_org_id_var
+        from .store import Store
+        from sqlalchemy.exc import SQLAlchemyError
 
+        try:
             factory = get_session_factory()
             async with factory() as session:
                 store = Store(session, allow_unscoped=True)  # No org filter for key lookup
@@ -233,12 +232,8 @@ class MCPAuthMiddleware:
                         )
                         _warned_no_backend_url = True
                     # Set user_id and org_id to "local" so MCP tools can access the store
-                    try:
-                        from .mcp_server import mcp_user_id_var, mcp_org_id_var
-                        mcp_user_id_var.set("local")
-                        mcp_org_id_var.set("local")
-                    except Exception:
-                        pass
+                    mcp_user_id_var.set("local")
+                    mcp_org_id_var.set("local")
                     if "state" not in scope:
                         scope["state"] = {}
                     scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
@@ -266,13 +261,12 @@ class MCPAuthMiddleware:
                     "org_id": "local",  # clamp: matched.org_id may be stale cloud data
                 }
                 # Set user_id and org_id context vars for MCP store access
-                from .mcp_server import mcp_user_id_var, mcp_org_id_var
                 mcp_user_id_var.set(matched.user_id or "local")
                 mcp_org_id_var.set("local")
                 await self._app(scope, receive, send)
-        except Exception as e:
+        except (SQLAlchemyError, ValueError) as e:
             logger.error("MCP auth: DB error in local validation: %s", e)
-            await _send_401(send, "Authentication service unavailable. Please try again.")
+            await _send_503(send, "Authentication service unavailable. Please try again.")
 
 
 def _extract_bearer_key(scope: dict[str, Any]) -> str | None:
@@ -301,6 +295,24 @@ async def _send_401(send: Callable, message: str) -> None:
     await send({
         "type": "http.response.start",
         "status": 401,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({
+        "type": "http.response.body",
+        "body": body,
+        "more_body": False,
+    })
+
+
+async def _send_503(send: Callable, message: str) -> None:
+    """Send a minimal 503 JSON response through the ASGI send callable."""
+    body = json.dumps({"detail": message}).encode()
+    await send({
+        "type": "http.response.start",
+        "status": 503,
         "headers": [
             (b"content-type", b"application/json"),
             (b"content-length", str(len(body)).encode()),

@@ -93,6 +93,11 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
         user_id = mcp_user_id_var.get(None)
     if org_id is None:
         org_id = mcp_org_id_var.get(None)
+    if not org_id:
+        raise RuntimeError(
+            "MCP _store_session invoked with no org_id — mcp_org_id_var was not set by MCPAuthMiddleware. "
+            "Check mcp_auth.py local/cloud branches both call mcp_org_id_var.set(...)."
+        )
     token = current_org_id_var.set(org_id)
     try:
         factory = get_session_factory()
@@ -1103,7 +1108,9 @@ async def fix_nondeterminism_hazards(
     table_columns: dict[str, list[str]] = {}
     schema_error: str = ""
 
+    tool_org_id: str
     async with _store_session() as store:
+        tool_org_id = store.org_id or "local"
         conn_info = await store.get_connection(connection_name)
         if not conn_info:
             available = [c.name for c in await store.list_connections()]
@@ -1125,16 +1132,20 @@ async def fix_nondeterminism_hazards(
             from .connectors.pool_manager import pool_manager
             from .connectors.schema_cache import schema_cache
 
-            schema = schema_cache.get(connection_name)
-            if schema is None:
-                try:
-                    async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                        schema = await connector.get_schema()
-                    schema_cache.put(connection_name, schema)
-                except Exception as e:
-                    schema_error = f"Could not fetch schema: {sanitize_mcp_error(str(e))}. Tiebreaker selection skipped."
-                    schema = {}
-            table_columns = build_table_columns_from_schema(schema)
+            _org_token = current_org_id_var.set(tool_org_id)
+            try:
+                schema = schema_cache.get(connection_name)
+                if schema is None:
+                    try:
+                        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                            schema = await connector.get_schema()
+                        schema_cache.put(connection_name, schema)
+                    except Exception as e:
+                        schema_error = f"Could not fetch schema: {sanitize_mcp_error(str(e))}. Tiebreaker selection skipped."
+                        schema = {}
+                table_columns = build_table_columns_from_schema(schema)
+            finally:
+                current_org_id_var.reset(_org_token)
 
     # Generate fixes (pure, no I/O).
     try:
@@ -1240,7 +1251,8 @@ async def check_budget(session_id: str = "default") -> str:
     """
     from .governance.budget import budget_ledger
 
-    budget = budget_ledger.get_session(session_id)
+    async with _store_session() as _store:
+        budget = budget_ledger.get_session(session_id)
     if not budget:
         return f"No budget tracking for session '{session_id}'. Create a budget via the gateway API to enable spending limits."
 
@@ -1957,7 +1969,8 @@ async def cache_status() -> str:
     """
     from .governance.cache import query_cache
 
-    stats = query_cache.stats()
+    async with _store_session() as _store:
+        stats = query_cache.stats()
     return (
         f"Query Cache Status:\n"
         f"Entries: {stats['entries']} / {stats['max_entries']}\n"
@@ -3273,7 +3286,6 @@ async def dbt_project_validate(
 async def create_project(name: str, connection_name: str) -> str:
     """Create a new dbt project wired to an existing connection."""
     from .models import ProjectCreate, ProjectSource
-    from . import project_store
 
     try:
         proj = ProjectCreate(
@@ -3281,7 +3293,8 @@ async def create_project(name: str, connection_name: str) -> str:
             connection_name=connection_name,
             source=ProjectSource.new,
         )
-        info = project_store.create_project(proj)
+        async with _store_session() as store:
+            info = await store.create_project(proj)
     except ValueError as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
     return (
@@ -3295,9 +3308,8 @@ async def create_project(name: str, connection_name: str) -> str:
 @mcp.tool()
 async def list_projects() -> str:
     """List all configured dbt projects."""
-    from . import project_store
-
-    projects = project_store.list_projects()
+    async with _store_session() as store:
+        projects = await store.list_projects()
     if not projects:
         return "No projects configured."
     lines = [f"Found {len(projects)} project(s):\n"]
@@ -3312,9 +3324,8 @@ async def list_projects() -> str:
 @mcp.tool()
 async def get_project(name: str) -> str:
     """Get dbt project detail including path and model count."""
-    from . import project_store
-
-    proj = project_store.get_project(name)
+    async with _store_session() as store:
+        proj = await store.get_project(name)
     if not proj:
         return f"Error: Project '{name}' not found."
     lines = [

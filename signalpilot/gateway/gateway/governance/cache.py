@@ -23,6 +23,7 @@ class CacheEntry:
     """A cached query result."""
     key: str
     org_id: str
+    connection_name: str
     rows: list[dict[str, Any]]
     tables: list[str]
     execution_ms: float
@@ -96,6 +97,7 @@ class QueryCache:
             self._cache[key] = CacheEntry(
                 key=key,
                 org_id=org_id,
+                connection_name=connection_name,
                 rows=rows,
                 tables=tables,
                 execution_ms=execution_ms,
@@ -117,13 +119,13 @@ class QueryCache:
                     count = len(self._cache)
                     self._cache.clear()
                     return count
-                # connection_name filter without org restriction
                 keys_to_remove = [
                     k for k, v in self._cache.items()
-                    if v.org_id is not None  # always true; filter included for type narrowing
+                    if v.connection_name == connection_name
                 ]
-                count = len(self._cache)
-                self._cache.clear()
+                count = len(keys_to_remove)
+                for k in keys_to_remove:
+                    del self._cache[k]
                 return count
 
         org_id = require_org_id()
@@ -131,12 +133,10 @@ class QueryCache:
             if connection_name is None:
                 keys_to_remove = [k for k, v in self._cache.items() if v.org_id == org_id]
             else:
-                # We store org_id on the entry; filter by both org and connection name stored in the key
-                # Since key is a hash, we use the entry's org_id and re-derive a prefix check via entry.
-                # The connection_name is not stored directly on CacheEntry (only org_id is).
-                # For correctness when connection_name is given, clear all entries for this org
-                # (same behavior as the pre-round-2 code which cleared everything on any name filter).
-                keys_to_remove = [k for k, v in self._cache.items() if v.org_id == org_id]
+                keys_to_remove = [
+                    k for k, v in self._cache.items()
+                    if v.org_id == org_id and v.connection_name == connection_name
+                ]
             count = len(keys_to_remove)
             for k in keys_to_remove:
                 del self._cache[k]

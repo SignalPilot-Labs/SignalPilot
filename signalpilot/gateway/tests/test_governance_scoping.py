@@ -131,6 +131,62 @@ class TestQueryCacheOrgIsolation:
         finally:
             current_org_id_var.reset(token_a2)
 
+    def test_invalidate_filters_by_connection_name(self):
+        """invalidate(conn_a) removes only conn_a entries; conn_b survives."""
+        cache = QueryCache(max_entries=100, ttl_seconds=300)
+
+        token = current_org_id_var.set("org-a")
+        try:
+            cache.put("conn_a", "SELECT 1", 100, [{"x": 1}], ["t"], 1.0, "SELECT 1")
+            cache.put("conn_b", "SELECT 2", 100, [{"y": 2}], ["t"], 1.0, "SELECT 2")
+            count = cache.invalidate("conn_a")
+            assert count == 1
+            stats = cache.stats()
+            assert stats["entries"] == 1
+            # The surviving entry must be for conn_b
+            survivor = next(iter(cache._cache.values()))
+            assert survivor.connection_name == "conn_b"
+        finally:
+            current_org_id_var.reset(token)
+
+    def test_invalidate_all_orgs_with_connection_name_filters_by_name(self):
+        """invalidate(conn_a, all_orgs=True) removes conn_a for all orgs; conn_b survives."""
+        cache = QueryCache(max_entries=100, ttl_seconds=300)
+
+        token_a = current_org_id_var.set("org-a")
+        try:
+            cache.put("conn_a", "SELECT 1", 100, [{"a": 1}], ["t"], 1.0, "SELECT 1")
+        finally:
+            current_org_id_var.reset(token_a)
+
+        token_b = current_org_id_var.set("org-b")
+        try:
+            cache.put("conn_a", "SELECT 2", 100, [{"b": 2}], ["t"], 1.0, "SELECT 2")
+            cache.put("conn_b", "SELECT 3", 100, [{"c": 3}], ["t"], 1.0, "SELECT 3")
+        finally:
+            current_org_id_var.reset(token_b)
+
+        # all_orgs=True with connection_name — should remove org-a/conn_a and org-b/conn_a only
+        count = cache.invalidate("conn_a", all_orgs=True)
+        assert count == 2
+        # conn_b under org-b must survive
+        assert len(cache._cache) == 1
+        survivor = next(iter(cache._cache.values()))
+        assert survivor.connection_name == "conn_b"
+
+    def test_cache_entry_populates_connection_name(self):
+        """put() stores connection_name on the CacheEntry for later filtering."""
+        cache = QueryCache(max_entries=100, ttl_seconds=300)
+
+        token = current_org_id_var.set("org-a")
+        try:
+            cache.put("my_conn", "SELECT 1", 100, [{"x": 1}], ["t"], 1.0, "SELECT 1")
+        finally:
+            current_org_id_var.reset(token)
+
+        entry = next(iter(cache._cache.values()))
+        assert entry.connection_name == "my_conn"
+
 
 class TestSchemaCacheOrgIsolation:
     """SchemaCache entries are keyed by org_id."""

@@ -1,4 +1,11 @@
-"""Project store: CRUD and scaffolding for dbt projects. Persists to projects.json."""
+"""Project store: CRUD and scaffolding for dbt projects. Persists to projects.json.
+
+DEPRECATED: This module-level file-backed singleton is NOT org-scoped and has no
+remaining callers after round 3. All MCP project tools (create_project, list_projects,
+get_project) now use Store.create_project / Store.list_projects / Store.get_project.
+This module is retained to keep the round-3 diff small; delete in a follow-up round
+once confirmed no remaining imports exist.
+"""
 
 from __future__ import annotations
 

@@ -464,8 +464,8 @@ async def export_connections(
         )
 
     logger.warning(
-        "Credential export requested by user %s, include_credentials=%s",
-        store.user_id,
+        "Credential export requested by org %s, include_credentials=%s",
+        store.org_id,
         body.include_credentials,
     )
 

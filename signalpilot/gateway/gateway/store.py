@@ -43,6 +43,10 @@ from .models import (
     ConnectionUpdate,
     DBType,
     GatewaySettings,
+    ProjectCreate,
+    ProjectInfo,
+    ProjectStorage,
+    ProjectUpdate,
     SandboxInfo,
     SSHTunnelConfig,
     SSLConfig,
@@ -588,29 +592,31 @@ def get_local_api_key() -> str | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Store:
-    """Database-backed store scoped by user_id.
+    """Database-backed store scoped by org_id.
 
     Pass allow_unscoped=True for background tasks that legitimately need
-    access across all users.  Callers that omit user_id without allow_unscoped=True
+    access across all orgs.  Callers that omit org_id without allow_unscoped=True
     will get a ValueError from _conn_filter to prevent accidental data leaks.
     """
 
     def __init__(
         self,
         session: AsyncSession,
+        org_id: str | None = None,
         user_id: str | None = None,
         allow_unscoped: bool = False,
     ):
         self.session = session
+        self.org_id = org_id
         self.user_id = user_id
         self._allow_unscoped = allow_unscoped
 
     # ─── Settings ────────────────────────────────────────────────────────
 
     async def load_settings(self) -> GatewaySettings:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
-            select(GatewaySetting).where(GatewaySetting.user_id == uid)
+            select(GatewaySetting).where(GatewaySetting.org_id == oid)
         )
         row = result.scalar_one_or_none()
         data = row.settings_json if row else {}
@@ -622,16 +628,17 @@ class Store:
         return GatewaySettings(**data)
 
     async def save_settings(self, settings: GatewaySettings):
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
-            select(GatewaySetting).where(GatewaySetting.user_id == uid)
+            select(GatewaySetting).where(GatewaySetting.org_id == oid)
         )
         row = result.scalar_one_or_none()
         if row:
             row.settings_json = settings.model_dump()
         else:
             self.session.add(GatewaySetting(
-                user_id=uid,
+                org_id=oid,
+                user_id=self.user_id,
                 settings_json=settings.model_dump(),
             ))
         await self.session.commit()
@@ -639,13 +646,13 @@ class Store:
     # ─── Connections ─────────────────────────────────────────────────────
 
     def _conn_filter(self):
-        if self.user_id is not None:
-            return GatewayConnection.user_id == self.user_id
+        if self.org_id is not None:
+            return GatewayConnection.org_id == self.org_id
         if self._allow_unscoped:
             return literal(True)
         raise ValueError(
-            "Store requires user_id for connection queries. "
-            "Use allow_unscoped=True for background tasks that need cross-user access."
+            "Store requires org_id for connection queries. "
+            "Use allow_unscoped=True for background tasks that need cross-org access."
         )
 
     async def list_connections(self) -> list[ConnectionInfo]:
@@ -664,7 +671,8 @@ class Store:
         return ConnectionInfo(**row.to_info_dict()) if row else None
 
     async def create_connection(self, conn: ConnectionCreate) -> ConnectionInfo:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
+        uid = self.user_id
         # Check uniqueness
         existing = await self.get_connection(conn.name)
         if existing:
@@ -701,6 +709,7 @@ class Store:
         conn_id = str(uuid.uuid4())
         db_conn = GatewayConnection(
             id=conn_id,
+            org_id=oid,
             user_id=uid,
             name=conn.name,
             db_type=conn.db_type.value if hasattr(conn.db_type, 'value') else conn.db_type,
@@ -729,7 +738,6 @@ class Store:
             query_timeout=conn.query_timeout,
             keepalive_interval=conn.keepalive_interval,
             created_at=time.time(),
-            org_id=conn.org_id or (self.user_id if self.user_id else "local"),
             byok_key_alias=conn.byok_key_alias,
         )
         self.session.add(db_conn)
@@ -748,20 +756,21 @@ class Store:
 
         # BYOK encrypt path: use envelope encryption when org has BYOK configured
         byok_key = None
-        if conn.org_id and _byok_provider is not None:
+        if oid and _byok_provider is not None:
             byok_key = await _resolve_byok_key(
-                self.session, conn.org_id, conn.byok_key_alias
+                self.session, oid, conn.byok_key_alias
             )
 
         if byok_key is not None and _byok_provider is not None:
             ciphertexts, wrapped_dek = await encrypt_fields_envelope(
                 _byok_provider,
-                conn.org_id,  # type: ignore[arg-type]
+                oid,
                 byok_key.key_alias,
                 [raw_cred, json.dumps(extras)],
             )
             db_conn.byok_key_alias = byok_key.key_alias
             cred = GatewayCredential(
+                org_id=oid,
                 user_id=uid,
                 connection_name=conn.name,
                 connection_string_enc=ciphertexts[0],
@@ -773,6 +782,7 @@ class Store:
             )
         else:
             cred = GatewayCredential(
+                org_id=oid,
                 user_id=uid,
                 connection_name=conn.name,
                 connection_string_enc=_encrypt(raw_cred),
@@ -785,17 +795,17 @@ class Store:
         except IntegrityError as e:
             await self.session.rollback()
             orig = str(e.orig) if e.orig is not None else str(e)
-            if "uq_gw_conn_user_name" in orig or "uq_gw_cred_user_conn" in orig:
+            if "uq_gw_conn_org_name" in orig or "uq_gw_cred_org_conn" in orig:
                 raise ValueError(f"Connection '{conn.name}' already exists") from e
             raise
         await self.session.refresh(db_conn)
         return ConnectionInfo(**db_conn.to_info_dict())
 
     async def delete_connection(self, name: str) -> bool:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayConnection).where(
-                GatewayConnection.user_id == uid, GatewayConnection.name == name
+                GatewayConnection.org_id == oid, GatewayConnection.name == name
             )
         )
         row = result.scalar_one_or_none()
@@ -804,7 +814,7 @@ class Store:
         await self.session.delete(row)
         await self.session.execute(
             delete(GatewayCredential).where(
-                GatewayCredential.user_id == uid,
+                GatewayCredential.org_id == oid,
                 GatewayCredential.connection_name == name,
             )
         )
@@ -812,10 +822,10 @@ class Store:
         return True
 
     async def update_connection(self, name: str, update_data: ConnectionUpdate) -> ConnectionInfo | None:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayConnection).where(
-                GatewayConnection.user_id == uid, GatewayConnection.name == name
+                GatewayConnection.org_id == oid, GatewayConnection.name == name
             )
         )
         row = result.scalar_one_or_none()
@@ -863,7 +873,7 @@ class Store:
                 # Update credential row
                 cred_result = await self.session.execute(
                     select(GatewayCredential).where(
-                        GatewayCredential.user_id == uid,
+                        GatewayCredential.org_id == oid,
                         GatewayCredential.connection_name == name,
                     )
                 )
@@ -907,15 +917,15 @@ class Store:
         return ConnectionInfo(**row.to_info_dict())
 
     async def get_connection_string(self, name: str) -> str | None:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection).join(
                 GatewayConnection,
-                (GatewayConnection.user_id == GatewayCredential.user_id)
+                (GatewayConnection.org_id == GatewayCredential.org_id)
                 & (GatewayConnection.name == GatewayCredential.connection_name),
                 isouter=True,
             ).where(
-                GatewayCredential.user_id == uid,
+                GatewayCredential.org_id == oid,
                 GatewayCredential.connection_name == name,
             )
         )
@@ -964,15 +974,15 @@ class Store:
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection).join(
                 GatewayConnection,
-                (GatewayConnection.user_id == GatewayCredential.user_id)
+                (GatewayConnection.org_id == GatewayCredential.org_id)
                 & (GatewayConnection.name == GatewayCredential.connection_name),
                 isouter=True,
             ).where(
-                GatewayCredential.user_id == uid,
+                GatewayCredential.org_id == oid,
                 GatewayCredential.connection_name == name,
             )
         )
@@ -1026,18 +1036,18 @@ class Store:
     # ─── Projects ────────────────────────────────────────────────────────
 
     async def list_projects(self) -> list[ProjectInfo]:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
-            select(GatewayProject).where(GatewayProject.user_id == uid)
+            select(GatewayProject).where(GatewayProject.org_id == oid)
         )
         rows = result.scalars().all()
         return [ProjectInfo(**{c.key: getattr(r, c.key) for c in GatewayProject.__table__.columns}) for r in rows]
 
     async def get_project(self, name: str) -> ProjectInfo | None:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayProject).where(
-                GatewayProject.user_id == uid, GatewayProject.name == name
+                GatewayProject.org_id == oid, GatewayProject.name == name
             )
         )
         row = result.scalar_one_or_none()
@@ -1046,7 +1056,7 @@ class Store:
         return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
 
     async def create_project(self, proj: ProjectCreate) -> ProjectInfo:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         existing = await self.get_project(proj.name)
         if existing:
             raise ValueError(f"Project '{proj.name}' already exists")
@@ -1062,7 +1072,8 @@ class Store:
 
         db_proj = GatewayProject(
             id=info.id,
-            user_id=uid,
+            org_id=oid,
+            user_id=self.user_id,
             name=info.name,
             connection_name=info.connection_name,
             project_dir=info.project_dir,
@@ -1078,7 +1089,7 @@ class Store:
         except IntegrityError as e:
             await self.session.rollback()
             orig = str(e.orig) if e.orig is not None else str(e)
-            if "uq_gw_proj_user_name" in orig:
+            if "uq_gw_proj_org_name" in orig:
                 raise ValueError(f"Project '{proj.name}' already exists") from e
             raise
         return info
@@ -1143,10 +1154,10 @@ class Store:
         return _PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
 
     async def update_project(self, name: str, update_data: ProjectUpdate) -> ProjectInfo | None:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayProject).where(
-                GatewayProject.user_id == uid, GatewayProject.name == name
+                GatewayProject.org_id == oid, GatewayProject.name == name
             )
         )
         row = result.scalar_one_or_none()
@@ -1160,10 +1171,10 @@ class Store:
         return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
 
     async def delete_project(self, name: str) -> bool:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayProject).where(
-                GatewayProject.user_id == uid, GatewayProject.name == name
+                GatewayProject.org_id == oid, GatewayProject.name == name
             )
         )
         row = result.scalar_one_or_none()
@@ -1180,10 +1191,11 @@ class Store:
     # ─── Audit ───────────────────────────────────────────────────────────
 
     async def append_audit(self, entry: AuditEntry):
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         self.session.add(GatewayAuditLog(
             id=entry.id or str(uuid.uuid4()),
-            user_id=uid,
+            org_id=oid,
+            user_id=self.user_id,
             timestamp=entry.timestamp,
             event_type=entry.event_type,
             connection_name=entry.connection_name,
@@ -1207,8 +1219,8 @@ class Store:
         connection_name: str | None = None,
         event_type: str | None = None,
     ) -> list[AuditEntry]:
-        uid = self.user_id or "local"
-        q = select(GatewayAuditLog).where(GatewayAuditLog.user_id == uid)
+        oid = self.org_id or "local"
+        q = select(GatewayAuditLog).where(GatewayAuditLog.org_id == oid)
         if connection_name:
             q = q.where(GatewayAuditLog.connection_name == connection_name)
         if event_type:
@@ -1293,10 +1305,10 @@ class Store:
         return schema
 
     async def _get_conn_row(self, name: str) -> GatewayConnection | None:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayConnection).where(
-                GatewayConnection.user_id == uid, GatewayConnection.name == name
+                GatewayConnection.org_id == oid, GatewayConnection.name == name
             )
         )
         return result.scalar_one_or_none()
@@ -1304,27 +1316,30 @@ class Store:
     # ─── API Keys ────────────────────────────────────────────────────────
 
     async def list_api_keys(self) -> list[ApiKeyRecord]:
-        uid = self.user_id or "local"
-        result = await self.session.execute(
-            select(GatewayApiKey).where(GatewayApiKey.user_id == uid)
-        )
+        if self._allow_unscoped:
+            result = await self.session.execute(select(GatewayApiKey))
+        else:
+            oid = self.org_id or "local"
+            result = await self.session.execute(
+                select(GatewayApiKey).where(GatewayApiKey.org_id == oid)
+            )
         return [ApiKeyRecord(
             id=r.id, name=r.name, prefix=r.prefix, key_hash=r.key_hash,
             scopes=r.scopes, created_at=r.created_at, last_used_at=r.last_used_at,
-            expires_at=r.expires_at, user_id=r.user_id,
+            expires_at=r.expires_at, user_id=r.user_id, org_id=r.org_id,
         ) for r in result.scalars()]
 
     async def create_api_key(
         self, name: str, scopes: list[str], expires_at: str | None = None
     ) -> tuple[ApiKeyRecord, str]:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         raw_key = "sp_" + secrets.token_hex(16)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         key_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
         db_key = GatewayApiKey(
-            id=key_id, user_id=uid, name=name, prefix=raw_key[:7],
+            id=key_id, org_id=oid, user_id=self.user_id, name=name, prefix=raw_key[:7],
             key_hash=key_hash, scopes=scopes, created_at=now, expires_at=expires_at,
         )
         self.session.add(db_key)
@@ -1333,15 +1348,15 @@ class Store:
         record = ApiKeyRecord(
             id=key_id, name=name, prefix=raw_key[:7], key_hash=key_hash,
             scopes=scopes, created_at=now, last_used_at=None,
-            expires_at=expires_at, user_id=uid,
+            expires_at=expires_at, user_id=self.user_id, org_id=oid,
         )
         return record, raw_key
 
     async def delete_api_key(self, key_id: str) -> bool:
-        uid = self.user_id or "local"
+        oid = self.org_id or "local"
         result = await self.session.execute(
             select(GatewayApiKey).where(
-                GatewayApiKey.user_id == uid, GatewayApiKey.id == key_id
+                GatewayApiKey.org_id == oid, GatewayApiKey.id == key_id
             )
         )
         row = result.scalar_one_or_none()
@@ -1354,7 +1369,7 @@ class Store:
     async def validate_stored_api_key(self, raw_key: str) -> ApiKeyRecord | None:
         import hmac as _hmac
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        # Search all keys (not user-scoped — validation doesn't know user yet)
+        # Search all keys (not org-scoped — validation doesn't know org yet)
         result = await self.session.execute(
             select(GatewayApiKey).where(GatewayApiKey.key_hash == key_hash)
         )
@@ -1378,7 +1393,7 @@ class Store:
         return ApiKeyRecord(
             id=row.id, name=row.name, prefix=row.prefix, key_hash=row.key_hash,
             scopes=row.scopes, created_at=row.created_at, last_used_at=row.last_used_at,
-            expires_at=row.expires_at, user_id=row.user_id,
+            expires_at=row.expires_at, user_id=row.user_id, org_id=row.org_id,
         )
 
     # ─── Key Rotation ────────────────────────────────────────────────────

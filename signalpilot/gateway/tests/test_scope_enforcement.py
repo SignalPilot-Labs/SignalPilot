@@ -228,6 +228,7 @@ class TestApiKeyExpiryValidation:
         mock_row.created_at = datetime.now(timezone.utc).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "user_abc"
+        mock_row.org_id = "local"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_row
@@ -257,6 +258,7 @@ class TestApiKeyExpiryValidation:
         mock_row.created_at = datetime.now(timezone.utc).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "user_xyz"
+        mock_row.org_id = "local"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_row
@@ -292,6 +294,7 @@ class TestUserIdPropagation:
         mock_row.created_at = datetime.now(timezone.utc).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "real_user_456"
+        mock_row.org_id = "local"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_row
@@ -336,7 +339,7 @@ class TestJwtErrorRedaction:
         from gateway.auth import resolve_user_id
 
         # Simulate cloud mode being active
-        with patch("gateway.auth._is_cloud_mode", return_value=True):
+        with patch("gateway.auth.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
             mock_client.get_signing_key_from_jwt.side_effect = pyjwt.InvalidTokenError(
                 "signature verification failed: algorithm=RS256, kid=abc123"
@@ -369,7 +372,7 @@ class TestJwtErrorRedaction:
 
         from gateway.auth import resolve_user_id
 
-        with patch("gateway.auth._is_cloud_mode", return_value=True):
+        with patch("gateway.auth.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
             mock_client.get_signing_key_from_jwt.side_effect = pyjwt.ExpiredSignatureError(
                 "Signature has expired."

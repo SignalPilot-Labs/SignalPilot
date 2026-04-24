@@ -36,6 +36,7 @@ class TestResolveOrgIdLocalMode:
     @pytest.mark.asyncio
     async def test_returns_local_org_id(self, monkeypatch):
         monkeypatch.delenv("CLERK_PUBLISHABLE_KEY", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         request = _make_request(
             claims={"sub": "local", "org_id": "local"},
         )
@@ -50,6 +51,7 @@ class TestResolveOrgIdLocalMode:
     async def test_ignores_claims_org_id_in_local_mode(self, monkeypatch):
         """Even if claims contain a different org_id, local mode always returns 'local'."""
         monkeypatch.delenv("CLERK_PUBLISHABLE_KEY", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         request = _make_request(
             claims={"sub": "user-123", "org_id": "org_from_jwt"},
         )
@@ -63,6 +65,7 @@ class TestResolveOrgIdCloudMode:
     @pytest.mark.asyncio
     async def test_extracts_org_id_from_claims(self, monkeypatch):
         monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_dGVzdA==")
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         request = _make_request(
             claims={"sub": "user-123", "org_id": "org_abc"},
         )
@@ -74,6 +77,7 @@ class TestResolveOrgIdCloudMode:
         from fastapi import HTTPException
 
         monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_dGVzdA==")
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         request = _make_request(
             claims={"sub": "user-123"},  # no org_id claim
         )
@@ -88,6 +92,7 @@ class TestResolveOrgIdCloudMode:
         from fastapi import HTTPException
 
         monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_dGVzdA==")
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         request = MagicMock()
         request.state = MagicMock(spec=[])  # no _jwt_claims attribute
         request.state.auth = None
@@ -102,6 +107,7 @@ class TestResolveOrgIdMCPMode:
     @pytest.mark.asyncio
     async def test_uses_org_id_from_auth_state(self, monkeypatch):
         monkeypatch.delenv("CLERK_PUBLISHABLE_KEY", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         auth_state = {"user_id": "mcp-user", "org_id": "mcp-org"}
         request = _make_request(
             claims={"sub": "mcp-user", "org_id": "mcp-org"},
@@ -116,6 +122,7 @@ class TestResolveOrgIdMCPMode:
         self, monkeypatch
     ):
         monkeypatch.delenv("CLERK_PUBLISHABLE_KEY", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         auth_state = {"user_id": "mcp-user"}  # no org_id
         request = _make_request(
             claims={"sub": "mcp-user"},
@@ -132,6 +139,7 @@ class TestResolveOrgIdMCPMode:
         from fastapi import HTTPException
 
         monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_dGVzdA==")
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         auth_state = {"user_id": "mcp-user"}  # no org_id
         request = _make_request(
             claims={"sub": "mcp-user"},

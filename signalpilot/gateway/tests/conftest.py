@@ -5,8 +5,20 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 # Ensure the gateway package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+@pytest.fixture
+def test_org_id() -> str:
+    return "test-org"
+
+
+@pytest.fixture
+def test_user_id() -> str:
+    return "test-user"
 
 
 def pytest_runtest_setup(item):

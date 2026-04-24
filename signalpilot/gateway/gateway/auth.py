@@ -18,8 +18,15 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db.engine import get_db
+from .deployment import is_cloud_mode
 
 logger = logging.getLogger(__name__)
+
+if is_cloud_mode() and not os.environ.get("CLERK_PUBLISHABLE_KEY"):
+    logger.error(
+        "Cloud mode is enabled (SP_DEPLOYMENT_MODE=cloud) but CLERK_PUBLISHABLE_KEY is not set. "
+        "JWT authentication will fail."
+    )
 
 LOCAL_USER_ID = "local"
 LOCAL_ORG_ID = "local"
@@ -27,10 +34,6 @@ LOCAL_ORG_ID = "local"
 # Cached JWKS client
 _jwks_client = None
 _expected_issuer: str | None = None
-
-
-def _is_cloud_mode() -> bool:
-    return bool(os.environ.get("CLERK_PUBLISHABLE_KEY"))
 
 
 def _get_jwks_client():
@@ -88,7 +91,7 @@ async def resolve_user_id(request: Request) -> str:
         }
         return auth_state["user_id"]
 
-    if not _is_cloud_mode():
+    if not is_cloud_mode():
         # Local mode: set synthetic claims so resolve_org_id can read them
         request.state._jwt_claims = {"sub": LOCAL_USER_ID, "org_id": LOCAL_ORG_ID}
         return LOCAL_USER_ID
@@ -141,7 +144,7 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
 
     org_id = claims.get("org_id")
 
-    if not _is_cloud_mode():
+    if not is_cloud_mode():
         # Local mode: always returns LOCAL_ORG_ID regardless of claims
         return LOCAL_ORG_ID
 

@@ -45,10 +45,10 @@ async def security_status(store: StoreD, org_id: OrgID):
     key_source = "environment" if os.getenv("SP_ENCRYPTION_KEY") else "auto-generated"
     encryption_healthy = _validate_encryption_health()
 
-    # Count current user's own credentials
+    # Count current org's credentials
     result = await store.session.execute(
         select(func.count()).select_from(GatewayCredential).where(
-            GatewayCredential.user_id == store.user_id
+            GatewayCredential.org_id == store.org_id
         )
     )
     credentials_encrypted = result.scalar_one()
@@ -92,7 +92,7 @@ async def security_status(store: StoreD, org_id: OrgID):
     # if the server_default was not applied retroactively.
     managed_result = await store.session.execute(
         select(func.count()).select_from(GatewayCredential).where(
-            GatewayCredential.user_id == store.user_id,
+            GatewayCredential.org_id == store.org_id,
             or_(
                 GatewayCredential.encryption_mode == "managed",
                 GatewayCredential.encryption_mode.is_(None),
@@ -103,15 +103,16 @@ async def security_status(store: StoreD, org_id: OrgID):
 
     byok_result = await store.session.execute(
         select(func.count()).select_from(GatewayCredential).where(
-            GatewayCredential.user_id == store.user_id,
+            GatewayCredential.org_id == store.org_id,
             GatewayCredential.encryption_mode == "byok",
         )
     )
     credentials_byok: int = byok_result.scalar_one()
 
     logger.info(
-        "Security status requested by user %s: healthy=%s, credentials=%d, "
+        "Security status requested by org %s user %s: healthy=%s, credentials=%d, "
         "pending_rotation=%d, byok_provider=%s, byok_keys_total=%d",
+        store.org_id,
         store.user_id,
         encryption_healthy,
         credentials_encrypted,

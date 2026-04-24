@@ -221,13 +221,13 @@ class TestCreateConnectionIntegrityError:
     @pytest.mark.asyncio
     async def test_integrity_error_on_connection_raises_value_error(self) -> None:
         session = AsyncMock()
-        store = Store(session, user_id="user1")
+        store = Store(session, org_id="test-org", user_id="user1")
 
         # Pre-check returns None (no existing connection found — window open for race)
         store.get_connection = AsyncMock(return_value=None)  # type: ignore[method-assign]
         store.get_connection_string = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
-        orig_exc = Exception("UNIQUE constraint failed: uq_gw_conn_user_name")
+        orig_exc = Exception("UNIQUE constraint failed: uq_gw_conn_org_name")
         integrity_err = IntegrityError("INSERT", {}, orig_exc)
 
         session.commit = AsyncMock(side_effect=integrity_err)
@@ -251,7 +251,7 @@ class TestCreateConnectionIntegrityError:
     @pytest.mark.asyncio
     async def test_non_uniqueness_integrity_error_reraises(self) -> None:
         session = AsyncMock()
-        store = Store(session, user_id="user1")
+        store = Store(session, org_id="test-org", user_id="user1")
         store.get_connection = AsyncMock(return_value=None)  # type: ignore[method-assign]
         store.get_connection_string = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
@@ -284,7 +284,7 @@ class TestCreateProjectIntegrityError:
     @pytest.mark.asyncio
     async def test_integrity_error_on_project_raises_value_error(self) -> None:
         session = AsyncMock()
-        store = Store(session, user_id="user1")
+        store = Store(session, org_id="test-org", user_id="user1")
         store.get_project = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
         fake_connection = MagicMock()
@@ -295,7 +295,7 @@ class TestCreateProjectIntegrityError:
         fake_connection.username = "user"
         store.get_connection = AsyncMock(return_value=fake_connection)  # type: ignore[method-assign]
 
-        orig_exc = Exception("UNIQUE constraint failed: uq_gw_proj_user_name")
+        orig_exc = Exception("UNIQUE constraint failed: uq_gw_proj_org_name")
         integrity_err = IntegrityError("INSERT", {}, orig_exc)
 
         session.commit = AsyncMock(side_effect=integrity_err)
@@ -315,7 +315,7 @@ class TestCreateProjectIntegrityError:
     @pytest.mark.asyncio
     async def test_non_uniqueness_integrity_error_on_project_reraises(self) -> None:
         session = AsyncMock()
-        store = Store(session, user_id="user1")
+        store = Store(session, org_id="test-org", user_id="user1")
         store.get_project = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
         fake_connection = MagicMock()

@@ -19,7 +19,7 @@ from typing import Annotated, Any
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import resolve_user_id, UserID, DBSession
+from ..auth import UserID, OrgID, DBSession
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..db.engine import get_db
@@ -30,11 +30,12 @@ from ..store import Store
 # ─── Store dependency ────────────────────────────────────────────────────────
 
 async def get_store(
+    org_id: OrgID,
     user_id: UserID,
     db: DBSession,
 ) -> Store:
-    """FastAPI dependency: yields a Store scoped to the current user."""
-    return Store(db, user_id)
+    """FastAPI dependency: yields a Store scoped to the current org."""
+    return Store(db, org_id=org_id, user_id=user_id)
 
 StoreD = Annotated[Store, Depends(get_store)]
 

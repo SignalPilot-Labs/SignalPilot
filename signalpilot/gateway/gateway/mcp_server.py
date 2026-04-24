@@ -61,8 +61,9 @@ import contextvars
 from .store import list_sandboxes, Store
 from .db.engine import get_session_factory
 
-# Context variable set by MCPAuthMiddleware with the authenticated user_id
+# Context variables set by MCPAuthMiddleware with the authenticated user_id and org_id
 mcp_user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_id", default=None)
+mcp_org_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_org_id", default=None)
 from .dbt import (
     build_project_map as _build_project_map,
     format_validation_result as _format_validation_result,
@@ -76,17 +77,19 @@ from .dbt.nondeterminism_fixer import (
 )
 
 @asynccontextmanager
-async def _store_session(user_id: str | None = None):
+async def _store_session(user_id: str | None = None, org_id: str | None = None):
     """Create a Store with a managed DB session for MCP tool calls.
 
-    If user_id is not provided, reads from the context variable set by
-    MCPAuthMiddleware during key validation.
+    If user_id or org_id are not provided, reads from the context variables set
+    by MCPAuthMiddleware during key validation.
     """
     if user_id is None:
         user_id = mcp_user_id_var.get(None)
+    if org_id is None:
+        org_id = mcp_org_id_var.get(None)
     factory = get_session_factory()
     async with factory() as session:
-        yield Store(session, user_id)
+        yield Store(session, org_id=org_id, user_id=user_id)
 
 
 def _gateway_url() -> str:

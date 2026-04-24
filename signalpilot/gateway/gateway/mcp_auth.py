@@ -195,13 +195,18 @@ class MCPAuthMiddleware:
                 await _send_401(send, "Invalid or expired API key.")
                 return
 
+            if not auth_info.get("org_id"):
+                await _send_401(send, "API key is not bound to an organization.")
+                return
+
             if "state" not in scope:
                 scope["state"] = {}
             scope["state"]["auth"] = auth_info
-            # Set context variable so MCP tools can access the user_id
+            # Set context variables so MCP tools can access the user_id and org_id
             try:
-                from .mcp_server import mcp_user_id_var
+                from .mcp_server import mcp_user_id_var, mcp_org_id_var
                 mcp_user_id_var.set(auth_info.get("user_id"))
+                mcp_org_id_var.set(auth_info.get("org_id"))
             except Exception:
                 pass
             await self._app(scope, receive, send)
@@ -214,7 +219,7 @@ class MCPAuthMiddleware:
 
             factory = get_session_factory()
             async with factory() as session:
-                store = Store(session)  # No user_id filter for key lookup
+                store = Store(session, allow_unscoped=True)  # No org filter for key lookup
 
                 keys = await store.list_api_keys()
                 has_user_keys = len(keys) > 0
@@ -227,12 +232,16 @@ class MCPAuthMiddleware:
                             "Create an API key in settings to require authentication."
                         )
                         _warned_no_backend_url = True
-                    # Set user_id to "local" so MCP tools can access the store
+                    # Set user_id and org_id to "local" so MCP tools can access the store
                     try:
-                        from .mcp_server import mcp_user_id_var
+                        from .mcp_server import mcp_user_id_var, mcp_org_id_var
                         mcp_user_id_var.set("local")
+                        mcp_org_id_var.set("local")
                     except Exception:
                         pass
+                    if "state" not in scope:
+                        scope["state"] = {}
+                    scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
                     await self._app(scope, receive, send)
                     return
 
@@ -250,11 +259,17 @@ class MCPAuthMiddleware:
 
                 if "state" not in scope:
                     scope["state"] = {}
-                scope["state"]["auth"] = {"key_id": matched.id, "key_name": matched.name, "user_id": "local"}
-                # Set user_id to "local" for local-mode MCP store access
+                scope["state"]["auth"] = {
+                    "key_id": matched.id,
+                    "key_name": matched.name,
+                    "user_id": matched.user_id or "local",
+                    "org_id": matched.org_id,
+                }
+                # Set user_id and org_id context vars for MCP store access
                 try:
-                    from .mcp_server import mcp_user_id_var
-                    mcp_user_id_var.set("local")
+                    from .mcp_server import mcp_user_id_var, mcp_org_id_var
+                    mcp_user_id_var.set(matched.user_id or "local")
+                    mcp_org_id_var.set(matched.org_id)
                 except Exception:
                     pass
                 await self._app(scope, receive, send)

@@ -98,6 +98,7 @@ class ApiKeyRecord(BaseModel):
     last_used_at: str | None = None
     expires_at: str | None = None
     user_id: str = "local"
+    org_id: str = "local"
 
 
 class ApiKeyResponse(BaseModel):

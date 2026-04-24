@@ -138,9 +138,10 @@ class TestSecurityStatusOrgScoping:
         r.scalar_one = MagicMock(return_value=value)
         return r
 
-    def _make_mock_store(self, user_id: str = "local") -> MagicMock:
+    def _make_mock_store(self, user_id: str = "local", org_id: str = "local") -> MagicMock:
         mock_store = MagicMock()
         mock_store.user_id = user_id
+        mock_store.org_id = org_id
         mock_store.get_credentials_needing_rotation = AsyncMock(return_value=0)
         mock_store.session = MagicMock()
         return mock_store
@@ -236,8 +237,8 @@ class TestSecurityStatusOrgScoping:
         assert result_org2["byok_keys_total"] == 0
 
     @pytest.mark.asyncio
-    async def test_credential_mode_counts_scoped_to_user(self):
-        """Credential mode counts (managed/byok) must be scoped to store.user_id."""
+    async def test_credential_mode_counts_scoped_to_org(self):
+        """Credential mode counts (managed/byok) must be scoped to store.org_id."""
         from gateway.api.security import security_status
         from gateway.byok import LocalBYOKProvider, DEKCache
         from gateway.store import configure_byok
@@ -246,15 +247,15 @@ class TestSecurityStatusOrgScoping:
         cache = DEKCache(ttl_seconds=300)
         configure_byok(provider, cache)
 
-        mock_store = self._make_mock_store(user_id="local")
+        mock_store = self._make_mock_store(user_id="local", org_id="local")
         captured_queries: list = []
 
         execute_results = [
             self._make_result(4),   # credentials_encrypted
             self._make_result(1),   # byok_keys_active
             self._make_result(0),   # byok_keys_revoked
-            self._make_result(3),   # credentials_managed (user-scoped)
-            self._make_result(1),   # credentials_byok (user-scoped)
+            self._make_result(3),   # credentials_managed (org-scoped)
+            self._make_result(1),   # credentials_byok (org-scoped)
         ]
         execute_index = [0]
 
@@ -277,9 +278,9 @@ class TestSecurityStatusOrgScoping:
         assert result["credentials_managed"] == 3
         assert result["credentials_byok"] == 1
 
-        # Verify that the user_id filter appears in managed and byok credential queries
+        # Verify that the org_id filter appears in managed and byok credential queries
         # (queries at index 3 and 4 in captured_queries)
         managed_query_str = captured_queries[3]
         byok_query_str = captured_queries[4]
-        assert "user_id" in managed_query_str
-        assert "user_id" in byok_query_str
+        assert "org_id" in managed_query_str
+        assert "org_id" in byok_query_str

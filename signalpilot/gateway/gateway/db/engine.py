@@ -171,6 +171,62 @@ async def _ensure_byok_columns(engine) -> None:
     logger.info("Ensured BYOK columns on gateway_credentials and gateway_connections")
 
 
+async def _ensure_org_id_columns(engine) -> None:
+    """Add org_id columns and migrate from user_id scope to org_id scope.
+
+    This is an additive, idempotent migration for existing deployments:
+    1. Add org_id TEXT column if it does not exist (nullable initially).
+    2. Backfill org_id = user_id WHERE org_id IS NULL (only runs when nullable).
+    3. Set NOT NULL constraint on org_id.
+    4. Drop old user-scoped unique constraints, add org-scoped ones.
+
+    The information_schema probe makes step 2 idempotent: once NOT NULL is set,
+    the probe returns 'NO' and the backfill is skipped on subsequent startups.
+    """
+    _migrations = [
+        ("gateway_connections", "uq_gw_conn_user_name", "uq_gw_conn_org_name", "org_id, name"),
+        ("gateway_credentials", "uq_gw_cred_user_conn", "uq_gw_cred_org_conn", "org_id, connection_name"),
+        ("gateway_settings", "gateway_settings_user_id_key", "uq_gw_settings_org", "org_id"),
+        ("gateway_audit_logs", None, None, None),
+        ("gateway_projects", "uq_gw_proj_user_name", "uq_gw_proj_org_name", "org_id, name"),
+        ("gateway_api_keys", None, None, None),
+    ]
+    for table, old_uq, new_uq, new_uq_cols in _migrations:
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS org_id TEXT"
+            ))
+            probe = await conn.execute(text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = :tname AND column_name = 'org_id'"
+            ), {"tname": table})
+            row = probe.fetchone()
+            needs_backfill = row is not None and row[0] == "YES"
+            if needs_backfill:
+                if table == "gateway_settings":
+                    # Dedupe: keep the most recent row per user_id before backfill
+                    await conn.execute(text(
+                        "DELETE FROM gateway_settings s1 "
+                        "USING gateway_settings s2 "
+                        "WHERE s1.user_id = s2.user_id AND s1.id > s2.id"
+                    ))
+                await conn.execute(text(
+                    f"UPDATE {table} SET org_id = user_id WHERE org_id IS NULL"
+                ))
+                await conn.execute(text(
+                    f"ALTER TABLE {table} ALTER COLUMN org_id SET NOT NULL"
+                ))
+            if old_uq:
+                await conn.execute(text(
+                    f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {old_uq}"
+                ))
+            if new_uq and new_uq_cols:
+                await conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {new_uq} ON {table} ({new_uq_cols})"
+                ))
+    logger.info("Ensured org_id columns on gateway tables")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -179,6 +235,7 @@ async def init_db() -> None:
     await _ensure_key_version_column(engine)
     await _ensure_expires_at_column(engine)
     await _ensure_byok_columns(engine)
+    await _ensure_org_id_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

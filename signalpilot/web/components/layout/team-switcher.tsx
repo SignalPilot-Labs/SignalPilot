@@ -276,7 +276,7 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
             aria-busy={!listLoaded || userMemberships.isLoading}
           >
             {!listLoaded || userMemberships.isLoading ? (
-              <p className="px-3 py-2 text-[11px] text-[var(--color-text-dim)] tracking-wider font-mono">
+              <p className="px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono">
                 loading teams…
               </p>
             ) : memberships.length === 0 && !organization ? (

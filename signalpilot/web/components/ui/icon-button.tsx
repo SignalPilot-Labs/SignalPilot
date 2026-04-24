@@ -7,6 +7,7 @@ export interface IconButtonProps
   extends Pick<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "disabled" | "type"> {
   icon: LucideIcon;
   label: string;
+  title?: string;
   variant?: "ghost" | "destructive";
   size?: "sm";
 }
@@ -27,6 +28,7 @@ const VARIANT: Record<NonNullable<IconButtonProps["variant"]>, string> = {
 export function IconButton({
   icon: Icon,
   label,
+  title,
   onClick,
   disabled,
   type = "button",
@@ -39,7 +41,7 @@ export function IconButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      title={label}
+      title={title}
       className={`${BASE} ${VARIANT[variant]}`}
     >
       <Icon className="w-3.5 h-3.5" strokeWidth={1.5} aria-hidden="true" />

@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..auth import UserID
+from ..auth import UserID, OrgID
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
@@ -384,7 +384,7 @@ async def add_connection(conn: ConnectionCreate, store: StoreD):
 
 
 @router.get("/connections/health", dependencies=[RequireScope("read")])
-async def get_all_connection_health(_: UserID, window: int = Query(default=300, ge=60, le=3600)):
+async def get_all_connection_health(_: UserID, _org: OrgID, window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for all monitored connections."""
     return {"connections": health_monitor.all_stats(window)}
 
@@ -1280,7 +1280,7 @@ async def test_connection(name: str, store: StoreD):
 
 
 @router.get("/connections/{name}/health", dependencies=[RequireScope("read")])
-async def get_connection_health(_: UserID, name: str, window: int = Query(default=300, ge=60, le=3600)):
+async def get_connection_health(_: UserID, _org: OrgID, name: str, window: int = Query(default=300, ge=60, le=3600)):
     """Get health stats for a specific connection."""
     stats = health_monitor.connection_stats(name, window)
     if stats is None:
@@ -1291,6 +1291,7 @@ async def get_connection_health(_: UserID, name: str, window: int = Query(defaul
 @router.get("/connections/{name}/health/history", dependencies=[RequireScope("read")])
 async def get_connection_health_history(
     _: UserID,
+    _org: OrgID,
     name: str,
     window: int = Query(default=3600, ge=300, le=86400, description="History window in seconds"),
     bucket: int = Query(default=60, ge=10, le=3600, description="Bucket size in seconds"),

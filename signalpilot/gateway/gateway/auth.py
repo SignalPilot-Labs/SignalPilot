@@ -136,7 +136,12 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
     - Local mode: returns LOCAL_ORG_ID ("local").
     - Cloud mode: extracts org_id claim from JWT. Raises 403 if missing.
     - MCP requests: uses org_id from auth_state. Raises 403 in cloud mode if absent.
+
+    Also sets current_org_id_var so governance singletons (health monitor, budget,
+    caches) can read the org scope without requiring Store instantiation.
     """
+    from .governance.context import current_org_id_var
+
     claims = getattr(request.state, "_jwt_claims", None)
     if claims is None:
         # Should never happen since _user_id dependency ran first
@@ -147,20 +152,23 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
 
     if not is_cloud_mode():
         # Local mode: always returns LOCAL_ORG_ID regardless of claims
+        current_org_id_var.set(LOCAL_ORG_ID)
         return LOCAL_ORG_ID
 
     # MCP / API-key auth state: require org_id in cloud mode
     auth_state = getattr(request.state, "auth", None)
     if auth_state and isinstance(auth_state, dict):
         if org_id:
+            current_org_id_var.set(org_id)
             return org_id
         raise HTTPException(
             status_code=403, detail="Organization context required"
         )
 
-    # Cloud mode: org_id claim is required for BYOK endpoints
+    # Cloud mode: org_id claim is required
     if not org_id:
         raise HTTPException(status_code=403, detail="Organization context required")
+    current_org_id_var.set(org_id)
     return org_id
 
 

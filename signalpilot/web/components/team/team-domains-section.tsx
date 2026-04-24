@@ -108,6 +108,7 @@ function DomainRow({ domain: d, onRevalidate }: DomainRowProps) {
 
   // Enrollment mode confirm dialog
   const [pendingMode, setPendingMode] = useState<OrganizationEnrollmentMode | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
 
   // Delete confirm dialog
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -181,20 +182,33 @@ function DomainRow({ domain: d, onRevalidate }: DomainRowProps) {
   // ---------------------------------------------------------------------------
 
   const reverifiedUpdateMode = useReverification(
-    (mode: OrganizationEnrollmentMode) =>
-      d.updateEnrollmentMode({ enrollmentMode: mode, deletePending: false }),
+    (mode: OrganizationEnrollmentMode, dp: boolean) =>
+      d.updateEnrollmentMode({ enrollmentMode: mode, deletePending: dp }),
   );
+
+  // Derived: show the deletePending checkbox only when switching away from
+  // automatic_invitation (where a pending-invite queue may exist).
+  const showDeletePendingOption =
+    d.enrollmentMode === "automatic_invitation" &&
+    pendingMode !== null &&
+    pendingMode !== "automatic_invitation";
 
   async function handleModeConfirm() {
     if (!pendingMode) return;
     const mode = pendingMode;
+    const dp = deletePending;
     setPendingMode(null);
     setRowError(null);
     setRowNotice(null);
     try {
-      await reverifiedUpdateMode(mode);
+      await reverifiedUpdateMode(mode, dp);
       onRevalidate();
-      toast("enrollment mode updated", "success");
+      toast(
+        dp
+          ? "enrollment mode updated — pending invitations revoked"
+          : "enrollment mode updated",
+        "success",
+      );
     } catch (err) {
       if (isReverificationCancelledError(err)) {
         setRowNotice("reverification required to change enrollment mode");
@@ -255,7 +269,10 @@ function DomainRow({ domain: d, onRevalidate }: DomainRowProps) {
           value={d.enrollmentMode}
           disabled={!isVerified}
           aria-label={`enrollment mode for ${d.name}`}
-          onChange={(e) => setPendingMode(e.target.value as OrganizationEnrollmentMode)}
+          onChange={(e) => {
+            setPendingMode(e.target.value as OrganizationEnrollmentMode);
+            setDeletePending(false);
+          }}
           className={`${FIELD_INPUT_CLASS} w-auto text-[11px] py-0.5 px-2 h-auto disabled:opacity-40 disabled:cursor-not-allowed`}
         >
           {ENROLLMENT_MODES.map((mode) => (
@@ -295,7 +312,7 @@ function DomainRow({ domain: d, onRevalidate }: DomainRowProps) {
             type="button"
             onClick={() => setDeleteOpen(true)}
             aria-label={`delete ${d.name}`}
-            className="p-1 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)]"
+            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]"
           >
             <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} aria-hidden="true" />
           </button>
@@ -403,8 +420,23 @@ function DomainRow({ domain: d, onRevalidate }: DomainRowProps) {
         title="change enrollment mode"
         message={
           pendingMode
-            ? `Change enrollment mode to "${ENROLLMENT_MODE_LABELS[pendingMode]}"? Existing pending invitations will be kept.`
+            ? showDeletePendingOption
+              ? `Change enrollment mode to "${ENROLLMENT_MODE_LABELS[pendingMode]}"?`
+              : `Change enrollment mode to "${ENROLLMENT_MODE_LABELS[pendingMode]}"? Existing pending invitations will be kept.`
             : ""
+        }
+        body={
+          showDeletePendingOption ? (
+            <label className="flex items-center gap-2 text-[12px] font-mono text-[var(--color-text-dim)] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={deletePending}
+                onChange={(e) => setDeletePending(e.target.checked)}
+                className="accent-[var(--color-text)]"
+              />
+              <span>revoke pending invitations for {d.name}</span>
+            </label>
+          ) : undefined
         }
         confirmLabel="change"
         cancelLabel="cancel"

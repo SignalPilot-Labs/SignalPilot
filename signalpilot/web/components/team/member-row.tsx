@@ -6,10 +6,9 @@
  */
 
 import type { OrganizationMembershipResource } from "@clerk/types";
-import { Loader2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { InitialsAvatar } from "./initials-avatar";
 import { RoleSelect } from "./role-select";
-import { PendingButton } from "@/components/ui/pending-button";
 import { roleLabel, type TeamRole } from "@/lib/team/roles";
 import type { TeamPermissions } from "@/lib/team/use-team-permissions";
 import { NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
@@ -90,15 +89,15 @@ export function MemberRow({
 
         {/* Remove button — hidden for self */}
         {!isSelf && perms.canRemove && (
-          <PendingButton
-            size="sm"
-            variant="danger"
-            pending={false}
+          <button
+            type="button"
             onClick={() => onRemove(membership)}
             aria-label={`remove ${displayName} from team`}
+            title="remove from team"
+            className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-colors focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]"
           >
-            remove
-          </PendingButton>
+            <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} aria-hidden="true" />
+          </button>
         )}
       </div>
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 
 /**
  * Minimal confirmation dialog — terminal-aesthetic.
@@ -10,6 +10,7 @@ export function ConfirmDialog({
   open,
   title,
   message,
+  body,
   confirmLabel = "confirm",
   cancelLabel = "cancel",
   variant = "danger",
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   open: boolean;
   title: string;
   message: string;
+  body?: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: "danger" | "default";
@@ -79,6 +81,7 @@ export function ConfirmDialog({
           <p className="text-xs text-[var(--color-text-muted)] tracking-wider leading-relaxed">
             {message}
           </p>
+          {body ? <div className="mt-3">{body}</div> : null}
         </div>
 
         {/* Actions */}

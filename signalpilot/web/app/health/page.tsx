@@ -40,8 +40,8 @@ const statusConfig: Record<string, { color: string; bg: string; icon: React.Elem
 };
 
 /* ── Latency bar with SVG visualization ── */
-function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: number | null; maxMs?: number }) {
-  if (value === null) return null;
+function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: number | null | undefined; maxMs?: number }) {
+  if (value == null) return null;
   const pct = Math.min(100, (value / maxMs) * 100);
   const color = value < 50 ? "var(--color-success)" : value < 200 ? "var(--color-warning)" : "var(--color-error)";
 
@@ -64,8 +64,8 @@ function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: numbe
 }
 
 /* ── Latency percentile distribution visualization ── */
-function LatencyDistribution({ p50, p95, p99 }: { p50: number | null; p95: number | null; p99: number | null }) {
-  const values = [p50, p95, p99].filter((v): v is number => v !== null);
+function LatencyDistribution({ p50, p95, p99 }: { p50: number | null | undefined; p95: number | null | undefined; p99: number | null | undefined }) {
+  const values = [p50, p95, p99].filter((v): v is number => v != null);
   if (values.length < 2) return null;
   const max = Math.max(...values, 1);
 
@@ -76,7 +76,7 @@ function LatencyDistribution({ p50, p95, p99 }: { p50: number | null; p95: numbe
         { label: "p95", value: p95, color: "var(--color-warning)" },
         { label: "p99", value: p99, color: "var(--color-error)" },
       ].map(({ label, value, color }) => {
-        if (value === null) return null;
+        if (value == null) return null;
         const h = Math.max(4, (value / max) * 24);
         return (
           <Tooltip key={label} content={`${label}: ${value.toFixed(1)}ms`} position="top">

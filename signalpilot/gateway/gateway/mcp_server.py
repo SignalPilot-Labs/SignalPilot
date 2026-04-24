@@ -65,6 +65,7 @@ from .db.engine import get_session_factory
 # Context variables set by MCPAuthMiddleware with the authenticated user_id and org_id
 mcp_user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_id", default=None)
 mcp_org_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_org_id", default=None)
+mcp_raw_key_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_raw_key", default=None)
 from .dbt import (
     build_project_map as _build_project_map,
     format_validation_result as _format_validation_result,
@@ -113,7 +114,16 @@ def _gateway_url() -> str:
     return os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 
 
+def _gw_headers() -> dict[str, str]:
+    """Build auth headers for internal MCP->gateway HTTP calls."""
+    key = mcp_raw_key_var.get(None)
+    if key:
+        return {"X-API-Key": key}
+    return {}
+
+
 import os as _os
+_is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 
 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
 _allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
@@ -154,80 +164,81 @@ async def _get_sandbox_url() -> str:
 # ─── Tools ───────────────────────────────────────────────────────────────────
 
 
-@mcp.tool()
-async def execute_code(code: str, timeout: int = 30) -> str:
-    """
-    Execute Python code in an isolated gVisor sandbox.
+if not _is_cloud:
+    @mcp.tool()
+    async def execute_code(code: str, timeout: int = 30) -> str:
+        """
+        Execute Python code in an isolated gVisor sandbox.
 
-    The code runs in a secure, ephemeral gVisor sandbox with Python 3.12 and common
-    stdlib modules pre-loaded (math, re, collections, datetime, etc.).
-    Each execution gets a fresh sandbox that is destroyed after returning.
-    Typical latency: ~300ms.
+        The code runs in a secure, ephemeral gVisor sandbox with Python 3.12 and common
+        stdlib modules pre-loaded (math, re, collections, datetime, etc.).
+        Each execution gets a fresh sandbox that is destroyed after returning.
+        Typical latency: ~300ms.
 
-    Args:
-        code: Python code to execute
-        timeout: Max execution time in seconds (default 30)
+        Args:
+            code: Python code to execute
+            timeout: Max execution time in seconds (default 30)
 
-    Returns:
-        The stdout output from the code, or an error message.
-    """
-    # Cloud mode gate
-    from .deployment import is_cloud_mode
-    if is_cloud_mode():
-        return "Error: Code execution is not available in cloud mode"
+        Returns:
+            The stdout output from the code, or an error message.
+        """
+        # Cloud mode gate
+        from .deployment import is_cloud_mode
+        if is_cloud_mode():
+            return "Error: Code execution is not available in cloud mode"
 
-    # Input validation
-    if not code or not code.strip():
-        return "Error: Code cannot be empty."
-    if len(code) > _MAX_CODE_LENGTH:
-        return f"Error: Code exceeds maximum length ({_MAX_CODE_LENGTH} characters)."
-    if timeout < 1 or timeout > 300:
-        return "Error: Timeout must be between 1 and 300 seconds."
+        # Input validation
+        if not code or not code.strip():
+            return "Error: Code cannot be empty."
+        if len(code) > _MAX_CODE_LENGTH:
+            return f"Error: Code exceeds maximum length ({_MAX_CODE_LENGTH} characters)."
+        if timeout < 1 or timeout > 300:
+            return "Error: Timeout must be between 1 and 300 seconds."
 
-    sandbox_url = await _get_sandbox_url()
+        sandbox_url = await _get_sandbox_url()
 
-    async with httpx.AsyncClient(timeout=timeout + 10) as client:
-        try:
-            resp = await client.post(
-                f"{sandbox_url}/execute",
-                json={
-                    "code": code,
-                    "session_token": str(uuid.uuid4()),
-                    "timeout": timeout,
+        async with httpx.AsyncClient(timeout=timeout + 10) as client:
+            try:
+                resp = await client.post(
+                    f"{sandbox_url}/execute",
+                    json={
+                        "code": code,
+                        "session_token": str(uuid.uuid4()),
+                        "timeout": timeout,
+                    },
+                )
+                data = resp.json()
+            except httpx.ConnectError:
+                return "Error: Cannot connect to sandbox manager. Is the sandbox manager running?"
+            except Exception as e:
+                return f"Error: Sandbox execution failed: {sanitize_mcp_error(str(e))}"
+
+        # Log to audit
+        async with _store_session() as store:
+            await store.append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="execute",
+                metadata={
+                    "code_preview": code[:200],
+                    "success": data.get("success", False),
+                    "execution_ms": data.get("execution_ms"),
+                    "restore_ms": data.get("restore_ms"),
                 },
-            )
-            data = resp.json()
-        except httpx.ConnectError:
-            return "Error: Cannot connect to sandbox manager. Is the sandbox manager running?"
-        except Exception as e:
-            return f"Error: Sandbox execution failed: {sanitize_mcp_error(str(e))}"
+            ))
 
-    # Log to audit
-    async with _store_session() as store:
-        await store.append_audit(AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="execute",
-            metadata={
-                "code_preview": code[:200],
-                "success": data.get("success", False),
-                "execution_ms": data.get("execution_ms"),
-                "restore_ms": data.get("restore_ms"),
-            },
-        ))
-
-    if data.get("success"):
-        output = data.get("output", "").strip()
-        meta = []
-        if data.get("restore_ms"):
-            meta.append(f"restore={data['restore_ms']:.0f}ms")
-        if data.get("execution_ms"):
-            meta.append(f"total={data['execution_ms']:.0f}ms")
-        suffix = f"\n[{', '.join(meta)}]" if meta else ""
-        return output + suffix if output else f"(no output){suffix}"
-    else:
-        error = data.get("error", "Unknown error")
-        return f"Error:\n{sanitize_mcp_error(str(error))}"
+        if data.get("success"):
+            output = data.get("output", "").strip()
+            meta = []
+            if data.get("restore_ms"):
+                meta.append(f"restore={data['restore_ms']:.0f}ms")
+            if data.get("execution_ms"):
+                meta.append(f"total={data['execution_ms']:.0f}ms")
+            suffix = f"\n[{', '.join(meta)}]" if meta else ""
+            return output + suffix if output else f"(no output){suffix}"
+        else:
+            error = data.get("error", "Unknown error")
+            return f"Error:\n{sanitize_mcp_error(str(error))}"
 
 
 @mcp.tool()
@@ -428,37 +439,38 @@ async def list_database_connections() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
-async def sandbox_status() -> str:
-    """
-    Check the health of the sandbox manager and list active sandboxes.
+if not _is_cloud:
+    @mcp.tool()
+    async def sandbox_status() -> str:
+        """
+        Check the health of the sandbox manager and list active sandboxes.
 
-    Returns sandbox manager health and active sandbox count.
-    """
-    async with _store_session() as store:
-        settings = await store.load_settings()
-    sandbox_url = settings.sandbox_manager_url
+        Returns sandbox manager health and active sandbox count.
+        """
+        async with _store_session() as store:
+            settings = await store.load_settings()
+        sandbox_url = settings.sandbox_manager_url
 
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{sandbox_url}/health")
-            health = resp.json()
-    except Exception:
-        return "Sandbox manager: OFFLINE (connection failed)"
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(f"{sandbox_url}/health")
+                health = resp.json()
+        except Exception:
+            return "Sandbox manager: OFFLINE (connection failed)"
 
-    lines = [
-        "Sandbox Manager: connected",
-        f"Status: {health.get('status', 'unknown')}",
-        f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
-    ]
+        lines = [
+            "Sandbox Manager: connected",
+            f"Status: {health.get('status', 'unknown')}",
+            f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
+        ]
 
-    sandboxes = list_sandboxes()
-    if sandboxes:
-        lines.append(f"\nActive sandboxes: {len(sandboxes)}")
-        for s in sandboxes:
-            lines.append(f"  - {s.label or s.id[:8]} ({s.status})")
+        sandboxes = list_sandboxes()
+        if sandboxes:
+            lines.append(f"\nActive sandboxes: {len(sandboxes)}")
+            for s in sandboxes:
+                lines.append(f"  - {s.label or s.id[:8]} ({s.status})")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
 
 
 @mcp.tool()
@@ -580,49 +592,54 @@ async def list_tables(connection_name: str) -> str:
 
         extras = await store.get_credential_extras(connection_name)
 
-    from .connectors.schema_cache import schema_cache
-    schema = schema_cache.get(connection_name)
-    if schema is None:
-        from .connectors.pool_manager import pool_manager
-        try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                schema = await connector.get_schema()
-        except Exception as e:
-            return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
-        schema_cache.put(connection_name, schema)
+    org_id = mcp_org_id_var.get(None) or "local"
+    token = current_org_id_var.set(org_id)
+    try:
+        from .connectors.schema_cache import schema_cache
+        schema = schema_cache.get(connection_name)
+        if schema is None:
+            from .connectors.pool_manager import pool_manager
+            try:
+                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                    schema = await connector.get_schema()
+            except Exception as e:
+                return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
+            schema_cache.put(connection_name, schema)
 
-    # Build FK lookup
-    fk_map: dict[str, str] = {}
-    for key, table in schema.items():
-        for fk in table.get("foreign_keys", []):
-            fk_map[f"{key}.{fk['column']}"] = f"{fk.get('references_table', '')}.{fk.get('references_column', '')}"
+        # Build FK lookup
+        fk_map: dict[str, str] = {}
+        for key, table in schema.items():
+            for fk in table.get("foreign_keys", []):
+                fk_map[f"{key}.{fk['column']}"] = f"{fk.get('references_table', '')}.{fk.get('references_column', '')}"
 
-    lines = [f"Database: {connection_name} ({conn_info.db_type})", f"Tables: {len(schema)}", ""]
-    for key in sorted(schema.keys()):
-        table = schema[key]
-        row_count = table.get("row_count", 0)
-        if row_count >= 1_000_000:
-            row_str = f" ({row_count / 1_000_000:.1f}M rows)"
-        elif row_count >= 1_000:
-            row_str = f" ({row_count / 1_000:.0f}K rows)"
-        elif row_count > 0:
-            row_str = f" ({row_count} rows)"
-        else:
-            row_str = ""
+        lines = [f"Database: {connection_name} ({conn_info.db_type})", f"Tables: {len(schema)}", ""]
+        for key in sorted(schema.keys()):
+            table = schema[key]
+            row_count = table.get("row_count", 0)
+            if row_count >= 1_000_000:
+                row_str = f" ({row_count / 1_000_000:.1f}M rows)"
+            elif row_count >= 1_000:
+                row_str = f" ({row_count / 1_000:.0f}K rows)"
+            elif row_count > 0:
+                row_str = f" ({row_count} rows)"
+            else:
+                row_str = ""
 
-        col_parts = []
-        for col in table.get("columns", []):
-            name = col["name"]
-            if col.get("primary_key"):
-                name += "*"
-            fk_ref = fk_map.get(f"{key}.{col['name']}")
-            if fk_ref:
-                name += f"→{fk_ref}"
-            col_parts.append(name)
+            col_parts = []
+            for col in table.get("columns", []):
+                name = col["name"]
+                if col.get("primary_key"):
+                    name += "*"
+                fk_ref = fk_map.get(f"{key}.{col['name']}")
+                if fk_ref:
+                    name += f"→{fk_ref}"
+                col_parts.append(name)
 
-        lines.append(f"{key}{row_str}: {', '.join(col_parts)}")
+            lines.append(f"{key}{row_str}: {', '.join(col_parts)}")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
+    finally:
+        current_org_id_var.reset(token)
 
 
 @dataclass
@@ -775,76 +792,81 @@ async def get_date_boundaries(connection_name: str) -> str:
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
 
+    org_id = mcp_org_id_var.get(None) or "local"
+    token = current_org_id_var.set(org_id)
     try:
-        result = await _fetch_date_boundaries(connection_name)
-    except Exception as e:
-        return f"Error: {sanitize_mcp_error(str(e))}"
+        try:
+            result = await _fetch_date_boundaries(connection_name)
+        except Exception as e:
+            return f"Error: {sanitize_mcp_error(str(e))}"
 
-    if not result.found_any:
-        return f"Date boundaries for: {connection_name} ({result.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
+        if not result.found_any:
+            return f"Date boundaries for: {connection_name} ({result.db_type})\nNo DATE or TIMESTAMP columns found in this connection."
 
-    lines = [f"Date boundaries for: {connection_name} ({result.db_type})", ""]
+        lines = [f"Date boundaries for: {connection_name} ({result.db_type})", ""]
 
-    # Reconstruct per-table detail lines from structured result.
-    # We need the schema object to iterate in the same order, so we re-use
-    # the table_col_results that _fetch_date_boundaries already collected.
-    from .connectors.schema_cache import schema_cache
-    schema = schema_cache.get(connection_name) or {}
+        # Reconstruct per-table detail lines from structured result.
+        # We need the schema object to iterate in the same order, so we re-use
+        # the table_col_results that _fetch_date_boundaries already collected.
+        from .connectors.schema_cache import schema_cache
+        schema = schema_cache.get(connection_name) or {}
 
-    DATE_TYPE_KEYWORDS = ("date", "timestamp", "datetime")
-    for key in sorted(schema.keys()):
-        table = schema[key]
-        table_schema = table.get("schema", "")
-        table_name = table.get("name", key)
-        full_name = f"{table_schema}.{table_name}" if table_schema else table_name
-        date_cols = [
-            col for col in table.get("columns", [])
-            if any(kw in col.get("type", "").lower() for kw in DATE_TYPE_KEYWORDS)
-        ]
-        if not date_cols:
-            continue
-        col_results = result.table_col_results.get(full_name, {})
-        lines.append(f"Table: {full_name}")
-        for col in date_cols:
-            col_name = col["name"]
-            col_type = col.get("type", "")
-            if col_name not in col_results:
-                lines.append(f"  {col_name} ({col_type}): (query failed)")
-            else:
-                min_val, max_val = col_results[col_name]
-                if min_val is None and max_val is None:
-                    lines.append(f"  {col_name} ({col_type}): (no data)")
+        DATE_TYPE_KEYWORDS = ("date", "timestamp", "datetime")
+        for key in sorted(schema.keys()):
+            table = schema[key]
+            table_schema = table.get("schema", "")
+            table_name = table.get("name", key)
+            full_name = f"{table_schema}.{table_name}" if table_schema else table_name
+            date_cols = [
+                col for col in table.get("columns", [])
+                if any(kw in col.get("type", "").lower() for kw in DATE_TYPE_KEYWORDS)
+            ]
+            if not date_cols:
+                continue
+            col_results = result.table_col_results.get(full_name, {})
+            lines.append(f"Table: {full_name}")
+            for col in date_cols:
+                col_name = col["name"]
+                col_type = col.get("type", "")
+                if col_name not in col_results:
+                    lines.append(f"  {col_name} ({col_type}): (query failed)")
                 else:
-                    lines.append(f"  {col_name} ({col_type}): {min_val} → {max_val}")
-        lines.append("")
+                    min_val, max_val = col_results[col_name]
+                    if min_val is None and max_val is None:
+                        lines.append(f"  {col_name} ({col_type}): (no data)")
+                    else:
+                        lines.append(f"  {col_name} ({col_type}): {min_val} → {max_val}")
+            lines.append("")
 
-    if result.global_max:
-        lines.append(f"GLOBAL MAX DATE: {result.global_max}")
-        lines.append("")
+        if result.global_max:
+            lines.append(f"GLOBAL MAX DATE: {result.global_max}")
+            lines.append("")
 
-    if result.table_max:
-        lines.append("TABLE MAX DATES (use these for date spine endpoints):")
-        for tbl, tbl_max in sorted(result.table_max.items()):
-            count_str = (
-                f"{result.table_row_count[tbl]:,} rows"
-                if tbl in result.table_row_count
-                else "row count unavailable"
-            )
-            size_marker = " (largest table)" if tbl == result.largest_table else ""
-            spine_marker = (
-                " ← USE THIS for spine if this is your fact/event table"
-                if tbl_max != result.global_max
-                else ""
-            )
-            lines.append(f"  {tbl} → {tbl_max} ({count_str}){size_marker}{spine_marker}")
-        lines.append("")
-        lines.append("RULE: Use the max date of your PRIMARY FACT TABLE (orders, events, transactions)")
-        lines.append("      as the date spine endpoint. Do NOT use the global max if it comes from a")
-        lines.append("      dimension or reference table with a later date.")
-    else:
-        lines.append("GLOBAL MAX DATE: (no non-null date values found)")
+        if result.table_max:
+            lines.append("TABLE MAX DATES (use these for date spine endpoints):")
+            for tbl, tbl_max in sorted(result.table_max.items()):
+                count_str = (
+                    f"{result.table_row_count[tbl]:,} rows"
+                    if tbl in result.table_row_count
+                    else "row count unavailable"
+                )
+                size_marker = " (largest table)" if tbl == result.largest_table else ""
+                spine_marker = (
+                    " ← USE THIS for spine if this is your fact/event table"
+                    if tbl_max != result.global_max
+                    else ""
+                )
+                lines.append(f"  {tbl} → {tbl_max} ({count_str}){size_marker}{spine_marker}")
+            lines.append("")
+            lines.append("RULE: Use the max date of your PRIMARY FACT TABLE (orders, events, transactions)")
+            lines.append("      as the date spine endpoint. Do NOT use the global max if it comes from a")
+            lines.append("      dimension or reference table with a later date.")
+        else:
+            lines.append("GLOBAL MAX DATE: (no non-null date values found)")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
+    finally:
+        current_org_id_var.reset(token)
 
 
 async def _find_hazard_table_date(
@@ -914,318 +936,320 @@ async def _find_hazard_table_date(
     return None
 
 
-@mcp.tool()
-async def fix_date_spine_hazards(
-    project_dir: str,
-    connection_name: str,
-    replacement_date: str = "",
-) -> str:
-    """
-    Auto-fix all date spine hazards in a dbt project in one call.
+if not _is_cloud:
+    @mcp.tool()
+    async def fix_date_spine_hazards(
+        project_dir: str,
+        connection_name: str,
+        replacement_date: str = "",
+    ) -> str:
+        """
+        Auto-fix all date spine hazards in a dbt project in one call.
 
-    Reads the project scan to find all current_date/current_timestamp/now() hazards,
-    then creates local override files for package models and edits project models
-    in-place. Uses the largest-table max date from the connection as the replacement
-    literal date, or an explicit replacement_date if provided.
+        Reads the project scan to find all current_date/current_timestamp/now() hazards,
+        then creates local override files for package models and edits project models
+        in-place. Uses the largest-table max date from the connection as the replacement
+        literal date, or an explicit replacement_date if provided.
 
-    Args:
-        project_dir: Absolute path to the dbt project root.
-        connection_name: Name of a configured database connection (used to auto-detect
-                         the replacement date from the largest fact table).
-        replacement_date: Optional override date string like "2022-01-31". If omitted,
-                          the date is auto-detected from the connection's largest table.
+        Args:
+            project_dir: Absolute path to the dbt project root.
+            connection_name: Name of a configured database connection (used to auto-detect
+                             the replacement date from the largest fact table).
+            replacement_date: Optional override date string like "2022-01-31". If omitted,
+                              the date is auto-detected from the connection's largest table.
 
-    Returns:
-        Markdown report listing every file created/modified and a dbt run command.
-    """
-    from pathlib import Path as _Path
+        Returns:
+            Markdown report listing every file created/modified and a dbt run command.
+        """
+        from pathlib import Path as _Path
 
-    if err := _validate_connection_name(connection_name):
-        return f"Error: {err}"
+        if err := _validate_connection_name(connection_name):
+            return f"Error: {err}"
 
-    project_path = _Path(project_dir)
-    if not project_path.exists():
-        return f"Error: project directory does not exist: {project_dir}"
+        project_path = _Path(project_dir)
+        if not project_path.exists():
+            return f"Error: project directory does not exist: {project_dir}"
 
-    # Determine the replacement date and whether to add a +1 day offset.
-    # add_day_offset=True only when the date comes from raw source data (global_max),
-    # where max_data_date + 1 = current_date. When the date comes from a pre-existing
-    # hazard table or is provided explicitly by the caller, it already reflects the
-    # correct current_date value, so no offset is needed.
-    resolved_date: str
-    date_source: str
-    add_day_offset: bool
-    if replacement_date.strip():
-        resolved_date = replacement_date.strip()
-        date_source = f"{resolved_date} (provided explicitly)"
-        add_day_offset = False
-    else:
-        try:
-            boundaries = await _fetch_date_boundaries(connection_name)
-        except Exception as e:
-            return f"Error fetching date boundaries: {sanitize_mcp_error(str(e))}"
-
-        if not boundaries.found_any:
-            return (
-                f"Error: No DATE/TIMESTAMP columns found in connection '{connection_name}'. "
-                "Pass replacement_date explicitly."
-            )
-
-        # Strategy: look for the hazard model(s) as pre-existing tables in the
-        # DB — their max date reflects the gold generation date. This is more
-        # reliable than global_max (which picks up outlier dates from raw data,
-        # e.g. purchase orders dated 2050) or largest_table_max (which misses
-        # derived tables that aren't the largest).
-        hazard_date = await _find_hazard_table_date(
-            connection_name, project_path, boundaries
-        )
-        if hazard_date:
-            resolved_date, date_source = hazard_date
+        # Determine the replacement date and whether to add a +1 day offset.
+        # add_day_offset=True only when the date comes from raw source data (global_max),
+        # where max_data_date + 1 = current_date. When the date comes from a pre-existing
+        # hazard table or is provided explicitly by the caller, it already reflects the
+        # correct current_date value, so no offset is needed.
+        resolved_date: str
+        date_source: str
+        add_day_offset: bool
+        if replacement_date.strip():
+            resolved_date = replacement_date.strip()
+            date_source = f"{resolved_date} (provided explicitly)"
             add_day_offset = False
-        elif boundaries.global_max:
-            resolved_date = boundaries.global_max
-            date_source = f"{resolved_date} (global max date — no hazard table found)"
-            add_day_offset = True
         else:
-            return (
-                f"Error: Could not determine a replacement date from connection '{connection_name}'. "
-                "Pass replacement_date explicitly."
-            )
-
-    # Scan the project to get hazards.
-    project = _scan_project(project_path)
-    hazards = project.date_hazards
-
-    if not hazards:
-        return "No date spine hazards found — nothing to fix."
-
-    # Generate fixes (pure, no I/O).
-    try:
-        fixes = generate_date_spine_fixes(project_path, hazards, resolved_date, add_day_offset)
-    except OSError as e:
-        return f"Error reading source files: {sanitize_mcp_error(str(e))}"
-
-    # Write files.
-    written: list[str] = []
-    skipped: list[str] = []
-    errors: list[str] = []
-
-    for fix in fixes:
-        if fix.already_overridden:
-            skipped.append(fix.original_path)
-            continue
-        try:
-            fix.output_path.parent.mkdir(parents=True, exist_ok=True)
-            fix.output_path.write_text(fix.content, encoding="utf-8")
-            written.append(fix.output_path.name.removesuffix(".sql"))
-        except OSError as e:
-            errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
-
-    # Build markdown report.
-    report_lines = [f"## Date spine hazards fixed ({len([f for f in fixes if not f.already_overridden])} files)", ""]
-
-    item_num = 0
-    for fix in fixes:
-        if fix.already_overridden:
-            report_lines.append(
-                f"  SKIPPED {fix.original_path} — override already exists"
-            )
-            continue
-
-        item_num += 1
-        action = "CREATED" if fix.is_package else "MODIFIED"
-        out_rel = str(fix.output_path.relative_to(project_path))
-
-        # Include a short snippet: first replacement found in context.
-        snippet = _extract_replacement_snippet(fix.content, resolved_date)
-        snippet_str = f"\n     snippet: {snippet}" if snippet else ""
-
-        patterns_str = ", ".join(fix.patterns_replaced) if fix.patterns_replaced else "unknown"
-        if fix.is_package:
-            report_lines.append(
-                f"{item_num}. {action} {out_rel} (override of {fix.original_path})\n"
-                f"   Replaced: {patterns_str} -> ('{resolved_date}'::date + INTERVAL '1 day'){snippet_str}"
-            )
-        else:
-            report_lines.append(
-                f"{item_num}. {action} {out_rel} (project model, edited in-place)\n"
-                f"   Replaced: {patterns_str} -> ('{resolved_date}'::date + INTERVAL '1 day'){snippet_str}"
-            )
-
-    if errors:
-        report_lines.append("")
-        report_lines.append("## Errors")
-        for err in errors:
-            report_lines.append(f"  - {err}")
-
-    if written:
-        model_list = " ".join(written)
-        report_lines.append("")
-        report_lines.append(f"Verify: dbt run --select {model_list}")
-
-    report_lines.append("")
-    report_lines.append(f"Date used: {date_source}")
-
-    return "\n".join(report_lines)
-
-
-@mcp.tool()
-async def fix_nondeterminism_hazards(
-    project_dir: str,
-    connection_name: str,
-) -> str:
-    """
-    Auto-fix all non-deterministic window function hazards in a dbt project.
-
-    Finds ROW_NUMBER/RANK/DENSE_RANK OVER(...) clauses whose ORDER BY may not be
-    unique, then appends a tiebreaker column (first *_id column found in referenced
-    tables) to each ambiguous ORDER BY.
-
-    Creates local override files for package models; edits project models in-place.
-    If the DB connection is unavailable, skips all fixes and returns a warning
-    listing the affected models for manual review.
-
-    Args:
-        project_dir: Absolute path to the dbt project root.
-        connection_name: Name of a configured database connection (used to discover
-                         column names for tiebreaker selection).
-
-    Returns:
-        Markdown report listing every file fixed and a dbt run --select command.
-    """
-    from pathlib import Path as _Path
-
-    if err := _validate_connection_name(connection_name):
-        return f"Error: {err}"
-
-    project_path = _Path(project_dir)
-    if not project_path.exists():
-        return f"Error: project directory does not exist: {project_dir}"
-
-    # Scan the project to get nd_warnings.
-    project = _scan_project(project_path)
-    nd_warnings = project.nondeterminism_warnings
-
-    if not nd_warnings:
-        return "No non-determinism hazards found — nothing to fix."
-
-    # Fetch schema to build table->columns map (graceful degradation if unavailable).
-    table_columns: dict[str, list[str]] = {}
-    schema_error: str = ""
-
-    tool_org_id: str
-    async with _store_session() as store:
-        tool_org_id = store.org_id or "local"
-        conn_info = await store.get_connection(connection_name)
-        if not conn_info:
-            available = [c.name for c in await store.list_connections()]
-            conn_str = None
-            extras = None
-        else:
-            conn_str = await store.get_connection_string(connection_name)
-            extras = await store.get_credential_extras(connection_name) if conn_str else None
-
-    if not conn_info:
-        schema_error = (
-            f"Connection '{connection_name}' not found (available: {available}). "
-            "Tiebreaker selection skipped — all patterns will need manual fixes."
-        )
-    else:
-        if not conn_str:
-            schema_error = "No credentials stored for this connection. Tiebreaker selection skipped."
-        else:
-            from .connectors.pool_manager import pool_manager
-            from .connectors.schema_cache import schema_cache
-
-            _org_token = current_org_id_var.set(tool_org_id)
             try:
-                schema = schema_cache.get(connection_name)
-                if schema is None:
-                    try:
-                        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                            schema = await connector.get_schema()
-                        schema_cache.put(connection_name, schema)
-                    except Exception as e:
-                        schema_error = f"Could not fetch schema: {sanitize_mcp_error(str(e))}. Tiebreaker selection skipped."
-                        schema = {}
-                table_columns = build_table_columns_from_schema(schema)
-            finally:
-                current_org_id_var.reset(_org_token)
+                boundaries = await _fetch_date_boundaries(connection_name)
+            except Exception as e:
+                return f"Error fetching date boundaries: {sanitize_mcp_error(str(e))}"
 
-    # Generate fixes (pure, no I/O).
-    try:
-        fixes = generate_nondeterminism_fixes(project_path, nd_warnings, table_columns)
-    except OSError as e:
-        return f"Error reading source files: {sanitize_mcp_error(str(e))}"
+            if not boundaries.found_any:
+                return (
+                    f"Error: No DATE/TIMESTAMP columns found in connection '{connection_name}'. "
+                    "Pass replacement_date explicitly."
+                )
 
-    # Write files.
-    written: list[str] = []
-    skipped_files: list[str] = []
-    errors: list[str] = []
+            # Strategy: look for the hazard model(s) as pre-existing tables in the
+            # DB — their max date reflects the gold generation date. This is more
+            # reliable than global_max (which picks up outlier dates from raw data,
+            # e.g. purchase orders dated 2050) or largest_table_max (which misses
+            # derived tables that aren't the largest).
+            hazard_date = await _find_hazard_table_date(
+                connection_name, project_path, boundaries
+            )
+            if hazard_date:
+                resolved_date, date_source = hazard_date
+                add_day_offset = False
+            elif boundaries.global_max:
+                resolved_date = boundaries.global_max
+                date_source = f"{resolved_date} (global max date — no hazard table found)"
+                add_day_offset = True
+            else:
+                return (
+                    f"Error: Could not determine a replacement date from connection '{connection_name}'. "
+                    "Pass replacement_date explicitly."
+                )
 
-    for fix in fixes:
-        if fix.already_overridden:
-            skipped_files.append(fix.original_path)
-            continue
-        if not fix.content:
-            # No content means nothing could be fixed (no tiebreaker, read error, etc.)
-            skipped_files.append(fix.original_path)
-            continue
-        if not fix.fixes_applied:
-            # Parsed OK but nothing needed changing.
-            skipped_files.append(fix.original_path)
-            continue
+        # Scan the project to get hazards.
+        project = _scan_project(project_path)
+        hazards = project.date_hazards
+
+        if not hazards:
+            return "No date spine hazards found — nothing to fix."
+
+        # Generate fixes (pure, no I/O).
         try:
-            fix.output_path.parent.mkdir(parents=True, exist_ok=True)
-            fix.output_path.write_text(fix.content, encoding="utf-8")
-            written.append(fix.output_path.name.removesuffix(".sql"))
+            fixes = generate_date_spine_fixes(project_path, hazards, resolved_date, add_day_offset)
         except OSError as e:
-            errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
+            return f"Error reading source files: {sanitize_mcp_error(str(e))}"
 
-    # Build markdown report.
-    total_fixed = len([f for f in fixes if f.fixes_applied and not f.already_overridden])
-    report_lines = [f"## Non-determinism hazards fixed ({total_fixed} files)", ""]
+        # Write files.
+        written: list[str] = []
+        skipped: list[str] = []
+        errors: list[str] = []
 
-    if schema_error:
-        report_lines.append(f"Warning: {schema_error}")
-        report_lines.append("")
+        for fix in fixes:
+            if fix.already_overridden:
+                skipped.append(fix.original_path)
+                continue
+            try:
+                fix.output_path.parent.mkdir(parents=True, exist_ok=True)
+                fix.output_path.write_text(fix.content, encoding="utf-8")
+                written.append(fix.output_path.name.removesuffix(".sql"))
+            except OSError as e:
+                errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
 
-    item_num = 0
-    for fix in fixes:
-        if fix.already_overridden:
-            report_lines.append(f"  SKIPPED {fix.original_path} — override already exists")
-            continue
+        # Build markdown report.
+        report_lines = [f"## Date spine hazards fixed ({len([f for f in fixes if not f.already_overridden])} files)", ""]
 
-        if not fix.fixes_applied and not fix.skipped_patterns:
-            continue
+        item_num = 0
+        for fix in fixes:
+            if fix.already_overridden:
+                report_lines.append(
+                    f"  SKIPPED {fix.original_path} — override already exists"
+                )
+                continue
 
-        item_num += 1
-        if fix.fixes_applied:
+            item_num += 1
             action = "CREATED" if fix.is_package else "MODIFIED"
+            out_rel = str(fix.output_path.relative_to(project_path))
+
+            # Include a short snippet: first replacement found in context.
+            snippet = _extract_replacement_snippet(fix.content, resolved_date)
+            snippet_str = f"\n     snippet: {snippet}" if snippet else ""
+
+            patterns_str = ", ".join(fix.patterns_replaced) if fix.patterns_replaced else "unknown"
+            if fix.is_package:
+                report_lines.append(
+                    f"{item_num}. {action} {out_rel} (override of {fix.original_path})\n"
+                    f"   Replaced: {patterns_str} -> ('{resolved_date}'::date + INTERVAL '1 day'){snippet_str}"
+                )
+            else:
+                report_lines.append(
+                    f"{item_num}. {action} {out_rel} (project model, edited in-place)\n"
+                    f"   Replaced: {patterns_str} -> ('{resolved_date}'::date + INTERVAL '1 day'){snippet_str}"
+                )
+
+        if errors:
+            report_lines.append("")
+            report_lines.append("## Errors")
+            for err in errors:
+                report_lines.append(f"  - {err}")
+
+        if written:
+            model_list = " ".join(written)
+            report_lines.append("")
+            report_lines.append(f"Verify: dbt run --select {model_list}")
+
+        report_lines.append("")
+        report_lines.append(f"Date used: {date_source}")
+
+        return "\n".join(report_lines)
+
+
+if not _is_cloud:
+    @mcp.tool()
+    async def fix_nondeterminism_hazards(
+        project_dir: str,
+        connection_name: str,
+    ) -> str:
+        """
+        Auto-fix all non-deterministic window function hazards in a dbt project.
+
+        Finds ROW_NUMBER/RANK/DENSE_RANK OVER(...) clauses whose ORDER BY may not be
+        unique, then appends a tiebreaker column (first *_id column found in referenced
+        tables) to each ambiguous ORDER BY.
+
+        Creates local override files for package models; edits project models in-place.
+        If the DB connection is unavailable, skips all fixes and returns a warning
+        listing the affected models for manual review.
+
+        Args:
+            project_dir: Absolute path to the dbt project root.
+            connection_name: Name of a configured database connection (used to discover
+                             column names for tiebreaker selection).
+
+        Returns:
+            Markdown report listing every file fixed and a dbt run --select command.
+        """
+        from pathlib import Path as _Path
+
+        if err := _validate_connection_name(connection_name):
+            return f"Error: {err}"
+
+        project_path = _Path(project_dir)
+        if not project_path.exists():
+            return f"Error: project directory does not exist: {project_dir}"
+
+        # Scan the project to get nd_warnings.
+        project = _scan_project(project_path)
+        nd_warnings = project.nondeterminism_warnings
+
+        if not nd_warnings:
+            return "No non-determinism hazards found — nothing to fix."
+
+        # Fetch schema to build table->columns map (graceful degradation if unavailable).
+        table_columns: dict[str, list[str]] = {}
+        schema_error: str = ""
+
+        tool_org_id: str
+        async with _store_session() as store:
+            tool_org_id = store.org_id or "local"
+            conn_info = await store.get_connection(connection_name)
+            if not conn_info:
+                available = [c.name for c in await store.list_connections()]
+                conn_str = None
+                extras = None
+            else:
+                conn_str = await store.get_connection_string(connection_name)
+                extras = await store.get_credential_extras(connection_name) if conn_str else None
+
+        if not conn_info:
+            schema_error = (
+                f"Connection '{connection_name}' not found (available: {available}). "
+                "Tiebreaker selection skipped — all patterns will need manual fixes."
+            )
+        else:
+            if not conn_str:
+                schema_error = "No credentials stored for this connection. Tiebreaker selection skipped."
+            else:
+                from .connectors.pool_manager import pool_manager
+                from .connectors.schema_cache import schema_cache
+
+                _org_token = current_org_id_var.set(tool_org_id)
+                try:
+                    schema = schema_cache.get(connection_name)
+                    if schema is None:
+                        try:
+                            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                                schema = await connector.get_schema()
+                            schema_cache.put(connection_name, schema)
+                        except Exception as e:
+                            schema_error = f"Could not fetch schema: {sanitize_mcp_error(str(e))}. Tiebreaker selection skipped."
+                            schema = {}
+                    table_columns = build_table_columns_from_schema(schema)
+                finally:
+                    current_org_id_var.reset(_org_token)
+
+        # Generate fixes (pure, no I/O).
+        try:
+            fixes = generate_nondeterminism_fixes(project_path, nd_warnings, table_columns)
+        except OSError as e:
+            return f"Error reading source files: {sanitize_mcp_error(str(e))}"
+
+        # Write files.
+        written: list[str] = []
+        skipped_files: list[str] = []
+        errors: list[str] = []
+
+        for fix in fixes:
+            if fix.already_overridden:
+                skipped_files.append(fix.original_path)
+                continue
+            if not fix.content:
+                # No content means nothing could be fixed (no tiebreaker, read error, etc.)
+                skipped_files.append(fix.original_path)
+                continue
+            if not fix.fixes_applied:
+                # Parsed OK but nothing needed changing.
+                skipped_files.append(fix.original_path)
+                continue
             try:
-                out_rel = str(fix.output_path.relative_to(project_path))
-            except ValueError:
-                out_rel = str(fix.output_path)
-            source_note = f" (override of {fix.original_path})" if fix.is_package else " (edited in-place)"
-            report_lines.append(f"{item_num}. {action} {out_rel}{source_note}")
-            for applied in fix.fixes_applied:
-                report_lines.append(f"   Fixed: {applied}")
+                fix.output_path.parent.mkdir(parents=True, exist_ok=True)
+                fix.output_path.write_text(fix.content, encoding="utf-8")
+                written.append(fix.output_path.name.removesuffix(".sql"))
+            except OSError as e:
+                errors.append(f"{fix.output_path.name}: {sanitize_mcp_error(str(e), cap=100)}")
 
-        for skipped in fix.skipped_patterns:
-            report_lines.append(f"   SKIPPED: {skipped}")
+        # Build markdown report.
+        total_fixed = len([f for f in fixes if f.fixes_applied and not f.already_overridden])
+        report_lines = [f"## Non-determinism hazards fixed ({total_fixed} files)", ""]
 
-    if errors:
-        report_lines.append("")
-        report_lines.append("## Errors")
-        for err in errors:
-            report_lines.append(f"  - {err}")
+        if schema_error:
+            report_lines.append(f"Warning: {schema_error}")
+            report_lines.append("")
 
-    if written:
-        model_list = " ".join(written)
-        report_lines.append("")
-        report_lines.append(f"Verify: dbt run --select {model_list}")
+        item_num = 0
+        for fix in fixes:
+            if fix.already_overridden:
+                report_lines.append(f"  SKIPPED {fix.original_path} — override already exists")
+                continue
 
-    return "\n".join(report_lines)
+            if not fix.fixes_applied and not fix.skipped_patterns:
+                continue
+
+            item_num += 1
+            if fix.fixes_applied:
+                action = "CREATED" if fix.is_package else "MODIFIED"
+                try:
+                    out_rel = str(fix.output_path.relative_to(project_path))
+                except ValueError:
+                    out_rel = str(fix.output_path)
+                source_note = f" (override of {fix.original_path})" if fix.is_package else " (edited in-place)"
+                report_lines.append(f"{item_num}. {action} {out_rel}{source_note}")
+                for applied in fix.fixes_applied:
+                    report_lines.append(f"   Fixed: {applied}")
+
+            for skipped in fix.skipped_patterns:
+                report_lines.append(f"   SKIPPED: {skipped}")
+
+        if errors:
+            report_lines.append("")
+            report_lines.append("## Errors")
+            for err in errors:
+                report_lines.append(f"  - {err}")
+
+        if written:
+            model_list = " ".join(written)
+            report_lines.append("")
+            report_lines.append(f"Verify: dbt run --select {model_list}")
+
+        return "\n".join(report_lines)
 
 
 def _extract_replacement_snippet(content: str, replacement_date: str) -> str:
@@ -1287,21 +1311,26 @@ async def connection_health(connection_name: str = "") -> str:
     """
     from .connectors.health_monitor import health_monitor
 
-    if connection_name:
-        stats = health_monitor.connection_stats(connection_name)
-        if not stats:
-            return f"No health data for '{connection_name}'. Run some queries first."
-        return _format_health_stats(stats)
+    org_id = mcp_org_id_var.get(None) or "local"
+    token = current_org_id_var.set(org_id)
+    try:
+        if connection_name:
+            stats = health_monitor.connection_stats(connection_name)
+            if not stats:
+                return f"No health data for '{connection_name}'. Run some queries first."
+            return _format_health_stats(stats)
 
-    all_stats = health_monitor.all_stats()
-    if not all_stats:
-        return "No health data yet. Run some queries to start collecting metrics."
+        all_stats = health_monitor.all_stats()
+        if not all_stats:
+            return "No health data yet. Run some queries to start collecting metrics."
 
-    lines = [f"Connection Health ({len(all_stats)} connections):"]
-    for stats in all_stats:
-        lines.append("")
-        lines.append(_format_health_stats(stats))
-    return "\n".join(lines)
+        lines = [f"Connection Health ({len(all_stats)} connections):"]
+        for stats in all_stats:
+            lines.append("")
+            lines.append(_format_health_stats(stats))
+        return "\n".join(lines)
+    finally:
+        current_org_id_var.reset(token)
 
 
 def _format_health_stats(stats: dict) -> str:
@@ -1347,6 +1376,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/join-paths",
             params={"from_table": from_table, "to_table": to_table, "max_hops": max_hops, "include_implicit": "true"},
+            headers=_gw_headers(),
         )
         if resp.status_code != 200:
             return sanitize_proxy_response(resp.status_code, resp.text)
@@ -1387,6 +1417,7 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/relationships",
             params={"format": format},
+            headers=_gw_headers(),
         )
         if resp.status_code != 200:
             return sanitize_proxy_response(resp.status_code, resp.text)
@@ -1429,6 +1460,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
         resp = await client.get(
             f"/api/connections/{connection_name}/schema/explore-table",
             params={"table": table_name, "include_samples": True},
+            headers=_gw_headers(),
         )
         if resp.status_code != 200:
             return sanitize_proxy_response(resp.status_code, resp.text)
@@ -1501,7 +1533,7 @@ async def schema_overview(connection_name: str) -> str:
 
     try:
         async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
-            resp = await client.get(f"/api/connections/{connection_name}/schema/overview")
+            resp = await client.get(f"/api/connections/{connection_name}/schema/overview", headers=_gw_headers())
             if resp.status_code != 200:
                 return sanitize_proxy_response(resp.status_code, resp.text)
             data = resp.json()
@@ -1601,9 +1633,9 @@ async def connector_capabilities(connection_name: str = "") -> str:
         if connection_name:
             if not _CONN_NAME_RE.match(connection_name):
                 return "Error: Invalid connection name"
-            r = await client.get(f"{gw}/api/connections/{connection_name}/capabilities")
+            r = await client.get(f"{gw}/api/connections/{connection_name}/capabilities", headers=_gw_headers())
         else:
-            r = await client.get(f"{gw}/api/connectors/capabilities")
+            r = await client.get(f"{gw}/api/connectors/capabilities", headers=_gw_headers())
     if r.status_code != 200:
         return sanitize_proxy_response(r.status_code, r.text)
 
@@ -1651,7 +1683,7 @@ async def schema_diff(connection_name: str) -> str:
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.get(f"{gw}/api/connections/{connection_name}/schema/diff")
+        r = await client.get(f"{gw}/api/connections/{connection_name}/schema/diff", headers=_gw_headers())
     if r.status_code != 200:
         return sanitize_proxy_response(r.status_code, r.text)
 
@@ -1720,6 +1752,7 @@ async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool 
         r = await client.get(
             f"{gw}/api/connections/{connection_name}/schema/ddl",
             params={"max_tables": max_tables, "compress": compress},
+            headers=_gw_headers(),
         )
     if r.status_code != 200:
         return sanitize_proxy_response(r.status_code, r.text)
@@ -1764,6 +1797,7 @@ async def schema_link(connection_name: str, question: str, format: str = "ddl", 
         r = await client.get(
             f"{gw}/api/connections/{connection_name}/schema/link",
             params={"question": question, "format": format, "max_tables": max_tables},
+            headers=_gw_headers(),
         )
     if r.status_code != 200:
         return sanitize_proxy_response(r.status_code, r.text)
@@ -1813,6 +1847,7 @@ async def explain_query(connection_name: str, sql: str) -> str:
         r = await client.post(
             f"{gw}/api/query/explain",
             json={"connection_name": connection_name, "sql": sql},
+            headers=_gw_headers(),
         )
     if r.status_code != 200:
         return sanitize_proxy_response(r.status_code, r.text)
@@ -1871,6 +1906,7 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             r = await client.post(
                 f"{gw}/api/query/explain",
                 json={"connection_name": connection_name, "sql": sql},
+                headers=_gw_headers(),
             )
         if r.status_code == 200:
             data = r.json()
@@ -1889,7 +1925,7 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             db_type = ""
             try:
                 async with httpx.AsyncClient(timeout=5) as client2:
-                    r2 = await client2.get(f"{gw}/api/connections/{connection_name}")
+                    r2 = await client2.get(f"{gw}/api/connections/{connection_name}", headers=_gw_headers())
                     if r2.status_code == 200:
                         db_type = r2.json().get("db_type", "")
             except Exception:
@@ -1931,6 +1967,7 @@ async def query_history(connection_name: str, limit: int = 10) -> str:
                 "event_type": "query",
                 "limit": limit,
             },
+            headers=_gw_headers(),
         )
     if r.status_code != 200:
         return sanitize_proxy_response(r.status_code, r.text)
@@ -2030,6 +2067,7 @@ async def explore_columns(
             resp = await client.post(
                 f"{gw}/api/connections/{connection_name}/schema/explore-columns",
                 json=body,
+                headers=_gw_headers(),
             )
         if resp.status_code == 404:
             return f"Table '{table}' not found. Check the table name with schema_link first."
@@ -2110,7 +2148,7 @@ async def schema_statistics(connection_name: str) -> str:
     try:
         gw = _gateway_url()
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{gw}/api/connections/{connection_name}/schema/overview")
+            resp = await client.get(f"{gw}/api/connections/{connection_name}/schema/overview", headers=_gw_headers())
         if resp.status_code != 200:
             return sanitize_proxy_response(resp.status_code, resp.text)
 
@@ -2198,6 +2236,7 @@ async def explore_column(
             resp = await client.post(
                 f"{gw}/api/connections/{connection_name}/schema/explore",
                 params=params,
+                headers=_gw_headers(),
             )
         if resp.status_code != 200:
             return sanitize_proxy_response(resp.status_code, resp.text)
@@ -2261,6 +2300,7 @@ async def estimate_query_cost(connection_name: str, sql: str) -> str:
                     "sql": sql,
                     "row_limit": 1000,
                 },
+                headers=_gw_headers(),
             )
             if resp.status_code != 200:
                 return sanitize_proxy_response(resp.status_code, resp.text)
@@ -2357,6 +2397,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                         "sql": test_sql,
                         "row_limit": 5,
                     },
+                    headers=_gw_headers(),
                 )
             if resp.status_code == 200:
                 data = resp.json()
@@ -2375,7 +2416,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                 # Get hint
                 try:
                     async with httpx.AsyncClient(timeout=5) as client2:
-                        r2 = await client2.get(f"{gw}/api/connections/{connection_name}")
+                        r2 = await client2.get(f"{gw}/api/connections/{connection_name}", headers=_gw_headers())
                         if r2.status_code == 200:
                             db_type = r2.json().get("db_type", "")
                             hint = query_error_hint(error_text, db_type)
@@ -2400,6 +2441,7 @@ async def debug_cte_query(connection_name: str, sql: str) -> str:
                     "sql": sql,
                     "row_limit": 5,
                 },
+                headers=_gw_headers(),
             )
         if resp.status_code == 200:
             data = resp.json()
@@ -2490,77 +2532,78 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     return "\n".join(lines)
 
 
-@mcp.tool()
-async def dbt_error_parser(error_output: str) -> str:
-    """
-    Parse raw dbt stderr/stdout and extract structured, actionable error info.
+if not _is_cloud:
+    @mcp.tool()
+    async def dbt_error_parser(error_output: str) -> str:
+        """
+        Parse raw dbt stderr/stdout and extract structured, actionable error info.
 
-    No LLM involved — pure regex and string pattern matching against common
-    dbt error formats. Provides a suggested fix for known error categories.
+        No LLM involved — pure regex and string pattern matching against common
+        dbt error formats. Provides a suggested fix for known error categories.
 
-    Args:
-        error_output: Raw dbt command output (stderr or combined stdout/stderr)
+        Args:
+            error_output: Raw dbt command output (stderr or combined stdout/stderr)
 
-    Returns:
-        Structured error summary with model name, type, location, message, and suggested fix.
-    """
-    from .deployment import is_cloud_mode
-    if is_cloud_mode():
-        return "Error: dbt error parsing is not available in cloud mode"
-    if not error_output or not error_output.strip():
-        return "Error: error_output cannot be empty."
+        Returns:
+            Structured error summary with model name, type, location, message, and suggested fix.
+        """
+        from .deployment import is_cloud_mode
+        if is_cloud_mode():
+            return "Error: dbt error parsing is not available in cloud mode"
+        if not error_output or not error_output.strip():
+            return "Error: error_output cannot be empty."
 
-    model_match = (
-        re.search(r'model\s+"[^.]+\.[^.]+\.([^"]+)"', error_output)
-        or re.search(r'(?:Compilation|Database|Runtime|Test)\s+Error\s+in\s+model\s+(\S+)', error_output)
-    )
-    model_name = model_match.group(1) if model_match else "(not detected)"
+        model_match = (
+            re.search(r'model\s+"[^.]+\.[^.]+\.([^"]+)"', error_output)
+            or re.search(r'(?:Compilation|Database|Runtime|Test)\s+Error\s+in\s+model\s+(\S+)', error_output)
+        )
+        model_name = model_match.group(1) if model_match else "(not detected)"
 
-    type_match = re.search(r'(Compilation Error|Database Error|Runtime Error|Test Error|dbt\.exceptions\.\w+)', error_output)
-    error_type = type_match.group(1) if type_match else "(not detected)"
+        type_match = re.search(r'(Compilation Error|Database Error|Runtime Error|Test Error|dbt\.exceptions\.\w+)', error_output)
+        error_type = type_match.group(1) if type_match else "(not detected)"
 
-    location_match = (
-        re.search(r'at \[(\d+):(\d+)\]', error_output)
-        or re.search(r'[Ll]ine\s+(\d+)', error_output)
-    )
-    if location_match:
-        location = f"line {location_match.group(1)}" if len(location_match.groups()) == 1 else f"line {location_match.group(1)}, col {location_match.group(2)}"
-    else:
-        location = "(not detected)"
+        location_match = (
+            re.search(r'at \[(\d+):(\d+)\]', error_output)
+            or re.search(r'[Ll]ine\s+(\d+)', error_output)
+        )
+        if location_match:
+            location = f"line {location_match.group(1)}" if len(location_match.groups()) == 1 else f"line {location_match.group(1)}, col {location_match.group(2)}"
+        else:
+            location = "(not detected)"
 
-    msg_match = re.search(r'(?:ERROR|error):\s+(.+)', error_output)
-    core_message = msg_match.group(1).strip() if msg_match else "(not detected)"
+        msg_match = re.search(r'(?:ERROR|error):\s+(.+)', error_output)
+        core_message = msg_match.group(1).strip() if msg_match else "(not detected)"
 
-    error_lower = error_output.lower()
-    col_missing = re.search(r'column "?([^"\s]+)"? does not exist', error_output, re.IGNORECASE)
-    table_missing = re.search(r'(?:table|relation)\s+"?([^"\s]+)"?\s+does not exist', error_output, re.IGNORECASE)
+        error_lower = error_output.lower()
+        col_missing = re.search(r'column "?([^"\s]+)"? does not exist', error_output, re.IGNORECASE)
+        table_missing = re.search(r'(?:table|relation)\s+"?([^"\s]+)"?\s+does not exist', error_output, re.IGNORECASE)
 
-    if col_missing:
-        col = col_missing.group(1)
-        suggested_fix = f"Check column name {col} in your SELECT. Use check_model_schema to compare actual vs expected columns."
-    elif table_missing:
-        tbl = table_missing.group(1)
-        suggested_fix = f"Model {tbl} has not been materialized. Run `dbt run --select {tbl}` first."
-    elif "syntax error" in error_lower:
-        suggested_fix = "Review the SQL at the indicated line number."
-    elif "ambiguous column" in error_lower:
-        suggested_fix = "Qualify the column with a table alias."
-    elif "divide by zero" in error_lower or "division by zero" in error_lower:
-        suggested_fix = "Wrap denominator in NULLIF(denominator, 0)."
-    elif "unique constraint" in error_lower:
-        suggested_fix = "Deduplicate source data or add a ROW_NUMBER() window to resolve duplicates."
-    else:
-        suggested_fix = "Review the error message above."
+        if col_missing:
+            col = col_missing.group(1)
+            suggested_fix = f"Check column name {col} in your SELECT. Use check_model_schema to compare actual vs expected columns."
+        elif table_missing:
+            tbl = table_missing.group(1)
+            suggested_fix = f"Model {tbl} has not been materialized. Run `dbt run --select {tbl}` first."
+        elif "syntax error" in error_lower:
+            suggested_fix = "Review the SQL at the indicated line number."
+        elif "ambiguous column" in error_lower:
+            suggested_fix = "Qualify the column with a table alias."
+        elif "divide by zero" in error_lower or "division by zero" in error_lower:
+            suggested_fix = "Wrap denominator in NULLIF(denominator, 0)."
+        elif "unique constraint" in error_lower:
+            suggested_fix = "Deduplicate source data or add a ROW_NUMBER() window to resolve duplicates."
+        else:
+            suggested_fix = "Review the error message above."
 
-    lines = [
-        "dbt Error Summary:",
-        f"  Model: {model_name}",
-        f"  Type: {error_type}",
-        f"  Location: {location}",
-        f"  Message: {core_message}",
-        f"  Suggested fix: {suggested_fix}",
-    ]
-    return "\n".join(lines)
+        lines = [
+            "dbt Error Summary:",
+            f"  Model: {model_name}",
+            f"  Type: {error_type}",
+            f"  Location: {location}",
+            f"  Message: {core_message}",
+            f"  Suggested fix: {suggested_fix}",
+        ]
+        return "\n".join(lines)
 
 
 @mcp.tool()
@@ -3162,196 +3205,201 @@ SELECT
 # ─── dbt project discovery + validation ─────────────────────────────────────
 
 
-@mcp.tool()
-async def dbt_project_map(
-    project_dir: str,
-    focus: str = "all",
-    max_models_per_section: int = 40,
-    include_columns: bool = False,
-) -> str:
-    """
-    Yml-direct dbt project discovery — fast, comprehensive, broken-project safe.
+if not _is_cloud:
+    @mcp.tool()
+    async def dbt_project_map(
+        project_dir: str,
+        focus: str = "all",
+        max_models_per_section: int = 40,
+        include_columns: bool = False,
+    ) -> str:
+        """
+        Yml-direct dbt project discovery — fast, comprehensive, broken-project safe.
 
-    Scans a dbt project directory and returns a compact, LLM-optimized markdown
-    view of every model (complete, stub, missing, or orphan), every source,
-    every macro, plus a topologically-sorted work order for actionable models.
+        Scans a dbt project directory and returns a compact, LLM-optimized markdown
+        view of every model (complete, stub, missing, or orphan), every source,
+        every macro, plus a topologically-sorted work order for actionable models.
 
-    Unlike `dbt parse`, this tool DOES NOT depend on dbt itself — it reads yml
-    files and sql files directly with PyYAML and regex. That means it works on
-    broken projects, projects with missing packages, projects with no profile,
-    and projects where dbt parse would refuse to run. Critically, it surfaces
-    missing-model yml entries that `dbt parse` silently drops as "orphan
-    patches" — the exact thing the agent needs to find.
+        Unlike `dbt parse`, this tool DOES NOT depend on dbt itself — it reads yml
+        files and sql files directly with PyYAML and regex. That means it works on
+        broken projects, projects with missing packages, projects with no profile,
+        and projects where dbt parse would refuse to run. Critically, it surfaces
+        missing-model yml entries that `dbt parse` silently drops as "orphan
+        patches" — the exact thing the agent needs to find.
 
-    Args:
-        project_dir: absolute path to the dbt project root (where dbt_project.yml lives)
-        focus: which view to render. One of:
-            - "all" (default): full project overview grouped by directory
-            - "work_order": just the actionable models in build order, with deps + columns
-            - "missing": only models defined in yml but with no .sql file
-            - "stubs": only sql files classified as incomplete/stubbed
-            - "sources": source namespaces with their tables
-            - "macros": available custom macros grouped by file
-            - "model:<name>": deep-dive on one model (columns, deps, tests, description)
-        max_models_per_section: per-section truncation threshold (default 40)
-        include_columns: include column lists inline for complete models (default off)
+        Args:
+            project_dir: absolute path to the dbt project root (where dbt_project.yml lives)
+            focus: which view to render. One of:
+                - "all" (default): full project overview grouped by directory
+                - "work_order": just the actionable models in build order, with deps + columns
+                - "missing": only models defined in yml but with no .sql file
+                - "stubs": only sql files classified as incomplete/stubbed
+                - "sources": source namespaces with their tables
+                - "macros": available custom macros grouped by file
+                - "model:<name>": deep-dive on one model (columns, deps, tests, description)
+            max_models_per_section: per-section truncation threshold (default 40)
+            include_columns: include column lists inline for complete models (default off)
 
-    Returns:
-        markdown-formatted project map
-    """
-    import asyncio
+        Returns:
+            markdown-formatted project map
+        """
+        import asyncio
 
-    from .deployment import is_cloud_mode
-    if is_cloud_mode():
-        return "Error: dbt project map is not available in cloud mode"
-    if not project_dir or not project_dir.strip():
-        return "Error: project_dir is required"
-    # Offload the sync scan + render to a worker thread so the MCP event loop
-    # stays responsive on large projects.
-    return await asyncio.to_thread(
-        _build_project_map,
-        project_dir.strip(),
-        focus,
-        max_models_per_section,
-        include_columns,
-    )
+        from .deployment import is_cloud_mode
+        if is_cloud_mode():
+            return "Error: dbt project map is not available in cloud mode"
+        if not project_dir or not project_dir.strip():
+            return "Error: project_dir is required"
+        # Offload the sync scan + render to a worker thread so the MCP event loop
+        # stays responsive on large projects.
+        return await asyncio.to_thread(
+            _build_project_map,
+            project_dir.strip(),
+            focus,
+            max_models_per_section,
+            include_columns,
+        )
 
 
-@mcp.tool()
-async def dbt_project_validate(
-    project_dir: str,
-    timeout: int = 60,
-) -> str:
-    """
-    Run `dbt parse` against a project and surface structural errors + warnings.
+if not _is_cloud:
+    @mcp.tool()
+    async def dbt_project_validate(
+        project_dir: str,
+        timeout: int = 60,
+    ) -> str:
+        """
+        Run `dbt parse` against a project and surface structural errors + warnings.
 
-    This is the pre-build validation step — does the project compile? Use it
-    when the agent suspects a problem (after editing yml files, after adding
-    new models, before running `dbt run`). Much cheaper than `dbt run` because
-    it does not execute any SQL, but catches the same class of Jinja / ref /
-    source / yml-syntax errors that would fail a run.
+        This is the pre-build validation step — does the project compile? Use it
+        when the agent suspects a problem (after editing yml files, after adding
+        new models, before running `dbt run`). Much cheaper than `dbt run` because
+        it does not execute any SQL, but catches the same class of Jinja / ref /
+        source / yml-syntax errors that would fail a run.
 
-    Output includes:
-      - success/failure + degradation mode (profile_missing, packages_missing,
-        parse_failed, dbt_not_installed, timeout, etc.)
-      - error list with context
-      - orphan-patch list (yml-defined models with no .sql file — the "missing
-        models" that `dbt_project_map` surfaces via the yml-direct path)
-      - non-orphan warnings
+        Output includes:
+          - success/failure + degradation mode (profile_missing, packages_missing,
+            parse_failed, dbt_not_installed, timeout, etc.)
+          - error list with context
+          - orphan-patch list (yml-defined models with no .sql file — the "missing
+            models" that `dbt_project_map` surfaces via the yml-direct path)
+          - non-orphan warnings
 
-    Args:
-        project_dir: absolute path to the dbt project root
-        timeout: subprocess timeout in seconds (default 60, clamped to 1-300)
+        Args:
+            project_dir: absolute path to the dbt project root
+            timeout: subprocess timeout in seconds (default 60, clamped to 1-300)
 
-    Returns:
-        markdown-formatted validation report
-    """
-    import asyncio
-    from pathlib import Path as _Path
+        Returns:
+            markdown-formatted validation report
+        """
+        import asyncio
+        from pathlib import Path as _Path
 
-    from .deployment import is_cloud_mode
-    if is_cloud_mode():
-        return "Error: dbt project validation is not available in cloud mode"
-    if not project_dir or not project_dir.strip():
-        return "Error: project_dir is required"
+        from .deployment import is_cloud_mode
+        if is_cloud_mode():
+            return "Error: dbt project validation is not available in cloud mode"
+        if not project_dir or not project_dir.strip():
+            return "Error: project_dir is required"
 
-    clean_dir = project_dir.strip()
+        clean_dir = project_dir.strip()
 
-    # Require absolute path to prevent relative path confusion.
-    if not _Path(clean_dir).is_absolute():
-        return "Error: project_dir must be an absolute path"
+        # Require absolute path to prevent relative path confusion.
+        if not _Path(clean_dir).is_absolute():
+            return "Error: project_dir must be an absolute path"
 
-    # Reject path traversal — check resolved path for .. segments.
-    try:
-        resolved = _Path(clean_dir).resolve()
-    except (ValueError, OSError) as exc:
-        return f"Error: invalid project_dir: {exc}"
+        # Reject path traversal — check resolved path for .. segments.
+        try:
+            resolved = _Path(clean_dir).resolve()
+        except (ValueError, OSError) as exc:
+            return f"Error: invalid project_dir: {exc}"
 
-    # Reject if any part of the original (unresolved) path contains .. segments.
-    if ".." in _Path(clean_dir).parts:
-        return "Error: project_dir must not contain '..' segments"
+        # Reject if any part of the original (unresolved) path contains .. segments.
+        if ".." in _Path(clean_dir).parts:
+            return "Error: project_dir must not contain '..' segments"
 
-    # Clamp timeout to a safe range: minimum 1s, maximum 300s (5 minutes).
-    clamped_timeout = max(1, min(timeout, 300))
+        # Clamp timeout to a safe range: minimum 1s, maximum 300s (5 minutes).
+        clamped_timeout = max(1, min(timeout, 300))
 
-    # _validate_project calls subprocess.run, which would block this handler's
-    # event loop and can stall MCP heartbeats on Windows. Offload to a thread.
-    result = await asyncio.to_thread(
-        _validate_project,
-        str(resolved),
-        clamped_timeout,
-    )
-    return _format_validation_result(result)
+        # _validate_project calls subprocess.run, which would block this handler's
+        # event loop and can stall MCP heartbeats on Windows. Offload to a thread.
+        result = await asyncio.to_thread(
+            _validate_project,
+            str(resolved),
+            clamped_timeout,
+        )
+        return _format_validation_result(result)
 
 
 # ─── Project management tools ────────────────────────────────────────────────
 
 
-@mcp.tool()
-async def create_project(name: str, connection_name: str) -> str:
-    """Create a new dbt project wired to an existing connection."""
-    from .models import ProjectCreate, ProjectSource
+if not _is_cloud:
+    @mcp.tool()
+    async def create_project(name: str, connection_name: str) -> str:
+        """Create a new dbt project wired to an existing connection."""
+        from .models import ProjectCreate, ProjectSource
 
-    try:
-        proj = ProjectCreate(
-            name=name,
-            connection_name=connection_name,
-            source=ProjectSource.new,
+        try:
+            proj = ProjectCreate(
+                name=name,
+                connection_name=connection_name,
+                source=ProjectSource.new,
+            )
+            async with _store_session() as store:
+                info = await store.create_project(proj)
+        except ValueError as e:
+            return f"Error: {sanitize_mcp_error(str(e))}"
+        return (
+            f"Created project '{info.name}' at {info.project_dir}\n"
+            f"  connection: {info.connection_name}\n"
+            f"  db_type: {info.db_type}\n"
+            f"  storage: {info.storage.value}"
         )
+
+
+if not _is_cloud:
+    @mcp.tool()
+    async def list_projects() -> str:
+        """List all configured dbt projects."""
         async with _store_session() as store:
-            info = await store.create_project(proj)
-    except ValueError as e:
-        return f"Error: {sanitize_mcp_error(str(e))}"
-    return (
-        f"Created project '{info.name}' at {info.project_dir}\n"
-        f"  connection: {info.connection_name}\n"
-        f"  db_type: {info.db_type}\n"
-        f"  storage: {info.storage.value}"
-    )
+            projects = await store.list_projects()
+        if not projects:
+            return "No projects configured."
+        lines = [f"Found {len(projects)} project(s):\n"]
+        for p in projects:
+            lines.append(
+                f"  - {p.name}  ({p.db_type}, {p.status.value})  "
+                f"connection={p.connection_name}  models={p.model_count}"
+            )
+        return "\n".join(lines)
 
 
-@mcp.tool()
-async def list_projects() -> str:
-    """List all configured dbt projects."""
-    async with _store_session() as store:
-        projects = await store.list_projects()
-    if not projects:
-        return "No projects configured."
-    lines = [f"Found {len(projects)} project(s):\n"]
-    for p in projects:
-        lines.append(
-            f"  - {p.name}  ({p.db_type}, {p.status.value})  "
-            f"connection={p.connection_name}  models={p.model_count}"
-        )
-    return "\n".join(lines)
-
-
-@mcp.tool()
-async def get_project(name: str) -> str:
-    """Get dbt project detail including path and model count."""
-    async with _store_session() as store:
-        proj = await store.get_project(name)
-    if not proj:
-        return f"Error: Project '{name}' not found."
-    lines = [
-        f"Project: {proj.name}",
-        f"  id: {proj.id}",
-        f"  connection: {proj.connection_name}",
-        f"  db_type: {proj.db_type}",
-        f"  project_dir: {proj.project_dir}",
-        f"  storage: {proj.storage.value}",
-        f"  source: {proj.source.value}",
-        f"  status: {proj.status.value}",
-        f"  model_count: {proj.model_count}",
-        f"  dbt_version: {proj.dbt_version}",
-    ]
-    if proj.description:
-        lines.append(f"  description: {proj.description}")
-    if proj.tags:
-        lines.append(f"  tags: {', '.join(proj.tags)}")
-    if proj.git_remote:
-        lines.append(f"  git_remote: {proj.git_remote}")
-    return "\n".join(lines)
+if not _is_cloud:
+    @mcp.tool()
+    async def get_project(name: str) -> str:
+        """Get dbt project detail including path and model count."""
+        async with _store_session() as store:
+            proj = await store.get_project(name)
+        if not proj:
+            return f"Error: Project '{name}' not found."
+        lines = [
+            f"Project: {proj.name}",
+            f"  id: {proj.id}",
+            f"  connection: {proj.connection_name}",
+            f"  db_type: {proj.db_type}",
+            f"  project_dir: {proj.project_dir}",
+            f"  storage: {proj.storage.value}",
+            f"  source: {proj.source.value}",
+            f"  status: {proj.status.value}",
+            f"  model_count: {proj.model_count}",
+            f"  dbt_version: {proj.dbt_version}",
+        ]
+        if proj.description:
+            lines.append(f"  description: {proj.description}")
+        if proj.tags:
+            lines.append(f"  tags: {', '.join(proj.tags)}")
+        if proj.git_remote:
+            lines.append(f"  git_remote: {proj.git_remote}")
+        return "\n".join(lines)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

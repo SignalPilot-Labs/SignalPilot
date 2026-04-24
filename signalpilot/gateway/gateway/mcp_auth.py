@@ -207,6 +207,8 @@ class MCPAuthMiddleware:
                     # Set user_id and org_id to "local" so MCP tools can access the store
                     mcp_user_id_var.set("local")
                     mcp_org_id_var.set("local")
+                    from .mcp_server import mcp_raw_key_var
+                    mcp_raw_key_var.set(None)
                     if "state" not in scope:
                         scope["state"] = {}
                     scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
@@ -238,6 +240,8 @@ class MCPAuthMiddleware:
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
+                from .mcp_server import mcp_raw_key_var
+                mcp_raw_key_var.set(raw_key)
                 await self._app(scope, receive, send)
         except (SQLAlchemyError, ValueError) as e:
             logger.error("MCP auth: DB error in local validation: %s", e)

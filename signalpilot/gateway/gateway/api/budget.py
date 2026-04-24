@@ -23,14 +23,14 @@ class BudgetCreateRequest(BaseModel):
 @router.post("/budget", status_code=201, dependencies=[RequireScope("write")])
 async def create_budget(_: UserID, store: StoreD, req: BudgetCreateRequest):
     """Create a budget for a session."""
-    budget = budget_ledger.create_session(req.session_id, req.budget_usd)
+    budget = await budget_ledger.create_session(req.session_id, req.budget_usd)
     return budget.to_dict()
 
 
 @router.get("/budget/{session_id}", dependencies=[RequireScope("read")])
 async def get_budget(_: UserID, store: StoreD, session_id: str):
     """Get budget status for a session."""
-    budget = budget_ledger.get_session(session_id)
+    budget = await budget_ledger.get_session(session_id)
     if not budget:
         raise HTTPException(status_code=404, detail="Session budget not found")
     return budget.to_dict()
@@ -40,15 +40,15 @@ async def get_budget(_: UserID, store: StoreD, session_id: str):
 async def list_budgets(_: UserID, store: StoreD):
     """List all active session budgets."""
     return {
-        "sessions": budget_ledger.get_all_sessions(),
-        "total_spent_usd": round(budget_ledger.total_spent(), 6),
+        "sessions": await budget_ledger.get_all_sessions(),
+        "total_spent_usd": round(await budget_ledger.total_spent(), 6),
     }
 
 
 @router.delete("/budget/{session_id}", status_code=204, dependencies=[RequireScope("write")])
 async def close_budget(_: UserID, store: StoreD, session_id: str):
     """Close and remove a session budget."""
-    closed = budget_ledger.close_session(session_id)
+    closed = await budget_ledger.close_session(session_id)
     if not closed:
         raise HTTPException(status_code=404, detail="Session budget not found")
 

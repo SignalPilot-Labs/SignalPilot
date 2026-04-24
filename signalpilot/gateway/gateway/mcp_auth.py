@@ -181,35 +181,8 @@ class MCPAuthMiddleware:
             and os.environ.get("SP_DEPLOYMENT_MODE", "local") == "cloud"
         )
 
-        if is_cloud:
-            # Cloud mode: validate against backend
-            raw_key = _extract_bearer_key(scope)
-            if not raw_key:
-                raw_key = _extract_api_key_header(scope)
-            if not raw_key:
-                await _send_401(send, "Authentication required. Provide API key via Authorization: Bearer <key> or X-API-Key header.")
-                return
-
-            auth_info = await validate_api_key(raw_key, backend_url)
-            if auth_info is None:
-                await _send_401(send, "Invalid or expired API key.")
-                return
-
-            if not auth_info.get("org_id"):
-                await _send_401(send, "API key is not bound to an organization.")
-                return
-
-            if "state" not in scope:
-                scope["state"] = {}
-            scope["state"]["auth"] = auth_info
-            # Set context variables so MCP tools can access the user_id and org_id
-            from .mcp_server import mcp_user_id_var, mcp_org_id_var
-            mcp_user_id_var.set(auth_info.get("user_id"))
-            mcp_org_id_var.set(auth_info.get("org_id"))
-            await self._app(scope, receive, send)
-            return
-
-        # Local mode: validate against user-created gateway keys (DB-backed)
+        # All modes: validate against gateway's own DB-backed API keys
+        # (API keys are now org-scoped and managed by the gateway, not the backend)
         from .db.engine import get_session_factory
         from .mcp_server import mcp_user_id_var, mcp_org_id_var
         from .store import Store
@@ -254,15 +227,17 @@ class MCPAuthMiddleware:
 
                 if "state" not in scope:
                     scope["state"] = {}
+                key_org_id = matched.org_id or "local"
+                key_user_id = matched.user_id or "local"
                 scope["state"]["auth"] = {
                     "key_id": matched.id,
                     "key_name": matched.name,
-                    "user_id": matched.user_id or "local",
-                    "org_id": "local",  # clamp: matched.org_id may be stale cloud data
+                    "user_id": key_user_id,
+                    "org_id": key_org_id,
                 }
                 # Set user_id and org_id context vars for MCP store access
-                mcp_user_id_var.set(matched.user_id or "local")
-                mcp_org_id_var.set("local")
+                mcp_user_id_var.set(key_user_id)
+                mcp_org_id_var.set(key_org_id)
                 await self._app(scope, receive, send)
         except (SQLAlchemyError, ValueError) as e:
             logger.error("MCP auth: DB error in local validation: %s", e)

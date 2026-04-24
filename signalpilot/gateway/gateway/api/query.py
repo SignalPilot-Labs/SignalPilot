@@ -166,7 +166,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
 
     # Charge query cost to budget (Feature #11 + #12)
     query_cost_usd = (elapsed_ms / 1000) * 0.000014
-    budget_ledger.charge("default", query_cost_usd)
+    await budget_ledger.charge("default", query_cost_usd)
 
     await store.append_audit(AuditEntry(
         id=str(uuid.uuid4()),

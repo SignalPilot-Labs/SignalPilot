@@ -88,6 +88,10 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
   const teamName = organization?.name ?? "no team";
   const email = user?.primaryEmailAddress?.emailAddress ?? displayName;
 
+  // Multi-org: only allow creating additional teams if explicitly enabled via publicMetadata
+  // Set via Clerk Dashboard or API: user.publicMetadata.multi_org_enabled = true
+  const multiOrgEnabled = (user?.publicMetadata as Record<string, unknown>)?.multi_org_enabled === true;
+
   // Close on outside click or Escape
   const handleOutside = useCallback((e: MouseEvent) => {
     if (
@@ -180,6 +184,7 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
   }
 
   const memberships = userMemberships.data ?? [];
+  const canCreateTeam = multiOrgEnabled || (memberships.length === 0);
   const q = query.trim().toLowerCase();
   const filtered = q
     ? memberships.filter((m) => m.organization.name.toLowerCase().includes(q))
@@ -351,7 +356,8 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
             )}
           </div>
 
-          {/* Create-team CTA */}
+          {/* Create-team CTA — hidden unless multi_org_enabled or no teams yet */}
+          {canCreateTeam && (
           <div className="border-t border-[var(--color-border)]">
             {!showCreate ? (
               <button
@@ -395,6 +401,7 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
               </div>
             )}
           </div>
+          )}
 
           {/* Sign out */}
           <button

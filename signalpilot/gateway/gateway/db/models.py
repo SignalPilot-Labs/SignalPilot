@@ -77,6 +77,10 @@ class GatewayConnection(GatewayBase):
     pii_rules: Mapped[dict | None] = mapped_column(JSON)
     pii_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     byok_key_alias: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Health monitor state (persisted across restarts)
+    health_last_check: Mapped[float | None] = mapped_column(Float, nullable=True)
+    health_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    health_consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("org_id", "name", name="uq_gw_conn_org_name"),
@@ -255,6 +259,45 @@ class GatewayOrg(GatewayBase):
     byok_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     default_byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class GatewayHealthEvent(GatewayBase):
+    """Individual health check / query event for a connection."""
+
+    __tablename__ = "gateway_health_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    timestamp: Mapped[float] = mapped_column(Float, nullable=False)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_gw_health_org_conn_ts", "org_id", "connection_name", "timestamp"),
+    )
+
+
+class GatewaySessionBudget(GatewayBase):
+    """Per-session budget tracking, persisted across restarts."""
+
+    __tablename__ = "gateway_session_budgets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    budget_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    spent_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    query_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    last_activity: Mapped[float] = mapped_column(Float, nullable=False)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "session_id", name="uq_gw_budget_org_session"),
+        Index("ix_gw_budget_org_id", "org_id"),
+    )
 
 
 class GatewayApiKey(GatewayBase):

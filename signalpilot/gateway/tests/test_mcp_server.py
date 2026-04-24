@@ -77,7 +77,9 @@ class TestCheckBudgetOrgScoping:
             with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
                 with patch("gateway.mcp_server.Store") as mock_store_cls:
                     mock_store_cls.return_value = MagicMock(org_id="local")
-                    result = await check_budget("default")
+                    with patch("gateway.mcp_server.budget_ledger") as mock_ledger:
+                        mock_ledger.get_session = AsyncMock(return_value=None)
+                        result = await check_budget("default")
             assert "No budget tracking" in result
         finally:
             mcp_org_id_var.reset(token_org)

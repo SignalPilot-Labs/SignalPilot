@@ -355,7 +355,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             # Cost formula: duration_sec × $0.000014 per vCPU (simplified for DB queries)
             query_cost_usd = (elapsed_ms / 1000) * 0.000014
             # Budget check uses "default" session if no specific session
-            budget_ok = budget_ledger.charge("default", query_cost_usd)
+            budget_ok = await budget_ledger.charge("default", query_cost_usd)
             if not budget_ok:
                 meta_parts_budget = [f"${query_cost_usd:.6f} cost"]
                 return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
@@ -1252,7 +1252,7 @@ async def check_budget(session_id: str = "default") -> str:
     from .governance.budget import budget_ledger
 
     async with _store_session() as _store:
-        budget = budget_ledger.get_session(session_id)
+        budget = await budget_ledger.get_session(session_id)
     if not budget:
         return f"No budget tracking for session '{session_id}'. Create a budget via the gateway API to enable spending limits."
 

@@ -261,13 +261,16 @@ async def decrypt_envelope(
     """
     dek: bytes | None = None
 
-    if cache is not None and credential_id is not None:
-        dek = cache.get(credential_id)
+    # Cache key includes org_id to prevent cross-org DEK access (defense-in-depth)
+    cache_key = f"{org_id}::{credential_id}" if credential_id else None
+
+    if cache is not None and cache_key is not None:
+        dek = cache.get(cache_key)
 
     if dek is None:
         dek = await provider.unwrap_dek(org_id, key_alias, wrapped_dek)
-        if cache is not None and credential_id is not None:
-            cache.put(credential_id, dek)
+        if cache is not None and cache_key is not None:
+            cache.put(cache_key, dek)
 
     f = Fernet(dek)
     return f.decrypt(ciphertext).decode()

@@ -22,6 +22,7 @@ from .correlation import RequestCorrelationMiddleware
 from .deployment import is_cloud_mode
 from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .models import ConnectionUpdate
+from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import init_db, close_db, get_session_factory
@@ -43,6 +44,9 @@ async def lifespan(app: FastAPI):
 
     # Initialize gateway DB tables
     await init_db()
+
+    # Load persisted health state into in-memory cache
+    await health_monitor.load_from_db()
 
     # Verify encryption key is functional at startup
     if not _validate_encryption_health():
@@ -81,6 +85,24 @@ async def lifespan(app: FastAPI):
 
     if is_cloud_mode():
         logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
+
+    async def _health_flush_loop():
+        """Flush buffered health events to DB every 5 seconds."""
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await health_monitor.flush_to_db()
+            except Exception as e:
+                logger.warning("Health flush loop error: %s", e)
+
+    async def _health_cleanup_loop():
+        """Delete health events older than 7 days, every hour."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await health_monitor.cleanup_old_events()
+            except Exception as e:
+                logger.warning("Health cleanup loop error: %s", e)
 
     async def _pool_cleanup_loop():
         while True:
@@ -144,6 +166,8 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 
+    health_flush_task = asyncio.create_task(_health_flush_loop())
+    health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
 
@@ -158,6 +182,10 @@ async def lifespan(app: FastAPI):
     finally:
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
+        # Flush any remaining health events before shutdown
+        await health_monitor.flush_to_db()
+        health_flush_task.cancel()
+        health_cleanup_task.cancel()
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()

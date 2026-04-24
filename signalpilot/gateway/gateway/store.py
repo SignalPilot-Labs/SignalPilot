@@ -209,8 +209,21 @@ def _get_encryption_key() -> bytes:
             _CACHED_KEY = key_str.encode()
             return _CACHED_KEY
         except Exception:
-            # Treat as a passphrase; derive a proper key via PBKDF2.
-            _CACHED_KEY = _derive_key_pbkdf2(key_str)
+            if is_cloud_mode():
+                deterministic_salt = hashlib.sha256(
+                    b"signalpilot-cloud-salt:" + key_str.encode()
+                ).digest()[:16]
+                from cryptography.hazmat.primitives import hashes
+                from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+                kdf = PBKDF2HMAC(
+                    algorithm=hashes.SHA256(),
+                    length=PBKDF2_KEY_LENGTH,
+                    salt=deterministic_salt,
+                    iterations=PBKDF2_ITERATIONS,
+                )
+                _CACHED_KEY = base64.urlsafe_b64encode(kdf.derive(key_str.encode()))
+            else:
+                _CACHED_KEY = _derive_key_pbkdf2(key_str)
             return _CACHED_KEY
     else:
         if is_cloud_mode():

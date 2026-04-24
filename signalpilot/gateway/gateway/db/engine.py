@@ -227,6 +227,30 @@ async def _ensure_org_id_columns(engine) -> None:
     logger.info("Ensured org_id columns on gateway tables")
 
 
+async def _ensure_health_columns(engine) -> None:
+    """Add health monitoring columns to gateway_connections if they do not exist."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_connections "
+                "ADD COLUMN IF NOT EXISTS health_last_check DOUBLE PRECISION"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_connections "
+                "ADD COLUMN IF NOT EXISTS health_last_error TEXT"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_connections "
+                "ADD COLUMN IF NOT EXISTS health_consecutive_failures INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+    logger.info("Ensured health columns on gateway_connections")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -236,6 +260,7 @@ async def init_db() -> None:
     await _ensure_expires_at_column(engine)
     await _ensure_byok_columns(engine)
     await _ensure_org_id_columns(engine)
+    await _ensure_health_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

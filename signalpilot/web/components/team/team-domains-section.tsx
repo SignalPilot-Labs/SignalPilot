@@ -85,6 +85,14 @@ function DomainListSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
+// File-local error formatter — prevents drift between the two domainsError sites
+// ---------------------------------------------------------------------------
+
+function formatDomainsLoadError(err: unknown): string {
+  return `failed to load domains: ${err instanceof Error ? err.message : "unexpected error"}`;
+}
+
+// ---------------------------------------------------------------------------
 // DomainRow — per-row state: verify stepper + enrollment confirm + delete confirm
 // ---------------------------------------------------------------------------
 
@@ -577,12 +585,7 @@ function TeamDomainsSectionInner({ org }: { org: OrganizationResource }) {
             {addError && <p className={ERROR_CLASS}>{addError}</p>}
             {/* Explicit error UI for Clerk domains fetch error — never masked with ?? [] */}
             {domainsError && !addError && domainData && (
-              <p className={ERROR_CLASS}>
-                failed to load domains:{" "}
-                {domainsError instanceof Error
-                  ? domainsError.message
-                  : "unexpected error"}
-              </p>
+              <p className={ERROR_CLASS}>{formatDomainsLoadError(domainsError)}</p>
             )}
           </div>
 
@@ -604,12 +607,7 @@ function TeamDomainsSectionInner({ org }: { org: OrganizationResource }) {
           {/* Error state — domains.error present, no data */}
           {domainsError && !domainData && (
             <div className="p-6">
-              <p className={ERROR_CLASS}>
-                failed to load domains:{" "}
-                {domainsError instanceof Error
-                  ? domainsError.message
-                  : "unexpected error"}
-              </p>
+              <p className={ERROR_CLASS}>{formatDomainsLoadError(domainsError)}</p>
             </div>
           )}
 

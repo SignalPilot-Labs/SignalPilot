@@ -19,6 +19,8 @@ import { LogOut, ChevronDown, Check, Plus } from "lucide-react";
 import { useCreateTeam } from "@/lib/use-create-team";
 import { PendingButton } from "@/components/ui/pending-button";
 
+const LIST_MSG_CLASS = "px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono";
+
 // ---------------------------------------------------------------------------
 // Inline error boundary — catches "Organizations not enabled" throws
 // ---------------------------------------------------------------------------
@@ -276,15 +278,15 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
             aria-busy={!listLoaded || userMemberships.isLoading}
           >
             {!listLoaded || userMemberships.isLoading ? (
-              <p className="px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono">
+              <p className={LIST_MSG_CLASS}>
                 loading teams…
               </p>
             ) : memberships.length === 0 && !organization ? (
-              <p className="px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono">
+              <p className={LIST_MSG_CLASS}>
                 no teams yet. create one below
               </p>
             ) : filtered.length === 0 && q ? (
-              <p className="px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono">
+              <p className={LIST_MSG_CLASS}>
                 no teams match &ldquo;{query}&rdquo;
               </p>
             ) : (

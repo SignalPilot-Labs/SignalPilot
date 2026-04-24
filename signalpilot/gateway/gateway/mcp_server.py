@@ -127,9 +127,10 @@ for h in _allowed_hosts:
 
 # In cloud mode behind a reverse proxy (Caddy/nginx), disable host validation entirely
 # since the proxy already handles DNS rebinding protection via its own config
-_transport_security: dict | None = None if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" else {
-    "allowed_hosts": _allowed_hosts_with_ports,
-}
+if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud":
+    _transport_security = {"enable_dns_rebinding_protection": False}
+else:
+    _transport_security = {"allowed_hosts": _allowed_hosts_with_ports}
 
 mcp = FastMCP(
     "SignalPilot",

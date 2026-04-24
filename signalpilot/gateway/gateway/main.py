@@ -104,6 +104,47 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Health cleanup loop error: %s", e)
 
+    async def _health_ping_loop():
+        """Ping each connection every 30s to keep health stats fresh."""
+        await asyncio.sleep(10)  # Wait for startup to settle
+        while True:
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    store = Store(session, allow_unscoped=True)
+                    connections = await store.list_connections()
+                    for conn_info in connections:
+                        token = current_org_id_var.set(conn_info.org_id)
+                        try:
+                            inner_store = Store(session, org_id=conn_info.org_id)
+                            conn_str = await inner_store.get_connection_string(conn_info.name)
+                            if not conn_str:
+                                continue
+                            extras = await inner_store.get_credential_extras(conn_info.name)
+                            start = time.monotonic()
+                            try:
+                                async with pool_manager.connection(
+                                    conn_info.db_type, conn_str, credential_extras=extras,
+                                ) as connector:
+                                    ok = await connector.health_check()
+                                elapsed = (time.monotonic() - start) * 1000
+                                health_monitor.record(
+                                    conn_info.name, elapsed, ok,
+                                    error=None if ok else "health_check returned false",
+                                    db_type=conn_info.db_type,
+                                )
+                            except Exception as e:
+                                elapsed = (time.monotonic() - start) * 1000
+                                health_monitor.record(
+                                    conn_info.name, elapsed, False,
+                                    error=str(e)[:200], db_type=conn_info.db_type,
+                                )
+                        finally:
+                            current_org_id_var.reset(token)
+            except Exception as e:
+                logger.warning("Health ping loop error: %s", e)
+            await asyncio.sleep(30)
+
     async def _pool_cleanup_loop():
         while True:
             await asyncio.sleep(60)
@@ -168,6 +209,7 @@ async def lifespan(app: FastAPI):
 
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
+    health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
 
@@ -186,6 +228,7 @@ async def lifespan(app: FastAPI):
         await health_monitor.flush_to_db()
         health_flush_task.cancel()
         health_cleanup_task.cancel()
+        health_ping_task.cancel()
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()

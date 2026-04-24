@@ -12,9 +12,8 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyResponse } from "@/lib/backend-client";
-import { getGatewayApiKeys } from "@/lib/api";
+import { getApiKeys } from "@/lib/api";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { CodeBlock } from "@/components/ui/code-block";
 import { StatusDot } from "@/components/ui/data-viz";
@@ -130,12 +129,11 @@ export default function McpConnectPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Content component — safe to call useBackendClient() (ClerkProvider present)
+// Content component — cloud mode (ClerkProvider present)
 // ---------------------------------------------------------------------------
 
 function McpConnectContent() {
   const { isLoaded } = useAppAuth();
-  const client = useBackendClient();
   const mcpUrl = getMcpUrl();
   const { toast } = useToast();
 
@@ -147,7 +145,7 @@ function McpConnectContent() {
   const fetchKeys = useCallback(async () => {
     setKeysError(null);
     try {
-      const data = await client.getApiKeys();
+      const data = await getApiKeys();
       setKeys(data);
     } catch (e) {
       setKeysError(String(e));
@@ -155,7 +153,7 @@ function McpConnectContent() {
     } finally {
       setKeysLoading(false);
     }
-  }, [client, toast]);
+  }, [toast]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -419,7 +417,7 @@ function LocalMcpConnectContent() {
 
   const fetchKeys = useCallback(async () => {
     try {
-      const data = await getGatewayApiKeys();
+      const data = await getApiKeys();
       setKeys(data);
     } catch {
       // No keys or gateway unreachable — that's fine for local

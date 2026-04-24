@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { useAuth, useUser, useOrganization } from "@clerk/nextjs";
+import { useAuth, useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
 import { AuthContext, type AppAuth, type AppUser } from "./auth-context";
 import { setClerkTokenGetter } from "./api";
 
@@ -9,7 +9,20 @@ const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 function OrgAwareProvider({ children, baseValue }: { children: ReactNode; baseValue: Omit<AppAuth, "activeOrgId" | "activeOrgName"> }) {
   const { organization } = useOrganization();
-  console.log("[clerk-auth] OrgAwareProvider orgId=", organization?.id ?? null, "orgName=", organization?.name ?? null);
+  const { userMemberships, setActive } = useOrganizationList({
+    userMemberships: { infinite: true },
+  });
+
+  // Auto-activate first org if user is a member but no org is active on the session
+  useEffect(() => {
+    if (organization) return; // already active
+    const memberships = userMemberships?.data ?? [];
+    if (memberships.length > 0 && setActive) {
+      const firstOrg = memberships[0].organization;
+      setActive({ organization: firstOrg.id });
+    }
+  }, [organization, userMemberships?.data, setActive]);
+
   const value: AppAuth = {
     ...baseValue,
     activeOrgId: organization?.id ?? null,

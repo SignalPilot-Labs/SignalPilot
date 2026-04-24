@@ -23,9 +23,9 @@ import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
 import {
-  getGatewayApiKeys,
-  createGatewayApiKey,
-  deleteGatewayApiKey,
+  getApiKeys,
+  createApiKey,
+  deleteApiKey,
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -402,7 +402,7 @@ function ApiKeysContent() {
     setLoadError(null);
     try {
       const [keysData, byKeyRes] = await Promise.all([
-        client.getApiKeys(),
+        getApiKeys(),
         client.getUsageByKey().catch(() => null),
       ]);
       setKeys(keysData);
@@ -462,7 +462,7 @@ function ApiKeysContent() {
   async function handleDelete(id: string) {
     setDeleting(true);
     try {
-      await client.deleteApiKey(id);
+      await deleteApiKey(id);
       setKeys((prev) => prev.filter((k) => k.id !== id));
       setRequestCounts((prev) => {
         const next = new Map(prev);
@@ -541,7 +541,7 @@ function ApiKeysContent() {
         {showCreateForm && (
           <div className="mb-4">
             <CreateKeyForm
-              createFn={(name, scopes) => client.createApiKey(name, scopes)}
+              createFn={(name, scopes) => createApiKey(name, scopes)}
               onCreated={handleCreated}
               onCancel={() => setShowCreateForm(false)}
             />
@@ -633,7 +633,7 @@ function LocalApiKeysContent() {
   const fetchKeys = useCallback(async () => {
     setLoadError(null);
     try {
-      const keysData = await getGatewayApiKeys();
+      const keysData = await getApiKeys();
       setKeys(keysData);
     } catch (e) {
       setLoadError(String(e));
@@ -661,7 +661,7 @@ function LocalApiKeysContent() {
   async function handleDelete(id: string) {
     setDeleting(true);
     try {
-      await deleteGatewayApiKey(id);
+      await deleteApiKey(id);
       setKeys((prev) => prev.filter((k) => k.id !== id));
       toast("api key deleted", "success");
     } catch {
@@ -718,7 +718,7 @@ function LocalApiKeysContent() {
         {showCreateForm && (
           <div className="mb-4">
             <CreateKeyForm
-              createFn={(name, scopes) => createGatewayApiKey(name, scopes)}
+              createFn={(name, scopes) => createApiKey(name, scopes)}
               onCreated={handleCreated}
               onCancel={() => setShowCreateForm(false)}
             />

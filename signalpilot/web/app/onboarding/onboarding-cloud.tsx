@@ -19,8 +19,8 @@ import {
 import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
 import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyCreatedResponse } from "@/lib/backend-client";
+import { createApiKey } from "@/lib/api";
 import { useOnboardingStatus } from "@/lib/onboarding";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -216,7 +216,6 @@ function StepCreateApiKey({
   onSkip: () => void;
   onKeyCreated: (key: ApiKeyCreatedResponse) => void;
 }) {
-  const client = useBackendClient();
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read", "query"]);
@@ -246,7 +245,7 @@ function StepCreateApiKey({
     setCreating(true);
     setError(null);
     try {
-      const created = await client.createApiKey(name.trim(), scopes);
+      const created = await createApiKey(name.trim(), scopes);
       setCreatedKey(created);
       onKeyCreated(created);
       toast("api key created", "success");

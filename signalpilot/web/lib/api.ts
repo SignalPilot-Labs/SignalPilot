@@ -277,15 +277,15 @@ export const discoverDbtCloudProjects = (token: string, account_id: string, host
     body: JSON.stringify({ token, account_id, host }),
   });
 
-// API Keys (local mode — gateway-managed)
-export const getGatewayApiKeys = () =>
+// API Keys (org-scoped)
+export const getApiKeys = () =>
   request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null }[]>("/api/keys");
-export const createGatewayApiKey = (name: string, scopes: string[]) =>
+export const createApiKey = (name: string, scopes: string[]) =>
   request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null; raw_key: string }>("/api/keys", {
     method: "POST",
     body: JSON.stringify({ name, scopes }),
   });
-export const deleteGatewayApiKey = (keyId: string) =>
+export const deleteApiKey = (keyId: string) =>
   request<void>(`/api/keys/${keyId}`, { method: "DELETE" });
 
 // Sandboxes

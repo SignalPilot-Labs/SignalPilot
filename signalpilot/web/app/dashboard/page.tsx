@@ -438,12 +438,13 @@ function DashboardOnboardingCheck() {
   const router = useRouter();
   const { isComplete, isLoading } = useOnboardingStatus();
 
-  if (isLoading || isComplete === null) {
-    return <DashboardSkeleton />;
-  }
+  useEffect(() => {
+    if (!isLoading && isComplete === false) {
+      router.push("/onboarding");
+    }
+  }, [isLoading, isComplete, router]);
 
-  if (isComplete === false) {
-    router.push("/onboarding");
+  if (isLoading || isComplete === null || isComplete === false) {
     return <DashboardSkeleton />;
   }
 

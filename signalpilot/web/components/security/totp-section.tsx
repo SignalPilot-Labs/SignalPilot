@@ -35,9 +35,6 @@ export function TotpSection(): React.JSX.Element {
   const [confirmDisableOpen, setConfirmDisableOpen] = useState(false);
 
   const reverifiedCreateTOTP = useReverification(() => user!.createTOTP());
-  const reverifiedVerifyTOTP = useReverification(
-    (args: { code: string }) => user!.verifyTOTP(args),
-  );
   const reverifiedCreateBackupCode = useReverification(() => user!.createBackupCode());
   const reverifiedDisableTOTP = useReverification(() => user!.disableTOTP());
 
@@ -62,36 +59,40 @@ export function TotpSection(): React.JSX.Element {
     }
   }
 
+  const [showBackupStep, setShowBackupStep] = useState(false);
+
   async function handleVerify() {
     if (!user || !otpCode) { setError("enter the code from your authenticator app"); return; }
     setError(null);
     setNeutralMsg(null);
+    setLoading(true);
+    try {
+      await user.verifyTOTP({ code: otpCode });
+      toast("authenticator app enabled", "success");
+      setTotpResource(null);
+      setOtpCode("");
+      // Show next step for backup codes
+      setShowBackupStep(true);
+    } catch (err) {
+      setError(formatClerkError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGenerateBackupCodes() {
+    if (!user) return;
     setBackupCodeError(null);
     setLoading(true);
     try {
-      await reverifiedVerifyTOTP({ code: otpCode });
-      // Immediately generate backup codes BEFORE calling user.reload()
-      try {
-        const result = await reverifiedCreateBackupCode();
-        setFirstTimeBackupCodes(result.codes);
-        setTotpResource(null);
-        setOtpCode("");
-        toast("authenticator app enabled", "success");
-      } catch (backupErr) {
-        // TOTP is verified but backup codes failed — surface error, don't reload
-        setTotpResource(null);
-        setOtpCode("");
-        if (isReverificationCancelledError(backupErr)) {
-          setBackupCodeError("reverification required to generate backup codes");
-        } else {
-          setBackupCodeError(formatClerkError(backupErr));
-        }
-      }
+      const result = await reverifiedCreateBackupCode();
+      setFirstTimeBackupCodes(result.codes);
+      setShowBackupStep(false);
     } catch (err) {
       if (isReverificationCancelledError(err)) {
-        setNeutralMsg("reverification required to verify code");
+        setBackupCodeError("verification required — click generate to try again");
       } else {
-        setError(formatClerkError(err));
+        setBackupCodeError(formatClerkError(err));
       }
     } finally {
       setLoading(false);
@@ -99,20 +100,7 @@ export function TotpSection(): React.JSX.Element {
   }
 
   async function handleRetryBackupCodes() {
-    setBackupCodeError(null);
-    setLoading(true);
-    try {
-      const result = await reverifiedCreateBackupCode();
-      setFirstTimeBackupCodes(result.codes);
-    } catch (err) {
-      if (isReverificationCancelledError(err)) {
-        setBackupCodeError("reverification required to generate backup codes");
-      } else {
-        setBackupCodeError(formatClerkError(err));
-      }
-    } finally {
-      setLoading(false);
-    }
+    await handleGenerateBackupCodes();
   }
 
   async function handleDismissBackupCodes() {
@@ -173,6 +161,43 @@ export function TotpSection(): React.JSX.Element {
           >
             retry generate backup codes
           </PendingButton>
+        </div>
+      </section>
+    );
+  }
+
+  // Step 2: TOTP verified — prompt to generate backup codes
+  if (showBackupStep) {
+    return (
+      <section className="mb-8">
+        <SectionHeader icon={ShieldCheck} title="authenticator app" />
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 space-y-4">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[12px] text-[var(--color-success)] tracking-wider">✓ authenticator app enabled</span>
+          </div>
+          <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            generate backup codes now — these are one-time codes you can use if you lose access to your authenticator app.
+          </p>
+          {backupCodeError && (
+            <div role="alert" aria-live="assertive" aria-atomic="true">
+              <p className={ERROR_CLASS}>{backupCodeError}</p>
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <PendingButton
+              onClick={handleGenerateBackupCodes}
+              pending={loading}
+              pendingLabel="generating…"
+            >
+              generate backup codes
+            </PendingButton>
+            <button
+              onClick={() => { setShowBackupStep(false); user?.reload(); }}
+              className={SECONDARY_BTN_CLASS}
+            >
+              skip for now
+            </button>
+          </div>
         </div>
       </section>
     );

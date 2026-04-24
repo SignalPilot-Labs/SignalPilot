@@ -34,11 +34,7 @@ export function SignInFlow() {
       <SignIn.Step name="start">
         <StepTransition stepKey="start">
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <SocialButton name="google" />
-              <SocialButton name="github" />
-            </div>
-            <Divider label="or with email" />
+            <Divider label="sign in with email" />
             {/* Wire onChange via render slot to track identifier value */}
             <FieldRow
               name="identifier"

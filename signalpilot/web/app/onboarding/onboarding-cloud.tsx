@@ -17,7 +17,7 @@ import {
   Plug,
 } from "lucide-react";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
-import { useUser, useOrganization } from "@clerk/nextjs";
+import { useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyCreatedResponse } from "@/lib/backend-client";
@@ -51,9 +51,10 @@ function getClaudeDesktopConfig(mcpUrl: string, apiKey: string): string {
     {
       mcpServers: {
         signalpilot: {
+          type: "http",
           url: mcpUrl,
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            "X-API-Key": apiKey,
           },
         },
       },
@@ -560,14 +561,36 @@ function OnboardingWizard({
 
 export function CloudOnboardingContent() {
   const router = useRouter();
+  const { user, isLoaded: userLoaded } = useUser();
+
+  useEffect(() => {
+    if (userLoaded && !user) {
+      router.push("/sign-in");
+    }
+  }, [userLoaded, user, router]);
+
+  // Gate: don't render org-dependent hooks until user session is established
+  if (!userLoaded || !user) {
+    return <DashboardSkeleton />;
+  }
+
+  return <CloudOnboardingInner />;
+}
+
+function CloudOnboardingInner() {
+  const router = useRouter();
   const { toast } = useToast();
   const { isCloudMode } = useAppAuth();
 
-  // useUser works even in pending-session window (unlike useAuth().isSignedIn)
-  const { user, isLoaded: userLoaded } = useUser();
+  const { user } = useUser();
   const { organization, isLoaded: orgLoaded } = useOrganization();
+  const { userInvitations, userMemberships, setActive } = useOrganizationList({
+    userInvitations: { infinite: true },
+    userMemberships: { infinite: true },
+  });
 
   const [teamCreated, setTeamCreated] = useState(false);
+  const [acceptingInvite, setAcceptingInvite] = useState(false);
   const [handoff, setHandoff] = useState(false);
   const [step, setStep] = useState(0);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreatedResponse | null>(null);
@@ -588,22 +611,45 @@ export function CloudOnboardingContent() {
     }, 180);
   }
 
-  if (!userLoaded || !orgLoaded) {
-    return <DashboardSkeleton />;
-  }
-
-  useEffect(() => {
-    if (userLoaded && !user) {
-      router.push("/sign-in");
-    }
-  }, [userLoaded, user, router]);
-
-  if (userLoaded && !user) {
+  if (!orgLoaded) {
     return <DashboardSkeleton />;
   }
 
   const orgId = organization?.id ?? null;
   const showTeamStep = isCloudMode && !orgId && !teamCreated;
+
+  const allInvitations = userInvitations?.data ?? [];
+  const pendingInvitations = allInvitations.filter(inv => inv.status === "pending");
+
+  // Auto-activate first org membership if user has one but no active org
+  useEffect(() => {
+    if (!orgLoaded || organization) return;
+    const memberships = userMemberships?.data ?? [];
+    if (memberships.length > 0 && setActive) {
+      // User is a member of an org but doesn't have it active — activate it
+      const firstOrg = memberships[0].organization;
+      console.log("[onboarding] auto-activating org:", firstOrg.name);
+      setActive({ organization: firstOrg.id }).then(() => {
+        handleTeamCreated();
+      });
+    }
+  }, [orgLoaded, organization, userMemberships?.data, setActive]);
+
+  async function handleAcceptInvitation(invitationId: string) {
+    setAcceptingInvite(true);
+    try {
+      const inv = pendingInvitations.find(i => i.id === invitationId);
+      if (!inv) return;
+      const result = await inv.accept();
+      if (setActive && result.publicOrganizationData?.id) {
+        await setActive({ organization: result.publicOrganizationData.id });
+      }
+      handleTeamCreated();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to accept invitation", "error");
+      setAcceptingInvite(false);
+    }
+  }
 
   if (showTeamStep) {
     return (
@@ -613,6 +659,44 @@ export function CloudOnboardingContent() {
           <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">setup wizard</p>
         </div>
         <StepIndicator currentStep={0} showTeamStep={true} />
+
+        {/* Show pending invitations if any */}
+        {pendingInvitations.length > 0 && (
+          <div className="mb-6 animate-fade-in">
+            <div className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-5">
+              <p className="text-[12px] text-[var(--color-text)] tracking-wider mb-3">
+                you&apos;ve been invited to join a team
+              </p>
+              <div className="space-y-2">
+                {pendingInvitations.map((inv) => (
+                  <div key={inv.id} className="flex items-center justify-between p-3 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+                    <div>
+                      <p className="text-[13px] text-[var(--color-text)] font-mono tracking-wider">
+                        {inv.publicOrganizationData?.name || "Team"}
+                      </p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                        role: {inv.role || "member"}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleAcceptInvitation(inv.id)}
+                      disabled={acceptingInvite}
+                      className="px-4 py-2 bg-[var(--color-success)] text-[var(--color-bg)] text-[12px] font-medium tracking-wider uppercase hover:opacity-90 disabled:opacity-30 transition-all"
+                    >
+                      {acceptingInvite ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "join team"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-3 mt-3">
+                <div className="flex-1 h-px bg-[var(--color-border)]" />
+                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">or create your own</span>
+                <div className="flex-1 h-px bg-[var(--color-border)]" />
+              </div>
+            </div>
+          </div>
+        )}
+
         <TeamStep onTeamCreated={handleTeamCreated} />
       </div>
     );

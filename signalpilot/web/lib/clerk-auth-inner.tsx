@@ -7,10 +7,20 @@ import { setClerkTokenGetter } from "./api";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
+function OrgAwareProvider({ children, baseValue }: { children: ReactNode; baseValue: Omit<AppAuth, "activeOrgId" | "activeOrgName"> }) {
+  const { organization } = useOrganization();
+  console.log("[clerk-auth] OrgAwareProvider orgId=", organization?.id ?? null, "orgName=", organization?.name ?? null);
+  const value: AppAuth = {
+    ...baseValue,
+    activeOrgId: organization?.id ?? null,
+    activeOrgName: organization?.name ?? null,
+  } as AppAuth;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
 export function ClerkAuthInner({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn, signOut, getToken } = useAuth();
   const { user: clerkUser } = useUser();
-  const { organization } = useOrganization();
 
   // Wire Clerk's getToken into the gateway API client
   useEffect(() => {
@@ -30,7 +40,7 @@ export function ClerkAuthInner({ children }: { children: ReactNode }) {
         }
       : null;
 
-  const value: AppAuth = {
+  const baseValue = {
     isAuthenticated: isSignedIn === true,
     isCloudMode: IS_CLOUD_MODE,
     isLocalMode: !IS_CLOUD_MODE,
@@ -38,9 +48,19 @@ export function ClerkAuthInner({ children }: { children: ReactNode }) {
     user,
     isLoaded,
     signOut: signOut ?? null,
-    activeOrgId: organization?.id ?? null,
-    activeOrgName: organization?.name ?? null,
   };
 
+  console.log("[clerk-auth] isLoaded=", isLoaded, "isSignedIn=", isSignedIn, "user=", clerkUser?.id ?? null);
+
+  // Only mount OrgAwareProvider (which calls useOrganization) when signed in
+  if (isSignedIn) {
+    return <OrgAwareProvider baseValue={baseValue}>{children}</OrgAwareProvider>;
+  }
+
+  const value: AppAuth = {
+    ...baseValue,
+    activeOrgId: null,
+    activeOrgName: null,
+  };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

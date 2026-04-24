@@ -201,7 +201,7 @@ if _extra_origins:
 # APIKeyAuthMiddleware is innermost — closest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
 app.add_middleware(RequestCorrelationMiddleware)
-app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30, auth_rpm=10)
+app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=2_097_152)
 app.add_middleware(

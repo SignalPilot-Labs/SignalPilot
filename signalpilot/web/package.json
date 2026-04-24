@@ -9,8 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@clerk/elements": "^0.24.16",
-    "@clerk/nextjs": "^7.2.4",
+    "@clerk/nextjs": "^6.39.3",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "clsx": "^2.1.1",
@@ -32,5 +31,6 @@
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4.0.0",
     "typescript": "^5"
-  }
+  },
+  "overrides": {}
 }

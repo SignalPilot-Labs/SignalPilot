@@ -27,11 +27,7 @@ export function SignUpFlow() {
       <SignUp.Step name="start">
         <StepTransition stepKey="start">
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <SocialButton name="google" />
-              <SocialButton name="github" />
-            </div>
-            <Divider label="or with email" />
+            <Divider label="sign up with email" />
             <FieldRow name="emailAddress" type="email" label="email" />
             <FieldRow name="password" type="password" label="password" />
             <GlobalErrorBanner />

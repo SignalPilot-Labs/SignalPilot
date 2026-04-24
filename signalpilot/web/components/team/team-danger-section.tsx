@@ -107,35 +107,12 @@ export function TeamDangerSection({ org, perms, user }: TeamDangerSectionProps) 
       <SectionHeader icon={AlertTriangle} title="danger zone" iconColor="text-[var(--color-error)]" />
       <div className="border border-[var(--color-error)]/30 bg-[var(--color-bg-card)] divide-y divide-[var(--color-border)]">
 
-        {/* Leave team — all members */}
-        <div className="p-6 space-y-3">
-          <p className={LABEL_CLASS}>leave team</p>
-          <p className="text-[12px] text-[var(--color-text-muted)] tracking-wider leading-relaxed">
-            Leaving will revoke your access to {org.name}. You can be re-invited by an admin.
-          </p>
-          <div role="alert" aria-live="assertive" aria-atomic="true">
-            {leaveError && <p className={ERROR_CLASS}>{leaveError}</p>}
-          </div>
-          <div role="status" aria-live="polite" aria-atomic="true">
-            {leaveNotice && <p className={NEUTRAL_CLASS}>{leaveNotice}</p>}
-          </div>
-          <PendingButton
-            type="button"
-            variant="danger"
-            pending={leaving}
-            pendingLabel="leaving…"
-            onClick={() => setLeaveConfirmOpen(true)}
-          >
-            leave team
-          </PendingButton>
-        </div>
-
         {/* Delete team — admin only */}
         {perms.canDelete && (
           <div className="p-6 space-y-3">
-            <p className={LABEL_CLASS}>delete team</p>
+            <p className={LABEL_CLASS}>delete workspace</p>
             <p className="text-[12px] text-[var(--color-text-muted)] tracking-wider leading-relaxed">
-              This permanently deletes {org.name}, revokes all members, and cannot be undone.
+              This permanently deletes {org.name}, all connections, credentials, and member access. This cannot be undone.
             </p>
 
             {/* Typed confirmation */}
@@ -178,17 +155,6 @@ export function TeamDangerSection({ org, perms, user }: TeamDangerSectionProps) 
           </div>
         )}
       </div>
-
-      <ConfirmDialog
-        open={leaveConfirmOpen}
-        title="leave team"
-        message={`Leave ${org.name}? You will lose access immediately. An admin can re-invite you.`}
-        confirmLabel="leave"
-        cancelLabel="cancel"
-        variant="danger"
-        onConfirm={handleLeaveConfirm}
-        onCancel={() => setLeaveConfirmOpen(false)}
-      />
 
       <ConfirmDialog
         open={deleteConfirmOpen}

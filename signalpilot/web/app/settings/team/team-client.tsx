@@ -73,8 +73,8 @@ export default function TeamClient() {
       <TeamOverviewSection org={organization} perms={perms} />
       <TeamMembersSection org={organization} me={membership} perms={perms} />
       <TeamInvitationsSection org={organization} perms={perms} />
-      <TeamEnterpriseSection perms={perms} />
-      <TeamDomainsSection perms={perms} org={organization} />
+      {/* <TeamEnterpriseSection perms={perms} /> — requires Clerk paid plan */}
+      {/* <TeamDomainsSection perms={perms} org={organization} /> — requires Clerk paid plan */}
       <TeamDangerSection org={organization} perms={perms} user={user} />
     </div>
   );

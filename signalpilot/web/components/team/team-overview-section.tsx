@@ -79,18 +79,6 @@ export function TeamOverviewSection({ org, perms }: TeamOverviewSectionProps) {
                 autoComplete="off"
               />
             </div>
-            <div className="flex flex-col gap-1">
-              <label htmlFor="team-slug" className={LABEL_CLASS}>slug</label>
-              <input
-                id="team-slug"
-                type="text"
-                value={slug}
-                onChange={(e) => setSlug(e.target.value)}
-                className={FIELD_INPUT_CLASS}
-                autoComplete="off"
-              />
-            </div>
-
             <div role="alert" aria-live="assertive" aria-atomic="true">
               {error && <p className={ERROR_CLASS}>{error}</p>}
             </div>
@@ -113,12 +101,6 @@ export function TeamOverviewSection({ org, perms }: TeamOverviewSectionProps) {
               <span className={LABEL_CLASS}>team name</span>
               <p className="text-[13px] text-[var(--color-text)] font-mono">{org.name}</p>
             </div>
-            {org.slug && (
-              <div className="flex flex-col gap-1">
-                <span className={LABEL_CLASS}>slug</span>
-                <p className="text-[13px] text-[var(--color-text)] font-mono">{org.slug}</p>
-              </div>
-            )}
           </div>
         )}
       </div>

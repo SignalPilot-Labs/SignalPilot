@@ -117,5 +117,12 @@ export const clerkAppearance = {
     badge: {
       display: "none",
     },
+    // Hide org logo upload in create-organization flow
+    organizationProfileAvatarUploader: {
+      display: "none",
+    },
+    organizationAvatarUploaderContainer: {
+      display: "none",
+    },
   },
 } as const;

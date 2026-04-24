@@ -95,28 +95,33 @@ if (clerkEnabled) {
   const isPublicRoute = createRouteMatcher([
     "/sign-in(.*)",
     "/sign-up(.*)",
+    "/onboarding(.*)",
     "/",
   ]);
 
   const isOnboardingRoute = createRouteMatcher(["/onboarding(.*)"]);
+  const isSignInRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
 
   middlewareExport = clerkMiddleware(async (auth, req) => {
-    // In cloud mode, protect all non-public routes
-    if (IS_CLOUD_MODE && !isPublicRoute(req)) {
-      await auth.protect();
-    }
-    // NEW: force team creation before any app route.
-    // Allowlist: onboarding itself, public routes, and API routes.
     const { userId, orgId } = await auth();
+
+    // Signed in but no org — redirect to onboarding
+    // Skip sign-in/sign-up routes (Clerk strips session on those)
     if (
       userId &&
       !orgId &&
       !isOnboardingRoute(req) &&
-      !isPublicRoute(req) &&
+      !isSignInRoute(req) &&
       !req.nextUrl.pathname.startsWith("/api")
     ) {
       return NextResponse.redirect(new URL("/onboarding", req.url));
     }
+
+    // In cloud mode, protect non-public routes (unauthenticated users only)
+    if (IS_CLOUD_MODE && !isPublicRoute(req) && !userId) {
+      await auth.protect();
+    }
+
     const response = NextResponse.next();
     applySecurityHeaders(response, true, req);
     return response;

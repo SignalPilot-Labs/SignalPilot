@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { Smartphone, Loader2, Info } from "lucide-react";
+import { Smartphone, Info } from "lucide-react";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useUser, useReverification } from "@clerk/nextjs";
 import type { PhoneNumberResource } from "@clerk/types";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -9,8 +10,6 @@ import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
-  SECONDARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
@@ -217,14 +216,15 @@ export function SmsSection(): React.JSX.Element {
                 <div role="status" aria-live="polite" aria-atomic="true">
                   {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
-                <button
+                <PendingButton
+                  variant="danger"
+                  size="sm"
                   onClick={() => requestRemove(reservedPhone.id)}
-                  disabled={loading}
-                  className={SECONDARY_BTN_CLASS}
+                  pending={loading}
+                  pendingLabel="removing…"
                 >
-                  {loading && <Loader2 className="w-3 h-3 animate-spin inline mr-1.5" />}
                   remove phone number
-                </button>
+                </PendingButton>
               </>
             ) : verifiedPhone && !reservedPhone ? (
               <>
@@ -237,14 +237,13 @@ export function SmsSection(): React.JSX.Element {
                 <div role="status" aria-live="polite" aria-atomic="true">
                   {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
-                <button
+                <PendingButton
                   onClick={() => handlePromote(verifiedPhone.id)}
-                  disabled={loading}
-                  className={PRIMARY_BTN_CLASS}
+                  pending={loading}
+                  pendingLabel="promoting…"
                 >
-                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" />}
                   promote to 2fa
-                </button>
+                </PendingButton>
               </>
             ) : pendingPhone ? (
               <>
@@ -270,17 +269,17 @@ export function SmsSection(): React.JSX.Element {
                 <div role="status" aria-live="polite" aria-atomic="true">
                   {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
-                <button
+                <PendingButton
                   onClick={handleVerifyPhone}
+                  pending={loading}
+                  pendingLabel="verifying…"
                   disabled={loading || otpCode.length < 4}
-                  className={PRIMARY_BTN_CLASS}
                 >
-                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" />}
                   verify phone
-                </button>
+                </PendingButton>
                 <button
                   onClick={() => { setPendingPhone(null); setPhoneInput(""); setOtpCode(""); setError(null); }}
-                  className={SECONDARY_BTN_CLASS}
+                  className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider underline underline-offset-2 transition-colors font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)]"
                 >
                   cancel
                 </button>
@@ -307,14 +306,13 @@ export function SmsSection(): React.JSX.Element {
                 <div role="status" aria-live="polite" aria-atomic="true">
                   {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
-                <button
+                <PendingButton
                   onClick={handleAddPhone}
-                  disabled={loading}
-                  className={PRIMARY_BTN_CLASS}
+                  pending={loading}
+                  pendingLabel="adding…"
                 >
-                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" />}
                   add phone number
-                </button>
+                </PendingButton>
               </>
             )}
           </div>

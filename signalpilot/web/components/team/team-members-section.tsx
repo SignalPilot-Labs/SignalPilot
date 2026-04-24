@@ -8,14 +8,16 @@
  */
 
 import React, { useState } from "react";
-import { Users, Loader2 } from "lucide-react";
+import { Users } from "lucide-react";
+import { TeamMemberListSkeleton } from "@/components/ui/list-skeletons";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useReverification, useOrganization } from "@clerk/nextjs";
 import { useUser } from "@clerk/nextjs";
 import type { OrganizationResource, OrganizationMembershipResource } from "@clerk/types";
 import { SectionHeader } from "@/components/ui/section-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { ERROR_CLASS, NEUTRAL_CLASS, SECONDARY_BTN_CLASS } from "@/components/auth/auth-primitives";
+import { ERROR_CLASS, NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
 import { isReverificationCancelledError } from "@/lib/security/use-reverify";
 import { formatClerkError } from "@/lib/security/clerk-errors";
 import type { TeamPermissions } from "@/lib/team/use-team-permissions";
@@ -105,15 +107,7 @@ export function TeamMembersSection({ org, me, perms }: TeamMembersSectionProps) 
         </div>
 
         {isLoading && data.length === 0 ? (
-          /* Skeleton rows */
-          <div className="p-4 space-y-3" aria-busy="true">
-            {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="h-8 bg-[var(--color-bg-hover)] animate-pulse"
-              />
-            ))}
-          </div>
+          <TeamMemberListSkeleton rows={3} />
         ) : data.length === 0 ? (
           <p className={`${NEUTRAL_CLASS} p-4`}>no other members yet. invite someone below.</p>
         ) : (
@@ -134,15 +128,14 @@ export function TeamMembersSection({ org, me, perms }: TeamMembersSectionProps) 
 
         {hasNextPage && (
           <div className="px-4 py-3 border-t border-[var(--color-border)]">
-            <button
-              type="button"
+            <PendingButton
+              size="sm"
+              variant="secondary"
+              pending={isLoading}
               onClick={() => memberships?.fetchNext?.()}
-              disabled={isLoading}
-              className={`${SECONDARY_BTN_CLASS} flex items-center gap-1`}
             >
-              {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
               load more
-            </button>
+            </PendingButton>
           </div>
         )}
       </div>

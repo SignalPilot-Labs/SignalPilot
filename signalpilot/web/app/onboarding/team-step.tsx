@@ -9,8 +9,9 @@
  */
 
 import { useState } from "react";
-import { Loader2, Users } from "lucide-react";
+import { Users } from "lucide-react";
 import { useCreateTeam } from "@/lib/use-create-team";
+import { PendingButton } from "@/components/ui/pending-button";
 
 interface TeamStepProps {
   /** Called after org is created + set active — parent advances to api-key wizard */
@@ -80,14 +81,14 @@ export function TeamStep({ onTeamCreated }: TeamStepProps) {
           </p>
         )}
 
-        <button
+        <PendingButton
           type="submit"
+          pending={loading}
+          pendingLabel="creating team…"
           disabled={loading || !teamName.trim()}
-          className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase hover:opacity-90 transition-opacity disabled:opacity-40 focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg)]"
         >
-          {loading && <Loader2 className="w-3 h-3 animate-spin" />}
-          {loading ? "creating team…" : "create team"}
-        </button>
+          create team
+        </PendingButton>
       </form>
     </div>
   );

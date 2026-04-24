@@ -1,7 +1,7 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
 import { useUser } from "@clerk/nextjs";
+import { PageHeaderSkeleton, CardSkeleton } from "@/components/ui/skeleton";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { PasswordSection } from "@/components/security/password-section";
@@ -15,8 +15,11 @@ export default function AccountSecurityClient() {
 
   if (!isLoaded) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
+      <div className="p-8 max-w-2xl" aria-busy="true">
+        <PageHeaderSkeleton />
+        <div className="space-y-px">
+          {[1, 2, 3, 4].map((i) => <CardSkeleton key={i} />)}
+        </div>
       </div>
     );
   }

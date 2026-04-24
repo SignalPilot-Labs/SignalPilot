@@ -88,6 +88,8 @@ export const NEUTRAL_CLASS =
   "text-[11px] text-[var(--color-text-dim)] tracking-wider";
 export const SECONDARY_BTN_CLASS =
   "text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider underline underline-offset-2 transition-colors font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)]";
+export const DANGER_BTN_CLASS =
+  "px-5 py-2.5 bg-[var(--color-error)]/10 border border-[var(--color-error)]/40 text-[var(--color-error)] text-[12px] uppercase tracking-wider hover:bg-[var(--color-error)]/20 transition-colors disabled:opacity-40 font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
 
 export function PrimaryAction({
   children,

@@ -5,9 +5,9 @@
  * Fetches org + membership data, computes permissions, renders sections.
  */
 
-import { Loader2 } from "lucide-react";
 import { useUser, useOrganization } from "@clerk/nextjs";
 import { Info } from "lucide-react";
+import { PageHeaderSkeleton, CardSkeleton } from "@/components/ui/skeleton";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { TeamOverviewSection } from "@/components/team/team-overview-section";
 import { TeamMembersSection } from "@/components/team/team-members-section";
@@ -24,8 +24,11 @@ export default function TeamClient() {
 
   if (!isLoaded) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
+      <div className="p-8 max-w-3xl" aria-busy="true">
+        <PageHeaderSkeleton />
+        <div className="space-y-px">
+          {[1, 2, 3].map((i) => <CardSkeleton key={i} />)}
+        </div>
       </div>
     );
   }

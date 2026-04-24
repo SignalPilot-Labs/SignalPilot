@@ -6,14 +6,14 @@
  */
 
 import React, { useState } from "react";
-import { Settings, Loader2 } from "lucide-react";
+import { Settings } from "lucide-react";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useReverification } from "@clerk/nextjs";
 import type { OrganizationResource } from "@clerk/types";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useToast } from "@/components/ui/toast";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
@@ -98,14 +98,14 @@ export function TeamOverviewSection({ org, perms }: TeamOverviewSectionProps) {
               {notice && <p className={NEUTRAL_CLASS}>{notice}</p>}
             </div>
 
-            <button
+            <PendingButton
               type="submit"
+              pending={saving}
+              pendingLabel="saving…"
               disabled={saving || unchanged}
-              className={PRIMARY_BTN_CLASS}
             >
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" /> : null}
               save changes
-            </button>
+            </PendingButton>
           </form>
         ) : (
           <div className="p-6 space-y-4">

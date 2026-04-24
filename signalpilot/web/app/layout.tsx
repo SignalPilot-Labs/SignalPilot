@@ -11,6 +11,7 @@ import { ConnectionProvider } from "@/lib/connection-context";
 import { AuthProvider } from "@/lib/auth-context";
 import { SubscriptionProvider } from "@/lib/subscription-context";
 import { clerkAppearance } from "@/lib/clerk-theme";
+import { ClerkBootSplash } from "@/components/auth/clerk-boot-splash";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -54,7 +55,7 @@ export default async function RootLayout({
   );
 
   if (clerkEnabled) {
-    const { ClerkProvider } = await import("@clerk/nextjs");
+    const { ClerkProvider, ClerkLoading, ClerkLoaded } = await import("@clerk/nextjs");
     return (
       <html lang="en" className="dark">
         <body className="antialiased bg-noise">
@@ -66,7 +67,8 @@ export default async function RootLayout({
             afterSignOutUrl="/"
             appearance={clerkAppearance}
           >
-            {content}
+            <ClerkLoading><ClerkBootSplash /></ClerkLoading>
+            <ClerkLoaded>{content}</ClerkLoaded>
           </ClerkProvider>
         </body>
       </html>

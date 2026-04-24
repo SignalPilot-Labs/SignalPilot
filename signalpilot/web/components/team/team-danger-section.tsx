@@ -8,7 +8,8 @@
  */
 
 import React, { useState } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useReverification, useClerk } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import type { OrganizationResource, DeletedObjectResource } from "@clerk/types";
@@ -100,8 +101,6 @@ export function TeamDangerSection({ org, perms, user }: TeamDangerSectionProps) 
     }
   }
 
-  const dangerBtnClass =
-    "px-5 py-2.5 bg-[var(--color-error)] text-white text-[12px] uppercase tracking-wider hover:opacity-90 transition-opacity disabled:opacity-40 font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-error)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
 
   return (
     <section className="mb-8">
@@ -120,15 +119,15 @@ export function TeamDangerSection({ org, perms, user }: TeamDangerSectionProps) 
           <div role="status" aria-live="polite" aria-atomic="true">
             {leaveNotice && <p className={NEUTRAL_CLASS}>{leaveNotice}</p>}
           </div>
-          <button
+          <PendingButton
             type="button"
+            variant="danger"
+            pending={leaving}
+            pendingLabel="leaving…"
             onClick={() => setLeaveConfirmOpen(true)}
-            disabled={leaving}
-            className={dangerBtnClass}
           >
-            {leaving ? <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" /> : null}
             leave team
-          </button>
+          </PendingButton>
         </div>
 
         {/* Delete team — admin only */}
@@ -166,15 +165,16 @@ export function TeamDangerSection({ org, perms, user }: TeamDangerSectionProps) 
               <p className={NEUTRAL_CLASS}>Admin delete is disabled for this instance.</p>
             )}
 
-            <button
+            <PendingButton
               type="button"
-              onClick={() => setDeleteConfirmOpen(true)}
+              variant="danger"
+              pending={deleting}
+              pendingLabel="deleting…"
               disabled={deleting || typedName !== org.name || !deleteEnabled}
-              className={dangerBtnClass}
+              onClick={() => setDeleteConfirmOpen(true)}
             >
-              {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" /> : null}
               delete team
-            </button>
+            </PendingButton>
           </div>
         )}
       </div>

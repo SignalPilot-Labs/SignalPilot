@@ -7,7 +7,8 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Monitor, Loader2 } from "lucide-react";
+import { Monitor } from "lucide-react";
+import { SessionListSkeleton } from "@/components/ui/list-skeletons";
 import { useUser, useSession, useReverification } from "@clerk/nextjs";
 import type { SessionWithActivitiesResource } from "@clerk/types";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -114,11 +115,7 @@ export function ActiveSessionsSection() {
         aria-live="polite"
       >
         {loading && sessions === null ? (
-          <div className="p-4 space-y-3">
-            {[1, 2].map((i) => (
-              <div key={i} className="h-12 bg-[var(--color-bg-hover)] animate-pulse" />
-            ))}
-          </div>
+          <SessionListSkeleton rows={2} />
         ) : (
           <>
             <div role="alert" aria-live="assertive" aria-atomic="true" className="px-4">

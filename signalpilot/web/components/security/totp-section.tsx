@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { ShieldCheck, Loader2 } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useUser, useReverification } from "@clerk/nextjs";
 import type { TOTPResource } from "@clerk/types";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -11,7 +12,6 @@ import { QrCode } from "./qr-code";
 import { RevealOnce } from "./reveal-once";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
   SECONDARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
@@ -166,14 +166,13 @@ export function TotpSection(): React.JSX.Element {
           <div role="alert" aria-live="assertive" aria-atomic="true">
             <p className={ERROR_CLASS}>{backupCodeError}</p>
           </div>
-          <button
+          <PendingButton
             onClick={handleRetryBackupCodes}
-            disabled={loading}
-            className={PRIMARY_BTN_CLASS}
+            pending={loading}
+            pendingLabel="generating…"
           >
-            {loading && <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" />}
             retry generate backup codes
-          </button>
+          </PendingButton>
         </div>
       </section>
     );
@@ -197,14 +196,15 @@ export function TotpSection(): React.JSX.Element {
                 <div role="status" aria-live="polite" aria-atomic="true">
                   {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
-                <button
+                <PendingButton
+                  variant="danger"
+                  size="sm"
                   onClick={() => setConfirmDisableOpen(true)}
-                  disabled={loading}
-                  className={SECONDARY_BTN_CLASS}
+                  pending={loading}
+                  pendingLabel="disabling…"
                 >
-                  {loading && <Loader2 className="w-3 h-3 animate-spin inline mr-1.5" />}
                   disable authenticator app
-                </button>
+                </PendingButton>
               </>
             ) : totpResource ? (
               <>
@@ -242,14 +242,14 @@ export function TotpSection(): React.JSX.Element {
                   {neutralMsg && <p id="totp-neutral" className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
                 <div className="flex items-center gap-3 pt-1">
-                  <button
+                  <PendingButton
                     onClick={handleVerify}
+                    pending={loading}
+                    pendingLabel="verifying…"
                     disabled={loading || otpCode.length !== 6}
-                    className={PRIMARY_BTN_CLASS}
                   >
-                    {loading && <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" />}
                     verify and enable
-                  </button>
+                  </PendingButton>
                   <button
                     onClick={() => { setTotpResource(null); setOtpCode(""); setError(null); }}
                     className={SECONDARY_BTN_CLASS}
@@ -269,14 +269,13 @@ export function TotpSection(): React.JSX.Element {
                 <div role="status" aria-live="polite" aria-atomic="true">
                   {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
                 </div>
-                <button
+                <PendingButton
                   onClick={handleStartEnroll}
-                  disabled={loading}
-                  className={PRIMARY_BTN_CLASS}
+                  pending={loading}
+                  pendingLabel="enabling…"
                 >
-                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" />}
                   enable authenticator app
-                </button>
+                </PendingButton>
               </>
             )}
           </div>

@@ -7,19 +7,16 @@
  */
 
 import dynamic from "next/dynamic";
-import { Info, Loader2 } from "lucide-react";
+import { Info } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useAppAuth } from "@/lib/auth-context";
 
 const TeamClient = dynamic(
   () => import("./team-client"),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    ),
+    loading: () => <DashboardSkeleton />,
   },
 );
 
@@ -27,11 +24,7 @@ export default function TeamPage() {
   const { isCloudMode, isLoaded } = useAppAuth();
 
   if (!isLoaded) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   if (!isCloudMode) {

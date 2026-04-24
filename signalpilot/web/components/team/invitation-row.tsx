@@ -7,8 +7,8 @@
 
 import { useState } from "react";
 import type { OrganizationInvitationResource } from "@clerk/types";
-import { Loader2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PendingButton } from "@/components/ui/pending-button";
 import { roleLabel } from "@/lib/team/roles";
 import { NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
 
@@ -66,16 +66,15 @@ export function InvitationRow({ invitation, canRevoke, onRevoke }: InvitationRow
 
         {/* Revoke button */}
         {canRevoke && (
-          <button
-            type="button"
+          <PendingButton
+            size="sm"
+            variant="danger"
+            pending={revoking}
             onClick={() => setConfirmOpen(true)}
-            disabled={revoking}
             aria-label={`revoke invitation to ${invitation.emailAddress}`}
-            className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-error)] tracking-wider font-mono transition-colors disabled:opacity-40 flex items-center gap-1 focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)]"
           >
-            {revoking ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
             revoke
-          </button>
+          </PendingButton>
         )}
       </div>
 

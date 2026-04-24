@@ -4,30 +4,29 @@ import { type ReactNode } from "react";
 
 export interface StepTransitionProps {
   /**
-   * Accepted for API compatibility but not used internally.
-   * The animation plays on every mount — which is already driven by
-   * SignIn.Step / SignUp.Step unmounting and remounting on step change.
-   * Passing key={stepKey} on the *caller* side would force remounting;
-   * the inner `key` prop on a div has no effect.
+   * Used to select the enter-animation axis:
+   * - "verifications" → animate-slide-in-up (OTP step rises from below)
+   * - anything else  → animate-slide-in-right
+   *
+   * Remount triggering is handled by Clerk Elements (SignIn.Step / SignUp.Step
+   * unmounts when its step is inactive), so we don't need key-on-div tricks.
    */
   stepKey: string;
   children: ReactNode;
 }
 
 /**
- * Tiny animation wrapper that applies animate-slide-in-right on mount.
- * Animation replay is driven by SignIn.Step / SignUp.Step mount/unmount —
- * each step renders only when active, so this wrapper naturally remounts.
- * No exit animation — deferred to round 4.
- *
- * Usage:
- *   <StepTransition stepKey="start">
- *     <SignIn.Step name="start">...</SignIn.Step>
- *   </StepTransition>
+ * Thin animation wrapper for Clerk Elements multi-step flows.
+ * Picks enter-animation class from stepKey on mount.
+ * Animation replays on every mount — already driven by Clerk's
+ * Step remount cycle. No exit animation (exit owned by Clerk remount).
  */
-export function StepTransition({ children }: StepTransitionProps) {
+export function StepTransition({ stepKey, children }: StepTransitionProps) {
+  const animClass =
+    stepKey === "verifications" ? "animate-slide-in-up" : "animate-slide-in-right";
+
   return (
-    <div className="animate-slide-in-right">
+    <div className={animClass}>
       {children}
     </div>
   );

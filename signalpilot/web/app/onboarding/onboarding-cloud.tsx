@@ -7,7 +7,7 @@
  * browser-only location API during local-mode static generation.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Key,
@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Plug,
 } from "lucide-react";
+import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useUser, useOrganization } from "@clerk/nextjs";
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
@@ -505,11 +506,7 @@ function OnboardingWizard({
   const { isComplete, markComplete, isLoading } = useOnboardingStatus();
 
   if (isLoading || isComplete === null) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   useEffect(() => {
@@ -521,7 +518,7 @@ function OnboardingWizard({
   if (isComplete === true) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
+        <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" aria-hidden="true" />
       </div>
     );
   }
@@ -571,15 +568,28 @@ export function CloudOnboardingContent() {
   const { organization, isLoaded: orgLoaded } = useOrganization();
 
   const [teamCreated, setTeamCreated] = useState(false);
+  const [handoff, setHandoff] = useState(false);
   const [step, setStep] = useState(0);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreatedResponse | null>(null);
+  const handoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (handoffTimerRef.current !== null) {
+        clearTimeout(handoffTimerRef.current);
+      }
+    };
+  }, []);
+
+  function handleTeamCreated() {
+    setHandoff(true);
+    handoffTimerRef.current = setTimeout(() => {
+      setTeamCreated(true);
+    }, 180);
+  }
 
   if (!userLoaded || !orgLoaded) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   useEffect(() => {
@@ -589,11 +599,7 @@ export function CloudOnboardingContent() {
   }, [userLoaded, user, router]);
 
   if (userLoaded && !user) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   const orgId = organization?.id ?? null;
@@ -601,13 +607,13 @@ export function CloudOnboardingContent() {
 
   if (showTeamStep) {
     return (
-      <div className="p-8 max-w-2xl animate-fade-in">
+      <div className={`p-8 max-w-2xl ${handoff ? "animate-slide-out-up" : "animate-fade-in"}`}>
         <div className="mb-8">
           <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1">signalpilot</p>
           <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">setup wizard</p>
         </div>
         <StepIndicator currentStep={0} showTeamStep={true} />
-        <TeamStep onTeamCreated={() => setTeamCreated(true)} />
+        <TeamStep onTeamCreated={handleTeamCreated} />
       </div>
     );
   }

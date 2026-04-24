@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { KeyRound, Loader2 } from "lucide-react";
+import { KeyRound } from "lucide-react";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useUser, useReverification } from "@clerk/nextjs";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { RevealOnce } from "./reveal-once";
-import { SECONDARY_BTN_CLASS, ERROR_CLASS, NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
+import { ERROR_CLASS, NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
 import { isReverificationCancelledError } from "@/lib/security/use-reverify";
 import { formatClerkError } from "@/lib/security/clerk-errors";
 
@@ -71,14 +72,15 @@ export function BackupCodesSection(): React.JSX.Element {
               <div role="status" aria-live="polite" aria-atomic="true">
                 {neutralMsg && <p className={NEUTRAL_CLASS}>{neutralMsg}</p>}
               </div>
-              <button
+              <PendingButton
+                variant="secondary"
+                size="sm"
                 onClick={() => setConfirmRegenOpen(true)}
-                disabled={loading}
-                className={SECONDARY_BTN_CLASS}
+                pending={loading}
+                pendingLabel="regenerating…"
               >
-                {loading && <Loader2 className="w-3 h-3 animate-spin inline mr-1.5" />}
                 regenerate backup codes
-              </button>
+              </PendingButton>
             </div>
           </div>
         )}

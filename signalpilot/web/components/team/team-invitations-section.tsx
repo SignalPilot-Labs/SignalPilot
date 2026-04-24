@@ -7,18 +7,18 @@
  */
 
 import React, { useState } from "react";
-import { Mail, Loader2 } from "lucide-react";
+import { Mail } from "lucide-react";
+import { InvitationListSkeleton } from "@/components/ui/list-skeletons";
+import { PendingButton } from "@/components/ui/pending-button";
 import { useReverification, useOrganization } from "@clerk/nextjs";
 import type { OrganizationResource, OrganizationInvitationResource } from "@clerk/types";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useToast } from "@/components/ui/toast";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
-  SECONDARY_BTN_CLASS,
 } from "@/components/auth/auth-primitives";
 import { isReverificationCancelledError } from "@/lib/security/use-reverify";
 import { formatClerkError } from "@/lib/security/clerk-errors";
@@ -129,14 +129,14 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
               {notice && <p className={NEUTRAL_CLASS}>{notice}</p>}
             </div>
 
-            <button
+            <PendingButton
               type="submit"
+              pending={sending}
+              pendingLabel="sending…"
               disabled={sending || !email.trim()}
-              className={PRIMARY_BTN_CLASS}
             >
-              {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin inline mr-2" /> : null}
               send invitation
-            </button>
+            </PendingButton>
           </form>
         )}
 
@@ -154,11 +154,7 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
 
         {/* Pending invitations list */}
         {isLoading && data.length === 0 ? (
-          <div className="p-4 space-y-3" aria-busy="true">
-            {[1, 2].map((i) => (
-              <div key={i} className="h-8 bg-[var(--color-bg-hover)] animate-pulse" />
-            ))}
-          </div>
+          <InvitationListSkeleton rows={2} />
         ) : data.length === 0 ? (
           <p className={`${NEUTRAL_CLASS} p-4`}>no pending invitations.</p>
         ) : (
@@ -176,15 +172,14 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
 
         {hasNextPage && (
           <div className="px-4 py-3 border-t border-[var(--color-border)]">
-            <button
-              type="button"
+            <PendingButton
+              size="sm"
+              variant="secondary"
+              pending={isLoading}
               onClick={() => invitations?.fetchNext?.()}
-              disabled={isLoading}
-              className={`${SECONDARY_BTN_CLASS} flex items-center gap-1`}
             >
-              {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
               load more
-            </button>
+            </PendingButton>
           </div>
         )}
       </div>

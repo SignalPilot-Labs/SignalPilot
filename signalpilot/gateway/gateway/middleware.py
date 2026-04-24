@@ -164,7 +164,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
         # Local dev key check (fast, no DB needed)
         if local_key and hmac.compare_digest(provided_key, local_key):
-            request.state.auth = {"user_id": "local", "auth_method": "local_key"}
+            request.state.auth = {"user_id": "local", "org_id": "local", "auth_method": "local_key"}
             request_id = getattr(request.state, "request_id", "unknown")
             logger.info(
                 "request %s %s user=%s request_id=%s",
@@ -186,6 +186,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 if matched:
                     request.state.auth = {
                         "user_id": matched.user_id,
+                        "org_id": matched.org_id or "local",
                         "key_id": matched.id,
                         "key_name": matched.name,
                         "auth_method": "api_key",

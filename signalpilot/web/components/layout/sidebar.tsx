@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
+import { getSandboxes, getProjects, getConnectionsHealth } from "@/lib/api";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
@@ -349,25 +350,21 @@ export default function Sidebar() {
 
   // Poll for active sandbox count and connection health
   const fetchCounts = useCallback(() => {
-    const url = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
-    const key = typeof window !== "undefined" ? localStorage.getItem("sp_api_key") : null;
-    const headers: Record<string, string> = {};
-    if (key) headers["Authorization"] = `Bearer ${key}`;
-    fetch(`${url}/api/sandboxes`, { headers })
-      .then((r) => r.ok ? r.json() : [])
-      .then((sandboxes: { status: string }[]) => {
-        setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
-      })
-      .catch(() => {});
-    fetch(`${url}/api/projects`, { headers })
-      .then((r) => r.ok ? r.json() : [])
-      .then((projects: { status: string }[]) => {
-        setProjectCount(projects.length);
-      })
-      .catch(() => {});
-    fetch(`${url}/api/connections/health`, { headers })
-      .then((r) => r.ok ? r.json() : { connections: [] })
-      .then((data: { connections: { status: string }[] }) => {
+    // Sandboxes & projects are local-only features
+    if (!isCloudMode) {
+      getSandboxes()
+        .then((sandboxes) => {
+          setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
+        })
+        .catch(() => {});
+      getProjects()
+        .then((projects) => {
+          setProjectCount(projects.length);
+        })
+        .catch(() => {});
+    }
+    getConnectionsHealth()
+      .then((data) => {
         const conns = data.connections || [];
         setConnHealth({
           total: conns.length,
@@ -375,7 +372,7 @@ export default function Sidebar() {
         });
       })
       .catch(() => {});
-  }, []);
+  }, [isCloudMode]);
 
   useEffect(() => {
     fetchCounts();

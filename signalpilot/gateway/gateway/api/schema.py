@@ -287,7 +287,7 @@ async def get_schema_samples(
 # POST /connections/{name}/schema/explore
 # ───────────────────────────────────────────────────────────────────────────
 
-@router.post("/connections/{name}/schema/explore", dependencies=[RequireScope("write")])
+@router.post("/connections/{name}/schema/explore", dependencies=[RequireScope("read")])
 async def explore_column_values(
     name: str,
     store: StoreD,
@@ -3262,7 +3262,7 @@ async def correct_columns(name: str, store: StoreD, body: dict):
 # ─── Column Exploration (ReFoRCE pattern) ────────────────────────────────────
 
 
-@router.post("/connections/{name}/schema/explore-columns", dependencies=[RequireScope("write")])
+@router.post("/connections/{name}/schema/explore-columns", dependencies=[RequireScope("read")])
 async def explore_columns_deep(name: str, store: StoreD, body: dict):
     """Deep column exploration for complex Spider2.0 queries.
 

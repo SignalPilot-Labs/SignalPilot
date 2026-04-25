@@ -14,7 +14,7 @@ from .deps import StoreD
 router = APIRouter(prefix="/api")
 
 
-@router.get("/audit", dependencies=[RequireScope("admin")])
+@router.get("/audit", dependencies=[RequireScope("read")])
 async def get_audit(
     store: StoreD,
     limit: int = Query(default=100, ge=1, le=500),

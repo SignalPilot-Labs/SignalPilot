@@ -125,6 +125,26 @@ def _gw_headers() -> dict[str, str]:
 import os as _os
 _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 
+
+async def _get_column_names(connector, db_type: str, table_name: str) -> list[str]:
+    """Get column names for a table, using the correct SQL for the database dialect."""
+    if db_type in ("sqlite", "duckdb"):
+        rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
+        return [r.get("name", "") for r in rows if r.get("name")]
+    else:
+        # Use information_schema for Postgres, MySQL, Snowflake, etc.
+        parts = table_name.split(".")
+        if len(parts) == 2:
+            schema, tbl = parts
+        else:
+            schema, tbl = "public", parts[0]
+        rows = await connector.execute(
+            f"SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
+            f"ORDER BY ordinal_position"
+        )
+        return [r.get("column_name", "") for r in rows if r.get("column_name")]
+
 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
 _allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
 _extra_hosts = _os.environ.get("SP_MCP_ALLOWED_HOSTS", "")
@@ -2497,14 +2517,12 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
 
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
+            actual = await _get_column_names(connector, conn_info.db_type, model_name)
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
 
-    if not rows:
+    if not actual:
         return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
-
-    actual: list[str] = [row.get("name", "") for row in rows if row.get("name")]
 
     expected_lower = {c.lower(): c for c in expected}
     actual_lower = {c.lower(): c for c in actual}
@@ -2719,13 +2737,12 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     else:
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                pragma_rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
+                all_col_names = await _get_column_names(connector, conn_info.db_type, table_name)
         except Exception as e:
             return f"Error fetching schema: {sanitize_mcp_error(str(e))}"
         id_cols = [
-            r.get("name", "")
-            for r in pragma_rows
-            if r.get("name", "").lower() == "id" or r.get("name", "").lower().endswith("_id")
+            c for c in all_col_names
+            if c.lower() == "id" or c.lower().endswith("_id")
         ]
         keys = id_cols[:5]
 
@@ -2965,8 +2982,7 @@ async def audit_model_sources(
         _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                pragma_rows = await connector.execute(f"PRAGMA table_info('{model_name}')")
-            all_cols = [r.get("name", "") for r in pragma_rows if r.get("name")]
+                all_cols = await _get_column_names(connector, conn_info.db_type, model_name)
             total_col_count = len(all_cols)
             cols = all_cols[:20]
 
@@ -3014,7 +3030,7 @@ async def audit_model_sources(
                     col_scan_lines.append(f"  [--] {col}: error ({sanitize_mcp_error(str(e), cap=100)})")
 
         except Exception:
-            col_scan_header = "Column scan: unavailable (PRAGMA table_info failed)"
+            col_scan_header = "Column scan: unavailable (column introspection failed)"
 
     elif sample_nulls and model_rows == 0:
         col_scan_header = "Column scan: skipped (model has 0 rows)"

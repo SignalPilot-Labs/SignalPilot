@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import {
   ScrollText,
   Filter,
@@ -8,13 +8,14 @@ import {
   ShieldAlert,
   Terminal,
   Database as DbIcon,
-  Loader2,
   Download,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
-import { getAudit, getAuditExportUrl } from "@/lib/api";
+import { getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
+import { useAudit } from "@/lib/hooks/use-gateway-data";
+import { PageLoader } from "@/components/ui/page-loader";
 import { EmptyList, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { ActivityDots, StatusDot, Sparkline } from "@/components/ui/data-viz";
@@ -36,23 +37,18 @@ const typeColors: Record<string, string> = {
 };
 
 export default function AuditPage() {
-  const [entries, setEntries] = useState<AuditEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params: Record<string, string | number> = { limit: 200 };
-      if (typeFilter) params.event_type = typeFilter;
-      const res = await getAudit(params);
-      setEntries(res.entries);
-    } catch {} finally { setLoading(false); }
-  }, [typeFilter]);
+  const { data, isLoading, mutate: refreshAudit } = useAudit({
+    limit: 200,
+    event_type: typeFilter || undefined,
+    connection_name: undefined,
+  });
 
-  useEffect(() => { refresh(); }, [refresh]);
+  const entries = data?.entries ?? [];
+  const loading = isLoading && entries.length === 0;
 
   function exportCSV() {
     const headers = ["timestamp", "event_type", "connection_name", "sql", "tables", "rows_returned", "duration_ms", "blocked", "block_reason"];
@@ -108,6 +104,8 @@ export default function AuditPage() {
     return slots;
   })();
 
+  if (loading) return <PageLoader label="loading audit log" />;
+
   return (
     <div className="p-8 animate-fade-in">
       <PageHeader
@@ -125,9 +123,9 @@ export default function AuditPage() {
             className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
           </a>
-          <button onClick={refresh}
+          <button onClick={() => refreshAudit()}
             className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
           </button>
         </div>
         </>}
@@ -135,7 +133,7 @@ export default function AuditPage() {
 
       <TerminalBar
         path="audit --tail -f"
-        status={<StatusDot status={entries.length > 0 ? "healthy" : "unknown"} size={4} pulse={loading} />}
+        status={<StatusDot status={entries.length > 0 ? "healthy" : "unknown"} size={4} pulse={isLoading} />}
       >
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">events: <code className="text-[12px] text-[var(--color-text)]">{entries.length}</code></span>
@@ -206,7 +204,7 @@ export default function AuditPage() {
           <option value="connect">connections</option>
           <option value="block">blocked</option>
         </select>
-        {!loading && (
+        {!isLoading && (
           <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider">
             {filtered.length} entries
           </span>
@@ -226,13 +224,7 @@ export default function AuditPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--color-border)]">
-            {loading && filtered.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-12 text-center">
-                  <Loader2 className="w-4 h-4 animate-spin mx-auto text-[var(--color-text-dim)]" />
-                </td>
-              </tr>
-            ) : filtered.length === 0 ? (
+            {filtered.length === 0 ? (
               <tr>
                 <td colSpan={5}>
                   <EmptyState

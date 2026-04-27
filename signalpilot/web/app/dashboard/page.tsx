@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -20,7 +20,8 @@ import {
   Plug,
   Plus,
 } from "lucide-react";
-import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
+import { subscribeMetrics } from "@/lib/api";
+import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
 import { useAppAuth } from "@/lib/auth-context";
@@ -34,7 +35,6 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SystemDiagram } from "@/components/ui/system-diagram";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
-import { useToast } from "@/components/ui/toast";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useOnboardingStatus } from "@/lib/onboarding";
 
@@ -468,61 +468,48 @@ export default function DashboardGate() {
 
 function DashboardContent() {
   const { isCloudMode } = useAppAuth();
-  const { toast } = useToast();
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-  const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
-  const [budgetData, setBudgetData] = useState<{
-    sessions: Record<string, unknown>[];
-    total_spent_usd: number;
-  } | null>(null);
   const { connections } = useConnection();
-  const [auditStats, setAuditStats] = useState({
-    queries: 0,
-    executions: 0,
-    blocks: 0,
-    total: 0,
-  });
-  const [cacheStats, setCacheStats] = useState<{
-    entries: number;
-    max_entries: number;
-    hits: number;
-    misses: number;
-    hit_rate: number;
-  } | null>(null);
-  const [connHealth, setConnHealth] = useState<Record<string, ConnectionHealthStats>>({});
 
+  // SWR data hooks
+  const { data: auditData } = useAudit({ limit: 50 });
+  const { data: budgetData } = useBudgets();
+  const { data: cacheStats } = useCacheStats();
+  const { data: healthData } = useConnectionsHealth();
+
+  // Derive audit entries + stats from SWR data
+  const recentAudit: AuditEntry[] = auditData?.entries ?? [];
+  const auditStats = useMemo(() => {
+    const stats = { queries: 0, executions: 0, blocks: 0, total: recentAudit.length };
+    for (const e of recentAudit) {
+      if (e.event_type === "query") stats.queries++;
+      else if (e.event_type === "execute") stats.executions++;
+      if (e.blocked) stats.blocks++;
+    }
+    return stats;
+  }, [recentAudit]);
+
+  // Derive connection health map from SWR data
+  const connHealth = useMemo(() => {
+    const map: Record<string, ConnectionHealthStats> = {};
+    if (healthData?.connections) {
+      for (const h of healthData.connections) {
+        map[h.connection_name] = h;
+      }
+    }
+    return map;
+  }, [healthData]);
+
+  // Prefetch common data on mount for faster navigation to other pages
+  useEffect(() => { prefetchCommonData(); }, []);
+
+  // SSE metrics subscription — live stream, not a REST fetch
   useEffect(() => {
     const unsub = subscribeMetrics((data) => {
       setMetrics(data);
     });
-
-    getAudit({ limit: 50 })
-      .then((res) => {
-        setRecentAudit(res.entries);
-        const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
-        for (const e of res.entries) {
-          if (e.event_type === "query") stats.queries++;
-          else if (e.event_type === "execute") stats.executions++;
-          if (e.blocked) stats.blocks++;
-        }
-        setAuditStats(stats);
-      })
-      .catch((e) => toast(String(e), "error"));
-
-    getBudgets().then(setBudgetData).catch((e) => toast(String(e), "error"));
-    getCacheStats().then(setCacheStats).catch((e) => toast(String(e), "error"));
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) {
-          map[h.connection_name] = h;
-        }
-        setConnHealth(map);
-      })
-      .catch((e) => toast(String(e), "error"));
-
     return unsub;
-  }, [toast]);
+  }, []);
 
   const latencyValues = recentAudit
     .filter(e => e.duration_ms != null)

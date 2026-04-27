@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import {
   Key,
   Plus,
@@ -10,7 +10,6 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyResponse, ApiKeyCreatedResponse } from "@/lib/backend-client";
 import { useSubscription } from "@/lib/subscription-context";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -22,8 +21,9 @@ import { useToast } from "@/components/ui/toast";
 import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
+import { useApiKeys, invalidateApiKeys } from "@/lib/hooks/use-gateway-data";
+import { PageLoader } from "@/components/ui/page-loader";
 import {
-  getApiKeys,
   createApiKey,
   deleteApiKey,
 } from "@/lib/api";
@@ -384,13 +384,11 @@ export default function ApiKeysPage() {
 
 function ApiKeysContent() {
   const { isLoaded } = useAppAuth();
-  const client = useBackendClient();
   const { maxApiKeys, canCreateKey } = useSubscription();
   const { toast } = useToast();
 
-  const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { data: keys = [], isLoading, error: swrError } = useApiKeys();
+  const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -398,49 +396,12 @@ function ApiKeysContent() {
   // Map of key_id -> total_requests, populated from real or mock data
   const [requestCounts, setRequestCounts] = useState<Map<string, number>>(new Map());
 
-  const fetchKeys = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const [keysData, byKeyRes] = await Promise.all([
-        getApiKeys(),
-        client.getUsageByKey().catch(() => null),
-      ]);
-      setKeys(keysData);
-
-      if (byKeyRes !== null) {
-        const counts = new Map<string, number>();
-        for (const entry of byKeyRes.keys) {
-          counts.set(entry.key_id, entry.total_requests);
-        }
-        setRequestCounts(counts);
-      } else {
-        // Fall back to mock per-key counts
-        const { generateKeyUsage } = await import("@/lib/mock-usage");
-        const counts = new Map<string, number>();
-        for (const k of keysData) {
-          counts.set(k.id, generateKeyUsage(k).totalRequests);
-        }
-        setRequestCounts(counts);
-      }
-    } catch (e) {
-      setLoadError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
-
-  useEffect(() => {
-    if (isLoaded) {
-      fetchKeys();
-    }
-  }, [isLoaded, fetchKeys]);
-
   // ---------------------------------------------------------------------------
   // Loading state
   // ---------------------------------------------------------------------------
 
-  if (!isLoaded || loading) {
-    return <ApiKeysSkeleton />;
+  if (!isLoaded || isLoading) {
+    return <PageLoader label="loading api keys" />;
   }
 
   // ---------------------------------------------------------------------------
@@ -450,12 +411,9 @@ function ApiKeysContent() {
   function handleCreated(created: ApiKeyCreatedResponse) {
     setNewlyCreated(created);
     setShowCreateForm(false);
-    // Add the new key to the list (without raw_key)
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { raw_key: _raw, ...keyData } = created;
-    setKeys((prev) => [keyData, ...prev]);
     // New key starts with 0 requests
     setRequestCounts((prev) => new Map(prev).set(created.id, 0));
+    invalidateApiKeys();
     toast("api key created", "success");
   }
 
@@ -463,12 +421,12 @@ function ApiKeysContent() {
     setDeleting(true);
     try {
       await deleteApiKey(id);
-      setKeys((prev) => prev.filter((k) => k.id !== id));
       setRequestCounts((prev) => {
         const next = new Map(prev);
         next.delete(id);
         return next;
       });
+      invalidateApiKeys();
       toast("api key deleted", "success");
     } catch (e) {
       toast("failed to delete key", "error");
@@ -621,40 +579,22 @@ function LocalApiKeysContent() {
   const { toast } = useToast();
   const MAX_KEYS = 50;
 
-  const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { data: keys = [], isLoading, error: swrError } = useApiKeys();
+  const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [requestCounts] = useState<Map<string, number>>(new Map());
 
-  const fetchKeys = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const keysData = await getApiKeys();
-      setKeys(keysData);
-    } catch (e) {
-      setLoadError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchKeys();
-  }, [fetchKeys]);
-
-  if (loading) {
-    return <ApiKeysSkeleton />;
+  if (isLoading) {
+    return <PageLoader label="loading api keys" />;
   }
 
   function handleCreated(created: ApiKeyCreatedResponse) {
     setNewlyCreated(created);
     setShowCreateForm(false);
-    const { raw_key: _raw, ...keyData } = created;
-    setKeys((prev) => [keyData, ...prev]);
+    invalidateApiKeys();
     toast("api key created", "success");
   }
 
@@ -662,7 +602,7 @@ function LocalApiKeysContent() {
     setDeleting(true);
     try {
       await deleteApiKey(id);
-      setKeys((prev) => prev.filter((k) => k.id !== id));
+      invalidateApiKeys();
       toast("api key deleted", "success");
     } catch {
       toast("failed to delete key", "error");

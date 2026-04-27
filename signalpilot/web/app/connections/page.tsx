@@ -35,7 +35,6 @@ import {
   HardDrive,
 } from "lucide-react";
 import {
-  getConnections,
   createConnection,
   updateConnection,
   deleteConnection,
@@ -43,7 +42,6 @@ import {
   testConnection,
   getConnectionSchema,
   searchConnectionSchema,
-  getConnectionsHealth,
   detectPII,
   getPIIConfig,
   setPIIConfig,
@@ -64,6 +62,8 @@ import {
   browseFiles,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
+import { useConnections, useConnectionsHealth, invalidateConnections, invalidateHealth } from "@/lib/hooks/use-gateway-data";
+import { PageLoader } from "@/components/ui/page-loader";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot, MiniBar, Sparkline } from "@/components/ui/data-viz";
@@ -2150,7 +2150,8 @@ function SSHSection({
 export default function ConnectionsPage() {
   const { toast } = useToast();
   const { refreshConnections: syncGlobalConnections } = useConnection();
-  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
+  const { data: swrConnections, isLoading: connectionsLoading } = useConnections();
+  const connections = swrConnections ?? [];
   const [showForm, setShowForm] = useState(false);
   const [securityBannerExpanded, setSecurityBannerExpanded] = useState(false);
   const [editingConnection, setEditingConnection] = useState<string | null>(null);
@@ -2162,7 +2163,12 @@ export default function ConnectionsPage() {
   const [expandedConn, setExpandedConn] = useState<string | null>(null);
   const [schemaData, setSchemaData] = useState<Record<string, { tables: Record<string, { schema: string; name: string; columns: { name: string; type: string; nullable: boolean; primary_key?: boolean }[] }> }>>({});
   const [schemaLoading, setSchemaLoading] = useState<string | null>(null);
-  const [healthData, setHealthData] = useState<Record<string, ConnectionHealthStats>>({});
+  const { data: swrHealthData } = useConnectionsHealth();
+  const healthData: Record<string, ConnectionHealthStats> = (() => {
+    const map: Record<string, ConnectionHealthStats> = {};
+    if (swrHealthData) for (const h of swrHealthData.connections) map[h.connection_name] = h;
+    return map;
+  })();
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
   const [piiConfig, setPiiConfig] = useState<Record<string, { enabled: boolean; rules: Record<string, string> }>>({});
@@ -2197,38 +2203,28 @@ export default function ConnectionsPage() {
   const hasFormErrors = Object.keys(formErrors).length > 0;
 
   const refresh = useCallback(() => {
-    getConnections().then((conns) => {
-      setConnections(conns);
-      // Load PII config for connections that have it
-      for (const conn of conns) {
-        if ((conn as any).pii_enabled || (conn as any).pii_rules) {
-          setPiiConfig((prev) => ({ ...prev, [conn.name]: { enabled: (conn as any).pii_enabled || false, rules: (conn as any).pii_rules || {} } }));
-        }
-      }
-      // Fetch latency sparkline history for each connection (background)
-      for (const conn of conns) {
-        getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
-          const latencies = res.buckets
-            .map((b) => b.avg_latency_ms)
-            .filter((v): v is number => v !== null);
-          if (latencies.length >= 2) {
-            setHealthHistory((prev) => ({ ...prev, [conn.name]: latencies }));
-          }
-        }).catch(() => {});
-      }
-    }).catch(() => {});
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) map[h.connection_name] = h;
-        setHealthData(map);
-      })
-      .catch(() => {});
+    invalidateConnections();
+    invalidateHealth();
     // Sync the global connection context so other pages see updates
     syncGlobalConnections();
   }, [syncGlobalConnections]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  // Load PII config and sparkline history whenever the connection list changes
+  useEffect(() => {
+    for (const conn of connections) {
+      if ((conn as any).pii_enabled || (conn as any).pii_rules) {
+        setPiiConfig((prev) => ({ ...prev, [conn.name]: { enabled: (conn as any).pii_enabled || false, rules: (conn as any).pii_rules || {} } }));
+      }
+      getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
+        const latencies = res.buckets
+          .map((b) => b.avg_latency_ms)
+          .filter((v): v is number => v !== null);
+        if (latencies.length >= 2) {
+          setHealthHistory((prev) => ({ ...prev, [conn.name]: latencies }));
+        }
+      }).catch(() => {});
+    }
+  }, [connections]);
 
   // Fetch server IP for whitelist guidance
   useEffect(() => {
@@ -2738,6 +2734,8 @@ export default function ConnectionsPage() {
   }
 
   const config = DB_CONFIGS[form.db_type];
+
+  if (connectionsLoading) return <PageLoader label="loading connections" />;
 
   return (
     <div className="p-8 animate-fade-in">

@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
-import { getSandboxes, getProjects, getConnectionsHealth } from "@/lib/api";
+import { getSandboxes, getProjects } from "@/lib/api";
+import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
@@ -346,39 +347,25 @@ export default function Sidebar() {
   const { isCloudMode } = useAppAuth();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [projectCount, setProjectCount] = useState(0);
-  const [connHealth, setConnHealth] = useState<{ total: number; healthy: number }>({ total: 0, healthy: 0 });
 
-  // Poll for active sandbox count and connection health
-  const fetchCounts = useCallback(() => {
-    // Sandboxes & projects are local-only features
-    if (!isCloudMode) {
-      getSandboxes()
-        .then((sandboxes) => {
-          setActiveSandboxes(sandboxes.filter((s) => s.status === "running").length);
-        })
-        .catch(() => {});
-      getProjects()
-        .then((projects) => {
-          setProjectCount(projects.length);
-        })
-        .catch(() => {});
-    }
-    getConnectionsHealth()
-      .then((data) => {
-        const conns = data.connections || [];
-        setConnHealth({
-          total: conns.length,
-          healthy: conns.filter((c) => c.status === "healthy").length,
-        });
-      })
-      .catch(() => {});
-  }, [isCloudMode]);
+  // Connection health from shared SWR cache (auto-refreshes every 15s)
+  const { data: healthData } = useConnectionsHealth();
+  const connHealth = useMemo(() => {
+    const conns = healthData?.connections || [];
+    return { total: conns.length, healthy: conns.filter((c) => c.status === "healthy").length };
+  }, [healthData]);
 
+  // Sandboxes & projects are local-only — poll separately
   useEffect(() => {
-    fetchCounts();
-    const i = setInterval(fetchCounts, 30000);
+    if (isCloudMode) return;
+    const fetch = () => {
+      getSandboxes().then((s) => setActiveSandboxes(s.filter((x) => x.status === "running").length)).catch(() => {});
+      getProjects().then((p) => setProjectCount(p.length)).catch(() => {});
+    };
+    fetch();
+    const i = setInterval(fetch, 30000);
     return () => clearInterval(i);
-  }, [fetchCounts]);
+  }, [isCloudMode]);
 
   const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/sandboxes")));
 

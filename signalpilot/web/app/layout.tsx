@@ -10,6 +10,7 @@ import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
 import { ConnectionProvider } from "@/lib/connection-context";
 import { AuthProvider } from "@/lib/auth-context";
+import { SWRProvider } from "@/lib/swr";
 import { SubscriptionProvider } from "@/lib/subscription-context";
 import { clerkAppearance } from "@/lib/clerk-theme";
 import { ClerkBootSplash } from "@/components/auth/clerk-boot-splash";
@@ -36,6 +37,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const content = (
+    <SWRProvider>
     <ToastProvider>
       <ConnectionProvider>
         <AuthProvider clerkEnabled={clerkEnabled}>
@@ -53,6 +55,7 @@ export default async function RootLayout({
         </AuthProvider>
       </ConnectionProvider>
     </ToastProvider>
+    </SWRProvider>
   );
 
   if (clerkEnabled) {

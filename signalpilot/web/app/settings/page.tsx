@@ -29,6 +29,16 @@ import { SectionHeader } from "@/components/ui/section-header";
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 export default function SettingsPage() {
+  if (IS_CLOUD_MODE) {
+    return (
+      <div className="p-10">
+        <PageHeader title="settings" subtitle="Gateway settings are managed by the platform in cloud mode." />
+        <p className="text-[13px] text-[var(--color-text-dim)] mt-4">
+          Use <a href="/settings/api-keys" className="underline">API Keys</a>, <a href="/settings/byok" className="underline">BYOK</a>, or <a href="/security" className="underline">Security</a> pages instead.
+        </p>
+      </div>
+    );
+  }
   const { toast } = useToast();
   const [settings, setSettings] = useState<GatewaySettings | null>(null);
   const [saving, setSaving] = useState(false);

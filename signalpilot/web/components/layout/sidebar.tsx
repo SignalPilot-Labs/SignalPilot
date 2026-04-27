@@ -367,7 +367,7 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/sandboxes")));
+  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/sandboxes" || href === "/settings")));
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {

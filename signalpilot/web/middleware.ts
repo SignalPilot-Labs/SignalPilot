@@ -33,12 +33,15 @@ function applySecurityHeaders(
 
   let workerSrc = "'self'";
 
+  let frameSrc = "'self'";
+
   if (withClerk) {
     connectSrc +=
       " https://*.clerk.accounts.dev https://clerk-telemetry.com";
     scriptSrc += " https://*.clerk.accounts.dev https://challenges.cloudflare.com";
     imgSrc += " https://img.clerk.com";
     workerSrc += " blob:";
+    frameSrc += " https://challenges.cloudflare.com";
   }
 
   const backendUrl =
@@ -55,6 +58,7 @@ function applySecurityHeaders(
       "style-src 'self' 'unsafe-inline'",
       `img-src ${imgSrc}`,
       `font-src ${fontSrc}`,
+      `frame-src ${frameSrc}`,
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",

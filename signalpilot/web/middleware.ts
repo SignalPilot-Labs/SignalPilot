@@ -36,7 +36,7 @@ function applySecurityHeaders(
   if (withClerk) {
     connectSrc +=
       " https://*.clerk.accounts.dev https://clerk-telemetry.com";
-    scriptSrc += " https://*.clerk.accounts.dev";
+    scriptSrc += " https://*.clerk.accounts.dev https://challenges.cloudflare.com";
     imgSrc += " https://img.clerk.com";
     workerSrc += " blob:";
   }

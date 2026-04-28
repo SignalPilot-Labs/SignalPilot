@@ -45,12 +45,12 @@ export function useConnections() {
   );
 }
 
-/** All connections health — refreshes every 15s. */
-export function useConnectionsHealth(autoRefresh = true) {
+/** All connections health — refreshes every 15s. Pass false to disable fetching entirely. */
+export function useConnectionsHealth(enabled: boolean = true) {
   return useSWR<{ connections: ConnectionHealthStats[] }>(
-    SWR_KEYS.connectionsHealth,
+    enabled ? SWR_KEYS.connectionsHealth : null,
     () => getConnectionsHealth(),
-    { refreshInterval: autoRefresh ? 15_000 : 0 },
+    { refreshInterval: enabled ? 15_000 : 0 },
   );
 }
 

@@ -344,12 +344,13 @@ function AccountSecurityNavLink({ pathname }: { pathname: string }) {
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { isCloudMode } = useAppAuth();
+  const { isCloudMode, isAuthenticated } = useAppAuth();
   const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [projectCount, setProjectCount] = useState(0);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
-  const { data: healthData } = useConnectionsHealth();
+  // Only fetch when authenticated (prevents 401s on login page)
+  const { data: healthData } = useConnectionsHealth(isAuthenticated);
   const connHealth = useMemo(() => {
     const conns = healthData?.connections || [];
     return { total: conns.length, healthy: conns.filter((c) => c.status === "healthy").length };

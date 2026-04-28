@@ -218,6 +218,7 @@ export interface BackendClient {
     credit: number;
     new_charge: number;
     immediate: boolean;
+    effective_date: string | null;
   }>;
   getSubscription(): Promise<SubscriptionResponse>;
   createCheckoutSession(
@@ -258,7 +259,7 @@ export function useBackendClient(): BackendClient {
       backendFetch<PlansResponse>("/api/v1/billing/plans", getToken),
 
     previewProration: (priceId: string) =>
-      backendFetch<{ amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean }>(
+      backendFetch<{ amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean; effective_date: string | null }>(
         "/api/v1/billing/preview-proration", getToken, {
           method: "POST",
           body: JSON.stringify({ price_id: priceId }),

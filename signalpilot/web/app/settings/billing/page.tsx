@@ -317,7 +317,7 @@ function BillingContent() {
     plan: PlanInfo;
     price: PlanPrice;
     isUpgrade: boolean;
-    proration: { amount_due: number; currency: string; credit: number; new_charge: number } | null;
+    proration: { amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean; effective_date: string | null } | null;
     loadingPreview: boolean;
   } | null>(null);
 
@@ -716,35 +716,49 @@ function BillingContent() {
                 <div className="flex items-center gap-2 py-2">
                   <Loader2 className="w-3 h-3 text-[var(--color-text-dim)] animate-spin" />
                   <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                    calculating proration...
+                    calculating...
                   </span>
                 </div>
               ) : pendingChange.proration ? (
-                <>
-                  {pendingChange.proration.credit > 0 && (
+                pendingChange.proration.immediate ? (
+                  <>
+                    {pendingChange.proration.credit > 0 && (
+                      <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+                        <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                          credit from current plan
+                        </span>
+                        <span className="text-[12px] text-[var(--color-success)] tracking-wider tabular-nums">
+                          −{formatPrice(pendingChange.proration.credit, pendingChange.proration.currency)}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
                       <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
-                        credit from current plan
+                        charge today
                       </span>
-                      <span className="text-[12px] text-[var(--color-success)] tracking-wider tabular-nums">
-                        −{formatPrice(pendingChange.proration.credit, pendingChange.proration.currency)}
+                      <span className="text-[13px] font-medium tracking-wider tabular-nums text-[var(--color-text)]">
+                        {formatPrice(pendingChange.proration.amount_due, pendingChange.proration.currency)}
                       </span>
                     </div>
-                  )}
-                  <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-                    <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
-                      {pendingChange.proration.amount_due >= 0 ? "charge today" : "credit to account"}
-                    </span>
-                    <span className={`text-[13px] font-medium tracking-wider tabular-nums ${
-                      pendingChange.proration.amount_due >= 0
-                        ? "text-[var(--color-text)]"
-                        : "text-[var(--color-success)]"
-                    }`}>
-                      {pendingChange.proration.amount_due < 0 && "−"}
-                      {formatPrice(Math.abs(pendingChange.proration.amount_due), pendingChange.proration.currency)}
-                    </span>
+                  </>
+                ) : (
+                  <div className="py-2 space-y-2">
+                    <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                      your current plan stays active until the end of this billing period.
+                      no charge today.
+                    </p>
+                    {pendingChange.proration.effective_date && (
+                      <p className="text-[11px] text-[var(--color-error)] tracking-wider leading-relaxed">
+                        your plan will change to {pendingChange.plan.tier} on{" "}
+                        {new Date(pendingChange.proration.effective_date + "T00:00:00").toLocaleDateString("en-US", {
+                          month: "long",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </p>
+                    )}
                   </div>
-                </>
+                )
               ) : (
                 <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
                   the prorated difference will be charged immediately.

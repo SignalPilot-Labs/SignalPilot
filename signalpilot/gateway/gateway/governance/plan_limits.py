@@ -63,8 +63,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         tier="pro",
         connections=10,
         users=3,
-        api_keys=0,  # unlimited
-        queries_per_day=0,  # unlimited
+        api_keys=100,
+        queries_per_day=10000,
         audit_retention_days=90,
         pii_redaction=True,
         byok=False,
@@ -75,11 +75,11 @@ PLAN_TIERS: dict[str, PlanLimits] = {
     ),
     "team": PlanLimits(
         tier="team",
-        connections=0,  # unlimited
-        users=0,  # unlimited
-        api_keys=0,
-        queries_per_day=0,
-        audit_retention_days=0,  # unlimited
+        connections=100,
+        users=100,
+        api_keys=100,
+        queries_per_day=100000,
+        audit_retention_days=365,
         pii_redaction=True,
         byok=True,
         sso=True,
@@ -89,11 +89,11 @@ PLAN_TIERS: dict[str, PlanLimits] = {
     ),
     "enterprise": PlanLimits(
         tier="enterprise",
-        connections=0,
-        users=0,
-        api_keys=0,
-        queries_per_day=0,
-        audit_retention_days=0,
+        connections=100,
+        users=100,
+        api_keys=100,
+        queries_per_day=100000,
+        audit_retention_days=365,
         pii_redaction=True,
         byok=True,
         sso=True,

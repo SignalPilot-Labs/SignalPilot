@@ -158,6 +158,8 @@ export default function BYOKPage() {
     if (!deleteTarget) return;
     try {
       await deleteBYOKKey(deleteTarget);
+      // Optimistic UI: remove from list immediately
+      setKeys((prev) => prev.filter((k) => k.id !== deleteTarget));
       toast("Key deleted", "success");
       setDeleteTarget(null);
       setForceDelete(false);
@@ -177,6 +179,8 @@ export default function BYOKPage() {
     if (!deleteTarget) return;
     try {
       await deleteBYOKKey(deleteTarget, true);
+      // Optimistic UI: remove from list immediately
+      setKeys((prev) => prev.filter((k) => k.id !== deleteTarget));
       toast("Key revoked — credentials reverted to managed encryption", "success");
       setDeleteTarget(null);
       setForceDelete(false);

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSignUp } from "@clerk/nextjs";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Loader2 } from "lucide-react";
 
@@ -19,6 +19,7 @@ const LINK_CLASS =
 export default function SignUpPage() {
   const { isLoaded, signUp, setActive } = useSignUp();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -27,12 +28,35 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<"form" | "verify">("form");
 
-  if (!isLoaded) {
+  // Handle invitation ticket from Clerk invite emails
+  const ticket = searchParams.get("__clerk_ticket");
+  useEffect(() => {
+    if (!isLoaded || !signUp || !ticket) return;
+    setLoading(true);
+    signUp.create({ strategy: "ticket", ticket })
+      .then(async (result) => {
+        if (result.status === "complete") {
+          await setActive!({ session: result.createdSessionId });
+          router.push("/dashboard");
+        } else {
+          // Needs more steps (e.g. password, verification)
+          setStep("form");
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Invitation link failed");
+        setLoading(false);
+      });
+  }, [isLoaded, signUp, ticket, setActive, router]);
+
+  if (!isLoaded || (ticket && loading)) {
     return (
-      <AuthShell title="boot sequence" subtitle="create your signalpilot account">
+      <AuthShell title="boot sequence" subtitle={ticket ? "accepting invitation..." : "create your signalpilot account"}>
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
         </div>
+        {error && <p className={ERROR_CLASS}>{error}</p>}
       </AuthShell>
     );
   }

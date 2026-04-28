@@ -23,6 +23,7 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useToast } from "@/components/ui/toast";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BillingSkeleton } from "@/components/ui/skeleton";
 
 // ---------------------------------------------------------------------------
@@ -309,6 +310,12 @@ function BillingContent() {
   const [billingInterval, setBillingInterval] = useState<"month" | "year">("month");
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
   const [plansError, setPlansError] = useState(false);
+  const [pendingChange, setPendingChange] = useState<{
+    priceId: string;
+    plan: PlanInfo;
+    price: PlanPrice;
+    isUpgrade: boolean;
+  } | null>(null);
 
   // Fetch plans from backend (which fetches from Stripe)
   useEffect(() => {
@@ -343,26 +350,8 @@ function BillingContent() {
     }
   }, [checkoutOutcome, refetch, mutatePlan]);
 
-  const handleUpgrade = useCallback(
+  const executeCheckout = useCallback(
     async (priceId: string) => {
-      // Find the plan/price for confirmation
-      const targetPlan = plans?.find((p) => p.prices.some((pr) => pr.price_id === priceId));
-      const targetPrice = targetPlan?.prices.find((pr) => pr.price_id === priceId);
-      const isCurrentlyPaid = planTier !== "free";
-
-      // Confirm plan changes (paid → paid) before proceeding
-      if (isCurrentlyPaid && targetPlan && targetPrice) {
-        const isUpgrade = (TIER_ORDER[targetPlan.tier] ?? 0) > (TIER_ORDER[planTier] ?? 0);
-        const action = isUpgrade ? "upgrade" : "switch";
-        const priceStr = formatPrice(targetPrice.amount, targetPrice.currency);
-        const interval = targetPrice.interval === "year" ? "year" : "month";
-        const confirmed = window.confirm(
-          `${action === "upgrade" ? "Upgrade" : "Switch"} to ${targetPlan.tier} at ${priceStr}/${interval}?\n\n` +
-          `You'll be charged the prorated difference immediately.`
-        );
-        if (!confirmed) return;
-      }
-
       setActionError(null);
       setUpgrading(priceId);
       try {
@@ -388,7 +377,25 @@ function BillingContent() {
         setUpgrading(null);
       }
     },
-    [client, toast, refetch, mutatePlan, plans, planTier],
+    [client, toast, refetch, mutatePlan],
+  );
+
+  const handleUpgrade = useCallback(
+    (priceId: string) => {
+      const targetPlan = plans?.find((p) => p.prices.some((pr) => pr.price_id === priceId));
+      const targetPrice = targetPlan?.prices.find((pr) => pr.price_id === priceId);
+
+      // For paid → paid, show confirmation dialog
+      if (planTier !== "free" && targetPlan && targetPrice) {
+        const isUpgrade = (TIER_ORDER[targetPlan.tier] ?? 0) > (TIER_ORDER[planTier] ?? 0);
+        setPendingChange({ priceId, plan: targetPlan, price: targetPrice, isUpgrade });
+        return;
+      }
+
+      // Free → paid: go straight to Stripe checkout
+      executeCheckout(priceId);
+    },
+    [plans, planTier, executeCheckout],
   );
 
   const handleManagePortal = useCallback(async () => {
@@ -598,6 +605,55 @@ function BillingContent() {
           </>
         )}
       </section>
+
+      {/* Plan change confirmation dialog */}
+      <ConfirmDialog
+        open={pendingChange !== null}
+        title={pendingChange?.isUpgrade ? "upgrade plan" : "change plan"}
+        message={
+          pendingChange
+            ? `${pendingChange.isUpgrade ? "Upgrade" : "Switch"} to ${pendingChange.plan.tier}?`
+            : ""
+        }
+        body={
+          pendingChange ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                  new plan
+                </span>
+                <span className="text-[12px] text-[var(--color-text)] tracking-wider">
+                  {pendingChange.plan.tier}
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                  price
+                </span>
+                <span className="text-[12px] text-[var(--color-text)] tracking-wider tabular-nums">
+                  {formatPrice(pendingChange.price.amount, pendingChange.price.currency)}
+                  /{pendingChange.price.interval === "year" ? "yr" : "mo"}
+                </span>
+              </div>
+              <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                {pendingChange.isUpgrade
+                  ? "the prorated difference will be charged to your payment method immediately."
+                  : "you'll receive a prorated credit applied to your next invoice."}
+              </p>
+            </div>
+          ) : undefined
+        }
+        confirmLabel={pendingChange?.isUpgrade ? "upgrade now" : "confirm change"}
+        cancelLabel="cancel"
+        variant="default"
+        onConfirm={() => {
+          if (pendingChange) {
+            executeCheckout(pendingChange.priceId);
+            setPendingChange(null);
+          }
+        }}
+        onCancel={() => setPendingChange(null)}
+      />
     </div>
   );
 }

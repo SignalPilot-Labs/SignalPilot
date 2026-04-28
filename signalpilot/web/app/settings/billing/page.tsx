@@ -317,6 +317,8 @@ function BillingContent() {
     plan: PlanInfo;
     price: PlanPrice;
     isUpgrade: boolean;
+    proration: { amount_due: number; currency: string; credit: number; new_charge: number } | null;
+    loadingPreview: boolean;
   } | null>(null);
 
   // Fetch plans from backend (which fetches from Stripe)
@@ -383,21 +385,28 @@ function BillingContent() {
   );
 
   const handleUpgrade = useCallback(
-    (priceId: string) => {
+    async (priceId: string) => {
       const targetPlan = plans?.find((p) => p.prices.some((pr) => pr.price_id === priceId));
       const targetPrice = targetPlan?.prices.find((pr) => pr.price_id === priceId);
 
-      // For paid → paid, show confirmation dialog
+      // For paid → paid, fetch proration preview then show confirmation
       if (planTier !== "free" && targetPlan && targetPrice) {
         const isUpgrade = (TIER_ORDER[targetPlan.tier] ?? 0) > (TIER_ORDER[planTier] ?? 0);
-        setPendingChange({ priceId, plan: targetPlan, price: targetPrice, isUpgrade });
+        setPendingChange({ priceId, plan: targetPlan, price: targetPrice, isUpgrade, proration: null, loadingPreview: true });
+
+        try {
+          const preview = await client.previewProration(priceId);
+          setPendingChange((prev) => prev ? { ...prev, proration: preview, loadingPreview: false } : null);
+        } catch {
+          setPendingChange((prev) => prev ? { ...prev, loadingPreview: false } : null);
+        }
         return;
       }
 
       // Free → paid: go straight to Stripe checkout
       executeCheckout(priceId);
     },
-    [plans, planTier, executeCheckout],
+    [plans, planTier, executeCheckout, client],
   );
 
   const handleManagePortal = useCallback(async () => {
@@ -702,19 +711,53 @@ function BillingContent() {
                   /{pendingChange.price.interval === "year" ? "yr" : "mo"}
                 </span>
               </div>
-              <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
-                {pendingChange.isUpgrade
-                  ? "the prorated difference will be charged to your payment method immediately."
-                  : "you'll receive a prorated credit applied to your next invoice."}
-              </p>
+
+              {pendingChange.loadingPreview ? (
+                <div className="flex items-center gap-2 py-2">
+                  <Loader2 className="w-3 h-3 text-[var(--color-text-dim)] animate-spin" />
+                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                    calculating proration...
+                  </span>
+                </div>
+              ) : pendingChange.proration ? (
+                <>
+                  {pendingChange.proration.credit > 0 && (
+                    <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+                      <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                        credit from current plan
+                      </span>
+                      <span className="text-[12px] text-[var(--color-success)] tracking-wider tabular-nums">
+                        −{formatPrice(pendingChange.proration.credit, pendingChange.proration.currency)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+                    <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                      {pendingChange.proration.amount_due >= 0 ? "charge today" : "credit to account"}
+                    </span>
+                    <span className={`text-[13px] font-medium tracking-wider tabular-nums ${
+                      pendingChange.proration.amount_due >= 0
+                        ? "text-[var(--color-text)]"
+                        : "text-[var(--color-success)]"
+                    }`}>
+                      {pendingChange.proration.amount_due < 0 && "−"}
+                      {formatPrice(Math.abs(pendingChange.proration.amount_due), pendingChange.proration.currency)}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                  the prorated difference will be charged immediately.
+                </p>
+              )}
             </div>
           ) : undefined
         }
-        confirmLabel={pendingChange?.isUpgrade ? "upgrade now" : "confirm change"}
+        confirmLabel={pendingChange?.loadingPreview ? "calculating..." : pendingChange?.isUpgrade ? "upgrade now" : "confirm change"}
         cancelLabel="cancel"
         variant="default"
         onConfirm={() => {
-          if (pendingChange) {
+          if (pendingChange && !pendingChange.loadingPreview) {
             executeCheckout(pendingChange.priceId);
             setPendingChange(null);
           }

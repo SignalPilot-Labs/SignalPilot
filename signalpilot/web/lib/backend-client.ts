@@ -212,6 +212,13 @@ export interface BackendClient {
   createApiKey(name: string, scopes: string[]): Promise<ApiKeyCreatedResponse>;
   deleteApiKey(keyId: string): Promise<void>;
   getPlans(): Promise<PlansResponse>;
+  previewProration(priceId: string): Promise<{
+    amount_due: number;
+    currency: string;
+    credit: number;
+    new_charge: number;
+    immediate: boolean;
+  }>;
   getSubscription(): Promise<SubscriptionResponse>;
   createCheckoutSession(
     priceId: string,
@@ -249,6 +256,14 @@ export function useBackendClient(): BackendClient {
 
     getPlans: () =>
       backendFetch<PlansResponse>("/api/v1/billing/plans", getToken),
+
+    previewProration: (priceId: string) =>
+      backendFetch<{ amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean }>(
+        "/api/v1/billing/preview-proration", getToken, {
+          method: "POST",
+          body: JSON.stringify({ price_id: priceId }),
+        },
+      ),
 
     getSubscription: () =>
       backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),

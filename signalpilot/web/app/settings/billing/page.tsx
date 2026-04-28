@@ -264,7 +264,7 @@ export default function BillingPage() {
 
   if (!isCloudMode) {
     return (
-      <div className="p-8 max-w-3xl animate-fade-in">
+      <div className="p-8 max-w-5xl animate-fade-in">
         <PageHeader
           title="billing"
           subtitle="subscription"
@@ -437,7 +437,7 @@ function BillingContent() {
         : status;
 
   return (
-    <div className="p-8 max-w-3xl animate-fade-in">
+    <div className="p-8 max-w-5xl animate-fade-in">
       <PageHeader
         title="billing"
         subtitle="subscription"

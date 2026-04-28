@@ -342,6 +342,31 @@ export const getBudget = (session_id: string) =>
 // Health
 export const getHealth = () => request<Record<string, unknown>>("/health");
 
+// Plan & Usage
+export interface PlanUsage {
+  tier: string;
+  limits: {
+    connections: number | "unlimited";
+    users: number | "unlimited";
+    api_keys: number | "unlimited";
+    queries_per_day: number | "unlimited";
+    audit_retention_days: number | "unlimited";
+  };
+  usage: {
+    connections: number;
+    api_keys: number;
+    queries_today: number;
+  };
+  features: {
+    pii_redaction: boolean;
+    byok: boolean;
+    sso: boolean;
+    budget_controls: boolean;
+    audit_export: boolean;
+  };
+}
+export const getPlan = () => request<PlanUsage>("/api/plan");
+
 // Connection Health
 export const getConnectionsHealth = () =>
   request<{ connections: import("./types").ConnectionHealthStats[] }>("/api/connections/health");

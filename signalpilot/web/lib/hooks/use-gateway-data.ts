@@ -12,8 +12,10 @@ import {
   getSettings,
   getBudgets,
   getConnectionSchema,
+  getPlan,
   setApiKey,
 } from "@/lib/api";
+import type { PlanUsage } from "@/lib/api";
 import type {
   ConnectionInfo,
   ConnectionHealthStats,
@@ -28,6 +30,7 @@ export const SWR_KEYS = {
   cacheStats: "/api/cache/stats",
   schemaCache: "/api/schema/cache",
   apiKeys: "/api/keys",
+  plan: "/api/plan",
   settings: "/api/settings",
   budgets: "/api/budgets",
   audit: (params?: string) => `/api/audit${params ? `?${params}` : ""}`,
@@ -89,6 +92,19 @@ export function useApiKeys() {
     () => getApiKeys(),
     { dedupingInterval: 30_000 },
   );
+}
+
+/** Plan tier, limits, and current usage — 60s cache. */
+export function usePlan() {
+  return useSWR<PlanUsage>(
+    SWR_KEYS.plan,
+    () => getPlan(),
+    { dedupingInterval: 60_000 },
+  );
+}
+
+export function invalidatePlan() {
+  return mutate(SWR_KEYS.plan);
 }
 
 /** Gateway settings — rarely changes, 5min cache. */

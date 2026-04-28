@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSignUp } from "@clerk/nextjs";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AuthShell } from "@/components/auth/auth-shell";
@@ -30,8 +30,10 @@ export default function SignUpPage() {
 
   // Handle invitation ticket from Clerk invite emails
   const ticket = searchParams.get("__clerk_ticket");
+  const ticketAttempted = useRef(false);
   useEffect(() => {
-    if (!isLoaded || !signUp || !ticket) return;
+    if (!isLoaded || !signUp || !ticket || ticketAttempted.current) return;
+    ticketAttempted.current = true;
     setLoading(true);
     signUp.create({ strategy: "ticket", ticket })
       .then(async (result) => {
@@ -48,15 +50,26 @@ export default function SignUpPage() {
         setError(err instanceof Error ? err.message : "Invitation link failed");
         setLoading(false);
       });
-  }, [isLoaded, signUp, ticket, setActive, router]);
+  }, [isLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!isLoaded || (ticket && loading)) {
+  if (!isLoaded || (ticket && loading && !error)) {
     return (
       <AuthShell title="boot sequence" subtitle={ticket ? "accepting invitation..." : "create your signalpilot account"}>
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
         </div>
-        {error && <p className={ERROR_CLASS}>{error}</p>}
+      </AuthShell>
+    );
+  }
+
+  if (ticket && error) {
+    return (
+      <AuthShell title="boot sequence" subtitle="invitation failed">
+        <div className="flex flex-col gap-4">
+          <p className={ERROR_CLASS}>{error}</p>
+          <a href="/sign-up" className={LINK_CLASS}>try signing up manually</a>
+          <a href="/sign-in" className={LINK_CLASS}>already have an account? sign in</a>
+        </div>
       </AuthShell>
     );
   }

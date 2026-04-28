@@ -108,8 +108,8 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
 ];
 
-/** Routes where the sidebar should be hidden */
-const AUTH_ROUTE_PREFIXES = ["/sign-in", "/sign-up"];
+/** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
+const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding"];
 
 function SignalPilotLogo() {
   return (
@@ -385,7 +385,7 @@ export default function Sidebar() {
   }, [router, filteredNav]);
 
   // Hide sidebar on auth pages — checked after all hooks are called
-  if (AUTH_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return null;
   }
 

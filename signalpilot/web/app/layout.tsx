@@ -8,6 +8,7 @@ import { CommandPalette } from "@/components/ui/command-palette";
 import { ToastProvider } from "@/components/ui/toast";
 import { GridBackground } from "@/components/ui/grid-background";
 import { PageTransition } from "@/components/ui/page-transition";
+import { MainContent } from "@/components/layout/main-content";
 import { ConnectionProvider } from "@/lib/connection-context";
 import { AuthProvider } from "@/lib/auth-context";
 import { SWRProvider } from "@/lib/swr";
@@ -43,13 +44,13 @@ export default async function RootLayout({
           <SubscriptionProvider>
             <Sidebar />
             <GridBackground />
-            <main className="ml-56 min-h-screen relative z-10">
+            <MainContent>
               <ErrorBoundary>
                 <PageTransition>{children}</PageTransition>
               </ErrorBoundary>
               <KeyboardShortcuts />
               <CommandPalette />
-            </main>
+            </MainContent>
           </SubscriptionProvider>
         </AuthProvider>
       </ConnectionProvider>

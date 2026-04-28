@@ -53,6 +53,14 @@ export default function SignUpPage() {
   const ticket = searchParams.get("__clerk_ticket");
   const ticketAttempted = useRef(false);
 
+  // If Clerk redirected to #/tasks/choose-organization, user is already
+  // signed up — skip to dashboard (our auth layer auto-activates the org)
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash.includes("choose-organization")) {
+      router.push("/dashboard");
+    }
+  }, [router]);
+
   useEffect(() => {
     if (!isLoaded || !signUp || !ticket || ticketAttempted.current) return;
     ticketAttempted.current = true;
@@ -64,9 +72,13 @@ export default function SignUpPage() {
         if (result.status === "complete") {
           await setActive!({ session: result.createdSessionId });
           router.push("/dashboard");
+        } else if (result.createdSessionId) {
+          // Account created, session exists — just activate and go
+          // (Clerk may want org selection but our auth layer handles that)
+          await setActive!({ session: result.createdSessionId });
+          router.push("/dashboard");
         } else {
-          // Ticket accepted but needs more info (e.g. password for new account)
-          // Pre-fill email from the sign-up attempt
+          // Genuinely needs more info (e.g. password for email-only signup)
           if (result.emailAddress) {
             setEmail(result.emailAddress);
           }

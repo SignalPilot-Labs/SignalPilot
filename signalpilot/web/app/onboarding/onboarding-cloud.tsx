@@ -533,8 +533,9 @@ function OnboardingWizard({
   }
 
   return (
-    <div className="p-8 max-w-2xl animate-fade-in">
-      <div className="mb-8">
+    <div className="flex flex-col items-center justify-center min-h-screen relative">
+    <div className="w-full max-w-2xl px-8 py-12 animate-fade-in">
+      <div className="mb-8 text-center">
         <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1">signalpilot</p>
         <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">setup wizard</p>
       </div>
@@ -549,6 +550,7 @@ function OnboardingWizard({
       )}
       {step === 2 && <StepConnectMcp onNext={() => setStep(3)} createdKey={createdKey} />}
       {step === 3 && <StepDone createdKey={createdKey} onFinish={handleFinish} />}
+    </div>
     </div>
   );
 }
@@ -652,8 +654,9 @@ function CloudOnboardingInner() {
 
   if (showTeamStep) {
     return (
-      <div className={`p-8 max-w-2xl ${handoff ? "animate-slide-out-up" : "animate-fade-in"}`}>
-        <div className="mb-8">
+      <div className="flex flex-col items-center justify-center min-h-screen relative">
+      <div className={`w-full max-w-2xl px-8 py-12 ${handoff ? "animate-slide-out-up" : "animate-fade-in"}`}>
+        <div className="mb-8 text-center">
           <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1">signalpilot</p>
           <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">setup wizard</p>
         </div>
@@ -697,6 +700,7 @@ function CloudOnboardingInner() {
         )}
 
         <TeamStep onTeamCreated={handleTeamCreated} />
+      </div>
       </div>
     );
   }

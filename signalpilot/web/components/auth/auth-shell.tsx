@@ -14,7 +14,7 @@ export interface AuthShellProps {
 
 export function AuthShell({ title, subtitle, children }: AuthShellProps) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen -ml-56 relative">
+    <div className="flex flex-col items-center justify-center min-h-screen relative">
       {/* Background grid — same pattern as boot page */}
       <div
         className="absolute inset-0 pointer-events-none overflow-hidden"

@@ -217,7 +217,7 @@ export interface BackendClient {
     priceId: string,
     successUrl: string,
     cancelUrl: string,
-  ): Promise<{ checkout_url: string }>;
+  ): Promise<{ checkout_url: string | null; action: "checkout" | "updated" }>;
   createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
   getUsageSummary(): Promise<UsageSummaryResponse>;
   getUsageDaily(days?: number): Promise<DailyUsageResponse>;
@@ -254,7 +254,7 @@ export function useBackendClient(): BackendClient {
       backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),
 
     createCheckoutSession: (priceId: string, successUrl: string, cancelUrl: string) =>
-      backendFetch<{ checkout_url: string }>("/api/v1/billing/checkout", getToken, {
+      backendFetch<{ checkout_url: string | null; action: "checkout" | "updated" }>("/api/v1/billing/checkout", getToken, {
         method: "POST",
         body: JSON.stringify({
           price_id: priceId,

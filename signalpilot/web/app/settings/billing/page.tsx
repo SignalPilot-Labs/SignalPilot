@@ -351,19 +351,28 @@ function BillingContent() {
         const origin = window.location.origin;
         const successUrl = `${origin}/settings/billing?checkout=success`;
         const cancelUrl = `${origin}/settings/billing?checkout=canceled`;
-        const { checkout_url } = await client.createCheckoutSession(
+        const res = await client.createCheckoutSession(
           priceId,
           successUrl,
           cancelUrl,
         );
-        window.location.href = checkout_url;
+        if (res.action === "updated") {
+          // Plan changed instantly (paid → paid), no redirect needed
+          toast("plan updated successfully", "success");
+          refetch();
+          mutatePlan();
+          setUpgrading(null);
+        } else if (res.checkout_url) {
+          // New subscription (free → paid), redirect to Stripe
+          window.location.href = res.checkout_url;
+        }
       } catch (e) {
         setActionError(String(e));
-        toast("failed to start checkout", "error");
+        toast("failed to change plan", "error");
         setUpgrading(null);
       }
     },
-    [client, toast],
+    [client, toast, refetch, mutatePlan],
   );
 
   const handleManagePortal = useCallback(async () => {

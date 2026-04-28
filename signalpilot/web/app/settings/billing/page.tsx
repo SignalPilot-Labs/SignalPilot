@@ -268,7 +268,7 @@ export default function BillingPage() {
 function BillingContent() {
   const client = useBackendClient();
   const { status, isLoaded, refetch } = useSubscription();
-  const { data: plan } = usePlan();
+  const { data: plan, mutate: mutatePlan } = usePlan();
   const planTier = plan?.tier ?? "free";
   const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
   const searchParams = useSearchParams();
@@ -306,12 +306,13 @@ function BillingContent() {
   // Determine checkout outcome from URL params
   const checkoutOutcome = searchParams.get("checkout");
 
-  // Refetch subscription after successful checkout return
+  // Refetch subscription + plan after successful checkout return
   useEffect(() => {
     if (checkoutOutcome === "success") {
       refetch();
+      mutatePlan();
     }
-  }, [checkoutOutcome, refetch]);
+  }, [checkoutOutcome, refetch, mutatePlan]);
 
   const handleUpgrade = useCallback(
     async (priceId: string) => {

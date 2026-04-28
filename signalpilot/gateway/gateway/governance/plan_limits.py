@@ -1,8 +1,10 @@
 """Plan tier limits and enforcement.
 
 Defines per-tier limits and provides helpers to check them.
-The org's plan_tier is stored in gateway_orgs.plan_tier and resolved
-via the OrgID dependency chain.
+
+In cloud mode, the org's plan_tier is read from the backend's `subscriptions`
+table (Stripe source of truth). In local mode, it reads from `gateway_orgs`.
+Both tables live in the same database.
 
 Usage:
     limits = get_plan_limits(org_id, session)
@@ -13,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -20,6 +23,8 @@ from typing import Any
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+_is_cloud = os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
 
@@ -111,13 +116,15 @@ def get_limits(tier: str) -> PlanLimits:
 async def get_org_tier(org_id: str) -> str:
     """Look up the org's plan tier from the DB.
 
-    Auto-creates the gateway_orgs row on first access (defaults to 'free').
-    This ensures every org that touches the gateway gets a tracked plan_tier.
+    In cloud mode, reads from the backend's `subscriptions` table (Stripe
+    source of truth). In local mode, reads from `gateway_orgs`.
+    Auto-creates the gateway_orgs row on first access regardless of mode
+    (needed for BYOK and other gateway-specific settings).
     """
     import time
     from ..db.engine import get_session_factory
     from ..db.models import GatewayOrg
-    from sqlalchemy import select
+    from sqlalchemy import select, text
 
     if not org_id or org_id == "local":
         return DEFAULT_TIER
@@ -125,23 +132,36 @@ async def get_org_tier(org_id: str) -> str:
     try:
         factory = get_session_factory()
         async with factory() as session:
-            result = await session.execute(
+            # Ensure gateway_orgs row exists (needed for BYOK etc.)
+            gw_result = await session.execute(
                 select(GatewayOrg.plan_tier).where(GatewayOrg.org_id == org_id)
             )
-            row = result.scalar_one_or_none()
-            if row:
-                return row
+            gw_tier = gw_result.scalar_one_or_none()
 
-            # Auto-create org row on first access
-            session.add(GatewayOrg(
-                org_id=org_id,
-                plan_tier=DEFAULT_TIER,
-                byok_enabled=False,
-                created_at=time.time(),
-            ))
-            await session.commit()
-            logger.info("Auto-created gateway_orgs row for %s (tier=%s)", org_id, DEFAULT_TIER)
-            return DEFAULT_TIER
+            if gw_tier is None:
+                session.add(GatewayOrg(
+                    org_id=org_id,
+                    plan_tier=DEFAULT_TIER,
+                    byok_enabled=False,
+                    created_at=time.time(),
+                ))
+                await session.commit()
+                logger.info("Auto-created gateway_orgs row for %s", org_id)
+
+            # In cloud mode, subscriptions table is the source of truth
+            if _is_cloud:
+                result = await session.execute(
+                    text("SELECT plan_tier FROM subscriptions WHERE org_id = :oid"),
+                    {"oid": org_id},
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    return row
+                # No subscription row yet — free tier
+                return DEFAULT_TIER
+
+            # Local mode: use gateway_orgs
+            return gw_tier or DEFAULT_TIER
     except Exception:
         logger.warning("Failed to resolve plan tier for org %s, defaulting to free", org_id)
         return DEFAULT_TIER

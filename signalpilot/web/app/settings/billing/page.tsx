@@ -122,12 +122,16 @@ function PlanCard({
   plan,
   interval,
   currentTier,
+  pendingDowngradeTo,
+  pendingDowngradeDate,
   onUpgrade,
   upgrading,
 }: {
   plan: PlanInfo;
   interval: "month" | "year";
   currentTier: string;
+  pendingDowngradeTo?: string | null;
+  pendingDowngradeDate?: string | null;
   onUpgrade: (priceId: string) => void;
   upgrading: string | null;
 }) {
@@ -142,6 +146,7 @@ function PlanCard({
   const isCurrent = plan.tier === currentTier;
   const isHigher = (TIER_ORDER[plan.tier] ?? 0) > (TIER_ORDER[currentTier] ?? 0);
   const isLower = (TIER_ORDER[plan.tier] ?? 0) < (TIER_ORDER[currentTier] ?? 0);
+  const isPendingDowngrade = pendingDowngradeTo === plan.tier;
   const displayAmount = formatPrice(price.amount, price.currency);
   const monthlyEquiv = getMonthlyEquivalent(price);
   const showSavings = interval === "year" && monthlyPrice && monthlyEquiv < monthlyPrice.amount;
@@ -223,6 +228,18 @@ function PlanCard({
           <CheckCircle2 className="w-3 h-3" />
           current plan
         </div>
+      ) : isPendingDowngrade && pendingDowngradeDate ? (
+        <div
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border border-[var(--color-warning)]/40 text-[var(--color-warning)]"
+          style={{ opacity: 0.8 }}
+        >
+          <AlertTriangle className="w-3 h-3" />
+          active{" "}
+          {new Date(pendingDowngradeDate + "T00:00:00").toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+          })}
+        </div>
       ) : (
         <button
           onClick={() => onUpgrade(price.price_id)}
@@ -299,7 +316,7 @@ export default function BillingPage() {
 
 function BillingContent() {
   const client = useBackendClient();
-  const { status, isLoaded, refetch } = useSubscription();
+  const { status, isLoaded, refetch, pendingDowngradeTo, pendingDowngradeDate } = useSubscription();
   const { data: plan, mutate: mutatePlan } = usePlan();
   const planTier = plan?.tier ?? "free";
   const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
@@ -573,6 +590,34 @@ function BillingContent() {
         </div>
       </section>
 
+      {/* Pending downgrade banner */}
+      {pendingDowngradeTo && pendingDowngradeDate && (
+        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 animate-fade-in">
+          <AlertTriangle
+            className="w-4 h-4 text-[var(--color-warning)] mt-0.5 flex-shrink-0"
+            strokeWidth={1.5}
+          />
+          <div>
+            <p className="text-[12px] text-[var(--color-warning)] tracking-wider font-medium">
+              plan change scheduled
+            </p>
+            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mt-0.5">
+              your plan will change to{" "}
+              <span className="text-[var(--color-text-muted)]">{pendingDowngradeTo}</span>{" "}
+              on{" "}
+              <span className="text-[var(--color-text-muted)] tabular-nums">
+                {new Date(pendingDowngradeDate + "T00:00:00").toLocaleDateString("en-US", {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+              </span>
+              . you keep full {planTier} access until then.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Plans section — always shown */}
       <section className="mb-8">
         <SectionHeader icon={Zap} title="plans" />
@@ -605,6 +650,8 @@ function BillingContent() {
                   plan={p}
                   interval={billingInterval}
                   currentTier={planTier}
+                  pendingDowngradeTo={pendingDowngradeTo}
+                  pendingDowngradeDate={pendingDowngradeDate}
                   onUpgrade={handleUpgrade}
                   upgrading={upgrading}
                 />

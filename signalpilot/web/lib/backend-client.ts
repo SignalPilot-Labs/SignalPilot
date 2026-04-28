@@ -40,6 +40,8 @@ export interface SubscriptionResponse {
   stripe_subscription_id: string | null;
   current_period_end: string | null;
   max_api_keys: number;
+  pending_downgrade_to: string | null;
+  pending_downgrade_date: string | null;
 }
 
 export interface PlanPrice {

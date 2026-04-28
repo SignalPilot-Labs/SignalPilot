@@ -20,6 +20,8 @@ export interface SubscriptionState {
   status: string;
   maxApiKeys: number;
   isLoaded: boolean;
+  pendingDowngradeTo: string | null;
+  pendingDowngradeDate: string | null;
   canCreateKey: (currentCount: number) => boolean;
   refetch: () => void;
 }
@@ -39,6 +41,8 @@ const LOCAL_MODE_SUBSCRIPTION: Omit<SubscriptionState, "canCreateKey" | "refetch
   status: "active",
   maxApiKeys: 50,
   isLoaded: true,
+  pendingDowngradeTo: null,
+  pendingDowngradeDate: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -53,6 +57,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState("active");
   const [maxApiKeys, setMaxApiKeys] = useState(50);
   const [isLoaded, setIsLoaded] = useState(true);
+  const [pendingDowngradeTo, setPendingDowngradeTo] = useState<string | null>(null);
+  const [pendingDowngradeDate, setPendingDowngradeDate] = useState<string | null>(null);
 
   const fetchSubscription = useCallback(async () => {
     if (!isAuthenticated) {
@@ -64,6 +70,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
       setPlanTier(data.plan_tier);
       setStatus(data.status);
       setMaxApiKeys(data.max_api_keys);
+      setPendingDowngradeTo(data.pending_downgrade_to);
+      setPendingDowngradeDate(data.pending_downgrade_date);
     } catch {
       // Surface error by leaving defaults (free tier) and marking loaded
       // so the UI renders rather than spinning indefinitely
@@ -81,6 +89,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
     status,
     maxApiKeys,
     isLoaded,
+    pendingDowngradeTo,
+    pendingDowngradeDate,
     canCreateKey: (currentCount: number) => currentCount < maxApiKeys,
     refetch: fetchSubscription,
   };

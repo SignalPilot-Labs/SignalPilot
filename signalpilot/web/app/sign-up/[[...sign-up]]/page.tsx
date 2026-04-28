@@ -1,7 +1,19 @@
 "use client";
 
+/**
+ * Custom sign-up page handling ALL auth paths:
+ *
+ * 1. Not signed in, no ticket        → normal sign-up form
+ * 2. Not signed in, ticket+sign_up   → signUp.create with ticket
+ * 3. Not signed in, ticket+sign_in   → redirect to /sign-in with ticket
+ * 4. Not signed in, ticket+complete  → redirect to /dashboard
+ * 5. Signed in, no ticket            → redirect to /dashboard
+ * 6. Signed in, with ticket          → redirect to /dashboard (onboarding shows invite)
+ * 7. Hash #/tasks/choose-organization → redirect to /dashboard
+ */
+
 import { useState, useEffect, useRef } from "react";
-import { useSignUp } from "@clerk/nextjs";
+import { useSignUp, useAuth } from "@clerk/nextjs";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Loader2 } from "lucide-react";
@@ -39,6 +51,7 @@ function GitHubIcon() {
 
 export default function SignUpPage() {
   const { isLoaded, signUp, setActive } = useSignUp();
+  const { isSignedIn } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -47,48 +60,68 @@ export default function SignUpPage() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
   const [step, setStep] = useState<"form" | "verify">("form");
 
-  // Handle invitation ticket from Clerk invite emails
   const ticket = searchParams.get("__clerk_ticket");
+  const clerkStatus = searchParams.get("__clerk_status");
   const ticketAttempted = useRef(false);
 
-  // If Clerk redirected to #/tasks/choose-organization, user is already
-  // signed up — skip to dashboard (our auth layer auto-activates the org)
+  // ── Guard 1: Hash route tasks → redirect to dashboard ──────────────────
   useEffect(() => {
-    if (typeof window !== "undefined" && window.location.hash.includes("choose-organization")) {
+    if (typeof window !== "undefined" && window.location.hash.includes("tasks/")) {
       router.push("/dashboard");
     }
   }, [router]);
 
+  // ── Guard 2: Already signed in → redirect immediately ──────────────────
+  // If signed in with a ticket, the onboarding page will show the pending
+  // invitation for acceptance. No need to handle it on the sign-up page.
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (isSignedIn) {
+      setRedirecting(true);
+      router.push("/dashboard");
+    }
+  }, [isLoaded, isSignedIn, router]);
+
+  // ── Guard 3: __clerk_status routing ────────────────────────────────────
+  // sign_in → user exists, redirect to sign-in page with ticket
+  // complete → already done, go to dashboard
+  useEffect(() => {
+    if (!isLoaded || isSignedIn) return;
+    if (clerkStatus === "sign_in" && ticket) {
+      setRedirecting(true);
+      router.push(`/sign-in?__clerk_ticket=${ticket}`);
+    } else if (clerkStatus === "complete") {
+      setRedirecting(true);
+      router.push("/dashboard");
+    }
+  }, [isLoaded, isSignedIn, clerkStatus, ticket, router]);
+
+  // ── Ticket handler: create account via invitation ──────────────────────
   useEffect(() => {
     if (!isLoaded || !signUp || !ticket || ticketAttempted.current) return;
+    if (isSignedIn || clerkStatus === "sign_in" || clerkStatus === "complete") return;
+
     ticketAttempted.current = true;
     setLoading(true);
     setError("");
 
     signUp.create({ strategy: "ticket", ticket })
       .then(async (result) => {
-        if (result.status === "complete") {
-          await setActive!({ session: result.createdSessionId });
-          router.push("/dashboard");
-        } else if (result.createdSessionId) {
-          // Account created, session exists — just activate and go
-          // (Clerk may want org selection but our auth layer handles that)
+        if (result.status === "complete" || result.createdSessionId) {
           await setActive!({ session: result.createdSessionId });
           router.push("/dashboard");
         } else {
-          // Genuinely needs more info (e.g. password for email-only signup)
-          if (result.emailAddress) {
-            setEmail(result.emailAddress);
-          }
+          // Needs more info (e.g. password)
+          if (result.emailAddress) setEmail(result.emailAddress);
           setStep("form");
           setLoading(false);
         }
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        // If user already exists, redirect to sign-in with the ticket
         if (msg.includes("already exists") || msg.includes("taken")) {
           router.push(`/sign-in?__clerk_ticket=${ticket}`);
           return;
@@ -98,9 +131,15 @@ export default function SignUpPage() {
       });
   }, [isLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!isLoaded || (ticket && loading && !error)) {
+  // ── Loading states ─────────────────────────────────────────────────────
+  if (!isLoaded || redirecting || (ticket && loading && !error)) {
+    const subtitle = redirecting
+      ? "redirecting..."
+      : ticket
+      ? "accepting invitation..."
+      : "create your signalpilot account";
     return (
-      <AuthShell title="boot sequence" subtitle={ticket ? "accepting invitation..." : "create your signalpilot account"}>
+      <AuthShell title="boot sequence" subtitle={subtitle}>
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
         </div>
@@ -108,13 +147,14 @@ export default function SignUpPage() {
     );
   }
 
+  // ── Handlers ───────────────────────────────────────────────────────────
+
   async function handleSocialSignUp(strategy: "oauth_google" | "oauth_github") {
     try {
       await signUp!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sign-in/sso-callback",
         redirectUrlComplete: "/dashboard",
-        unsafeMetadata: ticket ? { __clerk_ticket: ticket } : undefined,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Social sign-up failed");
@@ -128,25 +168,16 @@ export default function SignUpPage() {
     setLoading(true);
 
     try {
-      // If ticket already started the sign-up, just update with password
       if (ticket && signUp?.status === "missing_requirements") {
         await signUp.update({ password });
       } else {
-        await signUp!.create({
-          emailAddress: email,
-          password,
-        });
+        await signUp!.create({ emailAddress: email, password });
       }
 
-      // Send email verification code
-      await signUp!.prepareEmailAddressVerification({
-        strategy: "email_code",
-      });
-
+      await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
       setStep("verify");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Sign-up failed";
-      setError(msg);
+      setError(err instanceof Error ? err.message : "Sign-up failed");
     } finally {
       setLoading(false);
     }
@@ -160,7 +191,6 @@ export default function SignUpPage() {
 
     try {
       const result = await signUp!.attemptEmailAddressVerification({ code });
-
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
         router.push("/dashboard");
@@ -168,12 +198,13 @@ export default function SignUpPage() {
         setError("Verification incomplete — please try again");
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Invalid code";
-      setError(msg);
+      setError(err instanceof Error ? err.message : "Invalid code");
     } finally {
       setLoading(false);
     }
   }
+
+  // ── Render ─────────────────────────────────────────────────────────────
 
   const subtitle = ticket
     ? "complete your account to accept the invitation"
@@ -202,22 +233,23 @@ export default function SignUpPage() {
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div>
-                <label htmlFor="email" className={LABEL_CLASS}>email</label>
+                <label htmlFor="signup-email" className={LABEL_CLASS}>email</label>
                 <input
-                  id="email"
+                  id="signup-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@company.com"
                   autoFocus={!ticket}
                   readOnly={!!ticket && !!email}
+                  autoComplete="email"
                   className={`${INPUT_CLASS} ${ticket && email ? "opacity-60" : ""}`}
                 />
               </div>
               <div>
-                <label htmlFor="password" className={LABEL_CLASS}>password</label>
+                <label htmlFor="signup-password" className={LABEL_CLASS}>password</label>
                 <input
-                  id="password"
+                  id="signup-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -235,6 +267,9 @@ export default function SignUpPage() {
                 already have an account? sign in
               </a>
             </form>
+
+            {/* Clerk CAPTCHA mount point (prevents console warning) */}
+            <div id="clerk-captcha" />
           </>
         )}
 
@@ -244,9 +279,9 @@ export default function SignUpPage() {
               we sent a verification code to <code className="text-[var(--color-text-muted)]">{email}</code>
             </p>
             <div>
-              <label htmlFor="code" className={LABEL_CLASS}>verification code</label>
+              <label htmlFor="verify-code" className={LABEL_CLASS}>verification code</label>
               <input
-                id="code"
+                id="verify-code"
                 type="text"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}

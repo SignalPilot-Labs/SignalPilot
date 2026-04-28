@@ -111,14 +111,18 @@ function IntervalToggle({
 // Plan card — fully dynamic from Stripe data
 // ---------------------------------------------------------------------------
 
+const TIER_ORDER: Record<string, number> = { free: 0, pro: 1, team: 2, enterprise: 3 };
+
 function PlanCard({
   plan,
   interval,
+  currentTier,
   onUpgrade,
   upgrading,
 }: {
   plan: PlanInfo;
   interval: "month" | "year";
+  currentTier: string;
   onUpgrade: (priceId: string) => void;
   upgrading: string | null;
 }) {
@@ -130,6 +134,9 @@ function PlanCard({
   if (!price) return null;
 
   const isUpgrading = upgrading === price.price_id;
+  const isCurrent = plan.tier === currentTier;
+  const isHigher = (TIER_ORDER[plan.tier] ?? 0) > (TIER_ORDER[currentTier] ?? 0);
+  const isLower = (TIER_ORDER[plan.tier] ?? 0) < (TIER_ORDER[currentTier] ?? 0);
   const displayAmount = formatPrice(price.amount, price.currency);
   const monthlyEquiv = getMonthlyEquivalent(price);
   const showSavings = interval === "year" && monthlyPrice && monthlyEquiv < monthlyPrice.amount;
@@ -198,23 +205,43 @@ function PlanCard({
         ))}
       </ul>
 
-      {/* Upgrade button */}
-      <button
-        onClick={() => onUpgrade(price.price_id)}
-        disabled={isUpgrading || upgrading !== null}
-        className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border transition-all disabled:opacity-40"
-        style={{
-          borderColor: highlightColor,
-          color: highlightColor,
-        }}
-      >
-        {isUpgrading ? (
-          <Loader2 className="w-3 h-3 animate-spin" />
-        ) : (
-          <ArrowRight className="w-3 h-3" />
-        )}
-        {isUpgrading ? "redirecting..." : `upgrade to ${plan.tier}`}
-      </button>
+      {/* Action button */}
+      {isCurrent ? (
+        <div
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border"
+          style={{
+            borderColor: highlightColor,
+            color: highlightColor,
+            opacity: 0.7,
+          }}
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          current plan
+        </div>
+      ) : (
+        <button
+          onClick={() => onUpgrade(price.price_id)}
+          disabled={isUpgrading || upgrading !== null}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border transition-all disabled:opacity-40 hover:bg-[var(--color-bg-hover)]"
+          style={{
+            borderColor: highlightColor,
+            color: highlightColor,
+          }}
+        >
+          {isUpgrading ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : (
+            <ArrowRight className="w-3 h-3" />
+          )}
+          {isUpgrading
+            ? "redirecting..."
+            : isHigher
+              ? `upgrade to ${plan.tier}`
+              : isLower
+                ? `downgrade to ${plan.tier}`
+                : `switch to ${plan.tier}`}
+        </button>
+      )}
     </div>
   );
 }
@@ -501,50 +528,49 @@ function BillingContent() {
         </div>
       </section>
 
-      {/* Upgrade section — only shown when on free tier */}
-      {isFreeTier && (
-        <section className="mb-8">
-          <SectionHeader icon={Zap} title="upgrade plan" />
+      {/* Plans section — always shown */}
+      <section className="mb-8">
+        <SectionHeader icon={Zap} title="plans" />
 
-          {plans === null && !plansError && (
-            <div className="flex items-center gap-2 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-              <Loader2 className="w-3.5 h-3.5 text-[var(--color-text-dim)] animate-spin" />
-              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-                loading plans...
-              </span>
+        {plans === null && !plansError && (
+          <div className="flex items-center gap-2 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+            <Loader2 className="w-3.5 h-3.5 text-[var(--color-text-dim)] animate-spin" />
+            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+              loading plans...
+            </span>
+          </div>
+        )}
+
+        {plansError && (
+          <div className="flex items-start gap-3 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+            <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
+            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+              unable to load pricing. please try again later.
+            </p>
+          </div>
+        )}
+
+        {plans && plans.length > 0 && (
+          <>
+            <IntervalToggle interval={billingInterval} onChange={setBillingInterval} />
+            <div className="flex gap-4">
+              {plans.map((p) => (
+                <PlanCard
+                  key={p.tier}
+                  plan={p}
+                  interval={billingInterval}
+                  currentTier={planTier}
+                  onUpgrade={handleUpgrade}
+                  upgrading={upgrading}
+                />
+              ))}
             </div>
-          )}
-
-          {plansError && (
-            <div className="flex items-start gap-3 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-              <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
-              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-                unable to load pricing. please try again later.
-              </p>
-            </div>
-          )}
-
-          {plans && plans.length > 0 && (
-            <>
-              <IntervalToggle interval={billingInterval} onChange={setBillingInterval} />
-              <div className="flex gap-4">
-                {plans.map((p) => (
-                  <PlanCard
-                    key={p.tier}
-                    plan={p}
-                    interval={billingInterval}
-                    onUpgrade={handleUpgrade}
-                    upgrading={upgrading}
-                  />
-                ))}
-              </div>
-              <p className="mt-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                cancel anytime. prices in usd. self-hosted is always free.
-              </p>
-            </>
-          )}
-        </section>
-      )}
+            <p className="mt-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+              cancel anytime. prices in usd. self-hosted is always free.
+            </p>
+          </>
+        )}
+      </section>
     </div>
   );
 }

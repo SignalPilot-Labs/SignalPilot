@@ -21,7 +21,7 @@ import {
   Plus,
 } from "lucide-react";
 import { subscribeMetrics } from "@/lib/api";
-import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
+import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, usePlan, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
 import { useAppAuth } from "@/lib/auth-context";
@@ -115,7 +115,10 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
 /** Inner content for the subscription/keys/MCP grid.
  *  Receives keyCount as a prop — no internal fetch needed. */
 function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
-  const { planTier, status, maxApiKeys } = useSubscription();
+  const { status } = useSubscription();
+  const { data: plan } = usePlan();
+  const planTier = plan?.tier ?? "free";
+  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
 
   const tierColorMap: Record<string, string> = {
     free: "text-[var(--color-text-dim)] border-[var(--color-border)]",

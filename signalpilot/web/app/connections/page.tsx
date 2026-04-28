@@ -62,7 +62,7 @@ import {
   browseFiles,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
-import { useConnections, useConnectionsHealth, invalidateConnections, invalidateHealth } from "@/lib/hooks/use-gateway-data";
+import { useConnections, useConnectionsHealth, usePlan, invalidateConnections, invalidateHealth } from "@/lib/hooks/use-gateway-data";
 import { PageLoader } from "@/components/ui/page-loader";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -2164,6 +2164,7 @@ export default function ConnectionsPage() {
   const [schemaData, setSchemaData] = useState<Record<string, { tables: Record<string, { schema: string; name: string; columns: { name: string; type: string; nullable: boolean; primary_key?: boolean }[] }> }>>({});
   const [schemaLoading, setSchemaLoading] = useState<string | null>(null);
   const { data: swrHealthData } = useConnectionsHealth();
+  const { data: planData } = usePlan();
   const healthData: Record<string, ConnectionHealthStats> = (() => {
     const map: Record<string, ConnectionHealthStats> = {};
     if (swrHealthData) for (const h of swrHealthData.connections) map[h.connection_name] = h;
@@ -2781,7 +2782,17 @@ export default function ConnectionsPage() {
         status={<StatusDot status={connections.length > 0 ? "healthy" : "unknown"} size={4} />}
       >
         <div className="flex items-center gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">registered: <code className="text-[12px] text-[var(--color-text)]">{connections.length}</code></span>
+          <span className="text-[var(--color-text-dim)]">
+            connections:{" "}
+            <code className={`text-[12px] ${planData && planData.limits.connections !== "unlimited" && connections.length >= (planData.limits.connections as number) ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
+              {connections.length}/{planData?.limits.connections === "unlimited" ? "∞" : (planData?.limits.connections ?? "—")}
+            </code>
+          </span>
+          {planData && (
+            <span className="text-[var(--color-text-dim)]">
+              plan: <code className="text-[12px] text-[var(--color-text)]">{planData.tier}</code>
+            </span>
+          )}
         </div>
       </TerminalBar>
 

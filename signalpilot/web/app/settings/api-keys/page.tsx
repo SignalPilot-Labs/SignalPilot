@@ -585,9 +585,10 @@ function ApiKeysContent() {
 
 function LocalApiKeysContent() {
   const { toast } = useToast();
-  const MAX_KEYS = 50;
 
   const { data: keys = [], isLoading, error: swrError } = useApiKeys();
+  const { data: plan } = usePlan();
+  const MAX_KEYS = plan?.limits.api_keys === "unlimited" ? 50 : (plan?.limits.api_keys ?? 50);
   const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
@@ -635,10 +636,16 @@ function LocalApiKeysContent() {
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
-            <code className="text-[12px] text-[var(--color-text)]">
-              {keys.length}/{MAX_KEYS}
+            <code className={`text-[12px] ${keys.length >= MAX_KEYS ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
+              {keys.length}/{MAX_KEYS === 50 && !plan ? "∞" : MAX_KEYS}
             </code>
           </span>
+          {plan && (
+            <span className="text-[var(--color-text-dim)]">
+              plan:{" "}
+              <code className="text-[12px] text-[var(--color-text)]">{plan.tier}</code>
+            </span>
+          )}
         </div>
       </TerminalBar>
 

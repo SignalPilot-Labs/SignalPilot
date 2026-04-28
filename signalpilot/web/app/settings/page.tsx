@@ -32,7 +32,7 @@ export default function SettingsPage() {
   if (IS_CLOUD_MODE) {
     return (
       <div className="p-10">
-        <PageHeader title="settings" subtitle="Gateway settings are managed by the platform in cloud mode." />
+        <PageHeader title="settings" subtitle="cloud mode" description="Gateway settings are managed by the platform in cloud mode." />
         <p className="text-[13px] text-[var(--color-text-dim)] mt-4">
           Use <a href="/settings/api-keys" className="underline">API Keys</a>, <a href="/settings/byok" className="underline">BYOK</a>, or <a href="/security" className="underline">Security</a> pages instead.
         </p>

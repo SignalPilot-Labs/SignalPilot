@@ -17,6 +17,7 @@ import {
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
 import { useSubscription } from "@/lib/subscription-context";
+import { usePlan } from "@/lib/hooks/use-gateway-data";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -228,7 +229,10 @@ export default function BillingPage() {
 
 function BillingContent() {
   const client = useBackendClient();
-  const { planTier, status, maxApiKeys, isLoaded, refetch } = useSubscription();
+  const { status, isLoaded, refetch } = useSubscription();
+  const { data: plan } = usePlan();
+  const planTier = plan?.tier ?? "free";
+  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
   const searchParams = useSearchParams();
   const { toast } = useToast();
 

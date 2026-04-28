@@ -256,6 +256,7 @@ class GatewayOrg(GatewayBase):
     __tablename__ = "gateway_orgs"
 
     org_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    plan_tier: Mapped[str] = mapped_column(String(20), default="free", server_default="free")
     byok_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     default_byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)

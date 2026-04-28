@@ -18,6 +18,7 @@ from ..governance.budget import budget_ledger
 from ..governance.cache import query_cache
 from ..models import AuditEntry
 from ..scope_guard import RequireScope
+from ..governance.plan_limits import check_query_limit, record_query, get_org_limits
 from .deps import SQLGLOT_DIALECTS, StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
@@ -32,6 +33,10 @@ class DirectQueryRequest(BaseModel):
 
 @router.post("/query", dependencies=[RequireScope("query")])
 async def query_database(req: DirectQueryRequest, store: StoreD):
+    # Enforce daily query limit based on org's plan tier
+    plan = await get_org_limits(store.org_id)
+    check_query_limit(store.org_id, plan)
+
     info = await store.get_connection(req.connection_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
@@ -163,6 +168,9 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
         execution_ms=elapsed_ms,
         sql_executed=safe_sql,
     )
+
+    # Record query for daily rate limiting
+    record_query(store.org_id)
 
     # Charge query cost to budget (Feature #11 + #12)
     query_cost_usd = (elapsed_ms / 1000) * 0.000014

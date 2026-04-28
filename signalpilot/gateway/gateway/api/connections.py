@@ -371,6 +371,12 @@ async def get_connections(store: StoreD):
 
 @router.post("/connections", status_code=201, dependencies=[RequireScope("write")])
 async def add_connection(conn: ConnectionCreate, store: StoreD):
+    # Enforce connection limit based on org's plan tier
+    from ..governance.plan_limits import get_org_limits, check_connection_limit
+    plan = await get_org_limits(store.org_id)
+    current_connections = await store.list_connections()
+    check_connection_limit(len(current_connections), plan)
+
     errors = _validate_connection_params(conn)
     if errors:
         raise HTTPException(status_code=422, detail={"validation_errors": errors})

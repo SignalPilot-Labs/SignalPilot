@@ -251,6 +251,18 @@ async def _ensure_health_columns(engine) -> None:
     logger.info("Ensured health columns on gateway_connections")
 
 
+async def _ensure_plan_tier_column(engine) -> None:
+    """Add plan_tier column to gateway_orgs if it does not exist."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_orgs "
+                "ADD COLUMN IF NOT EXISTS plan_tier VARCHAR(20) NOT NULL DEFAULT 'free'"
+            )
+        )
+    logger.info("Ensured plan_tier column on gateway_orgs")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -261,6 +273,7 @@ async def init_db() -> None:
     await _ensure_byok_columns(engine)
     await _ensure_org_id_columns(engine)
     await _ensure_health_columns(engine)
+    await _ensure_plan_tier_column(engine)
     logger.info("Gateway database tables initialized")
 
 

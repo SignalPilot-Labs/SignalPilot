@@ -288,8 +288,16 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
 
     from .connectors.registry import get_connector
     from .governance.annotations import load_annotations
+    from .governance.plan_limits import get_org_limits, check_query_limit, record_query
 
     async with _store_session() as store:
+        # Enforce daily query limit
+        plan = await get_org_limits(store.org_id)
+        try:
+            check_query_limit(store.org_id, plan)
+        except Exception as e:
+            return f"Error: {e}"
+
         conn_info = await store.get_connection(connection_name)
         if not conn_info:
             available = [c.name for c in await store.list_connections()]
@@ -361,6 +369,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
 
             elapsed_ms = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
+            record_query(store.org_id)
 
             # Apply PII redaction if enabled on this connection (Feature #15)
             from .governance.pii import PIIRedactor

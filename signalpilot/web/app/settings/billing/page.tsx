@@ -13,6 +13,8 @@ import {
   Users,
   ArrowRight,
   ExternalLink,
+  Building2,
+  Mail,
 } from "lucide-react";
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
@@ -598,6 +600,71 @@ function BillingContent() {
                   upgrading={upgrading}
                 />
               ))}
+
+              {/* Enterprise card — static, contact us */}
+              <div
+                className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-all"
+                style={{ borderTopColor: "var(--color-text-muted)", borderTopWidth: "2px" }}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Building2
+                      className="w-3.5 h-3.5 text-[var(--color-text-muted)]"
+                      strokeWidth={1.5}
+                    />
+                    <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-muted)]">
+                      enterprise
+                    </span>
+                  </div>
+                  <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider italic">
+                    contact us
+                  </span>
+                </div>
+
+                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-4">
+                  for large organizations with dedicated infrastructure and compliance needs
+                </p>
+
+                <ul className="space-y-2 mb-5">
+                  {[
+                    "dedicated infrastructure",
+                    "custom sla (99.9%+)",
+                    "on-prem / vpc deployment",
+                    "custom pii rules",
+                    "soc 2 compliance path",
+                    "dedicated slack channel",
+                    "quarterly business reviews",
+                  ].map((f) => (
+                    <li key={f} className="flex items-center gap-2">
+                      <CheckCircle2
+                        className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]"
+                        strokeWidth={1.5}
+                      />
+                      <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                        {f}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                {planTier === "enterprise" ? (
+                  <div
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border"
+                    style={{ borderColor: "var(--color-text-muted)", color: "var(--color-text-muted)", opacity: 0.7 }}
+                  >
+                    <CheckCircle2 className="w-3 h-3" />
+                    current plan
+                  </div>
+                ) : (
+                  <a
+                    href="mailto:daniel@signalpilot.ai?subject=SignalPilot%20Enterprise"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border border-[var(--color-text-muted)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] transition-all"
+                  >
+                    <Mail className="w-3 h-3" />
+                    contact us
+                  </a>
+                )}
+              </div>
             </div>
             <p className="mt-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
               cancel anytime. prices in usd. self-hosted is always free.

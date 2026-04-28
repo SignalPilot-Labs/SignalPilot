@@ -345,6 +345,24 @@ function BillingContent() {
 
   const handleUpgrade = useCallback(
     async (priceId: string) => {
+      // Find the plan/price for confirmation
+      const targetPlan = plans?.find((p) => p.prices.some((pr) => pr.price_id === priceId));
+      const targetPrice = targetPlan?.prices.find((pr) => pr.price_id === priceId);
+      const isCurrentlyPaid = planTier !== "free";
+
+      // Confirm plan changes (paid → paid) before proceeding
+      if (isCurrentlyPaid && targetPlan && targetPrice) {
+        const isUpgrade = (TIER_ORDER[targetPlan.tier] ?? 0) > (TIER_ORDER[planTier] ?? 0);
+        const action = isUpgrade ? "upgrade" : "switch";
+        const priceStr = formatPrice(targetPrice.amount, targetPrice.currency);
+        const interval = targetPrice.interval === "year" ? "year" : "month";
+        const confirmed = window.confirm(
+          `${action === "upgrade" ? "Upgrade" : "Switch"} to ${targetPlan.tier} at ${priceStr}/${interval}?\n\n` +
+          `You'll be charged the prorated difference immediately.`
+        );
+        if (!confirmed) return;
+      }
+
       setActionError(null);
       setUpgrading(priceId);
       try {
@@ -357,13 +375,11 @@ function BillingContent() {
           cancelUrl,
         );
         if (res.action === "updated") {
-          // Plan changed instantly (paid → paid), no redirect needed
           toast("plan updated successfully", "success");
           refetch();
           mutatePlan();
           setUpgrading(null);
         } else if (res.checkout_url) {
-          // New subscription (free → paid), redirect to Stripe
           window.location.href = res.checkout_url;
         }
       } catch (e) {
@@ -372,7 +388,7 @@ function BillingContent() {
         setUpgrading(null);
       }
     },
-    [client, toast, refetch, mutatePlan],
+    [client, toast, refetch, mutatePlan, plans, planTier],
   );
 
   const handleManagePortal = useCallback(async () => {

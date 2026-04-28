@@ -149,6 +149,9 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
 
   async function handleSignOut() {
     setOpen(false);
+    // Clear all app state before Clerk sign-out redirects
+    const { clearAppState } = await import("@/lib/hooks/use-gateway-data");
+    clearAppState();
     await signOut();
   }
 

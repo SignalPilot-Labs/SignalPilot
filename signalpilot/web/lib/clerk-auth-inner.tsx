@@ -60,7 +60,11 @@ export function ClerkAuthInner({ children }: { children: ReactNode }) {
     clerkEnabled: true,
     user,
     isLoaded,
-    signOut: signOut ?? null,
+    signOut: signOut ? async () => {
+      const { clearAppState } = await import("@/lib/hooks/use-gateway-data");
+      clearAppState();
+      await signOut();
+    } : null,
   };
 
   console.log("[clerk-auth] isLoaded=", isLoaded, "isSignedIn=", isSignedIn, "user=", clerkUser?.id ?? null);

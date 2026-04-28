@@ -12,6 +12,7 @@ import {
   getSettings,
   getBudgets,
   getConnectionSchema,
+  setApiKey,
 } from "@/lib/api";
 import type {
   ConnectionInfo,
@@ -152,6 +153,22 @@ export function invalidateSettings() {
 export function invalidateAll() {
   // Revalidate all SWR keys — nuclear option
   return mutate(() => true, undefined, { revalidate: true });
+}
+
+/** Clear ALL app state on sign-out: SWR cache, localStorage, module state. */
+export function clearAppState() {
+  // 1. Clear entire SWR cache (no revalidation — data is gone)
+  mutate(() => true, undefined, { revalidate: false });
+
+  // 2. Clear all SignalPilot localStorage keys
+  try {
+    localStorage.removeItem("sp_active_connection");
+    localStorage.removeItem("sp_api_key");
+    localStorage.removeItem("sp_query_history");
+  } catch {}
+
+  // 3. Reset the Clerk token getter in api.ts
+  setApiKey(null);
 }
 
 // ── Prefetch helper (call on dashboard mount) ───────────────────────────────

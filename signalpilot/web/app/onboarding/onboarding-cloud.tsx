@@ -605,7 +605,14 @@ function CloudOnboardingInner() {
     };
   }, []);
 
-  function handleTeamCreated() {
+  function handleTeamCreated(joined = false) {
+    if (joined) {
+      // Joining an existing team — skip the wizard entirely
+      // The team already has API keys, MCP configured, etc.
+      router.push("/dashboard");
+      return;
+    }
+    // Created a new team — continue to the setup wizard
     setHandoff(true);
     handoffTimerRef.current = setTimeout(() => {
       setTeamCreated(true);
@@ -631,7 +638,7 @@ function CloudOnboardingInner() {
       const firstOrg = memberships[0].organization;
       console.log("[onboarding] auto-activating org:", firstOrg.name);
       setActive({ organization: firstOrg.id }).then(() => {
-        handleTeamCreated();
+        handleTeamCreated(true);  // joined existing team
       });
     }
   }, [orgLoaded, organization, userMemberships?.data, setActive]);
@@ -645,7 +652,7 @@ function CloudOnboardingInner() {
       if (setActive && result.publicOrganizationData?.id) {
         await setActive({ organization: result.publicOrganizationData.id });
       }
-      handleTeamCreated();
+      handleTeamCreated(true);  // joined existing team via invitation
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to accept invitation", "error");
       setAcceptingInvite(false);

@@ -109,10 +109,18 @@ def get_limits(tier: str) -> PlanLimits:
 # ── Org tier resolution ──────────────────────────────────────────────────────
 
 async def get_org_tier(org_id: str) -> str:
-    """Look up the org's plan tier from the DB. Returns 'free' if not found."""
+    """Look up the org's plan tier from the DB.
+
+    Auto-creates the gateway_orgs row on first access (defaults to 'free').
+    This ensures every org that touches the gateway gets a tracked plan_tier.
+    """
+    import time
     from ..db.engine import get_session_factory
     from ..db.models import GatewayOrg
     from sqlalchemy import select
+
+    if not org_id or org_id == "local":
+        return DEFAULT_TIER
 
     try:
         factory = get_session_factory()
@@ -121,7 +129,19 @@ async def get_org_tier(org_id: str) -> str:
                 select(GatewayOrg.plan_tier).where(GatewayOrg.org_id == org_id)
             )
             row = result.scalar_one_or_none()
-            return row or DEFAULT_TIER
+            if row:
+                return row
+
+            # Auto-create org row on first access
+            session.add(GatewayOrg(
+                org_id=org_id,
+                plan_tier=DEFAULT_TIER,
+                byok_enabled=False,
+                created_at=time.time(),
+            ))
+            await session.commit()
+            logger.info("Auto-created gateway_orgs row for %s (tier=%s)", org_id, DEFAULT_TIER)
+            return DEFAULT_TIER
     except Exception:
         logger.warning("Failed to resolve plan tier for org %s, defaulting to free", org_id)
         return DEFAULT_TIER

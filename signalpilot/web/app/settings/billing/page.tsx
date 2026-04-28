@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
+import type { PlanInfo, PlanPrice } from "@/lib/backend-client";
 import { useSubscription } from "@/lib/subscription-context";
 import { usePlan } from "@/lib/hooks/use-gateway-data";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -25,54 +26,28 @@ import { useToast } from "@/components/ui/toast";
 import { BillingSkeleton } from "@/components/ui/skeleton";
 
 // ---------------------------------------------------------------------------
-// Plan definitions
+// Helpers
 // ---------------------------------------------------------------------------
 
-interface PlanFeature {
-  label: string;
+function formatPrice(amount: number, currency: string): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount / 100);
 }
 
-interface PlanDefinition {
-  tier: "pro" | "team";
-  name: string;
-  price: string;
-  period: string;
-  description: string;
-  features: PlanFeature[];
-  highlightColor: string;
+function getMonthlyEquivalent(price: PlanPrice): number {
+  if (price.interval === "year") return Math.round(price.amount / 12);
+  return price.amount;
 }
 
-const PLANS: PlanDefinition[] = [
-  {
-    tier: "pro",
-    name: "pro",
-    price: "$29",
-    period: "/month",
-    description: "for individual developers and small projects",
-    features: [
-      { label: "10 api keys" },
-      { label: "standard rate limits" },
-      { label: "email support" },
-      { label: "audit logs (30 days)" },
-    ],
-    highlightColor: "var(--color-success)",
-  },
-  {
-    tier: "team",
-    name: "team",
-    price: "$99",
-    period: "/month",
-    description: "for teams that need more scale and control",
-    features: [
-      { label: "50 api keys" },
-      { label: "higher rate limits" },
-      { label: "priority support" },
-      { label: "audit logs (90 days)" },
-      { label: "team management" },
-    ],
-    highlightColor: "var(--color-warning)",
-  },
-];
+const HIGHLIGHT_COLORS: Record<string, string> = {
+  success: "var(--color-success)",
+  warning: "var(--color-warning)",
+  default: "var(--color-text-muted)",
+};
 
 // ---------------------------------------------------------------------------
 // Tier badge
@@ -95,48 +70,111 @@ function TierBadge({ tier }: { tier: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Plan card for upgrade options
+// Billing interval toggle
+// ---------------------------------------------------------------------------
+
+function IntervalToggle({
+  interval,
+  onChange,
+}: {
+  interval: "month" | "year";
+  onChange: (v: "month" | "year") => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 mb-5">
+      <button
+        onClick={() => onChange("month")}
+        className={`px-3 py-1.5 text-[11px] tracking-[0.15em] uppercase border transition-all ${
+          interval === "month"
+            ? "border-[var(--color-text-muted)] text-[var(--color-text)]"
+            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+        }`}
+      >
+        monthly
+      </button>
+      <button
+        onClick={() => onChange("year")}
+        className={`px-3 py-1.5 text-[11px] tracking-[0.15em] uppercase border transition-all ${
+          interval === "year"
+            ? "border-[var(--color-text-muted)] text-[var(--color-text)]"
+            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+        }`}
+      >
+        annual
+        <span className="ml-1.5 text-[var(--color-success)]">save ~30%</span>
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Plan card — fully dynamic from Stripe data
 // ---------------------------------------------------------------------------
 
 function PlanCard({
   plan,
+  interval,
   onUpgrade,
   upgrading,
 }: {
-  plan: PlanDefinition;
-  onUpgrade: (tier: "pro" | "team") => void;
+  plan: PlanInfo;
+  interval: "month" | "year";
+  onUpgrade: (priceId: string) => void;
   upgrading: string | null;
 }) {
-  const isUpgrading = upgrading === plan.tier;
+  const highlightColor = HIGHLIGHT_COLORS[plan.highlight_color] ?? HIGHLIGHT_COLORS.default;
+  const price = plan.prices.find((p) => p.interval === interval);
+  const monthlyPrice = plan.prices.find((p) => p.interval === "month");
   const Icon = plan.tier === "pro" ? Zap : Users;
+
+  if (!price) return null;
+
+  const isUpgrading = upgrading === price.price_id;
+  const displayAmount = formatPrice(price.amount, price.currency);
+  const monthlyEquiv = getMonthlyEquivalent(price);
+  const showSavings = interval === "year" && monthlyPrice && monthlyEquiv < monthlyPrice.amount;
 
   return (
     <div
       className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-all"
-      style={{ borderTopColor: plan.highlightColor, borderTopWidth: "2px" }}
+      style={{ borderTopColor: highlightColor, borderTopWidth: "2px" }}
     >
       {/* Plan header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
           <Icon
             className="w-3.5 h-3.5"
-            style={{ color: plan.highlightColor }}
+            style={{ color: highlightColor }}
             strokeWidth={1.5}
           />
           <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-muted)]">
-            {plan.name}
+            {plan.tier}
           </span>
         </div>
-        <div className="flex items-baseline gap-0.5">
-          <span
-            className="text-xl font-bold tracking-tight"
-            style={{ color: plan.highlightColor }}
-          >
-            {plan.price}
-          </span>
-          <span className="text-[12px] text-[var(--color-text-dim)]">
-            {plan.period}
-          </span>
+        <div className="text-right">
+          <div className="flex items-baseline gap-0.5">
+            <span
+              className="text-xl font-bold tracking-tight"
+              style={{ color: highlightColor }}
+            >
+              {interval === "year"
+                ? formatPrice(monthlyEquiv, price.currency)
+                : displayAmount}
+            </span>
+            <span className="text-[12px] text-[var(--color-text-dim)]">
+              /mo
+            </span>
+          </div>
+          {interval === "year" && (
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+              {displayAmount}/yr
+            </span>
+          )}
+          {showSavings && (
+            <span className="block text-[11px] text-[var(--color-success)] tracking-wider">
+              save {formatPrice(monthlyPrice.amount * 12 - price.amount, price.currency)}/yr
+            </span>
+          )}
         </div>
       </div>
 
@@ -147,14 +185,14 @@ function PlanCard({
       {/* Features list */}
       <ul className="space-y-2 mb-5">
         {plan.features.map((f) => (
-          <li key={f.label} className="flex items-center gap-2">
+          <li key={f} className="flex items-center gap-2">
             <CheckCircle2
               className="w-3 h-3 flex-shrink-0"
-              style={{ color: plan.highlightColor }}
+              style={{ color: highlightColor }}
               strokeWidth={1.5}
             />
             <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
-              {f.label}
+              {f}
             </span>
           </li>
         ))}
@@ -162,12 +200,12 @@ function PlanCard({
 
       {/* Upgrade button */}
       <button
-        onClick={() => onUpgrade(plan.tier)}
+        onClick={() => onUpgrade(price.price_id)}
         disabled={isUpgrading || upgrading !== null}
         className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border transition-all disabled:opacity-40"
         style={{
-          borderColor: plan.highlightColor,
-          color: plan.highlightColor,
+          borderColor: highlightColor,
+          color: highlightColor,
         }}
       >
         {isUpgrading ? (
@@ -175,7 +213,7 @@ function PlanCard({
         ) : (
           <ArrowRight className="w-3 h-3" />
         )}
-        {isUpgrading ? "redirecting..." : `upgrade to ${plan.name}`}
+        {isUpgrading ? "redirecting..." : `upgrade to ${plan.tier}`}
       </button>
     </div>
   );
@@ -239,8 +277,33 @@ function BillingContent() {
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [managingPortal, setManagingPortal] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [billingInterval, setBillingInterval] = useState<"month" | "year">("month");
+  const [plans, setPlans] = useState<PlanInfo[] | null>(null);
+  const [plansError, setPlansError] = useState(false);
 
-  // Determine checkout outcome from URL params (set by S6 suggestion)
+  // Fetch plans from backend (which fetches from Stripe)
+  useEffect(() => {
+    let cancelled = false;
+    client
+      .getPlans()
+      .then((res) => {
+        if (!cancelled) {
+          // Sort so pro comes before team
+          const sorted = [...res.plans].sort((a, b) => {
+            const order: Record<string, number> = { pro: 0, team: 1 };
+            return (order[a.tier] ?? 99) - (order[b.tier] ?? 99);
+          });
+          setPlans(sorted);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPlansError(true);
+      });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Determine checkout outcome from URL params
   const checkoutOutcome = searchParams.get("checkout");
 
   // Refetch subscription after successful checkout return
@@ -251,15 +314,15 @@ function BillingContent() {
   }, [checkoutOutcome, refetch]);
 
   const handleUpgrade = useCallback(
-    async (tier: "pro" | "team") => {
+    async (priceId: string) => {
       setActionError(null);
-      setUpgrading(tier);
+      setUpgrading(priceId);
       try {
         const origin = window.location.origin;
         const successUrl = `${origin}/settings/billing?checkout=success`;
         const cancelUrl = `${origin}/settings/billing?checkout=canceled`;
         const { checkout_url } = await client.createCheckoutSession(
-          tier,
+          priceId,
           successUrl,
           cancelUrl,
         );
@@ -301,8 +364,6 @@ function BillingContent() {
 
   const isFreeTier = planTier === "free";
 
-  // Format period-end date when available — not present in SubscriptionState,
-  // so we rely on the context's status/planTier only
   const statusLabel = status === "active"
     ? "active"
     : status === "past_due"
@@ -443,19 +504,44 @@ function BillingContent() {
       {isFreeTier && (
         <section className="mb-8">
           <SectionHeader icon={Zap} title="upgrade plan" />
-          <div className="flex gap-4">
-            {PLANS.map((plan) => (
-              <PlanCard
-                key={plan.tier}
-                plan={plan}
-                onUpgrade={handleUpgrade}
-                upgrading={upgrading}
-              />
-            ))}
-          </div>
-          <p className="mt-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-            all plans billed monthly. cancel anytime. prices in usd.
-          </p>
+
+          {plans === null && !plansError && (
+            <div className="flex items-center gap-2 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+              <Loader2 className="w-3.5 h-3.5 text-[var(--color-text-dim)] animate-spin" />
+              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                loading plans...
+              </span>
+            </div>
+          )}
+
+          {plansError && (
+            <div className="flex items-start gap-3 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+              <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
+              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                unable to load pricing. please try again later.
+              </p>
+            </div>
+          )}
+
+          {plans && plans.length > 0 && (
+            <>
+              <IntervalToggle interval={billingInterval} onChange={setBillingInterval} />
+              <div className="flex gap-4">
+                {plans.map((p) => (
+                  <PlanCard
+                    key={p.tier}
+                    plan={p}
+                    interval={billingInterval}
+                    onUpgrade={handleUpgrade}
+                    upgrading={upgrading}
+                  />
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                cancel anytime. prices in usd. self-hosted is always free.
+              </p>
+            </>
+          )}
         </section>
       )}
     </div>

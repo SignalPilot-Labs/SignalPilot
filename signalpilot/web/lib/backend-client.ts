@@ -42,6 +42,27 @@ export interface SubscriptionResponse {
   max_api_keys: number;
 }
 
+export interface PlanPrice {
+  price_id: string;
+  amount: number; // cents
+  currency: string;
+  interval: "month" | "year";
+}
+
+export interface PlanInfo {
+  tier: string;
+  name: string;
+  description: string;
+  features: string[];
+  highlight_color: string;
+  prices: PlanPrice[];
+}
+
+export interface PlansResponse {
+  plans: PlanInfo[];
+  publishable_key: string;
+}
+
 export interface UsageSummaryResponse {
   total_requests: number;
   total_requests_today: number;
@@ -190,9 +211,10 @@ export interface BackendClient {
   getApiKeys(): Promise<ApiKeyResponse[]>;
   createApiKey(name: string, scopes: string[]): Promise<ApiKeyCreatedResponse>;
   deleteApiKey(keyId: string): Promise<void>;
+  getPlans(): Promise<PlansResponse>;
   getSubscription(): Promise<SubscriptionResponse>;
   createCheckoutSession(
-    planTier: string,
+    priceId: string,
     successUrl: string,
     cancelUrl: string,
   ): Promise<{ checkout_url: string }>;
@@ -225,14 +247,17 @@ export function useBackendClient(): BackendClient {
         method: "DELETE",
       }),
 
+    getPlans: () =>
+      backendFetch<PlansResponse>("/api/v1/billing/plans", getToken),
+
     getSubscription: () =>
       backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),
 
-    createCheckoutSession: (planTier: string, successUrl: string, cancelUrl: string) =>
+    createCheckoutSession: (priceId: string, successUrl: string, cancelUrl: string) =>
       backendFetch<{ checkout_url: string }>("/api/v1/billing/checkout", getToken, {
         method: "POST",
         body: JSON.stringify({
-          plan_tier: planTier,
+          price_id: priceId,
           success_url: successUrl,
           cancel_url: cancelUrl,
         }),

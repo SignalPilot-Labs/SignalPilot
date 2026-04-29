@@ -30,7 +30,7 @@ const typeIcons: Record<string, React.ElementType> = {
   connect: DbIcon,
   block: ShieldAlert,
   mcp_tool: Wrench,
-  sql: DbIcon,
+  sql: Wrench,
 };
 
 const typeColors: Record<string, string> = {
@@ -39,7 +39,7 @@ const typeColors: Record<string, string> = {
   block: "text-[var(--color-error)]",
   connect: "text-[var(--color-text-dim)]",
   mcp_tool: "text-[var(--color-text-muted)]",
-  sql: "text-[var(--color-text-dim)]",
+  sql: "text-[var(--color-text-muted)]",
 };
 
 export default function AuditPage() {
@@ -301,7 +301,9 @@ export default function AuditPage() {
                         <Icon className="w-3 h-3" strokeWidth={1.5} />
                         {entry.event_type === "mcp_tool" && entry.agent_id
                           ? entry.agent_id
-                          : entry.event_type}
+                          : entry.event_type === "sql"
+                            ? "internal sql"
+                            : entry.event_type}
                         {entry.blocked && (
                           <span className="px-1 py-0.5 border badge-error text-[11px] uppercase tracking-wider">
                             blocked

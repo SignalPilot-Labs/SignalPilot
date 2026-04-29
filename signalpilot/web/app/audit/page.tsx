@@ -30,6 +30,7 @@ const typeIcons: Record<string, React.ElementType> = {
   connect: DbIcon,
   block: ShieldAlert,
   mcp_tool: Wrench,
+  sql: DbIcon,
 };
 
 const typeColors: Record<string, string> = {
@@ -38,6 +39,7 @@ const typeColors: Record<string, string> = {
   block: "text-[var(--color-error)]",
   connect: "text-[var(--color-text-dim)]",
   mcp_tool: "text-[var(--color-text-muted)]",
+  sql: "text-[var(--color-text-dim)]",
 };
 
 export default function AuditPage() {
@@ -79,10 +81,10 @@ export default function AuditPage() {
     URL.revokeObjectURL(url);
   }
 
-  // Build lookup of child SQL entries by parent_id
+  // Build lookup of child SQL entries by parent_id (mcp_sql + sql types)
   const childSqlByParent = new Map<string, typeof entries>();
   for (const e of entries) {
-    if (e.event_type === "mcp_sql" && e.parent_id) {
+    if ((e.event_type === "mcp_sql" || e.event_type === "sql") && e.parent_id) {
       const existing = childSqlByParent.get(e.parent_id) || [];
       existing.push(e);
       childSqlByParent.set(e.parent_id, existing);
@@ -91,7 +93,7 @@ export default function AuditPage() {
 
   // Hide mcp_sql from main list (shown as children of mcp_tool on expand)
   const filtered = entries.filter((e) => {
-    if (e.event_type === "mcp_sql") return false;
+    if (e.event_type === "mcp_sql" || (e.event_type === "sql" && e.parent_id)) return false;
     if (!filter) return true;
     const lower = filter.toLowerCase();
     return (

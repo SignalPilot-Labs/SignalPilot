@@ -387,16 +387,21 @@ class PoolManager:
         db_type: str,
         connection_string: str,
         credential_extras: dict | None = None,
+        connection_name: str | None = None,
     ) -> AsyncIterator[BaseConnector]:
         """Context manager that acquires a connector and guarantees release.
 
+        All SQL executed through the yielded connector is automatically
+        logged to the audit trail via AuditedConnector.
+
         Usage:
-            async with pool_manager.connection("postgres", conn_str) as connector:
+            async with pool_manager.connection("postgres", conn_str, connection_name="mydb") as connector:
                 rows = await connector.execute(sql)
         """
+        from .audited import AuditedConnector
         connector = await self.acquire(db_type, connection_string, credential_extras=credential_extras)
         try:
-            yield connector
+            yield AuditedConnector(connector, connection_name=connection_name)  # type: ignore[misc]
         finally:
             await self.release(db_type, connection_string)
 

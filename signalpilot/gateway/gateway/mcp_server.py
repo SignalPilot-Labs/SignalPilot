@@ -477,15 +477,6 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         # Validate SQL (with blocked tables from annotations)
         validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None)
         if not validation.ok:
-            await store.append_audit(AuditEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                event_type="block",
-                connection_name=connection_name,
-                sql=sql,
-                blocked=True,
-                block_reason=validation.blocked_reason,
-            ))
             return f"Query blocked: {validation.blocked_reason}"
 
         # Inject LIMIT
@@ -497,17 +488,6 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
 
         cached = query_cache.get(connection_name, sql, row_limit)
         if cached:
-            await store.append_audit(AuditEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                event_type="query",
-                connection_name=connection_name,
-                sql=sql,
-                tables=cached.tables,
-                rows_returned=len(cached.rows),
-                duration_ms=0.0,
-                metadata={"cache_hit": True},
-            ))
             rows = cached.rows
             elapsed_ms = cached.execution_ms
         else:
@@ -523,7 +503,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             start = time.monotonic()
             try:
                 async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                    rows = await connector.execute(safe_sql)
+                    rows = await _audited_execute(connector, safe_sql, connection_name)
             except Exception as e:
                 elapsed_err = (time.monotonic() - start) * 1000
                 health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
@@ -569,18 +549,6 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
             if not budget_ok:
                 meta_parts_budget = [f"${query_cost_usd:.6f} cost"]
                 return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
-
-            await store.append_audit(AuditEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                event_type="query",
-                connection_name=connection_name,
-                sql=sql,
-                tables=validation.tables,
-                rows_returned=len(rows),
-                duration_ms=elapsed_ms,
-                cost_usd=query_cost_usd,
-            ))
 
     # Build status footer
     meta_parts = [f"{len(rows)} rows", f"{elapsed_ms:.0f}ms"]

@@ -11,6 +11,7 @@ import {
   Download,
   ChevronDown,
   ChevronRight,
+  Wrench,
 } from "lucide-react";
 import { getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
@@ -27,6 +28,7 @@ const typeIcons: Record<string, React.ElementType> = {
   execute: Terminal,
   connect: DbIcon,
   block: ShieldAlert,
+  mcp_tool: Wrench,
 };
 
 const typeColors: Record<string, string> = {
@@ -34,6 +36,7 @@ const typeColors: Record<string, string> = {
   execute: "text-blue-400",
   block: "text-[var(--color-error)]",
   connect: "text-[var(--color-text-dim)]",
+  mcp_tool: "text-[var(--color-text-muted)]",
 };
 
 export default function AuditPage() {
@@ -85,6 +88,7 @@ export default function AuditPage() {
   const statsData = {
     total: filtered.length,
     queries: filtered.filter(e => e.event_type === "query").length,
+    mcp_tools: filtered.filter(e => e.event_type === "mcp_tool").length,
     executions: filtered.filter(e => e.event_type === "execute").length,
     blocked: filtered.filter(e => e.blocked).length,
   };
@@ -147,6 +151,7 @@ export default function AuditPage() {
           {[
             { label: "total", value: statsData.total, color: "" },
             { label: "queries", value: statsData.queries, color: "text-[var(--color-success)]" },
+            { label: "mcp tools", value: statsData.mcp_tools, color: "text-[var(--color-text-muted)]" },
             { label: "executions", value: statsData.executions, color: "text-blue-400" },
             { label: "blocked", value: statsData.blocked, color: statsData.blocked > 0 ? "text-[var(--color-error)]" : "" },
           ].map(s => (
@@ -279,7 +284,9 @@ export default function AuditPage() {
                     <td className="px-4 py-2.5 align-top">
                       <span className={`flex items-center gap-1.5 text-[12px] tracking-wider ${color}`}>
                         <Icon className="w-3 h-3" strokeWidth={1.5} />
-                        {entry.event_type}
+                        {entry.event_type === "mcp_tool" && entry.agent_id
+                          ? entry.agent_id
+                          : entry.event_type}
                         {entry.blocked && (
                           <span className="px-1 py-0.5 border badge-error text-[11px] uppercase tracking-wider">
                             blocked
@@ -297,6 +304,12 @@ export default function AuditPage() {
                         </div>
                       ) : entry.block_reason ? (
                         <span className="text-[12px] text-[var(--color-error)]">{entry.block_reason}</span>
+                      ) : entry.event_type === "mcp_tool" && entry.agent_id ? (
+                        <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                          {entry.connection_name
+                            ? `${entry.agent_id}(${entry.connection_name})`
+                            : entry.agent_id}
+                        </span>
                       ) : (
                         <span className="text-[12px] text-[var(--color-text-dim)]">
                           {entry.metadata?.code_preview ? String(entry.metadata.code_preview).slice(0, 60) : "—"}

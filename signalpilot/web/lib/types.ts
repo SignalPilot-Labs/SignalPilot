@@ -128,7 +128,7 @@ export interface ExecuteResult {
 export interface AuditEntry {
   id: string;
   timestamp: number;
-  event_type: "query" | "execute" | "connect" | "block";
+  event_type: "query" | "execute" | "connect" | "block" | "mcp_tool";
   connection_name: string | null;
   sandbox_id: string | null;
   sql: string | null;

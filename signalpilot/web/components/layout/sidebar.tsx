@@ -8,7 +8,7 @@ import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "luci
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 import { getSandboxes, getProjects } from "@/lib/api";
-import { useConnectionsHealth, usePlan } from "@/lib/hooks/use-gateway-data";
+import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
 import { TierWordmark } from "@/components/branding/tier-wordmark";
 import { TierAccent } from "@/components/branding/tier-accent";
 import { TierSeal } from "@/components/branding/tier-seal";
@@ -282,10 +282,10 @@ function McpConnectNavLink({ pathname }: { pathname: string }) {
 }
 
 function ByokNavLink({ pathname }: { pathname: string }) {
-  const { data: plan } = usePlan();
-  const tier = plan?.tier ?? "free";
-  // BYOK is team/enterprise only
-  if (tier === "free" || tier === "pro") return null;
+  const branding = useTierBranding();
+  // BYOK is team/enterprise only; hidden until tier branding is resolved (cloud + loaded)
+  if (!branding.enabled) return null;
+  if (branding.tier !== "team" && branding.tier !== "enterprise") return null;
 
   const active = pathname.startsWith("/settings/byok");
 

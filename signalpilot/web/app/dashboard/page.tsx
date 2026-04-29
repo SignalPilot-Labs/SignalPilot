@@ -124,8 +124,9 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
 
   const tierColorMap: Record<string, string> = {
     free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
-    pro: "text-[var(--color-success)] border-[var(--color-success)]/40",
-    team: "text-[var(--color-warning)] border-[var(--color-warning)]/40",
+    pro: "text-indigo-400 border-indigo-500/40",
+    team: "text-violet-300 border-violet-400/50",
+    enterprise: "text-amber-300 border-amber-400/50",
   };
   const tierClasses = tierColorMap[planTier] ?? tierColorMap.free;
 

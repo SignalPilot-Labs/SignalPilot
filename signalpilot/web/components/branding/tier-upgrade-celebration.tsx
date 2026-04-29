@@ -155,12 +155,12 @@ export default function TierUpgradeCelebration() {
       <div
         id="tier-celebration-card"
         role="dialog"
-        aria-modal="false"
+        aria-modal="true"
         aria-labelledby={HEADLINE_ID}
         aria-label={`${tierLabel} upgrade celebration`}
         className={`relative z-10 w-full max-w-sm mx-4 bg-[var(--color-bg-card)] border ${
           celebratingTier === "pro"
-            ? "border-indigo-500/40 bg-indigo-500/8"
+            ? "border-indigo-500/40 bg-indigo-500/10"
             : celebratingTier === "team"
             ? "border-violet-400/50"
             : "border-amber-400/50"
@@ -214,7 +214,7 @@ function ProVariant() {
       <div className="flex items-center gap-2">
         <TierBadge size="md" />
         <span className="text-[12px] text-indigo-400/70 tracking-wide">
-          indigo mark is live
+          Your Pro badge is active
         </span>
       </div>
       <p className="text-[13px] text-[var(--color-text-muted)]">

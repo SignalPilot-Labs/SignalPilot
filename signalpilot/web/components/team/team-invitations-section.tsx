@@ -64,6 +64,8 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
       setEmail("");
       setRole(ROLE_MEMBER);
       toast("invitation sent", "success");
+      // Revalidate the invitations list
+      invitations?.revalidate?.();
     } catch (err) {
       if (isReverificationCancelledError(err)) {
         setNotice("reverification required to send invitation");
@@ -81,6 +83,7 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
     try {
       await reverifiedRevoke(inv);
       toast("invitation revoked", "success");
+      invitations?.revalidate?.();
     } catch (err) {
       if (isReverificationCancelledError(err)) {
         setNotice("reverification required to revoke invitation");

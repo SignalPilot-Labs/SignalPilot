@@ -7,7 +7,7 @@ import { setClerkTokenGetter } from "./api";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
-function OrgAwareProvider({ children, baseValue }: { children: ReactNode; baseValue: Omit<AppAuth, "activeOrgId" | "activeOrgName"> }) {
+function OrgAwareProvider({ children, baseValue, getToken }: { children: ReactNode; baseValue: Omit<AppAuth, "activeOrgId" | "activeOrgName">; getToken: () => Promise<string | null> }) {
   const { organization } = useOrganization();
   const { userMemberships, setActive } = useOrganizationList({
     userMemberships: { infinite: true },
@@ -23,6 +23,14 @@ function OrgAwareProvider({ children, baseValue }: { children: ReactNode; baseVa
     }
   }, [organization, userMemberships?.data, setActive]);
 
+  // Only wire Clerk token into API client AFTER org is active,
+  // so the JWT includes the org_id claim.
+  useEffect(() => {
+    if (organization && getToken) {
+      setClerkTokenGetter(getToken);
+    }
+  }, [organization, getToken]);
+
   const value: AppAuth = {
     ...baseValue,
     activeOrgId: organization?.id ?? null,
@@ -34,13 +42,6 @@ function OrgAwareProvider({ children, baseValue }: { children: ReactNode; baseVa
 export function ClerkAuthInner({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn, signOut, getToken } = useAuth();
   const { user: clerkUser } = useUser();
-
-  // Wire Clerk's getToken into the gateway API client
-  useEffect(() => {
-    if (isLoaded && isSignedIn && getToken) {
-      setClerkTokenGetter(getToken);
-    }
-  }, [isLoaded, isSignedIn, getToken]);
 
   const user: AppUser | null =
     isSignedIn && clerkUser
@@ -71,7 +72,7 @@ export function ClerkAuthInner({ children }: { children: ReactNode }) {
 
   // Only mount OrgAwareProvider (which calls useOrganization) when signed in
   if (isSignedIn) {
-    return <OrgAwareProvider baseValue={baseValue}>{children}</OrgAwareProvider>;
+    return <OrgAwareProvider baseValue={baseValue} getToken={getToken}>{children}</OrgAwareProvider>;
   }
 
   const value: AppAuth = {

@@ -15,7 +15,8 @@ import {
 } from "lucide-react";
 import { getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
-import { useAudit } from "@/lib/hooks/use-gateway-data";
+import { useAudit, usePlan } from "@/lib/hooks/use-gateway-data";
+import { useToast } from "@/components/ui/toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { EmptyList, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -43,6 +44,10 @@ export default function AuditPage() {
   const [filter, setFilter] = useState<string>("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const { data: plan } = usePlan();
+  const { toast } = useToast();
+  const tier = plan?.tier ?? "free";
+  const canExport = tier === "team" || tier === "enterprise";
 
   const { data, isLoading, mutate: refreshAudit } = useAudit({
     limit: 200,
@@ -132,14 +137,30 @@ export default function AuditPage() {
         actions={<>
 
         <div className="flex items-center gap-2">
-          <button onClick={exportCSV} disabled={filtered.length === 0}
-            className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all disabled:opacity-30 tracking-wider">
+          <button
+            onClick={() => canExport ? exportCSV() : toast("upgrade to team plan to export audit logs", "error")}
+            disabled={canExport && filtered.length === 0}
+            className={`flex items-center gap-2 px-3 py-1.5 text-[12px] border transition-all tracking-wider ${
+              canExport
+                ? "text-[var(--color-text-dim)] hover:text-[var(--color-text)] border-[var(--color-border)] hover:border-[var(--color-border-hover)] disabled:opacity-30"
+                : "text-[var(--color-text-dim)]/50 border-[var(--color-border)]/50 cursor-not-allowed"
+            }`}
+          >
             <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> csv
           </button>
-          <a href={getAuditExportUrl("json", typeFilter || undefined)} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
-            <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
-          </a>
+          {canExport ? (
+            <a href={getAuditExportUrl("json", typeFilter || undefined)} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
+              <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
+            </a>
+          ) : (
+            <button
+              onClick={() => toast("upgrade to team plan to export audit logs", "error")}
+              className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)]/50 border border-[var(--color-border)]/50 cursor-not-allowed transition-all tracking-wider"
+            >
+              <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
+            </button>
+          )}
           <button onClick={() => refreshAudit()}
             className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh

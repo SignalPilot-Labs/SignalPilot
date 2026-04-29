@@ -8,7 +8,7 @@ import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "luci
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 import { getSandboxes, getProjects } from "@/lib/api";
-import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
+import { useConnectionsHealth, usePlan } from "@/lib/hooks/use-gateway-data";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
@@ -278,6 +278,11 @@ function McpConnectNavLink({ pathname }: { pathname: string }) {
 }
 
 function ByokNavLink({ pathname }: { pathname: string }) {
+  const { data: plan } = usePlan();
+  const tier = plan?.tier ?? "free";
+  // BYOK is team/enterprise only
+  if (tier === "free" || tier === "pro") return null;
+
   const active = pathname.startsWith("/settings/byok");
 
   return (

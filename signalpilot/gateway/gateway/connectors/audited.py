@@ -68,9 +68,10 @@ class AuditedConnector:
             from ..db.engine import get_session_factory
             from ..db.models import GatewayAuditLog
             from ..governance.context import current_org_id_var
-            from ..mcp_server import mcp_audit_id_var
+            from ..mcp_server import mcp_audit_id_var, mcp_user_id_var
 
             org_id = current_org_id_var.get("local")
+            user_id = mcp_user_id_var.get(None) or "system"
             parent_id = mcp_audit_id_var.get(None)
             conn_name = self._resolve_connection_name()
 
@@ -79,6 +80,7 @@ class AuditedConnector:
                 session.add(GatewayAuditLog(
                     id=str(uuid.uuid4()),
                     org_id=org_id,
+                    user_id=user_id,
                     timestamp=time.time(),
                     event_type="sql",
                     connection_name=conn_name,

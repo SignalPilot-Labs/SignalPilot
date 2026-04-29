@@ -533,7 +533,7 @@ export default function Sidebar() {
         </Tooltip>
         {/* System info line */}
         <div className="separator-subtle" />
-        <TierSeal variant="footer" />
+        <TierSeal />
         <div className="flex items-center justify-between">
           <Tooltip content="signalpilot gateway version" position="right">
             <div className="flex items-center gap-1.5 cursor-default">

@@ -103,23 +103,8 @@ if (clerkEnabled) {
     "/",
   ]);
 
-  const isOnboardingRoute = createRouteMatcher(["/onboarding(.*)"]);
-  const isSignInRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
-
   middlewareExport = clerkMiddleware(async (auth, req) => {
-    const { userId, orgId } = await auth();
-
-    // Signed in but no org — redirect to onboarding
-    // Skip sign-in/sign-up routes (Clerk strips session on those)
-    if (
-      userId &&
-      !orgId &&
-      !isOnboardingRoute(req) &&
-      !isSignInRoute(req) &&
-      !req.nextUrl.pathname.startsWith("/api")
-    ) {
-      return NextResponse.redirect(new URL("/onboarding", req.url));
-    }
+    const { userId } = await auth();
 
     // In cloud mode, protect non-public routes (unauthenticated users only)
     if (IS_CLOUD_MODE && !isPublicRoute(req) && !userId) {

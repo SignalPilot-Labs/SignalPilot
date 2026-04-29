@@ -449,23 +449,32 @@ function UserGreeting() {
 /* ── DashboardOnboardingCheck — only rendered when isCloudMode is true ── */
 function DashboardOnboardingCheck() {
   const router = useRouter();
-  const { activeOrgId } = useAppAuth();
+  const { activeOrgId, isAuthenticated } = useAppAuth();
   const { isComplete, isLoading, markComplete } = useOnboardingStatus();
+  const [autoCompleting, setAutoCompleting] = useState(false);
 
   useEffect(() => {
     if (isLoading) return;
-    if (isComplete === false) {
-      if (activeOrgId) {
-        // User has an active org (joined a team) but onboarding flag not set.
-        // Auto-mark complete — they don't need the wizard.
-        markComplete().catch(() => {});
-      } else {
-        router.push("/onboarding");
-      }
-    }
-  }, [isLoading, isComplete, activeOrgId, router, markComplete]);
 
-  if (isLoading || isComplete === null || (isComplete === false && !activeOrgId)) {
+    // Not signed in — nothing to do, auth protection handled by middleware
+    if (!isAuthenticated) return;
+
+    if (isComplete === true) return; // already done
+
+    if (activeOrgId) {
+      // User has an active org but onboarding flag not set.
+      // Auto-mark complete — they don't need the wizard.
+      setAutoCompleting(true);
+      markComplete()
+        .catch(() => {})
+        .finally(() => setAutoCompleting(false));
+    } else {
+      // No org — send to onboarding to create/join a team
+      router.push("/onboarding");
+    }
+  }, [isLoading, isComplete, activeOrgId, isAuthenticated, router, markComplete]);
+
+  if (isLoading || autoCompleting || (isComplete === false && !activeOrgId)) {
     return <DashboardSkeleton />;
   }
 

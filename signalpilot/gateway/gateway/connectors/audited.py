@@ -24,22 +24,35 @@ active_connection_name_var: contextvars.ContextVar[str | None] = contextvars.Con
 
 
 class AuditedConnector:
-    """Transparent wrapper that logs every execute() call to gateway_audit_logs."""
+    """Transparent wrapper that logs every execute() call to gateway_audit_logs.
+
+    Monkey-patches the underlying connector's execute method so that even
+    internal calls (e.g. get_schema → self.execute) are intercepted.
+    """
 
     def __init__(self, connector: BaseConnector, connection_name: str | None = None):
         self._connector = connector
         self._connection_name = connection_name
+        # Monkey-patch the connector's execute so internal calls are audited
+        self._original_execute = connector.execute
+        connector.execute = self._audited_execute  # type: ignore[assignment]
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connector, name)
 
     def _resolve_connection_name(self) -> str | None:
-        """Get connection name from constructor arg or context variable."""
         return self._connection_name or active_connection_name_var.get(None)
 
+    def restore(self) -> None:
+        """Restore the original execute method (call on release)."""
+        self._connector.execute = self._original_execute  # type: ignore[assignment]
+
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+        return await self._audited_execute(sql, params=params, timeout=timeout)
+
+    async def _audited_execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         t0 = time.monotonic()
-        rows = await self._connector.execute(sql, params=params, timeout=timeout)
+        rows = await self._original_execute(sql, params=params, timeout=timeout)
         elapsed_ms = (time.monotonic() - t0) * 1000
 
         try:

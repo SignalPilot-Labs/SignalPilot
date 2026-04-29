@@ -400,9 +400,11 @@ class PoolManager:
         """
         from .audited import AuditedConnector
         connector = await self.acquire(db_type, connection_string, credential_extras=credential_extras)
+        audited = AuditedConnector(connector, connection_name=connection_name)
         try:
-            yield AuditedConnector(connector, connection_name=connection_name)  # type: ignore[misc]
+            yield audited  # type: ignore[misc]
         finally:
+            audited.restore()
             await self.release(db_type, connection_string)
 
     async def cleanup_idle(self) -> int:

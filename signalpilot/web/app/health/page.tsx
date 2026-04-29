@@ -21,6 +21,8 @@ import {
   getConnectionHealth,
   testConnection,
 } from "@/lib/api";
+
+const isCloud = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 import {
   useConnections,
   useConnectionsHealth,
@@ -169,7 +171,7 @@ export default function HealthPage() {
       </TerminalBar>
 
       {/* Overview cards */}
-      <div className="grid grid-cols-3 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className={`grid ${isCloud ? "grid-cols-2" : "grid-cols-3"} gap-px mb-8 bg-[var(--color-border)] stagger-fade-in`}>
         {/* Connections */}
         <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
@@ -199,15 +201,17 @@ export default function HealthPage() {
           <p className="text-xl font-light tabular-nums">{avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--"}</p>
           <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
         </div>
-        {/* Schema Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
+        {/* Schema Cache — local mode only */}
+        {!isCloud && (
+          <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+            <div className="flex items-center gap-2 mb-3">
+              <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
+            </div>
+            <p className="text-xl font-light tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
+            <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
           </div>
-          <p className="text-xl font-light tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
-          <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
-        </div>
+        )}
       </div>
 
       {/* Connection health cards */}
@@ -224,7 +228,7 @@ export default function HealthPage() {
           <div className="section-header">
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connection health</span>
           </div>
-          <div className="grid grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
+          <div className={`grid ${isCloud ? "grid-cols-1" : "grid-cols-2"} gap-px bg-[var(--color-border)] stagger-fade-in`}>
             {healthData.map((health) => {
               const cfg = statusConfig[health.status] || statusConfig.unknown;
               const StatusIcon = cfg.icon;
@@ -327,8 +331,8 @@ export default function HealthPage() {
         </div>
       )}
 
-      {/* Schema Cache */}
-      {schemaCache && (
+      {/* Schema Cache details — local mode only */}
+      {!isCloud && schemaCache && (
         <div className="mt-8">
           <div className="section-header mb-4">
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>

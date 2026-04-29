@@ -391,7 +391,7 @@ export default function AuditPage() {
                           )}
                           {/* Client info */}
                           {(entry.client_ip || entry.user_agent) && (
-                            <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 mt-2 border-t border-[var(--color-border)]">
                               {entry.client_ip && (
                                 <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
                                   ip: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.client_ip}</span>

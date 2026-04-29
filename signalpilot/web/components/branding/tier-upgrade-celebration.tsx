@@ -135,7 +135,8 @@ export default function TierUpgradeCelebration() {
 
   if (!celebratingTier) return null;
 
-  const tierLabel = TIER_BRANDS[celebratingTier].label;
+  const brand = TIER_BRANDS[celebratingTier];
+  const tierLabel = brand.label;
 
   return (
     // Backdrop — z-[80] sits below toasts (z-[90])
@@ -158,18 +159,12 @@ export default function TierUpgradeCelebration() {
         aria-modal="true"
         aria-labelledby={HEADLINE_ID}
         aria-label={`${tierLabel} upgrade celebration`}
-        className={`relative z-10 w-full max-w-sm mx-4 bg-[var(--color-bg-card)] border ${
-          celebratingTier === "pro"
-            ? "border-indigo-500/40 bg-indigo-500/10"
-            : celebratingTier === "team"
-            ? "border-violet-400/50"
-            : "border-amber-400/50"
-        } ${
-          celebratingTier === "team"
-            ? "bg-violet-500/10"
-            : celebratingTier === "enterprise"
-            ? "bg-gradient-to-b from-amber-500/10 to-transparent"
-            : ""
+        className={`relative z-10 w-full max-w-sm mx-4 bg-[var(--color-bg-card)] border ${brand.accentBorder} ${
+          celebratingTier === "enterprise"
+            ? // enterprise celebration uses a gradient bg — deliberate one-off;
+              // brand.accentBg is the flat token (bg-amber-500/10) which differs
+              "bg-gradient-to-b from-amber-500/10 to-transparent"
+            : brand.accentBg
         } shadow-xl ${exiting ? "animate-slide-out-up" : "animate-slide-in-up"}`}
       >
         {/* Close button */}

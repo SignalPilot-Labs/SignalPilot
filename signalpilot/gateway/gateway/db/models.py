@@ -210,6 +210,8 @@ class GatewayAuditLog(GatewayBase):
     duration_ms: Mapped[float | None] = mapped_column(Float)
     agent_id: Mapped[str | None] = mapped_column(String)
     metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    client_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_gw_audit_org_ts", "org_id", "timestamp"),

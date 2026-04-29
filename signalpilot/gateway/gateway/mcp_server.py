@@ -66,6 +66,8 @@ from .db.engine import get_session_factory
 mcp_user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_id", default=None)
 mcp_org_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_org_id", default=None)
 mcp_raw_key_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_raw_key", default=None)
+mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_client_ip", default=None)
+mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
 from .dbt import (
     build_project_map as _build_project_map,
     format_validation_result as _format_validation_result,
@@ -208,6 +210,10 @@ async def _audit_tool_call(
     if org_id:
         daily_query_counter.increment(org_id)
 
+    # Read client IP and user-agent from context (set by MCPAuthMiddleware)
+    client_ip = mcp_client_ip_var.get(None)
+    user_agent = mcp_user_agent_var.get(None)
+
     # Write to audit log
     try:
         async with _store_session() as store:
@@ -224,6 +230,8 @@ async def _audit_tool_call(
                 duration_ms=duration_ms,
                 agent_id=tool_name,
                 metadata={"args": {k: str(v)[:200] for k, v in args.items()} if args else {}},
+                client_ip=client_ip,
+                user_agent=user_agent,
             ))
     except Exception:
         _mcp_logger.debug("Failed to audit MCP tool call %s", tool_name, exc_info=True)

@@ -259,16 +259,35 @@ export default function AuditPage() {
                         )}
                         <TimeAgo timestamp={entry.timestamp} live className="text-[12px]" />
                       </div>
-                      {isExpanded && entry.sql && (
+                      {isExpanded && (
                         <div className="mt-3 ml-4 animate-fade-in">
-                          <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
-                          <pre className="text-[13px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto">
-                            <SqlHighlight sql={entry.sql!} className="text-[13px]" />
-                          </pre>
+                          {entry.sql && (
+                            <>
+                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
+                              <pre className="text-[13px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto">
+                                <SqlHighlight sql={entry.sql} className="text-[13px]" />
+                              </pre>
+                            </>
+                          )}
                           {entry.rows_returned != null && (
                             <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
                               rows: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.rows_returned.toLocaleString()}</span>
                             </p>
+                          )}
+                          {/* Client info — IP + User-Agent */}
+                          {(entry.client_ip || entry.user_agent) && (
+                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                              {entry.client_ip && (
+                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                                  ip: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.client_ip}</span>
+                                </p>
+                              )}
+                              {entry.user_agent && (
+                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider truncate max-w-md">
+                                  ua: <span className="text-[var(--color-text-muted)]">{entry.user_agent}</span>
+                                </p>
+                              )}
+                            </div>
                           )}
                           {entry.metadata && Object.keys(entry.metadata).length > 0 && (
                             <div className="mt-2">

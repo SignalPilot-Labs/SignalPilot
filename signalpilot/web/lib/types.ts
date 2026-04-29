@@ -139,6 +139,8 @@ export interface AuditEntry {
   block_reason: string | null;
   duration_ms: number | null;
   agent_id: string | null;
+  client_ip: string | null;
+  user_agent: string | null;
   metadata: Record<string, unknown>;
 }
 

@@ -1228,6 +1228,8 @@ class Store:
             duration_ms=entry.duration_ms,
             agent_id=entry.agent_id,
             metadata_json=entry.metadata,
+            client_ip=entry.client_ip,
+            user_agent=entry.user_agent,
         ))
         await self.session.commit()
 
@@ -1263,6 +1265,8 @@ class Store:
                 duration_ms=row.duration_ms,
                 agent_id=row.agent_id,
                 metadata=row.metadata_json,
+                client_ip=getattr(row, "client_ip", None),
+                user_agent=getattr(row, "user_agent", None),
             ))
         return entries
 

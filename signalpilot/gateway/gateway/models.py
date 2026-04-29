@@ -496,6 +496,8 @@ class AuditEntry(BaseModel):
     duration_ms: float | None = None
     agent_id: str | None = None
     metadata: dict[str, Any] = {}
+    client_ip: str | None = None
+    user_agent: str | None = None
 
 
 # ─── BYOK API models ─────────────────────────────────────────────────────────

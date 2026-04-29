@@ -207,8 +207,10 @@ class MCPAuthMiddleware:
                     # Set user_id and org_id to "local" so MCP tools can access the store
                     mcp_user_id_var.set("local")
                     mcp_org_id_var.set("local")
-                    from .mcp_server import mcp_raw_key_var
+                    from .mcp_server import mcp_raw_key_var, mcp_client_ip_var, mcp_user_agent_var
                     mcp_raw_key_var.set(None)
+                    mcp_client_ip_var.set(_extract_client_ip(scope))
+                    mcp_user_agent_var.set(_extract_user_agent(scope))
                     if "state" not in scope:
                         scope["state"] = {}
                     scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
@@ -240,12 +242,40 @@ class MCPAuthMiddleware:
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
-                from .mcp_server import mcp_raw_key_var
+                from .mcp_server import mcp_raw_key_var, mcp_client_ip_var, mcp_user_agent_var
                 mcp_raw_key_var.set(raw_key)
+                mcp_client_ip_var.set(_extract_client_ip(scope))
+                mcp_user_agent_var.set(_extract_user_agent(scope))
                 await self._app(scope, receive, send)
         except (SQLAlchemyError, ValueError) as e:
             logger.error("MCP auth: DB error in local validation: %s", e)
             await _send_503(send, "Authentication service unavailable. Please try again.")
+
+
+def _extract_client_ip(scope: dict[str, Any]) -> str | None:
+    """Extract the client IP from ASGI scope, respecting reverse-proxy headers."""
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for name, value in headers:
+        if name.lower() == b"x-forwarded-for":
+            # X-Forwarded-For may contain a comma-separated list; first is the client
+            return value.decode("latin-1").split(",")[0].strip()
+    for name, value in headers:
+        if name.lower() == b"x-real-ip":
+            return value.decode("latin-1").strip()
+    # Fall back to the ASGI connection's remote address
+    client = scope.get("client")
+    if client:
+        return client[0]
+    return None
+
+
+def _extract_user_agent(scope: dict[str, Any]) -> str | None:
+    """Extract the User-Agent header from ASGI scope."""
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for name, value in headers:
+        if name.lower() == b"user-agent":
+            return value.decode("latin-1")
+    return None
 
 
 def _extract_bearer_key(scope: dict[str, Any]) -> str | None:

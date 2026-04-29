@@ -6,7 +6,7 @@ import asyncio
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..connectors.health_monitor import health_monitor
@@ -32,7 +32,10 @@ class DirectQueryRequest(BaseModel):
 
 
 @router.post("/query", dependencies=[RequireScope("query")])
-async def query_database(req: DirectQueryRequest, store: StoreD):
+async def query_database(req: DirectQueryRequest, store: StoreD, request: Request):
+    _client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else None)
+    _user_agent = request.headers.get("user-agent")
+
     # Enforce daily query limit based on org's plan tier
     plan = await get_org_limits(store.org_id)
     check_query_limit(store.org_id, plan)
@@ -66,6 +69,8 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
             sql=req.sql,
             blocked=True,
             block_reason=validation.blocked_reason,
+            client_ip=_client_ip,
+            user_agent=_user_agent,
         ))
         raise HTTPException(status_code=400, detail=f"Query blocked: {validation.blocked_reason}")
 
@@ -85,6 +90,8 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
             rows_returned=len(cached.rows),
             duration_ms=0.0,
             metadata={"cache_hit": True},
+            client_ip=_client_ip,
+            user_agent=_user_agent,
         ))
         return {
             "rows": cached.rows,
@@ -120,6 +127,8 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
                     connection_name=req.connection_name,
                     sql=req.sql,
                     metadata={"cost_warning": True, "estimated_usd": cost_estimate.estimated_usd, "estimated_rows": cost_estimate.estimated_rows},
+                    client_ip=_client_ip,
+                    user_agent=_user_agent,
                 ))
         except Exception:
             pass  # Cost estimation is best-effort
@@ -187,6 +196,8 @@ async def query_database(req: DirectQueryRequest, store: StoreD):
         duration_ms=elapsed_ms,
         cost_usd=query_cost_usd,
         metadata={"pii_redacted": pii_redactor.last_redacted_columns} if pii_redactor.last_redacted_columns else {},
+        client_ip=_client_ip,
+        user_agent=_user_agent,
     ))
 
     response = {

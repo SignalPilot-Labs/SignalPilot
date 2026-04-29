@@ -263,6 +263,28 @@ async def _ensure_plan_tier_column(engine) -> None:
     logger.info("Ensured plan_tier column on gateway_orgs")
 
 
+async def _ensure_audit_ip_columns(engine) -> None:
+    """Add client_ip and user_agent columns to gateway_audit_logs if they do not exist.
+
+    SQLAlchemy's create_all does not add columns to existing tables, so this
+    idempotent ALTER TABLE handles existing deployments.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_audit_logs "
+                "ADD COLUMN IF NOT EXISTS client_ip TEXT"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_audit_logs "
+                "ADD COLUMN IF NOT EXISTS user_agent TEXT"
+            )
+        )
+    logger.info("Ensured client_ip and user_agent columns on gateway_audit_logs")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -274,6 +296,7 @@ async def init_db() -> None:
     await _ensure_org_id_columns(engine)
     await _ensure_health_columns(engine)
     await _ensure_plan_tier_column(engine)
+    await _ensure_audit_ip_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

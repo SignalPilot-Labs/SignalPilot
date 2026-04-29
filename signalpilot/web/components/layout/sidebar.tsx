@@ -11,6 +11,7 @@ import { getSandboxes, getProjects } from "@/lib/api";
 import { useConnectionsHealth, usePlan } from "@/lib/hooks/use-gateway-data";
 import { TierWordmark } from "@/components/branding/tier-wordmark";
 import { TierAccent } from "@/components/branding/tier-accent";
+import { TierSeal } from "@/components/branding/tier-seal";
 import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
@@ -532,6 +533,7 @@ export default function Sidebar() {
         </Tooltip>
         {/* System info line */}
         <div className="separator-subtle" />
+        <TierSeal variant="footer" />
         <div className="flex items-center justify-between">
           <Tooltip content="signalpilot gateway version" position="right">
             <div className="flex items-center gap-1.5 cursor-default">

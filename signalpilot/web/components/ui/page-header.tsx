@@ -2,6 +2,7 @@
 
 import { TierBadge } from "@/components/branding/tier-badge";
 import { TierAccent } from "@/components/branding/tier-accent";
+import { TierSeal } from "@/components/branding/tier-seal";
 
 /**
  * Consistent page header with terminal-style breadcrumb.
@@ -30,7 +31,10 @@ export function PageHeader({
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
         </div>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        <div className="flex items-center gap-2">
+          {actions}
+          <TierSeal variant="header" />
+        </div>
       </div>
       {/* Neutral gradient accent line — always rendered */}
       <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />

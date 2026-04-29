@@ -4,6 +4,7 @@ import Sidebar from "@/components/layout/sidebar";
 
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { KeyboardShortcuts } from "@/components/ui/keyboard-shortcuts";
+import { TabTitle } from "@/components/layout/tab-title";
 import { CommandPalette } from "@/components/ui/command-palette";
 import { ToastProvider } from "@/components/ui/toast";
 import { GridBackground } from "@/components/ui/grid-background";
@@ -49,6 +50,7 @@ export default async function RootLayout({
                 <PageTransition>{children}</PageTransition>
               </ErrorBoundary>
               <KeyboardShortcuts />
+              <TabTitle />
               <CommandPalette />
             </MainContent>
           </SubscriptionProvider>

@@ -37,6 +37,8 @@ import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useOnboardingStatus } from "@/lib/onboarding";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { TierWordmark } from "@/components/branding/tier-wordmark";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -423,13 +425,22 @@ function CloudStatusSection() {
 /* ── Signed-in user greeting ── */
 function UserGreeting() {
   const { isCloudMode, user } = useAppAuth();
+  const b = useTierBranding();
 
   if (!isCloudMode || !user) return null;
 
   const email = user.email ?? "—";
 
+  const showTierPrefix = b.enabled && b.tier !== "free";
+
   return (
     <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
+      {showTierPrefix && (
+        <>
+          <TierWordmark variant="header" />
+          <span className="mx-2 text-[var(--color-text-dim)]">·</span>
+        </>
+      )}
       signed in as{" "}
       <span className="text-[var(--color-text-muted)]">{email}</span>
     </p>

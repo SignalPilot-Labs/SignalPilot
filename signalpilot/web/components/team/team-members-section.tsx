@@ -57,6 +57,7 @@ export function TeamMembersSection({ org, me, perms }: TeamMembersSectionProps) 
     setUpdatingUserId(userId);
     try {
       await reverifiedUpdateMember({ userId, role });
+      memberships?.revalidate?.();
       toast("role updated", "success");
     } catch (err) {
       if (isReverificationCancelledError(err)) {

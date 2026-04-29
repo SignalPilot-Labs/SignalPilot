@@ -449,15 +449,23 @@ function UserGreeting() {
 /* ── DashboardOnboardingCheck — only rendered when isCloudMode is true ── */
 function DashboardOnboardingCheck() {
   const router = useRouter();
-  const { isComplete, isLoading } = useOnboardingStatus();
+  const { activeOrgId } = useAppAuth();
+  const { isComplete, isLoading, markComplete } = useOnboardingStatus();
 
   useEffect(() => {
-    if (!isLoading && isComplete === false) {
-      router.push("/onboarding");
+    if (isLoading) return;
+    if (isComplete === false) {
+      if (activeOrgId) {
+        // User has an active org (joined a team) but onboarding flag not set.
+        // Auto-mark complete — they don't need the wizard.
+        markComplete().catch(() => {});
+      } else {
+        router.push("/onboarding");
+      }
     }
-  }, [isLoading, isComplete, router]);
+  }, [isLoading, isComplete, activeOrgId, router, markComplete]);
 
-  if (isLoading || isComplete === null || isComplete === false) {
+  if (isLoading || isComplete === null || (isComplete === false && !activeOrgId)) {
     return <DashboardSkeleton />;
   }
 

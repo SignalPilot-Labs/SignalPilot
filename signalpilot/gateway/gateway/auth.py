@@ -147,8 +147,14 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
         # Should never happen since _user_id dependency ran first
         raise HTTPException(status_code=500, detail="JWT claims not available")
 
-    # Clerk dev uses "org_id", Clerk prod uses short claim "o"
-    org_id = claims.get("org_id") or claims.get("o")
+    # Clerk dev uses "org_id" (string), Clerk prod uses short claim "o" (dict with "id" key)
+    org_id = claims.get("org_id")
+    if not org_id:
+        o_claim = claims.get("o")
+        if isinstance(o_claim, dict):
+            org_id = o_claim.get("id")
+        elif isinstance(o_claim, str):
+            org_id = o_claim
     logger.info("resolve_org_id: org_id=%s claims_keys=%s", org_id, list(claims.keys()))
 
     if not is_cloud_mode():

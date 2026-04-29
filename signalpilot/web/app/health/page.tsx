@@ -224,7 +224,7 @@ export default function HealthPage() {
           <div className="section-header">
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connection health</span>
           </div>
-          <div className="grid grid-cols-1 gap-px bg-[var(--color-border)] stagger-fade-in">
+          <div className="grid grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
             {healthData.map((health) => {
               const cfg = statusConfig[health.status] || statusConfig.unknown;
               const StatusIcon = cfg.icon;

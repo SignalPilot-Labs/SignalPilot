@@ -3,14 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Crown } from "lucide-react";
 import { useTierUpgrade } from "@/lib/hooks/use-tier-upgrade";
-import { TIER_BRANDS } from "@/lib/tier-branding";
+import { TIER_BRANDS, type BrandTier } from "@/lib/tier-branding";
 import { TierBadge } from "@/components/branding/tier-badge";
 import { TierWordmark } from "@/components/branding/tier-wordmark";
 import { TierAccent } from "@/components/branding/tier-accent";
 import { TierSeal } from "@/components/branding/tier-seal";
 
 // Per-tier dismiss delays — Enterprise copy is longest, gets the most time.
-const DISMISS_DELAY_MS: Record<string, number> = {
+const DISMISS_DELAY_MS: Record<BrandTier, number> = {
+  free: 8000,
   pro: 6000,
   team: 8000,
   enterprise: 12000,
@@ -56,7 +57,7 @@ export default function TierUpgradeCelebration() {
   useEffect(() => {
     if (!celebratingTier) return;
 
-    const delay = DISMISS_DELAY_MS[celebratingTier] ?? 8000;
+    const delay = DISMISS_DELAY_MS[celebratingTier];
     let remaining = delay;
     let start = Date.now();
     let timerId: ReturnType<typeof setTimeout> | null = null;

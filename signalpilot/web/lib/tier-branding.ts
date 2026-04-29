@@ -3,7 +3,6 @@ import { Sparkles, Gem, Crown, type LucideIcon } from "lucide-react";
 export type BrandTier = "free" | "pro" | "team" | "enterprise";
 
 export interface TierBrand {
-  tier: BrandTier;
   label: string;
   icon: LucideIcon | null;
   accentText: string;
@@ -16,7 +15,6 @@ export interface TierBrand {
 
 export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
   free: {
-    tier: "free",
     label: "Free",
     icon: null,
     accentText: "",
@@ -27,7 +25,6 @@ export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
     gradientTo: "",
   },
   pro: {
-    tier: "pro",
     label: "Pro",
     icon: Sparkles,
     accentText: "text-indigo-400",
@@ -38,7 +35,6 @@ export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
     gradientTo: "to-indigo-500/0",
   },
   team: {
-    tier: "team",
     label: "Team",
     icon: Gem,
     accentText: "text-violet-300",
@@ -49,7 +45,6 @@ export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
     gradientTo: "to-indigo-500/0",
   },
   enterprise: {
-    tier: "enterprise",
     label: "Enterprise",
     icon: Crown,
     accentText: "text-amber-300",
@@ -60,7 +55,3 @@ export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
     gradientTo: "to-amber-500/0",
   },
 };
-
-export function getTierBrand(tier: BrandTier): TierBrand {
-  return TIER_BRANDS[tier];
-}

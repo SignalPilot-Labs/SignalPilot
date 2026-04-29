@@ -21,7 +21,7 @@ export function TierWordmark({ variant = "sidebar" }: TierWordmarkProps) {
       className={`inline-flex items-center gap-1 tracking-[0.15em] uppercase ${brand.accentText} ${variant === "sidebar" ? "text-[11px]" : "text-[12px]"}`}
     >
       {Icon && <Icon size={iconSize} className="flex-shrink-0" />}
-      {brand.label.toUpperCase()}
+      {brand.label}
     </span>
   );
 }

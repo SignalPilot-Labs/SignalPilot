@@ -156,6 +156,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if not provided_key:
+            # Local mode: allow unauthenticated access (key is optional)
+            from .deployment import is_local_mode
+            if is_local_mode():
+                request.state.auth = {"user_id": "local", "org_id": "local", "auth_method": "local_nokey"}
+                return await call_next(request)
             return Response(
                 content='{"detail":"Authentication required. Provide API key via Authorization: Bearer <key> or X-API-Key header."}',
                 status_code=401,

@@ -37,8 +37,8 @@ def require_scopes(request: Request, *required: str) -> None:
     if auth is None:
         return
 
-    # Case 2: local dev key — bypass all scope checks.
-    if auth.get("auth_method") == "local_key":
+    # Case 2: local mode — bypass all scope checks.
+    if auth.get("auth_method") in ("local_key", "local_nokey"):
         return
 
     # Case 3: stored API key — enforce scopes explicitly.

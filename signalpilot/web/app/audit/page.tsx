@@ -310,7 +310,7 @@ export default function AuditPage() {
                       </span>
                     </td>
                     <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] align-top tracking-wider">
-                      {entry.connection_name || "—"}
+                      {entry.event_type === "sql" ? "internal" : (entry.connection_name || "—")}
                     </td>
                     <td className="px-4 py-2.5 max-w-md align-top">
                       {(() => {
@@ -405,7 +405,7 @@ export default function AuditPage() {
                                     <div className="flex gap-3 mt-0.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
                                       {child.rows_returned != null && <span>rows: {child.rows_returned}</span>}
                                       {child.duration_ms != null && <span>{Math.round(child.duration_ms)}ms</span>}
-                                      {child.connection_name && <span>{child.connection_name}</span>}
+                                      <span>{child.event_type === "sql" ? "internal" : (child.connection_name || "—")}</span>
                                     </div>
                                   </div>
                                 ))}

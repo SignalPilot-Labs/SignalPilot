@@ -71,7 +71,7 @@ class AuditedConnector:
             from ..mcp_server import mcp_audit_id_var, mcp_user_id_var
 
             org_id = current_org_id_var.get("local")
-            user_id = mcp_user_id_var.get(None) or "system"
+            user_id = mcp_user_id_var.get(None)
             parent_id = mcp_audit_id_var.get(None)
             conn_name = self._resolve_connection_name()
 

@@ -297,6 +297,18 @@ async def _ensure_audit_parent_id_column(engine) -> None:
     logger.info("Ensured parent_id column on gateway_audit_logs")
 
 
+async def _ensure_audit_user_id_nullable(engine) -> None:
+    """Make user_id nullable on gateway_audit_logs (was NOT NULL from original create_all)."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_audit_logs "
+                "ALTER COLUMN user_id DROP NOT NULL"
+            )
+        )
+    logger.info("Ensured user_id is nullable on gateway_audit_logs")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -310,6 +322,7 @@ async def init_db() -> None:
     await _ensure_plan_tier_column(engine)
     await _ensure_audit_ip_columns(engine)
     await _ensure_audit_parent_id_column(engine)
+    await _ensure_audit_user_id_nullable(engine)
     logger.info("Gateway database tables initialized")
 
 

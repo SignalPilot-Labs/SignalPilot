@@ -101,9 +101,24 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         audit_export=True,
         schema_tools=True,
     ),
+    "unlimited": PlanLimits(
+        tier="unlimited",
+        connections=0,
+        users=0,
+        api_keys=0,
+        queries_per_day=0,
+        audit_retention_days=0,
+        pii_redaction=True,
+        byok=True,
+        sso=True,
+        budget_controls=True,
+        audit_export=True,
+        schema_tools=True,
+    ),
 }
 
 DEFAULT_TIER = "free"
+LOCAL_TIER = "unlimited"
 
 
 def get_limits(tier: str) -> PlanLimits:
@@ -125,6 +140,10 @@ async def get_org_tier(org_id: str) -> str:
     from ..db.engine import get_session_factory
     from ..db.models import GatewayOrg
     from sqlalchemy import select, text
+
+    # Local mode: always unlimited, no plan enforcement
+    if not _is_cloud:
+        return LOCAL_TIER
 
     if not org_id or org_id == "local":
         return DEFAULT_TIER

@@ -192,6 +192,10 @@ def validate_connection_params(
     if db_type not in TCP_DB_TYPES:
         return
 
+    # Local mode: SSRF validation disabled (local/private connections expected)
+    if os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud":
+        return
+
     target_host: str | None = None
 
     if connection_string:

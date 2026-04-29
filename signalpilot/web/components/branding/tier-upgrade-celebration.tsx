@@ -1,13 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Crown } from "lucide-react";
 import { useTierUpgrade } from "@/lib/hooks/use-tier-upgrade";
-import { TIER_BRANDS, type BrandTier } from "@/lib/tier-branding";
-import { TierBadge } from "@/components/branding/tier-badge";
-import { TierWordmark } from "@/components/branding/tier-wordmark";
-import { TierAccent } from "@/components/branding/tier-accent";
-import { TierSeal } from "@/components/branding/tier-seal";
+import { TIER_BRANDS, type BrandTier, type TierBrand } from "@/lib/tier-branding";
 
 // Per-tier dismiss delays — Enterprise copy is longest, gets the most time.
 const DISMISS_DELAY_MS: Record<BrandTier, number> = {
@@ -19,6 +14,13 @@ const DISMISS_DELAY_MS: Record<BrandTier, number> = {
 const EXIT_DURATION_MS = 160;
 
 const HEADLINE_ID = "tier-celebration-headline";
+
+const BODY_COPY: Record<BrandTier, string> = {
+  free: "",
+  pro: "Higher rate limits (10k req/day) and additional API keys are now available.",
+  team: "Shared pipelines and team membership are active. Up to 100k requests/day.",
+  enterprise: "SSO, audit log export, and org-level access controls are active.",
+};
 
 /**
  * Self-contained, mount-point-agnostic tier upgrade celebration overlay.
@@ -119,13 +121,10 @@ export default function TierUpgradeCelebration() {
   // Focus management: move focus to close button on open; restore on close.
   useEffect(() => {
     if (celebratingTier) {
-      // Record where focus was before the overlay opened.
       previousFocusRef.current = document.activeElement as HTMLElement | null;
-      // Small delay to let the component fully render before attempting focus.
       const t = setTimeout(() => closeRef.current?.focus(), 0);
       return () => clearTimeout(t);
     } else {
-      // Overlay closed — restore previous focus.
       if (previousFocusRef.current && "focus" in previousFocusRef.current) {
         previousFocusRef.current.focus();
       }
@@ -147,7 +146,7 @@ export default function TierUpgradeCelebration() {
     >
       {/* Backdrop — clicking dismisses */}
       <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/40"
         onClick={handleDismiss}
         aria-hidden="true"
       />
@@ -159,20 +158,25 @@ export default function TierUpgradeCelebration() {
         aria-modal="true"
         aria-labelledby={HEADLINE_ID}
         aria-label={`${tierLabel} upgrade celebration`}
-        className={`relative z-10 w-full max-w-sm mx-4 bg-[var(--color-bg-card)] border ${brand.accentBorder} ${
-          celebratingTier === "enterprise"
-            ? // enterprise celebration uses a gradient bg — deliberate one-off;
-              // brand.accentBg is the flat token (bg-amber-500/10) which differs
-              "bg-gradient-to-b from-amber-500/10 to-transparent"
-            : brand.accentBg
-        } shadow-xl ${exiting ? "animate-slide-out-up" : "animate-slide-in-up"}`}
+        className={`relative z-10 w-full max-w-sm mx-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-hidden ${
+          exiting ? "animate-slide-out-up" : "animate-slide-in-up"
+        }`}
       >
-        {/* Close button */}
+        {/* 1px top accent strip — the only tier signal on the card */}
+        {brand.accentHex && (
+          <div
+            className="h-px w-full"
+            style={{ backgroundColor: brand.accentHex }}
+            aria-hidden="true"
+          />
+        )}
+
+        {/* Close button — top-4 right-4 aligns with content p-4 */}
         <button
           ref={closeRef}
           type="button"
           onClick={handleDismiss}
-          className="absolute top-3 right-3 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-current"
+          className="absolute top-4 right-4 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-current"
           aria-label="Dismiss"
         >
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -185,92 +189,57 @@ export default function TierUpgradeCelebration() {
           </svg>
         </button>
 
-        <div className="p-5">
-          {celebratingTier === "pro" && <ProVariant />}
-          {celebratingTier === "team" && <TeamVariant />}
-          {celebratingTier === "enterprise" && <EnterpriseVariant />}
+        <div className="p-4">
+          <CelebrationContent tier={celebratingTier} brand={brand} />
         </div>
       </div>
     </div>
   );
 }
 
-// ── Pro variant — clear step up: indigo wash, prominent headline ──────────────
+// ---------------------------------------------------------------------------
+// CelebrationContent — shared across all paid tiers
+// ---------------------------------------------------------------------------
 
-function ProVariant() {
+interface CelebrationContentProps {
+  tier: BrandTier;
+  brand: TierBrand;
+}
+
+function CelebrationContent({ tier, brand }: CelebrationContentProps) {
+  const headline = `${brand.label} is active.`;
+  const bodyCopy = BODY_COPY[tier];
+
   return (
     <div className="space-y-3">
-      <h2
-        id={HEADLINE_ID}
-        className="text-[15px] font-semibold text-[var(--color-text)] tracking-tight leading-snug"
-      >
-        Welcome to Pro
-      </h2>
-      <div className="flex items-center gap-2">
-        <TierBadge size="md" />
-        <span className="text-[12px] text-indigo-400/70 tracking-wide">
-          Your Pro badge is active
+      {/* Tier label row */}
+      <div className="flex items-center gap-1.5">
+        {brand.accentHex && (
+          <span
+            className="inline-block w-[5px] h-[5px] flex-shrink-0"
+            style={{ backgroundColor: brand.accentHex }}
+            aria-hidden="true"
+          />
+        )}
+        <span className="text-[10px] tracking-[0.2em] uppercase text-[var(--color-text-muted)]">
+          {brand.label}
         </span>
       </div>
-      <p className="text-[13px] text-[var(--color-text-muted)]">
-        Your new badge is live across the app.
-      </p>
-      <TierAccent />
-    </div>
-  );
-}
 
-// ── Team variant — richer ─────────────────────────────────────────────────────
-
-function TeamVariant() {
-  return (
-    <div className="space-y-3">
-      <TierAccent />
+      {/* Headline */}
       <h2
         id={HEADLINE_ID}
-        className="sr-only"
+        className="text-[15px] font-light text-[var(--color-text)] tracking-tight leading-snug"
       >
-        Welcome to Team
+        {headline}
       </h2>
-      <div className="flex items-center gap-2 py-1">
-        <TierWordmark variant="header" />
-      </div>
-      <p className="text-[13px] text-[var(--color-text-muted)]">
-        Invite your team and share signals together. Collaborators and shared
-        pipelines are now live.
-      </p>
-      <TierAccent />
-    </div>
-  );
-}
 
-// ── Enterprise variant — most premium ────────────────────────────────────────
-// TierCrest is a corner-overlay primitive; we feature the crown crest by
-// rendering TierBadge (Crown icon + label) as the focal hero, centered, with
-// TierSeal below as the authoritative wordmark. No placeholder squares.
-
-function EnterpriseVariant() {
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-col items-center gap-3 pt-2 pb-1">
-        <Crown
-          size={40}
-          strokeWidth={1.25}
-          className="text-amber-300 drop-shadow-[0_0_12px_rgba(251,191,36,0.35)]"
-          aria-hidden="true"
-        />
-        <TierSeal variant="header" />
-      </div>
-      <h2
-        id={HEADLINE_ID}
-        className="text-[15px] font-semibold text-[var(--color-text)] tracking-tight text-center leading-snug"
-      >
-        Enterprise is active
-      </h2>
-      <p className="text-[13px] text-[var(--color-text-muted)] text-center">
-        The Enterprise edition is active. Your console now bears the crown.
-      </p>
-      <TierAccent />
+      {/* Body */}
+      {bodyCopy && (
+        <p className="text-[13px] text-[var(--color-text-muted)]">
+          {bodyCopy}
+        </p>
+      )}
     </div>
   );
 }

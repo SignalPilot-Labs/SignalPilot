@@ -12,15 +12,18 @@ export function TierWordmark({ variant = "sidebar" }: TierWordmarkProps) {
   if (!b.enabled || b.tier === "free") return null;
 
   const { brand } = b;
-  const Icon = brand.icon;
 
-  const iconSize = variant === "sidebar" ? 10 : 12;
+  if (!brand.accentHex) return null;
+
+  const textSize = variant === "sidebar" ? "text-[11px]" : "text-[12px]";
 
   return (
-    <span
-      className={`inline-flex items-center gap-1 tracking-[0.15em] uppercase ${brand.accentText} ${variant === "sidebar" ? "text-[11px]" : "text-[12px]"}`}
-    >
-      {Icon && <Icon size={iconSize} className="flex-shrink-0" />}
+    <span className={`inline-flex items-center gap-1.5 tracking-[0.15em] uppercase ${brand.accentText} ${textSize}`}>
+      <span
+        className="inline-block w-[5px] h-[5px] flex-shrink-0"
+        style={{ backgroundColor: brand.accentHex }}
+        aria-hidden="true"
+      />
       {brand.label}
     </span>
   );

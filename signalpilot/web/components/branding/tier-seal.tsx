@@ -45,41 +45,39 @@ interface EnterpriseSealInnerProps extends TierSealProps {
 function EnterpriseSealInner({ variant, brand }: EnterpriseSealInnerProps) {
   const { organization } = useOrganization();
   const orgName = organization?.name ?? null;
-  const Icon = brand.icon;
+
+  if (!brand.accentHex) return null;
 
   if (variant === "footer") {
     return (
-      <div className="rounded border border-amber-400/30 bg-gradient-to-b from-amber-500/10 to-amber-500/5 overflow-hidden">
-        <div className="h-px bg-amber-400/60" />
-        <div className="px-3 py-2 flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            {Icon && (
-              <Icon
-                size={16}
-                className="flex-shrink-0 text-amber-300/80"
-                aria-hidden="true"
-              />
-            )}
-            <span className="text-[10px] text-amber-300 tracking-[0.2em] uppercase">
-              Enterprise Edition
-            </span>
-          </div>
-          {orgName && (
-            <span className="text-[10px] text-amber-300/60 tracking-wide pl-6">
-              {orgName}
-            </span>
-          )}
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-1.5">
+          <span
+            className="inline-block w-[5px] h-[5px] flex-shrink-0"
+            style={{ backgroundColor: brand.accentHex }}
+            aria-hidden="true"
+          />
+          <span className={`text-[10px] tracking-[0.2em] uppercase ${brand.accentText}`}>
+            Enterprise
+          </span>
         </div>
+        {orgName && (
+          <span className="text-[10px] text-[var(--color-text-dim)] tracking-wide pl-2.5">
+            {orgName}
+          </span>
+        )}
       </div>
     );
   }
 
-  // Header variant — enterprise only, unchanged
+  // Header variant — enterprise only
   return (
-    <span className="inline-flex items-center gap-1.5 text-amber-300 tracking-[0.2em] uppercase text-[11px]">
-      {Icon && (
-        <Icon size={12} className="flex-shrink-0" aria-hidden="true" />
-      )}
+    <span className={`inline-flex items-center gap-1.5 tracking-[0.2em] uppercase text-[11px] ${brand.accentText}`}>
+      <span
+        className="inline-block w-[5px] h-[5px] flex-shrink-0"
+        style={{ backgroundColor: brand.accentHex }}
+        aria-hidden="true"
+      />
       ENTERPRISE
     </span>
   );
@@ -94,23 +92,18 @@ interface TeamSealInnerProps {
 }
 
 function TeamSealInner({ brand }: TeamSealInnerProps) {
-  const Icon = brand.icon;
+  if (!brand.accentHex) return null;
 
   return (
-    <div className="rounded border border-violet-400/30 bg-gradient-to-b from-violet-500/10 to-violet-500/5 overflow-hidden">
-      <div className="h-px bg-violet-400/60" />
-      <div className="px-3 py-2 flex items-center gap-2">
-        {Icon && (
-          <Icon
-            size={16}
-            className="flex-shrink-0 text-violet-300/80"
-            aria-hidden="true"
-          />
-        )}
-        <span className="text-[10px] text-violet-300 tracking-[0.2em] uppercase">
-          Team Edition
-        </span>
-      </div>
+    <div className="flex items-center gap-1.5">
+      <span
+        className="inline-block w-[5px] h-[5px] flex-shrink-0"
+        style={{ backgroundColor: brand.accentHex }}
+        aria-hidden="true"
+      />
+      <span className={`text-[10px] tracking-[0.2em] uppercase ${brand.accentText}`}>
+        Team
+      </span>
     </div>
   );
 }

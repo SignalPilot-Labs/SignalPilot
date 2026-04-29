@@ -22,13 +22,13 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
-// Left-edge color literals for paid tiers. Tailwind has no side-specific border-color
-// shorthand that works with opacity modifiers, so these must be full literal strings
-// (not assembled from TIER_BRANDS tokens) to satisfy JIT. Color semantics mirror accentText.
+// Left-edge color literals for paid tiers. Full literal strings required to satisfy
+// Tailwind JIT — do not assemble from brand tokens. Color semantics mirror accentText.
 const TIER_LEFT_BORDER: Record<"pro" | "team" | "enterprise", string> = {
-  pro:        "border-l-2 border-l-indigo-400/60",
-  team:       "border-l-2 border-l-violet-400/60",
-  enterprise: "border-l-2 border-l-amber-300/60",
+  // Pro: use border-active (#444) — distinct from text (#999) so it reads as deliberate accent.
+  pro:        "border-l-2 border-l-[var(--color-border-active)]",
+  team:       "border-l-2 border-l-blue-400/60",
+  enterprise: "border-l-2 border-l-[var(--color-success)]",
 };
 
 function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) => void }) {

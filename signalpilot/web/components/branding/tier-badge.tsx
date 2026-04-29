@@ -3,27 +3,32 @@
 import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
 interface TierBadgeProps {
+  /**
+   * @deprecated Size prop is ignored — there is one canonical size.
+   * Accepted to avoid breaking existing call sites.
+   */
   size?: "sm" | "md";
 }
 
-export function TierBadge({ size = "sm" }: TierBadgeProps) {
+export function TierBadge({ size: _size }: TierBadgeProps) {
   const b = useTierBranding();
 
   if (!b.enabled || b.tier === "free") return null;
 
   const { brand } = b;
-  const Icon = brand.icon;
 
-  const textSize = size === "sm" ? "text-[11px]" : "text-[12px]";
-  const iconSize = size === "sm" ? 10 : 12;
-  const padding = size === "sm" ? "px-1.5 py-0.5" : "px-2 py-1";
+  if (!brand.accentHex) return null;
 
   return (
-    <span
-      className={`inline-flex items-center gap-1 border ${padding} ${textSize} tracking-[0.15em] uppercase ${brand.accentText} ${brand.accentBorder} ${brand.accentBg}`}
-    >
-      {Icon && <Icon size={iconSize} className="flex-shrink-0" />}
-      {brand.label}
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="inline-block w-[5px] h-[5px] flex-shrink-0"
+        style={{ backgroundColor: brand.accentHex }}
+        aria-hidden="true"
+      />
+      <span className="text-[11px] tracking-[0.15em] uppercase text-[var(--color-text-muted)]">
+        {brand.label}
+      </span>
     </span>
   );
 }

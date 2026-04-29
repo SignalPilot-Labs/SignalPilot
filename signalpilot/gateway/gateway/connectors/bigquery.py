@@ -178,7 +178,7 @@ class BigQueryConnector(BaseConnector):
 
     # ─── Execute (CRITICAL: non-blocking) ─────────────────────────────
 
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._client is None:
             raise RuntimeError("Not connected")
 

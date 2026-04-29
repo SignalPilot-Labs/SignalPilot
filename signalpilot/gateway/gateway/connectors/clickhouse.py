@@ -235,7 +235,7 @@ class ClickHouseConnector(BaseConnector):
             self._http_client = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._client is None and self._http_client is None:
             raise RuntimeError("Not connected")
 

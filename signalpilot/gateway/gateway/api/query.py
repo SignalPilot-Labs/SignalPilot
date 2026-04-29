@@ -76,10 +76,9 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored for this connection")
 
-    from ..connectors.audited import AuditedConnector
     extras = await store.get_credential_extras(req.connection_name)
-    raw_connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
-    connector = AuditedConnector(raw_connector, connection_name=req.connection_name)
+    connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
+    connector._audit_connection_name = req.connection_name
 
     try:
         # Cost estimation — run EXPLAIN before execution

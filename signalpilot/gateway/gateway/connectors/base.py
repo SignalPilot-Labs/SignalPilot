@@ -13,16 +13,22 @@ Provides shared infrastructure that was previously duplicated across 11 connecto
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import os
 import tempfile
 from abc import ABC, abstractmethod
 from typing import Any
 
+# Context var for the active connection name — set by REST API deps or MCP tools
+active_connection_name_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "active_connection_name", default=None
+)
+
 
 class BaseConnector(ABC):
     """Abstract base class for all database connectors.
 
-    Subclasses MUST implement: connect(), execute(), get_schema().
+    Subclasses MUST implement: connect(), _execute_impl(), get_schema().
     Subclasses MAY override: health_check(), close(), _ping(),
         _set_connector_specific_extras(), _identifier_quote.
     """
@@ -41,12 +47,72 @@ class BaseConnector(ABC):
         """Open connection pool."""
 
     @abstractmethod
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
-        """Execute query and return rows as list of dicts."""
+    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+        """Execute query and return rows as list of dicts. Subclasses implement this."""
 
     @abstractmethod
     async def get_schema(self) -> dict[str, Any]:
         """Return schema info: tables with columns."""
+
+    # ─── Audited execute (concrete — wraps _execute_impl) ────────────
+
+    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+        """Execute query with audit logging. Subclasses implement _execute_impl."""
+        import time as _time
+        t0 = _time.monotonic()
+        rows = await self._execute_impl(sql, params=params, timeout=timeout)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
+
+        # Fire-and-forget audit
+        try:
+            await self._audit_sql(sql, len(rows) if rows else 0, elapsed_ms)
+        except Exception:
+            pass
+
+        return rows
+
+    async def _audit_sql(self, sql: str, rows_returned: int, duration_ms: float) -> None:
+        """Log SQL execution to gateway_audit_logs. Best-effort, never fails the query."""
+        try:
+            import uuid as _uuid
+            import time as _time
+
+            # Late imports to avoid circular dependencies
+            from ..db.engine import get_session_factory
+            from ..db.models import GatewayAuditLog
+            from ..governance.context import current_org_id_var
+
+            # Try to get MCP context (may not exist in non-MCP paths)
+            parent_id = None
+            user_id = None
+            try:
+                from ..mcp_server import mcp_audit_id_var, mcp_user_id_var
+                parent_id = mcp_audit_id_var.get(None)
+                user_id = mcp_user_id_var.get(None)
+            except Exception:
+                pass
+
+            org_id = current_org_id_var.get("local")
+            conn_name = getattr(self, '_audit_connection_name', None) or active_connection_name_var.get(None)
+
+            factory = get_session_factory()
+            async with factory() as session:
+                session.add(GatewayAuditLog(
+                    id=str(_uuid.uuid4()),
+                    org_id=org_id,
+                    user_id=user_id,
+                    timestamp=_time.time(),
+                    event_type="sql",
+                    connection_name=conn_name,
+                    sql_text=sql[:10000],
+                    rows_returned=rows_returned,
+                    duration_ms=duration_ms,
+                    parent_id=parent_id,
+                    blocked=False,
+                ))
+                await session.commit()
+        except Exception:
+            pass  # Never fail the actual query for audit logging
 
     # ─── Identifier quoting (SQL injection prevention) ────────────────
 

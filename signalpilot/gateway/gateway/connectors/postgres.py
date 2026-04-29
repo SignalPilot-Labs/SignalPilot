@@ -141,7 +141,7 @@ class PostgresConnector(BaseConnector):
             self._pool = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         if self._pool is None:
             raise RuntimeError("Not connected")
         async with self._pool.acquire() as conn:

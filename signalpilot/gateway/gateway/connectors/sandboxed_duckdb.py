@@ -182,7 +182,7 @@ class SandboxedDuckDBConnector(BaseConnector):
         except json.JSONDecodeError:
             raise RuntimeError(f"Invalid JSON from sandbox: {result.output[:200]}")
 
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         """Execute a query via sandbox and return rows."""
         code = _build_query_code(sql)
         data = await self._run_sandboxed(code, timeout=timeout or self._query_timeout)

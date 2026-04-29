@@ -355,7 +355,7 @@ export default function AuditPage() {
                   </tr>
                   {isExpanded && (
                     <tr className="animate-fade-in">
-                      <td colSpan={5} className="px-4 pb-4 pt-0">
+                      <td colSpan={5} className="px-4 pb-4 pt-3 border-b border-[var(--color-border)]">
                         <div className="ml-8 space-y-3">
                           {entry.sql && (
                             <>

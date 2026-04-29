@@ -174,7 +174,7 @@ function KeyUsageRow({ entry }: { entry: KeyUsageEntry }) {
       <div className="w-28 flex-shrink-0">
         {entry.last_used_at ? (
           <TimeAgo
-            timestamp={new Date(entry.last_used_at).getTime()}
+            timestamp={new Date(entry.last_used_at).getTime() / 1000}
             className="text-[12px] text-[var(--color-text-dim)] tracking-wider tabular-nums"
           />
         ) : (

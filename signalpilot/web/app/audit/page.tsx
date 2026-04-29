@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   ScrollText,
   Filter,
@@ -258,8 +258,8 @@ export default function AuditPage() {
                 const color = typeColors[entry.event_type] || typeColors.connect;
                 const isExpanded = expandedRow === entry.id;
                 return (
+                <Fragment key={entry.id}>
                   <tr
-                    key={entry.id}
                     onClick={() => setExpandedRow(isExpanded ? null : entry.id)}
                     className="table-row-hover cursor-pointer group"
                   >
@@ -272,70 +272,6 @@ export default function AuditPage() {
                         )}
                         <TimeAgo timestamp={entry.timestamp} live className="text-[12px]" />
                       </div>
-                      {isExpanded && (
-                        <div className="mt-3 ml-4 animate-fade-in">
-                          {entry.sql && (
-                            <>
-                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
-                              <pre className="text-[13px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto">
-                                <SqlHighlight sql={entry.sql} className="text-[13px]" />
-                              </pre>
-                            </>
-                          )}
-                          {entry.rows_returned != null && (
-                            <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
-                              rows: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.rows_returned.toLocaleString()}</span>
-                            </p>
-                          )}
-                          {/* Child SQL queries (linked via parent_id) */}
-                          {childSqlByParent.has(entry.id) && (
-                            <div className="mt-3">
-                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-2">
-                                sql queries ({childSqlByParent.get(entry.id)!.length})
-                              </p>
-                              <div className="space-y-2">
-                                {childSqlByParent.get(entry.id)!.map((child) => (
-                                  <div key={child.id} className="border-l-2 border-[var(--color-border)] pl-3">
-                                    {child.sql && (
-                                      <pre className="text-[12px] bg-[var(--color-bg)] px-2 py-1 border border-[var(--color-border)] overflow-auto max-h-20">
-                                        <SqlHighlight sql={child.sql.slice(0, 200)} className="text-[12px]" />
-                                      </pre>
-                                    )}
-                                    <div className="flex gap-3 mt-0.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                                      {child.rows_returned != null && <span>rows: {child.rows_returned}</span>}
-                                      {child.duration_ms != null && <span>{Math.round(child.duration_ms)}ms</span>}
-                                      {child.connection_name && <span>{child.connection_name}</span>}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {/* Client info — IP + User-Agent */}
-                          {(entry.client_ip || entry.user_agent) && (
-                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                              {entry.client_ip && (
-                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                                  ip: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.client_ip}</span>
-                                </p>
-                              )}
-                              {entry.user_agent && (
-                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider truncate max-w-md">
-                                  ua: <span className="text-[var(--color-text-muted)]">{entry.user_agent}</span>
-                                </p>
-                              )}
-                            </div>
-                          )}
-                          {entry.metadata && Object.keys(entry.metadata).length > 0 && (
-                            <div className="mt-2">
-                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
-                              <pre className="text-[11px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)]">
-                                {JSON.stringify(entry.metadata, null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </td>
                     <td className="px-4 py-2.5 align-top">
                       <span className={`flex items-center gap-1.5 text-[12px] tracking-wider ${color}`}>
@@ -354,23 +290,41 @@ export default function AuditPage() {
                       {entry.connection_name || "—"}
                     </td>
                     <td className="px-4 py-2.5 max-w-md align-top">
-                      {entry.sql ? (
-                        <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
-                          <SqlHighlight sql={entry.sql.slice(0, 120)} className="text-[12px]" />
-                        </div>
-                      ) : entry.block_reason ? (
-                        <span className="text-[12px] text-[var(--color-error)]">{entry.block_reason}</span>
-                      ) : entry.event_type === "mcp_tool" && entry.agent_id ? (
-                        <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-                          {entry.connection_name
-                            ? `${entry.agent_id}(${entry.connection_name})`
-                            : entry.agent_id}
-                        </span>
-                      ) : (
-                        <span className="text-[12px] text-[var(--color-text-dim)]">
-                          {entry.metadata?.code_preview ? String(entry.metadata.code_preview).slice(0, 60) : "—"}
-                        </span>
-                      )}
+                      {(() => {
+                        // For mcp_tool entries, show child SQL if available (e.g. query_database)
+                        const childSql = childSqlByParent.get(entry.id)?.[0]?.sql;
+                        if (entry.sql) {
+                          return (
+                            <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
+                              <SqlHighlight sql={entry.sql.slice(0, 120)} className="text-[12px]" />
+                            </div>
+                          );
+                        }
+                        if (childSql) {
+                          return (
+                            <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
+                              <SqlHighlight sql={childSql.slice(0, 120)} className="text-[12px]" />
+                            </div>
+                          );
+                        }
+                        if (entry.block_reason) {
+                          return <span className="text-[12px] text-[var(--color-error)]">{entry.block_reason}</span>;
+                        }
+                        if (entry.event_type === "mcp_tool" && entry.agent_id) {
+                          return (
+                            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                              {entry.connection_name
+                                ? `${entry.agent_id}(${entry.connection_name})`
+                                : entry.agent_id}
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="text-[12px] text-[var(--color-text-dim)]">
+                            {entry.metadata?.code_preview ? String(entry.metadata.code_preview).slice(0, 60) : "—"}
+                          </span>
+                        );
+                      })()}
                       {entry.tables.length > 0 && (
                         <div className="flex gap-1 mt-1 flex-wrap">
                           {entry.tables.map((t) => (
@@ -399,6 +353,70 @@ export default function AuditPage() {
                       )}
                     </td>
                   </tr>
+                  {isExpanded && (
+                    <tr className="animate-fade-in">
+                      <td colSpan={5} className="px-4 pb-4 pt-0">
+                        <div className="ml-8 space-y-3">
+                          {entry.sql && (
+                            <>
+                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
+                              <pre className="text-[13px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                                <SqlHighlight sql={entry.sql} className="text-[13px]" />
+                              </pre>
+                            </>
+                          )}
+                          {/* Child SQL queries (linked via parent_id) */}
+                          {childSqlByParent.has(entry.id) && (
+                            <div>
+                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-2">
+                                sql queries ({childSqlByParent.get(entry.id)!.length})
+                              </p>
+                              <div className="space-y-2">
+                                {childSqlByParent.get(entry.id)!.map((child) => (
+                                  <div key={child.id} className="border-l-2 border-[var(--color-border)] pl-3">
+                                    {child.sql && (
+                                      <pre className="text-[12px] bg-[var(--color-bg)] px-2 py-1 border border-[var(--color-border)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
+                                        <SqlHighlight sql={child.sql.slice(0, 300)} className="text-[12px]" />
+                                      </pre>
+                                    )}
+                                    <div className="flex gap-3 mt-0.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                                      {child.rows_returned != null && <span>rows: {child.rows_returned}</span>}
+                                      {child.duration_ms != null && <span>{Math.round(child.duration_ms)}ms</span>}
+                                      {child.connection_name && <span>{child.connection_name}</span>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {/* Client info */}
+                          {(entry.client_ip || entry.user_agent) && (
+                            <div className="flex flex-wrap gap-x-4 gap-y-1">
+                              {entry.client_ip && (
+                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                                  ip: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.client_ip}</span>
+                                </p>
+                              )}
+                              {entry.user_agent && (
+                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                                  ua: <span className="text-[var(--color-text-muted)]">{entry.user_agent}</span>
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {entry.metadata && Object.keys(entry.metadata).length > 0 && (
+                            <div>
+                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
+                              <pre className="text-[11px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)] max-h-32 overflow-auto whitespace-pre-wrap break-all">
+                                {JSON.stringify(entry.metadata, null, 2)}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
                 );
               })
             )}

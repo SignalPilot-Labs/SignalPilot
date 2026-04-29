@@ -63,32 +63,31 @@ class AuditedConnector:
         return rows
 
     async def _log_sql_raw(self, sql: str, rows_returned: int, duration_ms: float) -> None:
-        """Log SQL execution using raw SQL INSERT to avoid ORM session conflicts."""
+        """Log SQL execution using a dedicated session to avoid connection conflicts."""
         try:
-            from ..db.engine import get_engine
+            from ..db.engine import get_session_factory
+            from ..db.models import GatewayAuditLog
             from ..governance.context import current_org_id_var
             from ..mcp_server import mcp_audit_id_var
-            from sqlalchemy import text
 
             org_id = current_org_id_var.get("local")
             parent_id = mcp_audit_id_var.get(None)
             conn_name = self._resolve_connection_name()
 
-            engine = get_engine()
-            async with engine.begin() as conn:
-                await conn.execute(text(
-                    "INSERT INTO gateway_audit_logs "
-                    "(id, org_id, timestamp, event_type, connection_name, sql_text, rows_returned, duration_ms, parent_id, blocked) "
-                    "VALUES (:id, :org_id, :ts, 'sql', :conn_name, :sql_text, :rows, :dur, :parent_id, false)"
-                ), {
-                    "id": str(uuid.uuid4()),
-                    "org_id": org_id,
-                    "ts": time.time(),
-                    "conn_name": conn_name,
-                    "sql_text": sql[:10000],
-                    "rows": rows_returned,
-                    "dur": duration_ms,
-                    "parent_id": parent_id,
-                })
+            factory = get_session_factory()
+            async with factory() as session:
+                session.add(GatewayAuditLog(
+                    id=str(uuid.uuid4()),
+                    org_id=org_id,
+                    timestamp=time.time(),
+                    event_type="sql",
+                    connection_name=conn_name,
+                    sql_text=sql[:10000],
+                    rows_returned=rows_returned,
+                    duration_ms=duration_ms,
+                    parent_id=parent_id,
+                    blocked=False,
+                ))
+                await session.commit()
         except Exception:
             logger.warning("Failed to audit SQL execution", exc_info=True)

@@ -483,77 +483,49 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         row_limit = min(row_limit, 10_000)
         safe_sql = inject_limit(sql, row_limit)
 
-        # Check query cache (Feature #30)
-        from .governance.cache import query_cache
+        conn_str = await store.get_connection_string(connection_name)
+        if not conn_str:
+            return "Error: No credentials stored for this connection (restart gateway to reload)"
 
-        cached = query_cache.get(connection_name, sql, row_limit)
-        if cached:
-            rows = cached.rows
-            elapsed_ms = cached.execution_ms
-        else:
-            conn_str = await store.get_connection_string(connection_name)
-            if not conn_str:
-                return "Error: No credentials stored for this connection (restart gateway to reload)"
+        from .connectors.pool_manager import pool_manager
+        from .connectors.health_monitor import health_monitor
 
-            # Use pool manager for connection reuse (MED-06 fix)
-            from .connectors.pool_manager import pool_manager
-            from .connectors.health_monitor import health_monitor
+        extras = await store.get_credential_extras(connection_name)
+        start = time.monotonic()
+        try:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                rows = await _audited_execute(connector, safe_sql, connection_name)
+        except Exception as e:
+            elapsed_err = (time.monotonic() - start) * 1000
+            health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
+            err_str = str(e)
+            hint = query_error_hint(err_str, conn_info.db_type)
+            sanitized = sanitize_mcp_error(err_str, cap=300)
+            return f"Query error: {sanitized}" + (f"\n\nHint: {hint}" if hint else "")
 
-            extras = await store.get_credential_extras(connection_name)
-            start = time.monotonic()
-            try:
-                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                    rows = await _audited_execute(connector, safe_sql, connection_name)
-            except Exception as e:
-                elapsed_err = (time.monotonic() - start) * 1000
-                health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
-                # Structured error feedback for agent self-correction (Spider2.0 SOTA pattern)
-                err_str = str(e)
-                hint = query_error_hint(err_str, conn_info.db_type)
-                sanitized = sanitize_mcp_error(err_str, cap=300)
-                return f"Query error: {sanitized}" + (f"\n\nHint: {hint}" if hint else "")
+        elapsed_ms = (time.monotonic() - start) * 1000
+        health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
 
-            elapsed_ms = (time.monotonic() - start) * 1000
-            health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
-
-            # Apply PII redaction if enabled on this connection (Feature #15)
-            from .governance.pii import PIIRedactor
-            pii_redactor = PIIRedactor()
-            # Load rules from DB-stored PII config (toggled per-connection)
-            if conn_info.pii_enabled and conn_info.pii_rules:
-                for col_name, rule in conn_info.pii_rules.items():
-                    pii_redactor.add_rule(col_name, rule)
-            # Also load from YAML annotations (legacy/manual overrides)
-            for col_name, rule in annotations.pii_columns.items():
+        # Apply PII redaction if enabled on this connection
+        from .governance.pii import PIIRedactor
+        pii_redactor = PIIRedactor()
+        if conn_info.pii_enabled and conn_info.pii_rules:
+            for col_name, rule in conn_info.pii_rules.items():
                 pii_redactor.add_rule(col_name, rule)
-            if pii_redactor.has_rules():
-                rows = pii_redactor.redact_rows(rows)
+        for col_name, rule in annotations.pii_columns.items():
+            pii_redactor.add_rule(col_name, rule)
+        if pii_redactor.has_rules():
+            rows = pii_redactor.redact_rows(rows)
 
-            # Store in cache after PII redaction
-            query_cache.put(
-                connection_name=connection_name,
-                sql=sql,
-                row_limit=row_limit,
-                rows=rows,
-                tables=validation.tables,
-                execution_ms=elapsed_ms,
-                sql_executed=safe_sql,
-            )
-
-            # Charge query cost to budget (Feature #11 + #12)
-            from .governance.budget import budget_ledger
-            # Cost formula: duration_sec × $0.000014 per vCPU (simplified for DB queries)
-            query_cost_usd = (elapsed_ms / 1000) * 0.000014
-            # Budget check uses "default" session if no specific session
-            budget_ok = await budget_ledger.charge("default", query_cost_usd)
-            if not budget_ok:
-                meta_parts_budget = [f"${query_cost_usd:.6f} cost"]
-                return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
+        # Charge query cost to budget
+        from .governance.budget import budget_ledger
+        query_cost_usd = (elapsed_ms / 1000) * 0.000014
+        budget_ok = await budget_ledger.charge("default", query_cost_usd)
+        if not budget_ok:
+            return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
 
     # Build status footer
     meta_parts = [f"{len(rows)} rows", f"{elapsed_ms:.0f}ms"]
-    if cached:
-        meta_parts.append("cache hit")
 
     # PII redaction notice for the LLM
     redaction_notice = ""
@@ -2163,26 +2135,6 @@ async def query_history(connection_name: str, limit: int = 10) -> str:
 
     return "\n".join(lines) if len(lines) > 1 else f"No successful queries for {connection_name}"
 
-
-@mcp.tool()
-async def cache_status() -> str:
-    """
-    Check the query cache status and performance.
-
-    Returns cache hit rate, entry count, and usage statistics.
-    """
-    from .governance.cache import query_cache
-
-    async with _store_session() as _store:
-        stats = query_cache.stats()
-    return (
-        f"Query Cache Status:\n"
-        f"Entries: {stats['entries']} / {stats['max_entries']}\n"
-        f"TTL: {stats['ttl_seconds']}s\n"
-        f"Hits: {stats['hits']}\n"
-        f"Misses: {stats['misses']}\n"
-        f"Hit Rate: {stats['hit_rate'] * 100:.1f}%"
-    )
 
 
 @mcp.tool()

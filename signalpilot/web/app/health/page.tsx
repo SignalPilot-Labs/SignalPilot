@@ -24,7 +24,6 @@ import {
 import {
   useConnections,
   useConnectionsHealth,
-  useCacheStats,
   useSchemaCache,
   SWR_KEYS,
 } from "@/lib/hooks/use-gateway-data";
@@ -103,7 +102,6 @@ export default function HealthPage() {
 
   const { data: connectionsData, isLoading: connectionsLoading } = useConnections();
   const { data: healthRaw, isLoading: healthLoading, mutate: mutateHealth } = useConnectionsHealth(autoRefresh);
-  const { data: cacheStats } = useCacheStats();
   const { data: schemaCache } = useSchemaCache();
 
   const connections = connectionsData ?? [];
@@ -113,7 +111,6 @@ export default function HealthPage() {
   function handleRefresh() {
     mutate(SWR_KEYS.connections);
     mutate(SWR_KEYS.connectionsHealth);
-    mutate(SWR_KEYS.cacheStats);
     mutate(SWR_KEYS.schemaCache);
   }
 
@@ -201,26 +198,6 @@ export default function HealthPage() {
           </div>
           <p className="text-xl font-light tabular-nums">{avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--"}</p>
           <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
-        </div>
-        {/* Query Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap className={`w-3.5 h-3.5 ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query cache</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <RingGauge
-              value={cacheStats ? cacheStats.hit_rate * 100 : 0}
-              max={100}
-              size={32}
-              strokeWidth={3}
-              color={cacheStats && cacheStats.hit_rate > 0.7 ? "var(--color-success)" : cacheStats && cacheStats.hit_rate > 0.3 ? "var(--color-warning)" : "var(--color-error)"}
-            />
-            <div>
-              <p className={`text-lg font-light tabular-nums ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : ""}`}>{cacheStats ? `${(cacheStats.hit_rate * 100).toFixed(1)}%` : "--"}</p>
-              <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">{cacheStats ? `${cacheStats.hits} hits / ${cacheStats.misses} misses` : "hit rate"}</p>
-            </div>
-          </div>
         </div>
         {/* Schema Cache */}
         <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
@@ -350,68 +327,24 @@ export default function HealthPage() {
         </div>
       )}
 
-      {/* Cache Details */}
-      {cacheStats && (
+      {/* Schema Cache */}
+      {schemaCache && (
         <div className="mt-8">
           <div className="section-header mb-4">
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">cache performance</span>
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
           </div>
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
-            <div className="grid grid-cols-2 gap-8">
-              <div>
-                <div className="text-[12px] text-[var(--color-text-dim)] mb-3 flex items-center gap-2 tracking-wider">
-                  <BarChart3 className="w-3 h-3" strokeWidth={1.5} /> query cache
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "connections", value: schemaCache.cached_connections },
+                { label: "entries", value: schemaCache.total_entries },
+                { label: "ttl", value: `${schemaCache.ttl_seconds}s` },
+              ].map((s) => (
+                <div key={s.label}>
+                  <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</p>
+                  <p className="text-xs font-light tabular-nums">{s.value}</p>
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex justify-between text-[12px] mb-1">
-                      <span className="text-[var(--color-text-dim)] tracking-wider">hit rate</span>
-                      <span className="tabular-nums">{(cacheStats.hit_rate * 100).toFixed(1)}%</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-[var(--color-bg)] overflow-hidden">
-                      <div className="h-full bg-[var(--color-success)] transition-all" style={{ width: `${cacheStats.hit_rate * 100}%` }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-[12px] mb-1">
-                      <span className="text-[var(--color-text-dim)] tracking-wider">capacity</span>
-                      <span className="tabular-nums">{cacheStats.entries} / {cacheStats.max_entries}</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-[var(--color-bg)] overflow-hidden">
-                      <div className="h-full bg-[var(--color-text-dim)] transition-all" style={{ width: `${(cacheStats.entries / cacheStats.max_entries) * 100}%` }} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 pt-1">
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits.toLocaleString()}</p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">misses</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses.toLocaleString()}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              {schemaCache && (
-                <div>
-                  <div className="text-[12px] text-[var(--color-text-dim)] mb-3 flex items-center gap-2 tracking-wider">
-                    <TrendingUp className="w-3 h-3" strokeWidth={1.5} /> schema cache
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { label: "connections", value: schemaCache.cached_connections },
-                      { label: "entries", value: schemaCache.total_entries },
-                      { label: "ttl", value: `${schemaCache.ttl_seconds}s` },
-                    ].map((s) => (
-                      <div key={s.label}>
-                        <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</p>
-                        <p className="text-xs font-light tabular-nums">{s.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              ))}
             </div>
           </div>
         </div>

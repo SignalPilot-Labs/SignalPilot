@@ -42,6 +42,8 @@ export interface SubscriptionResponse {
   max_api_keys: number;
   pending_downgrade_to: string | null;
   pending_downgrade_date: string | null;
+  cancel_at_period_end: boolean;
+  cancel_date: string | null;
 }
 
 export interface PlanPrice {
@@ -229,6 +231,8 @@ export interface BackendClient {
     cancelUrl: string,
   ): Promise<{ checkout_url: string | null; action: "checkout" | "updated" }>;
   createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
+  cancelSubscription(): Promise<{ status: string; cancel_date: string | null }>;
+  reactivateSubscription(): Promise<{ status: string }>;
   getUsageSummary(): Promise<UsageSummaryResponse>;
   getUsageDaily(days?: number): Promise<DailyUsageResponse>;
   getUsageByKey(): Promise<KeyUsageByKeyResponse>;
@@ -285,6 +289,16 @@ export function useBackendClient(): BackendClient {
       backendFetch<{ portal_url: string }>("/api/v1/billing/portal", getToken, {
         method: "POST",
         body: JSON.stringify({ return_url: returnUrl }),
+      }),
+
+    cancelSubscription: () =>
+      backendFetch<{ status: string; cancel_date: string | null }>("/api/v1/billing/cancel", getToken, {
+        method: "POST",
+      }),
+
+    reactivateSubscription: () =>
+      backendFetch<{ status: string }>("/api/v1/billing/reactivate", getToken, {
+        method: "POST",
       }),
 
     getUsageSummary: () =>

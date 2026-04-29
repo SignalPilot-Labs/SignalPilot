@@ -316,7 +316,7 @@ export default function BillingPage() {
 
 function BillingContent() {
   const client = useBackendClient();
-  const { status, isLoaded, refetch, pendingDowngradeTo, pendingDowngradeDate } = useSubscription();
+  const { status, isLoaded, refetch, pendingDowngradeTo, pendingDowngradeDate, cancelAtPeriodEnd, cancelDate } = useSubscription();
   const { data: plan, mutate: mutatePlan } = usePlan();
   const planTier = plan?.tier ?? "free";
   const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
@@ -329,6 +329,9 @@ function BillingContent() {
   const [billingInterval, setBillingInterval] = useState<"month" | "year">("month");
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
   const [plansError, setPlansError] = useState(false);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+
   const [pendingChange, setPendingChange] = useState<{
     priceId: string;
     plan: PlanInfo;
@@ -439,6 +442,34 @@ function BillingContent() {
       setManagingPortal(false);
     }
   }, [client, toast]);
+
+  const handleCancel = useCallback(async () => {
+    setCancelConfirmOpen(false);
+    setCanceling(true);
+    setActionError(null);
+    try {
+      await client.cancelSubscription();
+      toast("subscription will cancel at end of billing period", "success");
+      refetch();
+    } catch (e) {
+      setActionError(String(e));
+      toast("failed to cancel subscription", "error");
+    } finally {
+      setCanceling(false);
+    }
+  }, [client, toast, refetch]);
+
+  const handleReactivate = useCallback(async () => {
+    setActionError(null);
+    try {
+      await client.reactivateSubscription();
+      toast("subscription reactivated", "success");
+      refetch();
+    } catch (e) {
+      setActionError(String(e));
+      toast("failed to reactivate subscription", "error");
+    }
+  }, [client, toast, refetch]);
 
   // ---------------------------------------------------------------------------
   // Loading
@@ -683,13 +714,13 @@ function BillingContent() {
 
                 <ul className="space-y-2 mb-5">
                   {[
+                    "sso (saml/oidc)",
                     "dedicated infrastructure",
                     "custom sla (99.9%+)",
                     "on-prem / vpc deployment",
                     "custom pii rules",
                     "soc 2 compliance path",
                     "dedicated slack channel",
-                    "quarterly business reviews",
                   ].map((f) => (
                     <li key={f} className="flex items-center gap-2">
                       <CheckCircle2
@@ -728,6 +759,76 @@ function BillingContent() {
           </>
         )}
       </section>
+
+      {/* Cancel / reactivate section — only for paid tiers */}
+      {!isFreeTier && (
+        <section className="mb-8">
+          <SectionHeader icon={AlertTriangle} title="cancel subscription" iconColor="text-[var(--color-error)]" />
+          <div className="border border-[var(--color-error)]/30 bg-[var(--color-bg-card)] p-5">
+            {cancelAtPeriodEnd ? (
+              <div className="space-y-3">
+                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                  your subscription is set to cancel
+                  {cancelDate && (
+                    <> on{" "}
+                      <span className="text-[var(--color-error)] tabular-nums">
+                        {new Date(cancelDate + "T00:00:00").toLocaleDateString("en-US", {
+                          month: "long", day: "numeric", year: "numeric",
+                        })}
+                      </span>
+                    </>
+                  )}
+                  . you keep full access until then.
+                </p>
+                <button
+                  onClick={handleReactivate}
+                  className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-success)] border border-[var(--color-success)]/40 hover:bg-[var(--color-bg-hover)] transition-all tracking-wider uppercase"
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  keep subscription
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                  cancel your subscription. you'll keep full access until the end of the current billing period,
+                  then revert to the free plan.
+                </p>
+                <button
+                  onClick={() => setCancelConfirmOpen(true)}
+                  disabled={canceling}
+                  className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/40 hover:bg-[var(--color-error)]/5 transition-all tracking-wider uppercase disabled:opacity-40"
+                >
+                  {canceling ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <XCircle className="w-3 h-3" />
+                  )}
+                  {canceling ? "canceling..." : "cancel subscription"}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Cancel confirmation dialog */}
+      <ConfirmDialog
+        open={cancelConfirmOpen}
+        title="cancel subscription"
+        message="Are you sure you want to cancel?"
+        body={
+          <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            your {planTier} plan stays active until the end of the current billing period.
+            after that, your account reverts to the free plan with reduced limits.
+          </p>
+        }
+        confirmLabel="cancel subscription"
+        cancelLabel="keep subscription"
+        variant="danger"
+        onConfirm={handleCancel}
+        onCancel={() => setCancelConfirmOpen(false)}
+      />
 
       {/* Plan change confirmation dialog */}
       <ConfirmDialog

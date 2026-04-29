@@ -22,6 +22,8 @@ export interface SubscriptionState {
   isLoaded: boolean;
   pendingDowngradeTo: string | null;
   pendingDowngradeDate: string | null;
+  cancelAtPeriodEnd: boolean;
+  cancelDate: string | null;
   canCreateKey: (currentCount: number) => boolean;
   refetch: () => void;
 }
@@ -43,6 +45,8 @@ const LOCAL_MODE_SUBSCRIPTION: Omit<SubscriptionState, "canCreateKey" | "refetch
   isLoaded: true,
   pendingDowngradeTo: null,
   pendingDowngradeDate: null,
+  cancelAtPeriodEnd: false,
+  cancelDate: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -59,6 +63,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const [isLoaded, setIsLoaded] = useState(true);
   const [pendingDowngradeTo, setPendingDowngradeTo] = useState<string | null>(null);
   const [pendingDowngradeDate, setPendingDowngradeDate] = useState<string | null>(null);
+  const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(false);
+  const [cancelDate, setCancelDate] = useState<string | null>(null);
 
   const fetchSubscription = useCallback(async () => {
     if (!isAuthenticated) {
@@ -72,6 +78,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
       setMaxApiKeys(data.max_api_keys);
       setPendingDowngradeTo(data.pending_downgrade_to);
       setPendingDowngradeDate(data.pending_downgrade_date);
+      setCancelAtPeriodEnd(data.cancel_at_period_end ?? false);
+      setCancelDate(data.cancel_date ?? null);
     } catch {
       // Surface error by leaving defaults (free tier) and marking loaded
       // so the UI renders rather than spinning indefinitely
@@ -91,6 +99,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
     isLoaded,
     pendingDowngradeTo,
     pendingDowngradeDate,
+    cancelAtPeriodEnd,
+    cancelDate,
     canCreateKey: (currentCount: number) => currentCount < maxApiKeys,
     refetch: fetchSubscription,
   };

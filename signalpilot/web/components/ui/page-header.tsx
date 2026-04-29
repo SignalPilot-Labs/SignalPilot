@@ -1,5 +1,8 @@
 "use client";
 
+import { TierBadge } from "@/components/branding/tier-badge";
+import { TierAccent } from "@/components/branding/tier-accent";
+
 /**
  * Consistent page header with terminal-style breadcrumb.
  */
@@ -20,6 +23,7 @@ export function PageHeader({
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
+            <TierBadge size="sm" />
             <span className="text-[12px] text-[var(--color-text-muted)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
               {subtitle}
             </span>
@@ -28,8 +32,10 @@ export function PageHeader({
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
-      {/* Gradient accent line */}
+      {/* Neutral gradient accent line — always rendered */}
       <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
+      {/* Tier-tinted accent — renders only for paid cloud tiers */}
+      <TierAccent />
     </div>
   );
 }

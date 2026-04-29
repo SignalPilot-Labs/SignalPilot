@@ -118,7 +118,7 @@ async def get_connection_schema(
     if cached is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                 cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
@@ -183,7 +183,7 @@ async def get_grouped_schema(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             cached = schema_cache.get(name)
             if cached is None:
                 cached = await connector.get_schema()
@@ -241,7 +241,7 @@ async def get_schema_samples(
     if cached is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                 cached = await connector.get_schema()
                 schema_cache.put(name, cached)
         except Exception as e:
@@ -254,7 +254,7 @@ async def get_schema_samples(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             samples: dict[str, dict[str, list]] = {}
             for table_key in table_keys:
                 if table_key not in cached:
@@ -382,7 +382,7 @@ FROM {q_table}
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             actual_sql = explore_sql
 
             values_rows = await connector.execute(actual_sql, params=explore_params, timeout=30)
@@ -430,7 +430,7 @@ async def get_enriched_schema(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             # Get or use cached schema
             cached = schema_cache.get(name)
             if cached is None:
@@ -555,7 +555,7 @@ async def get_compact_schema(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             cached = await connector.get_schema()
             schema_cache.put(name, cached)
 
@@ -740,7 +740,7 @@ async def get_schema_ddl(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             cached = await connector.get_schema()
         schema_cache.put(name, cached)
 
@@ -985,7 +985,7 @@ async def get_agent_context(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             cached = await connector.get_schema()
         schema_cache.put(name, cached)
 
@@ -2020,7 +2020,7 @@ async def schema_link(
             conn_str = await store.get_connection_string(name)
             if conn_str:
                 extras = await store.get_credential_extras(name)
-                async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                     for key, t, sample_cols in missing_samples[:5]:  # Cap at 5 tables
                         table_name = f"{t.get('schema', '')}.{t['name']}" if t.get("schema") else t["name"]
                         try:
@@ -2384,7 +2384,7 @@ async def explore_table(
                 conn_str = await store.get_connection_string(name)
                 if conn_str:
                     extras = await store.get_credential_extras(name)
-                    async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+                    async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                         samples = await connector.get_sample_values(table, string_cols[:10], limit=sample_limit)
                     if samples:
                         schema_cache.put_sample_values(name, table, samples)
@@ -2487,7 +2487,7 @@ async def get_schema_diff(name: str, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             new_schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
@@ -2845,7 +2845,7 @@ async def get_cached_sample_values(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             col_list: list[str] = []
             if columns:
                 col_list = [c.strip() for c in columns.split(",") if c.strip()]
@@ -3007,7 +3007,7 @@ async def search_schema(
     if include_samples and results:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                 for key, table in results.items():
                     matched_cols = table.get("_matched_columns", [])
                     if matched_cols and hasattr(connector, "get_sample_values"):
@@ -3314,7 +3314,7 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
 
     result_cols: list[dict] = []
 
-    async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
+    async with pool_manager.connection(db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
         sample_values: dict[str, list] = {}
         if include_values:
             col_names = [c["name"] for c in explore_cols[:20]]

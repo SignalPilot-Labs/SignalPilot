@@ -48,7 +48,7 @@ async def detect_pii(name: str, store: StoreD):
     if cached_schema is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                 cached_schema = await connector.get_schema()
             schema_cache.put(name, cached_schema)
         except Exception as e:
@@ -116,7 +116,7 @@ async def detect_and_save_pii(name: str, store: StoreD):
     if cached_schema is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                 cached_schema = await connector.get_schema()
             schema_cache.put(name, cached_schema)
         except Exception as e:

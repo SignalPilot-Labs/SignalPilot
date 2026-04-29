@@ -7,6 +7,7 @@ introspection — gets logged automatically.
 
 from __future__ import annotations
 
+import contextvars
 import time
 import uuid
 import logging
@@ -15,6 +16,11 @@ from typing import Any
 from .base import BaseConnector
 
 logger = logging.getLogger(__name__)
+
+# Context var for the active connection name — set by REST API deps or MCP tools
+active_connection_name_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "active_connection_name", default=None
+)
 
 
 class AuditedConnector:
@@ -26,6 +32,10 @@ class AuditedConnector:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connector, name)
+
+    def _resolve_connection_name(self) -> str | None:
+        """Get connection name from constructor arg or context variable."""
+        return self._connection_name or active_connection_name_var.get(None)
 
     async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
         t0 = time.monotonic()
@@ -49,8 +59,7 @@ class AuditedConnector:
 
             org_id = current_org_id_var.get("local")
             parent_id = mcp_audit_id_var.get(None)
-            audit_id = str(uuid.uuid4())
-            ts = time.time()
+            conn_name = self._resolve_connection_name()
 
             engine = get_engine()
             async with engine.begin() as conn:
@@ -59,10 +68,10 @@ class AuditedConnector:
                     "(id, org_id, timestamp, event_type, connection_name, sql_text, rows_returned, duration_ms, parent_id, blocked) "
                     "VALUES (:id, :org_id, :ts, 'sql', :conn_name, :sql_text, :rows, :dur, :parent_id, false)"
                 ), {
-                    "id": audit_id,
+                    "id": str(uuid.uuid4()),
                     "org_id": org_id,
-                    "ts": ts,
-                    "conn_name": self._connection_name,
+                    "ts": time.time(),
+                    "conn_name": conn_name,
                     "sql_text": sql[:10000],
                     "rows": rows_returned,
                     "dur": duration_ms,

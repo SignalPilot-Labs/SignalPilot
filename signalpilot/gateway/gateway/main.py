@@ -125,6 +125,7 @@ async def lifespan(app: FastAPI):
                             try:
                                 async with pool_manager.connection(
                                     conn_info.db_type, conn_str, credential_extras=extras,
+                                    connection_name=conn_info.name,
                                 ) as connector:
                                     ok = await connector.health_check()
                                 elapsed = (time.monotonic() - start) * 1000
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI):
                             extras = await inner_store.get_credential_extras(conn_info.name)
                             async with pool_manager.connection(
                                 conn_info.db_type, conn_str, credential_extras=extras,
+                                connection_name=conn_info.name,
                             ) as connector:
                                 schema = await connector.get_schema()
                             diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)

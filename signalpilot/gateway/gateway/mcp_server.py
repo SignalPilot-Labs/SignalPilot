@@ -253,15 +253,19 @@ def _audited_tool(fn):
         try:
             result = await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
+            # Detect blocked queries from return value
+            result_str = str(result) if result else ""
+            is_blocked = result_str.startswith("Query blocked:")
             import asyncio
             asyncio.create_task(_audit_tool_call(
                 tool_name=tool_name,
                 args=kwargs,
-                result=str(result)[:200] if result else None,
+                result=result_str[:200],
                 duration_ms=duration_ms,
                 connection_name=conn,
                 sql=sql_arg,
                 audit_id=audit_id,
+                error=result_str[:200] if is_blocked else None,
             ))
             return result
         except Exception as exc:
@@ -442,7 +446,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         extras = await store.get_credential_extras(connection_name)
         start = time.monotonic()
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 rows = await connector.execute(safe_sql)
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
@@ -598,7 +602,7 @@ async def describe_table(connection_name: str, table_name: str) -> str:
         if schema is None:
             from .connectors.pool_manager import pool_manager
             try:
-                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                     schema = await connector.get_schema()
             except Exception as e:
                 return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
@@ -683,7 +687,7 @@ async def list_tables(connection_name: str) -> str:
         if schema is None:
             from .connectors.pool_manager import pool_manager
             try:
-                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                     schema = await connector.get_schema()
             except Exception as e:
                 return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
@@ -767,7 +771,7 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
 
     schema = schema_cache.get(connection_name)
     if schema is None:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
             schema = await connector.get_schema()
         schema_cache.put(connection_name, schema)
 
@@ -807,7 +811,7 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
         sql = f'SELECT {", ".join(select_parts)} FROM {quoted_table}'
 
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 rows = await connector.execute(sql)
                 if rows:
                     row = rows[0]
@@ -1249,7 +1253,7 @@ if not _is_cloud:
                     schema = schema_cache.get(connection_name)
                     if schema is None:
                         try:
-                            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                                 schema = await connector.get_schema()
                             schema_cache.put(connection_name, schema)
                         except Exception as e:
@@ -1661,7 +1665,7 @@ async def schema_overview(connection_name: str) -> str:
     schema = schema_cache.get(connection_name)
     if schema is None:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 schema = await connector.get_schema()
         except Exception as e:
             return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
@@ -2559,7 +2563,7 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     from .connectors.pool_manager import pool_manager
 
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
             actual = await _get_column_names(connector, conn_info.db_type, model_name)
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
@@ -2764,7 +2768,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     from .connectors.pool_manager import pool_manager
 
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
             count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}')
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
@@ -2779,7 +2783,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
             return f"Error: Invalid candidate key name(s): {', '.join(invalid_keys)}"
     else:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 all_col_names = await _get_column_names(connector, conn_info.db_type, table_name)
         except Exception as e:
             return f"Error fetching schema: {sanitize_mcp_error(str(e))}"
@@ -2798,7 +2802,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
     unique_keys: list[str] = []
     if keys:
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 for key in keys:
                     try:
                         safe_key = key.replace('"', '""')
@@ -2869,7 +2873,7 @@ async def validate_model_output(
     from .connectors.pool_manager import pool_manager
 
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
             model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
@@ -2882,7 +2886,7 @@ async def validate_model_output(
         if not _MODEL_NAME_RE.match(source_table):
             return f"Error: Invalid source_table name '{source_table}'."
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
@@ -2966,7 +2970,7 @@ async def audit_model_sources(
 
     # Step 1: Get model row count.
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
             model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
         return f"Error: could not query model '{model_name}': {sanitize_mcp_error(str(e))}"
@@ -2987,7 +2991,7 @@ async def audit_model_sources(
             source_lines.append(f"  {src}:  ERROR: invalid table name (skipped)")
             continue
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(src)}')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
@@ -3024,7 +3028,7 @@ async def audit_model_sources(
     if sample_nulls and model_rows > 0:
         _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
         try:
-            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                 all_cols = await _get_column_names(connector, conn_info.db_type, model_name)
             total_col_count = len(all_cols)
             cols = all_cols[:20]
@@ -3039,7 +3043,7 @@ async def audit_model_sources(
                     col_scan_lines.append(f"  [--] {col}: skipped (unsafe column name)")
                     continue
                 try:
-                    async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+                    async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
                         col_result = await connector.execute(
                             f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
                             f'COUNT(DISTINCT "{col}") as dist '
@@ -3212,7 +3216,7 @@ SELECT
 """
 
     try:
-        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name) as connector:
             result = await connector.execute(sql)
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"

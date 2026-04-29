@@ -191,7 +191,7 @@ async def explain_query(req: DirectQueryRequest, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(req.connection_name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=req.connection_name) as connector:
             from ..governance.cost_estimator import CostEstimator
             cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
 

@@ -130,7 +130,7 @@ async def _auto_schema_refresh(name: str, db_type: str, store):
         if not conn_str:
             return
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             schema = await connector.get_schema()
             schema_cache.put(name, schema)
             logger.info("Auto-refreshed schema for new connection '%s': %d tables", name, len(schema))
@@ -656,7 +656,7 @@ async def refresh_connection_schema(name: str, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
             schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e)))
@@ -695,7 +695,7 @@ async def warmup_all_schemas(store: StoreD):
             return {"name": name, "status": "skipped", "error": "no credentials"}
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras) as connector:
+            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
                 schema = await connector.get_schema()
                 schema_cache.put(name, schema)
 
@@ -877,7 +877,7 @@ async def test_credentials(_: UserID, request: Request):
     t2 = time.monotonic()
     phase2_label = "file_access" if is_embedded else "authentication"
     try:
-        async with pool_manager.connection(db_type, conn_str, credential_extras=extras) as connector:
+        async with pool_manager.connection(db_type, conn_str, credential_extras=extras, connection_name=conn.name) as connector:
             ok = await connector.health_check()
             if ok:
                 msg = "File found and readable" if is_embedded else "Authenticated and connected successfully"

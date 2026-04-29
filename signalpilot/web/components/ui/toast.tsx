@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
 interface Toast {
   id: string;
@@ -21,7 +22,17 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
+// Left-edge color literals for paid tiers. Tailwind has no side-specific border-color
+// shorthand that works with opacity modifiers, so these must be full literal strings
+// (not assembled from TIER_BRANDS tokens) to satisfy JIT. Color semantics mirror accentText.
+const TIER_LEFT_BORDER: Record<"pro" | "team" | "enterprise", string> = {
+  pro:        "border-l-2 border-l-indigo-400/60",
+  team:       "border-l-2 border-l-violet-400/60",
+  enterprise: "border-l-2 border-l-amber-300/60",
+};
+
 function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) => void }) {
+  const b = useTierBranding();
   const [exiting, setExiting] = useState(false);
 
   useEffect(() => {
@@ -60,9 +71,14 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
     info: "border-[var(--color-border)]",
   };
 
+  const tierLeftClass =
+    b.enabled && b.tier !== "free"
+      ? TIER_LEFT_BORDER[b.tier as "pro" | "team" | "enterprise"]
+      : "";
+
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} shadow-lg ${
+      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} ${tierLeftClass} shadow-lg ${
         exiting ? "animate-slide-out-right" : "animate-slide-in-right"
       }`}
     >

@@ -39,6 +39,7 @@ import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useOnboardingStatus } from "@/lib/onboarding";
 import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 import { TierWordmark } from "@/components/branding/tier-wordmark";
+import { TierBadge } from "@/components/branding/tier-badge";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -122,14 +123,6 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
   const planTier = plan?.tier ?? "free";
   const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
 
-  const tierColorMap: Record<string, string> = {
-    free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
-    pro: "text-indigo-400 border-indigo-500/40",
-    team: "text-violet-300 border-violet-400/50",
-    enterprise: "text-amber-300 border-amber-400/50",
-  };
-  const tierClasses = tierColorMap[planTier] ?? tierColorMap.free;
-
   const statusLabel = status === "past_due" ? "past due" : status;
 
   // MCP endpoint detection — static check, no API call
@@ -150,14 +143,19 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
       <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
         <div className="flex items-center gap-2 mb-3">
           <CreditCard className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+          <span className="text-[12px] leading-none text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
             subscription
           </span>
         </div>
         <div className="mb-1.5">
-          <span className={`px-2 py-0.5 text-[11px] border tracking-[0.15em] uppercase ${tierClasses}`}>
-            {planTier}
-          </span>
+          {planTier === "free" ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
+              <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
+            </span>
+          ) : (
+            <TierBadge size="sm" />
+          )}
         </div>
         <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
           {statusLabel}

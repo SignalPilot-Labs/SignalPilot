@@ -26,7 +26,7 @@ export function TierBadge({ size: _size }: TierBadgeProps) {
         style={{ backgroundColor: brand.accentHex }}
         aria-hidden="true"
       />
-      <span className="text-[11px] tracking-[0.15em] uppercase text-[var(--color-text-muted)]">
+      <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">
         {brand.label}
       </span>
     </span>

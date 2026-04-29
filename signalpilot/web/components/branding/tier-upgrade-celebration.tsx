@@ -221,7 +221,7 @@ function CelebrationContent({ tier, brand }: CelebrationContentProps) {
             aria-hidden="true"
           />
         )}
-        <span className="text-[10px] tracking-[0.2em] uppercase text-[var(--color-text-muted)]">
+        <span className="text-[10px] leading-none tracking-[0.2em] uppercase text-[var(--color-text-muted)]">
           {brand.label}
         </span>
       </div>

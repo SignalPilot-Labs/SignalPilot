@@ -57,12 +57,12 @@ function EnterpriseSealInner({ variant, brand }: EnterpriseSealInnerProps) {
             style={{ backgroundColor: brand.accentHex }}
             aria-hidden="true"
           />
-          <span className={`text-[10px] tracking-[0.2em] uppercase ${brand.accentText}`}>
+          <span className={`text-[10px] leading-none tracking-[0.2em] uppercase ${brand.accentText}`}>
             Enterprise
           </span>
         </div>
         {orgName && (
-          <span className="text-[10px] text-[var(--color-text-dim)] tracking-wide pl-2.5">
+          <span className="text-[10px] text-[var(--color-text-dim)] tracking-wide pl-[11px]">
             {orgName}
           </span>
         )}
@@ -72,7 +72,7 @@ function EnterpriseSealInner({ variant, brand }: EnterpriseSealInnerProps) {
 
   // Header variant — enterprise only
   return (
-    <span className={`inline-flex items-center gap-1.5 tracking-[0.2em] uppercase text-[11px] ${brand.accentText}`}>
+    <span className={`inline-flex items-center gap-1.5 leading-none tracking-[0.2em] uppercase text-[11px] ${brand.accentText}`}>
       <span
         className="inline-block w-[5px] h-[5px] flex-shrink-0"
         style={{ backgroundColor: brand.accentHex }}
@@ -101,7 +101,7 @@ function TeamSealInner({ brand }: TeamSealInnerProps) {
         style={{ backgroundColor: brand.accentHex }}
         aria-hidden="true"
       />
-      <span className={`text-[10px] tracking-[0.2em] uppercase ${brand.accentText}`}>
+      <span className={`text-[10px] leading-none tracking-[0.2em] uppercase ${brand.accentText}`}>
         Team
       </span>
     </div>

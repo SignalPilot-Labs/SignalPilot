@@ -564,8 +564,9 @@ function BillingContent() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               {planTier === "free" ? (
-                <span className="px-1.5 py-0.5 text-[11px] border tracking-[0.15em] uppercase text-[var(--color-text-dim)] border-[var(--color-border)]">
-                  free
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
+                  <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
                 </span>
               ) : (
                 <TierBadge size="sm" />

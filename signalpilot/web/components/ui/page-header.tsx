@@ -32,8 +32,9 @@ export function PageHeader({
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
             <TierBadge size="sm" />
-            <span className="text-[12px] text-[var(--color-text-muted)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
-              {subtitle}
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
+              <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">{subtitle}</span>
             </span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>

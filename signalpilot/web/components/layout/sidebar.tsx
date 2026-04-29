@@ -118,7 +118,7 @@ const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding"];
 function SignalPilotLogo() {
   return (
     /* eslint-disable-next-line @next/next/no-img-element */
-    <img src="/logo.svg" alt="SignalPilot" width={32} height={32} className="rounded-sm" />
+    <img src="/logo.svg" alt="SignalPilot" width={32} height={32} className="block rounded-sm" />
   );
 }
 
@@ -397,17 +397,6 @@ export default function Sidebar() {
   const tierBranding = useTierBranding();
   const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
 
-  // Tier-keyed logo glow — whole class tokens, no concatenation
-  const LOGO_GLOW: Record<string, string> = {
-    enterprise: "drop-shadow-[0_0_8px_rgba(251,191,36,0.4)]",
-    team: "drop-shadow-[0_0_8px_rgba(167,139,250,0.4)]",
-    pro: "drop-shadow-[0_0_8px_rgba(129,140,248,0.35)]",
-  };
-  const logoGlow =
-    tierBranding.enabled && tierBranding.tier !== "free"
-      ? (LOGO_GLOW[tierBranding.tier] ?? "")
-      : "";
-
   if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return null;
   }
@@ -417,7 +406,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 py-5 border-b border-[var(--color-border)]">
         <Link href="/dashboard" className="flex items-center gap-3 group">
-          <div className={`transition-transform group-hover:scale-105 ${logoGlow}`}>
+          <div className="transition-transform group-hover:scale-105">
             <SignalPilotLogo />
           </div>
           <div>

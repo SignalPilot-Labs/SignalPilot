@@ -83,7 +83,7 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
       }`}
     >
       {icons[toast.type]}
-      <span className="text-[13px] text-[var(--color-text-muted)] tracking-wide">{toast.message}</span>
+      <span className="text-[13px] leading-none tracking-wide text-[var(--color-text-muted)]">{toast.message}</span>
       <button
         onClick={() => {
           setExiting(true);

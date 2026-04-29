@@ -592,6 +592,7 @@ function CloudOnboardingInner() {
 
   const [teamCreated, setTeamCreated] = useState(false);
   const [acceptingInvite, setAcceptingInvite] = useState(false);
+  const [joinedTeam, setJoinedTeam] = useState(false);
   const [handoff, setHandoff] = useState(false);
   const [step, setStep] = useState(0);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreatedResponse | null>(null);
@@ -605,11 +606,18 @@ function CloudOnboardingInner() {
     };
   }, []);
 
+  // After joining a team, wait for Clerk to activate the org then navigate
+  useEffect(() => {
+    if (joinedTeam && organization) {
+      router.push("/dashboard");
+    }
+  }, [joinedTeam, organization, router]);
+
   function handleTeamCreated(joined = false) {
     if (joined) {
-      // Joining an existing team — skip the wizard entirely
-      // The team already has API keys, MCP configured, etc.
-      router.push("/dashboard");
+      // Joining an existing team — skip the wizard entirely.
+      // Set flag; useEffect above navigates once Clerk activates the org.
+      setJoinedTeam(true);
       return;
     }
     // Created a new team — continue to the setup wizard
@@ -652,7 +660,7 @@ function CloudOnboardingInner() {
       if (setActive && result.publicOrganizationData?.id) {
         await setActive({ organization: result.publicOrganizationData.id });
       }
-      handleTeamCreated(true);  // joined existing team via invitation
+      setJoinedTeam(true);  // useEffect navigates once org is active
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to accept invitation", "error");
       setAcceptingInvite(false);

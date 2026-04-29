@@ -45,7 +45,7 @@ class AuditedConnector:
         try:
             await self._log_sql_raw(sql, len(rows) if rows else 0, elapsed_ms)
         except Exception:
-            logger.debug("Audit log failed", exc_info=True)
+            logger.warning("Audit log failed", exc_info=True)
 
         return rows
 
@@ -78,4 +78,4 @@ class AuditedConnector:
                     "parent_id": parent_id,
                 })
         except Exception:
-            logger.debug("Failed to audit SQL execution", exc_info=True)
+            logger.warning("Failed to audit SQL execution", exc_info=True)

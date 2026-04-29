@@ -285,6 +285,18 @@ async def _ensure_audit_ip_columns(engine) -> None:
     logger.info("Ensured client_ip and user_agent columns on gateway_audit_logs")
 
 
+async def _ensure_audit_parent_id_column(engine) -> None:
+    """Add parent_id column to gateway_audit_logs for linking child SQL to parent tool calls."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_audit_logs "
+                "ADD COLUMN IF NOT EXISTS parent_id TEXT"
+            )
+        )
+    logger.info("Ensured parent_id column on gateway_audit_logs")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -297,6 +309,7 @@ async def init_db() -> None:
     await _ensure_health_columns(engine)
     await _ensure_plan_tier_column(engine)
     await _ensure_audit_ip_columns(engine)
+    await _ensure_audit_parent_id_column(engine)
     logger.info("Gateway database tables initialized")
 
 

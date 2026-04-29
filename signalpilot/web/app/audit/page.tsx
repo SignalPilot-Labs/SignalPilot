@@ -74,14 +74,27 @@ export default function AuditPage() {
     URL.revokeObjectURL(url);
   }
 
+  // Build lookup of child SQL entries by parent_id
+  const childSqlByParent = new Map<string, typeof entries>();
+  for (const e of entries) {
+    if (e.event_type === "mcp_sql" && e.parent_id) {
+      const existing = childSqlByParent.get(e.parent_id) || [];
+      existing.push(e);
+      childSqlByParent.set(e.parent_id, existing);
+    }
+  }
+
+  // Hide mcp_sql from main list (shown as children of mcp_tool on expand)
   const filtered = entries.filter((e) => {
+    if (e.event_type === "mcp_sql") return false;
     if (!filter) return true;
     const lower = filter.toLowerCase();
     return (
       e.sql?.toLowerCase().includes(lower) ||
       e.connection_name?.toLowerCase().includes(lower) ||
       e.event_type.includes(lower) ||
-      e.block_reason?.toLowerCase().includes(lower)
+      e.block_reason?.toLowerCase().includes(lower) ||
+      e.agent_id?.toLowerCase().includes(lower)
     );
   });
 
@@ -273,6 +286,30 @@ export default function AuditPage() {
                             <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
                               rows: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.rows_returned.toLocaleString()}</span>
                             </p>
+                          )}
+                          {/* Child SQL queries (linked via parent_id) */}
+                          {childSqlByParent.has(entry.id) && (
+                            <div className="mt-3">
+                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-2">
+                                sql queries ({childSqlByParent.get(entry.id)!.length})
+                              </p>
+                              <div className="space-y-2">
+                                {childSqlByParent.get(entry.id)!.map((child) => (
+                                  <div key={child.id} className="border-l-2 border-[var(--color-border)] pl-3">
+                                    {child.sql && (
+                                      <pre className="text-[12px] bg-[var(--color-bg)] px-2 py-1 border border-[var(--color-border)] overflow-auto max-h-20">
+                                        <SqlHighlight sql={child.sql.slice(0, 200)} className="text-[12px]" />
+                                      </pre>
+                                    )}
+                                    <div className="flex gap-3 mt-0.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                                      {child.rows_returned != null && <span>rows: {child.rows_returned}</span>}
+                                      {child.duration_ms != null && <span>{Math.round(child.duration_ms)}ms</span>}
+                                      {child.connection_name && <span>{child.connection_name}</span>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
                           )}
                           {/* Client info — IP + User-Agent */}
                           {(entry.client_ip || entry.user_agent) && (

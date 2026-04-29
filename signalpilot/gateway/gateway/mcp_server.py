@@ -66,6 +66,8 @@ from .db.engine import get_session_factory
 mcp_user_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_id", default=None)
 mcp_org_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_org_id", default=None)
 mcp_raw_key_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_raw_key", default=None)
+# Set by the audit wrapper before a tool runs; child SQL queries link back to this ID
+mcp_audit_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_audit_id", default=None)
 mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_client_ip", default=None)
 mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
 from .dbt import (
@@ -128,24 +130,76 @@ import os as _os
 _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 
 
-async def _get_column_names(connector, db_type: str, table_name: str) -> list[str]:
+async def _get_column_names(connector, db_type: str, table_name: str, connection_name: str | None = None) -> list[str]:
     """Get column names for a table, using the correct SQL for the database dialect."""
     if db_type in ("sqlite", "duckdb"):
-        rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
+        rows = await _audited_execute(connector, f"PRAGMA table_info('{table_name}')", connection_name)
         return [r.get("name", "") for r in rows if r.get("name")]
     else:
-        # Use information_schema for Postgres, MySQL, Snowflake, etc.
         parts = table_name.split(".")
         if len(parts) == 2:
             schema, tbl = parts
         else:
             schema, tbl = "public", parts[0]
-        rows = await connector.execute(
+        sql = (
             f"SELECT column_name FROM information_schema.columns "
             f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
             f"ORDER BY ordinal_position"
         )
+        rows = await _audited_execute(connector, sql, connection_name)
         return [r.get("column_name", "") for r in rows if r.get("column_name")]
+
+async def _audited_execute(connector, sql: str, connection_name: str | None = None) -> list[dict]:
+    """Execute SQL via connector and log it as an mcp_sql audit entry linked to the parent tool call."""
+    parent_id = mcp_audit_id_var.get(None)
+    t0 = time.monotonic()
+    try:
+        rows = await connector.execute(sql)
+    except Exception:
+        raise
+    elapsed = (time.monotonic() - t0) * 1000
+
+    # Fire-and-forget audit of the child SQL
+    if parent_id:
+        import asyncio
+        asyncio.create_task(_audit_child_sql(
+            parent_id=parent_id,
+            sql=sql,
+            connection_name=connection_name,
+            rows_returned=len(rows) if rows else 0,
+            duration_ms=elapsed,
+        ))
+    return rows
+
+
+async def _audit_child_sql(
+    parent_id: str,
+    sql: str,
+    connection_name: str | None,
+    rows_returned: int,
+    duration_ms: float,
+):
+    """Log an internal SQL call as a child of the parent MCP tool call."""
+    try:
+        client_ip = mcp_client_ip_var.get(None)
+        user_agent = mcp_user_agent_var.get(None)
+        async with _store_session() as store:
+            await store.append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="mcp_sql",
+                connection_name=connection_name,
+                sql=sql,
+                rows_returned=rows_returned,
+                duration_ms=duration_ms,
+                parent_id=parent_id,
+                agent_id=None,
+                client_ip=client_ip,
+                user_agent=user_agent,
+            ))
+    except Exception:
+        pass  # best-effort
+
 
 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
 _allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
@@ -199,30 +253,28 @@ async def _audit_tool_call(
     error: str | None = None,
     connection_name: str | None = None,
     sql: str | None = None,
+    audit_id: str | None = None,
 ):
     """Log an MCP tool call to the gateway audit log and increment usage counter."""
     from .governance.plan_limits import daily_query_counter
 
     org_id = mcp_org_id_var.get(None)
-    user_id = mcp_user_id_var.get(None)
 
     # Increment daily usage counter for every tool call
     if org_id:
         daily_query_counter.increment(org_id)
 
-    # Read client IP and user-agent from context (set by MCPAuthMiddleware)
     client_ip = mcp_client_ip_var.get(None)
     user_agent = mcp_user_agent_var.get(None)
 
-    # Write to audit log
     try:
         async with _store_session() as store:
             await store.append_audit(AuditEntry(
-                id=str(uuid.uuid4()),
+                id=audit_id or str(uuid.uuid4()),
                 timestamp=time.time(),
                 event_type="mcp_tool",
                 connection_name=connection_name,
-                sql=sql,
+                sql=None,  # Don't duplicate SQL here — child mcp_sql entries have it
                 rows_returned=None,
                 cost_usd=None,
                 blocked=error is not None,
@@ -243,13 +295,15 @@ def _audited_tool(fn):
     async def wrapper(*args, **kwargs):
         t0 = time.time()
         tool_name = fn.__name__
+        # Generate a unique ID for this tool call so child SQL can link back
+        audit_id = str(uuid.uuid4())
+        token = mcp_audit_id_var.set(audit_id)
         # Extract connection_name and sql from kwargs if present
         conn = kwargs.get("connection_name") or (args[0] if args and isinstance(args[0], str) else None)
         sql_arg = kwargs.get("sql")
         try:
             result = await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
-            # Fire-and-forget audit (don't slow down the tool call)
             import asyncio
             asyncio.create_task(_audit_tool_call(
                 tool_name=tool_name,
@@ -258,6 +312,7 @@ def _audited_tool(fn):
                 duration_ms=duration_ms,
                 connection_name=conn,
                 sql=sql_arg,
+                audit_id=audit_id,
             ))
             return result
         except Exception as exc:
@@ -271,8 +326,11 @@ def _audited_tool(fn):
                 error=str(exc)[:200],
                 connection_name=conn,
                 sql=sql_arg,
+                audit_id=audit_id,
             ))
             raise
+        finally:
+            mcp_audit_id_var.reset(token)
     return wrapper
 
 
@@ -861,7 +919,7 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
 
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                rows = await connector.execute(sql)
+                rows = await _audited_execute(connector, sql)
                 if rows:
                     row = rows[0]
                     for col in date_cols:
@@ -879,7 +937,7 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
                             if max_str > table_max.get(full_name, ""):
                                 table_max[full_name] = max_str
                 count_sql = f'SELECT COUNT(*) AS "cnt" FROM {quoted_table}'
-                count_rows = await connector.execute(count_sql)
+                count_rows = await _audited_execute(connector, count_sql)
                 if count_rows:
                     raw = count_rows[0].get("cnt")
                     if raw is not None:
@@ -2838,7 +2896,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
 
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            count_rows = await connector.execute(f'SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}')
+            count_rows = await _audited_execute(connector, f'SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}')
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
 
@@ -2875,7 +2933,7 @@ async def analyze_grain(connection_name: str, table_name: str, candidate_keys: s
                 for key in keys:
                     try:
                         safe_key = key.replace('"', '""')
-                        dist_rows = await connector.execute(f'SELECT COUNT(DISTINCT "{safe_key}") as distinct_count FROM {_quote_table(table_name)}')
+                        dist_rows = await _audited_execute(connector, f'SELECT COUNT(DISTINCT "{safe_key}") as distinct_count FROM {_quote_table(table_name)}')
                         distinct_count: int = dist_rows[0].get("distinct_count", 0) if dist_rows else 0
                         if distinct_count == total_rows:
                             lines.append(f"    {key}: {distinct_count:,} distinct (UNIQUE - this is likely the grain)")
@@ -2943,7 +3001,7 @@ async def validate_model_output(
 
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            model_rows_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
+            model_rows_result = await _audited_execute(connector, f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
 
@@ -2956,7 +3014,7 @@ async def validate_model_output(
             return f"Error: Invalid source_table name '{source_table}'."
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}')
+                src_result = await _audited_execute(connector, f'SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}')
             source_rows = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
             source_error = sanitize_mcp_error(str(e))
@@ -3040,7 +3098,7 @@ async def audit_model_sources(
     # Step 1: Get model row count.
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            model_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
+            model_result = await _audited_execute(connector, f'SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}')
     except Exception as e:
         return f"Error: could not query model '{model_name}': {sanitize_mcp_error(str(e))}"
 
@@ -3061,7 +3119,7 @@ async def audit_model_sources(
             continue
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                src_result = await connector.execute(f'SELECT COUNT(*) as row_count FROM {_quote_table(src)}')
+                src_result = await _audited_execute(connector, f'SELECT COUNT(*) as row_count FROM {_quote_table(src)}')
             src_rows: int = src_result[0].get("row_count", 0) if src_result else 0
         except Exception as e:
             source_lines.append(f"  {src}:  ERROR: {sanitize_mcp_error(str(e), cap=100)}")
@@ -3113,7 +3171,7 @@ async def audit_model_sources(
                     continue
                 try:
                     async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                        col_result = await connector.execute(
+                        col_result = await _audited_execute(connector, 
                             f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
                             f'COUNT(DISTINCT "{col}") as dist '
                             f'FROM {_quote_table(model_name)}'
@@ -3286,7 +3344,7 @@ SELECT
 
     try:
         async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-            result = await connector.execute(sql)
+            result = await _audited_execute(connector, sql)
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
 

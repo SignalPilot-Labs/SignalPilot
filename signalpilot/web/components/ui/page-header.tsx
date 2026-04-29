@@ -2,7 +2,6 @@
 
 import { TierBadge } from "@/components/branding/tier-badge";
 import { TierAccent } from "@/components/branding/tier-accent";
-import { TierSeal } from "@/components/branding/tier-seal";
 import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
 /**
@@ -36,10 +35,7 @@ export function PageHeader({
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
         </div>
-        <div className="flex items-center gap-2">
-          {actions}
-          <TierSeal variant="header" />
-        </div>
+        {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
       </div>
 
       {/* Bottom rule — exactly one line. Paid tier: tier-tinted accent.

@@ -50,6 +50,8 @@ function NewKeyReveal({
     },
   }, null, 2);
 
+  const claudeCodeCmd = `claude mcp add --transport http signalpilot ${mcpUrl} --header "Authorization: Bearer ${created.raw_key}"`;
+
   return (
     <div className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-5 animate-fade-in">
       {/* Warning banner */}
@@ -85,10 +87,21 @@ function NewKeyReveal({
         </span>
       </div>
 
+      {/* Claude Code one-liner */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">claude code — one-liner</span>
+          <CopyButton text={claudeCodeCmd} />
+        </div>
+        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] tracking-wider font-mono overflow-x-auto whitespace-pre">
+{claudeCodeCmd}
+        </pre>
+      </div>
+
       {/* MCP connection config */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">mcp connection config</span>
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">mcp json config</span>
           <CopyButton text={mcpConfig} />
         </div>
         <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] tracking-wider font-mono overflow-x-auto whitespace-pre">

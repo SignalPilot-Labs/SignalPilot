@@ -393,6 +393,8 @@ function StepConnectMcp({
   const mcpUrl = getMcpUrl();
   const apiKey = createdKey?.raw_key ?? "sp_your_api_key_here";
   const configSnippet = getClaudeDesktopConfig(mcpUrl, apiKey);
+  const claudeCodeCmd = `claude mcp add --transport http signalpilot ${mcpUrl} --header "Authorization: Bearer ${apiKey}"`;
+  const pluginCmd = `claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin && claude plugin install signalpilot-dbt@signalpilot`;
 
   return (
     <div className="animate-fade-in">
@@ -401,25 +403,47 @@ function StepConnectMcp({
           connect an mcp client
         </h2>
         <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
-          add the signalpilot mcp server to your ai client.
+          add the signalpilot mcp server to your ai client. pick the method that fits your workflow.
         </p>
       </div>
+
+      {/* Option 1: Claude Code one-liner */}
       <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-4">
-        <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">mcp server url</p>
-        <div className="flex items-center gap-3">
-          <code className="flex-1 px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] text-[var(--color-success)] tracking-wider font-mono break-all">
-            {mcpUrl}
-          </code>
-          <CopyButton text={mcpUrl} />
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">option 1 — claude code (one-liner)</p>
+          <CopyButton text={claudeCodeCmd} />
         </div>
+        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] tracking-wider font-mono overflow-x-auto whitespace-pre">
+{claudeCodeCmd}
+        </pre>
       </div>
-      <div className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase">file:</span>
-          <code className="text-[12px] text-[var(--color-text-muted)] tracking-wider">claude_desktop_config.json</code>
+
+      {/* Option 2: Plugin (includes skills + agents) */}
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">option 2 — claude code plugin (includes skills + agents)</p>
+          <CopyButton text={pluginCmd} />
         </div>
-        <CodeBlock code={configSnippet} language="json" maxHeight="14rem" showLineNumbers />
+        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] tracking-wider font-mono overflow-x-auto whitespace-pre-wrap break-all">
+{pluginCmd}
+        </pre>
+        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider opacity-60">
+          adds 30+ mcp tools, 10 skills, and a dbt verification agent
+        </p>
       </div>
+
+      {/* Option 3: JSON config */}
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">option 3 — json config (any mcp client)</p>
+          <CopyButton text={configSnippet} />
+        </div>
+        <CodeBlock code={configSnippet} language="json" maxHeight="12rem" showLineNumbers />
+        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider opacity-60">
+          paste into .mcp.json (Claude Code), .cursor/mcp.json (Cursor), or claude_desktop_config.json
+        </p>
+      </div>
+
       <button
         onClick={onNext}
         className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase hover:opacity-90 transition-opacity"

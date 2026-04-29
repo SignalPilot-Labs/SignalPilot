@@ -1,0 +1,3 @@
+[submodule "plugin-repo"]
+	path = plugin-repo
+	url = https://github.com/SignalPilot-Labs/signalpilot-plugin.git

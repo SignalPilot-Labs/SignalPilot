@@ -229,7 +229,7 @@ function BillingNavLink({ pathname }: { pathname: string }) {
       }`}
     >
       <CreditCard size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">billing</span>
+      <span className="flex-1 tracking-wide text-[12px]">plans</span>
     </Link>
   );
 }

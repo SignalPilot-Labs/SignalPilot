@@ -283,9 +283,9 @@ export default function BillingPage() {
     return (
       <div className="p-8 max-w-5xl animate-fade-in">
         <PageHeader
-          title="billing"
+          title="plans"
           subtitle="subscription"
-          description="manage your signalpilot subscription and billing"
+          description="manage your signalpilot plan and subscription"
         />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           <div className="p-6 flex items-start gap-3">
@@ -471,7 +471,7 @@ function BillingContent() {
       />
 
       <TerminalBar
-        path="settings/billing --status"
+        path="settings/plans --status"
         status={
           <StatusDot
             status={

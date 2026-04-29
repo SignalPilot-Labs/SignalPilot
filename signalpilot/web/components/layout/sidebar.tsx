@@ -8,7 +8,11 @@ import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "luci
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 import { getSandboxes, getProjects } from "@/lib/api";
-import { useConnectionsHealth, usePlan } from "@/lib/hooks/use-gateway-data";
+import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
+import { TierWordmark } from "@/components/branding/tier-wordmark";
+import { TierAccent } from "@/components/branding/tier-accent";
+import { TierSeal } from "@/components/branding/tier-seal";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
@@ -278,10 +282,10 @@ function McpConnectNavLink({ pathname }: { pathname: string }) {
 }
 
 function ByokNavLink({ pathname }: { pathname: string }) {
-  const { data: plan } = usePlan();
-  const tier = plan?.tier ?? "free";
-  // BYOK is team/enterprise only
-  if (tier === "free" || tier === "pro") return null;
+  const branding = useTierBranding();
+  // BYOK is team/enterprise only; hidden until tier branding is resolved (cloud + loaded)
+  if (!branding.enabled) return null;
+  if (branding.tier !== "team" && branding.tier !== "enterprise") return null;
 
   const active = pathname.startsWith("/settings/byok");
 
@@ -390,6 +394,20 @@ export default function Sidebar() {
   }, [router, filteredNav]);
 
   // Hide sidebar on auth pages — checked after all hooks are called
+  const tierBranding = useTierBranding();
+  const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
+
+  // Tier-keyed logo glow — whole class tokens, no concatenation
+  const LOGO_GLOW: Record<string, string> = {
+    enterprise: "drop-shadow-[0_0_8px_rgba(251,191,36,0.4)]",
+    team: "drop-shadow-[0_0_8px_rgba(167,139,250,0.4)]",
+    pro: "drop-shadow-[0_0_8px_rgba(129,140,248,0.35)]",
+  };
+  const logoGlow =
+    tierBranding.enabled && tierBranding.tier !== "free"
+      ? (LOGO_GLOW[tierBranding.tier] ?? "")
+      : "";
+
   if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return null;
   }
@@ -399,19 +417,28 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 py-5 border-b border-[var(--color-border)]">
         <Link href="/dashboard" className="flex items-center gap-3 group">
-          <div className="transition-transform group-hover:scale-105">
+          <div className={`transition-transform group-hover:scale-105 ${logoGlow}`}>
             <SignalPilotLogo />
           </div>
           <div>
             <h1 className="text-[13px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
               SignalPilot
             </h1>
-            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mt-0.5">
-              governed infra
-            </p>
+            {/* Subtitle slot — reserved height to prevent layout snap */}
+            <div className="min-h-[14px] mt-0.5">
+              {showWordmark ? (
+                <TierWordmark variant="sidebar" />
+              ) : (
+                <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">
+                  governed infra
+                </p>
+              )}
+            </div>
           </div>
         </Link>
       </div>
+      {/* Tier accent hairline below logo block — visible for paid cloud tiers only */}
+      <TierAccent />
 
       {/* Command palette hint */}
       <div className="px-3 pt-4 pb-2">
@@ -517,6 +544,7 @@ export default function Sidebar() {
         </Tooltip>
         {/* System info line */}
         <div className="separator-subtle" />
+        <TierSeal variant="footer" />
         <div className="flex items-center justify-between">
           <Tooltip content="signalpilot gateway version" position="right">
             <div className="flex items-center gap-1.5 cursor-default">

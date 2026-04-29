@@ -37,6 +37,8 @@ import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useOnboardingStatus } from "@/lib/onboarding";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { TierWordmark } from "@/components/branding/tier-wordmark";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -122,8 +124,9 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
 
   const tierColorMap: Record<string, string> = {
     free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
-    pro: "text-[var(--color-success)] border-[var(--color-success)]/40",
-    team: "text-[var(--color-warning)] border-[var(--color-warning)]/40",
+    pro: "text-indigo-400 border-indigo-500/40",
+    team: "text-violet-300 border-violet-400/50",
+    enterprise: "text-amber-300 border-amber-400/50",
   };
   const tierClasses = tierColorMap[planTier] ?? tierColorMap.free;
 
@@ -423,13 +426,22 @@ function CloudStatusSection() {
 /* ── Signed-in user greeting ── */
 function UserGreeting() {
   const { isCloudMode, user } = useAppAuth();
+  const b = useTierBranding();
 
   if (!isCloudMode || !user) return null;
 
   const email = user.email ?? "—";
 
+  const showTierPrefix = b.enabled && b.tier !== "free";
+
   return (
     <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
+      {showTierPrefix && (
+        <>
+          <TierWordmark variant="header" />
+          <span className="mx-2 text-[var(--color-text-dim)]">·</span>
+        </>
+      )}
       signed in as{" "}
       <span className="text-[var(--color-text-muted)]">{email}</span>
     </p>

@@ -27,6 +27,8 @@ import { SectionHeader } from "@/components/ui/section-header";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BillingSkeleton } from "@/components/ui/skeleton";
+import { TierBadge } from "@/components/branding/tier-badge";
+import { TierAccent } from "@/components/branding/tier-accent";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,26 +55,6 @@ const HIGHLIGHT_COLORS: Record<string, string> = {
   warning: "var(--color-warning)",
   default: "var(--color-text-muted)",
 };
-
-// ---------------------------------------------------------------------------
-// Tier badge
-// ---------------------------------------------------------------------------
-
-function TierBadge({ tier }: { tier: string }) {
-  const colorMap: Record<string, string> = {
-    free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
-    pro: "text-[var(--color-success)] border-[var(--color-success)]/40",
-    team: "text-[var(--color-warning)] border-[var(--color-warning)]/40",
-  };
-  const classes = colorMap[tier] ?? colorMap.free;
-  return (
-    <span
-      className={`px-2 py-0.5 text-[11px] border tracking-[0.15em] uppercase ${classes}`}
-    >
-      {tier}
-    </span>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Billing interval toggle
@@ -581,7 +563,13 @@ function BillingContent() {
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <TierBadge tier={planTier} />
+              {planTier === "free" ? (
+                <span className="px-1.5 py-0.5 text-[11px] border tracking-[0.15em] uppercase text-[var(--color-text-dim)] border-[var(--color-border)]">
+                  free
+                </span>
+              ) : (
+                <TierBadge size="sm" />
+              )}
               <div>
                 <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
                   status:{" "}
@@ -619,6 +607,7 @@ function BillingContent() {
             )}
           </div>
         </div>
+        <TierAccent />
       </section>
 
       {/* Pending downgrade banner */}

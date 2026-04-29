@@ -18,6 +18,7 @@ import { Component, type ReactNode } from "react";
 import { LogOut, ChevronDown, Check, Plus } from "lucide-react";
 import { useCreateTeam } from "@/lib/use-create-team";
 import { PendingButton } from "@/components/ui/pending-button";
+import { TierCrest } from "@/components/branding/tier-crest";
 
 const LIST_MSG_CLASS = "px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono";
 
@@ -217,11 +218,14 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
         className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-inset"
       >
         {/* Team avatar — first letter of team name, or dash for no-team state */}
-        <span
-          className="flex-shrink-0 w-5 h-5 flex items-center justify-center bg-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-muted)] uppercase"
-          aria-hidden="true"
-        >
-          {organization ? teamName.charAt(0) : "–"}
+        <span className="relative inline-flex flex-shrink-0">
+          <span
+            className="w-5 h-5 flex items-center justify-center bg-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-muted)] uppercase"
+            aria-hidden="true"
+          >
+            {organization ? teamName.charAt(0) : "–"}
+          </span>
+          <TierCrest />
         </span>
         <span className="flex-1 text-[11px] text-[var(--color-text-dim)] tracking-wide truncate font-mono">
           {teamName}

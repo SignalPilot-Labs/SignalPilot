@@ -154,7 +154,7 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
               <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
             </span>
           ) : (
-            <TierBadge size="sm" />
+            <TierBadge />
           )}
         </div>
         <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">

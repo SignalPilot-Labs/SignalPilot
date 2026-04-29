@@ -78,7 +78,7 @@ export function KeyboardShortcuts() {
             <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
               keyboard shortcuts
             </span>
-            <TierBadge size="sm" />
+            <TierBadge />
           </div>
           <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono text-[var(--color-text-dim)]">
             esc

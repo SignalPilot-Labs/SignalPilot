@@ -569,7 +569,7 @@ function BillingContent() {
                   <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
                 </span>
               ) : (
-                <TierBadge size="sm" />
+                <TierBadge />
               )}
               <div>
                 <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">

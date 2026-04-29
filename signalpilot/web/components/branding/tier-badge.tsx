@@ -2,15 +2,7 @@
 
 import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
-interface TierBadgeProps {
-  /**
-   * @deprecated Size prop is ignored — there is one canonical size.
-   * Accepted to avoid breaking existing call sites.
-   */
-  size?: "sm" | "md";
-}
-
-export function TierBadge({ size: _size }: TierBadgeProps) {
+export function TierBadge() {
   const b = useTierBranding();
 
   if (!b.enabled || b.tier === "free") return null;

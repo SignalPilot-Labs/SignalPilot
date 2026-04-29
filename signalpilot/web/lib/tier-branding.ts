@@ -16,7 +16,7 @@ export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
   pro: {
     label: "Pro",
     accentText: "text-[var(--color-text-muted)]",
-    accentHex: "#9ca3af",
+    accentHex: "#d4d4d4",
   },
   team: {
     label: "Team",

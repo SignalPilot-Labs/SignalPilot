@@ -30,7 +30,7 @@ export function PageHeader({
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-            <TierBadge size="sm" />
+            <TierBadge />
             <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">{subtitle}</span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>

@@ -12,7 +12,7 @@ import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 // Free tier: no favicon injection (handled by early return in useEffect).
 
 const PRO_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect x="8" y="8" width="16" height="16" fill="#9ca3af"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect x="8" y="8" width="16" height="16" fill="#d4d4d4"/></svg>';
 
 // bottom-right 8x8 cut: TL(8,8) TR(24,8) right-mid(24,16) notch-corner(16,24) BL(8,24)
 const TEAM_SVG =

@@ -75,7 +75,9 @@ export default function TeamClient() {
       <TeamInvitationsSection org={organization} perms={perms} />
       {/* <TeamEnterpriseSection perms={perms} /> — requires Clerk paid plan */}
       {/* <TeamDomainsSection perms={perms} org={organization} /> — requires Clerk paid plan */}
-      <TeamDangerSection org={organization} perms={perms} user={user} />
+      {perms.canDelete && (
+        <TeamDangerSection org={organization} perms={perms} user={user} />
+      )}
     </div>
   );
 }

@@ -93,6 +93,8 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
   const data = invitations?.data ?? [];
   const isLoading = invitations?.isLoading ?? false;
   const hasNextPage = invitations?.hasNextPage ?? false;
+  // Only show skeleton on initial load, not on background refetches
+  const showSkeleton = isLoading && data.length === 0;
 
   return (
     <section className="mb-8">
@@ -153,7 +155,7 @@ export function TeamInvitationsSection({ org, perms }: TeamInvitationsSectionPro
         )}
 
         {/* Pending invitations list */}
-        {isLoading && data.length === 0 ? (
+        {showSkeleton ? (
           <InvitationListSkeleton rows={2} />
         ) : data.length === 0 ? (
           <p className={`${NEUTRAL_CLASS} p-4`}>no pending invitations.</p>

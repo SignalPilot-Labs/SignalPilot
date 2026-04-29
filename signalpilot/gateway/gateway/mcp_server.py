@@ -223,7 +223,7 @@ async def _audit_tool_call(
                 timestamp=time.time(),
                 event_type="mcp_tool",
                 connection_name=connection_name,
-                sql=None,  # Don't duplicate SQL here — child mcp_sql entries have it
+                sql=sql,  # Present for query_database, None for other tools
                 rows_returned=None,
                 cost_usd=None,
                 blocked=error is not None,

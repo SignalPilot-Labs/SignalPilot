@@ -606,12 +606,16 @@ function CloudOnboardingInner() {
     };
   }, []);
 
-  // After joining a team, wait for Clerk to activate the org then navigate
+  // After joining a team, mark onboarding complete and navigate once org is active
   useEffect(() => {
-    if (joinedTeam && organization) {
-      router.push("/dashboard");
+    if (joinedTeam && organization && user) {
+      user.update({
+        unsafeMetadata: { ...user.unsafeMetadata, onboardingCompleted: true },
+      }).catch(() => {}).finally(() => {
+        router.push("/dashboard");
+      });
     }
-  }, [joinedTeam, organization, router]);
+  }, [joinedTeam, organization, user, router]);
 
   function handleTeamCreated(joined = false) {
     if (joined) {

@@ -1258,7 +1258,7 @@ class Store:
                 connection_name=row.connection_name,
                 sandbox_id=row.sandbox_id,
                 sql=row.sql_text,
-                tables=row.tables,
+                tables=row.tables or [],
                 rows_returned=row.rows_returned,
                 cost_usd=row.cost_usd,
                 blocked=row.blocked,
@@ -1266,7 +1266,7 @@ class Store:
                 duration_ms=row.duration_ms,
                 agent_id=row.agent_id,
                 parent_id=getattr(row, "parent_id", None),
-                metadata=row.metadata_json,
+                metadata=row.metadata_json or {},
                 client_ip=getattr(row, "client_ip", None),
                 user_agent=getattr(row, "user_agent", None),
             ))

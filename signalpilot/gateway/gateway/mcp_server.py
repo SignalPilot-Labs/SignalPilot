@@ -133,7 +133,7 @@ _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 async def _get_column_names(connector, db_type: str, table_name: str, connection_name: str | None = None) -> list[str]:
     """Get column names for a table, using the correct SQL for the database dialect."""
     if db_type in ("sqlite", "duckdb"):
-        rows = await connector.execute(f"PRAGMA table_info('{table_name}')", connection_name)
+        rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         return [r.get("name", "") for r in rows if r.get("name")]
     else:
         parts = table_name.split(".")
@@ -146,7 +146,7 @@ async def _get_column_names(connector, db_type: str, table_name: str, connection
             f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
             f"ORDER BY ordinal_position"
         )
-        rows = await connector.execute(sql, connection_name)
+        rows = await connector.execute(sql)
         return [r.get("column_name", "") for r in rows if r.get("column_name")]
 
 
@@ -443,7 +443,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         start = time.monotonic()
         try:
             async with pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
-                rows = await connector.execute(safe_sql, connection_name)
+                rows = await connector.execute(safe_sql)
         except Exception as e:
             elapsed_err = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)

@@ -42,7 +42,7 @@ function EnterpriseSealInner({ brand }: InnerProps) {
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-1.5">
         <span
-          className="inline-block w-[5px] h-[5px] flex-shrink-0"
+          className="inline-block w-[5px] h-[5px] flex-shrink-0 translate-y-[0.5px]"
           style={{ backgroundColor: brand.accentHex }}
           aria-hidden="true"
         />
@@ -51,7 +51,7 @@ function EnterpriseSealInner({ brand }: InnerProps) {
         </span>
       </div>
       {orgName && (
-        <span className="text-[10px] text-[var(--color-text-dim)] tracking-wide pl-[11px]">
+        <span className="text-[10px] leading-none text-[var(--color-text-dim)] tracking-wide pl-[11px]">
           {orgName}
         </span>
       )}
@@ -65,7 +65,7 @@ function TeamSealInner({ brand }: InnerProps) {
   return (
     <div className="flex items-center gap-1.5">
       <span
-        className="inline-block w-[5px] h-[5px] flex-shrink-0"
+        className="inline-block w-[5px] h-[5px] flex-shrink-0 translate-y-[0.5px]"
         style={{ backgroundColor: brand.accentHex }}
         aria-hidden="true"
       />

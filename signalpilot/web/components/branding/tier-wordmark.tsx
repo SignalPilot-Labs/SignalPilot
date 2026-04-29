@@ -20,7 +20,7 @@ export function TierWordmark({ variant = "sidebar" }: TierWordmarkProps) {
   return (
     <span className={`inline-flex items-center gap-1.5 leading-none tracking-[0.15em] uppercase ${brand.accentText} ${textSize}`}>
       <span
-        className="inline-block w-[5px] h-[5px] flex-shrink-0"
+        className="inline-block w-[5px] h-[5px] flex-shrink-0 translate-y-[0.5px]"
         style={{ backgroundColor: brand.accentHex }}
         aria-hidden="true"
       />

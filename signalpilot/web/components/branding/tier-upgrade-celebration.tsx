@@ -176,7 +176,7 @@ export default function TierUpgradeCelebration() {
           ref={closeRef}
           type="button"
           onClick={handleDismiss}
-          className="absolute top-4 right-4 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-current"
+          className="absolute top-4 right-4 mt-[1px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-current"
           aria-label="Dismiss"
         >
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -216,7 +216,7 @@ function CelebrationContent({ tier, brand }: CelebrationContentProps) {
       <div className="flex items-center gap-1.5">
         {brand.accentHex && (
           <span
-            className="inline-block w-[5px] h-[5px] flex-shrink-0"
+            className="inline-block w-[5px] h-[5px] flex-shrink-0 translate-y-[0.5px]"
             style={{ backgroundColor: brand.accentHex }}
             aria-hidden="true"
           />

@@ -410,11 +410,11 @@ export default function Sidebar() {
             <SignalPilotLogo />
           </div>
           <div>
-            <h1 className="text-[13px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
+            <h1 className="text-[13px] font-bold tracking-[0.2em] uppercase leading-none text-[var(--color-text)]">
               SignalPilot
             </h1>
             {/* Subtitle slot — reserved height to prevent layout snap */}
-            <div className="min-h-[14px] mt-0.5">
+            <div className="min-h-[14px] mt-0.5 flex items-center">
               {showWordmark ? (
                 <TierWordmark variant="sidebar" />
               ) : (
@@ -503,7 +503,7 @@ export default function Sidebar() {
               <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
               <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
             </span>
-            <span className="tracking-[0.15em] uppercase">governance active</span>
+            <span className="tracking-[0.15em] uppercase leading-none">governance active</span>
           </div>
         </Tooltip>
         {connHealth.total > 0 && (
@@ -513,7 +513,7 @@ export default function Sidebar() {
                 <ellipse cx="5" cy="3" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
                 <path d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3" stroke="currentColor" strokeWidth="0.75" />
               </svg>
-              <span className="tracking-[0.15em] uppercase">
+              <span className="tracking-[0.15em] uppercase leading-none">
                 db {connHealth.healthy}/{connHealth.total}
               </span>
               {connHealth.healthy < connHealth.total && (
@@ -528,7 +528,7 @@ export default function Sidebar() {
               <circle cx="5" cy="5" r="4" stroke="var(--color-border-hover)" strokeWidth="1" fill="none" />
               <path d="M5 2.5V5L6.5 6.5" stroke="var(--color-text-dim)" strokeWidth="0.8" strokeLinecap="round" />
             </svg>
-            <span className="tracking-wider">uptime <UptimeCounter /></span>
+            <span className="tracking-wider leading-none">uptime <UptimeCounter /></span>
           </div>
         </Tooltip>
         {/* System info line */}

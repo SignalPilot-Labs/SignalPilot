@@ -29,7 +29,7 @@ export function PageHeader({
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
+            <h1 className="text-xl font-light tracking-wide leading-none text-[var(--color-text)]">{title}</h1>
             <TierBadge />
             <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">{subtitle}</span>
           </div>

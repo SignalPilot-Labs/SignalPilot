@@ -592,7 +592,6 @@ function CloudOnboardingInner() {
 
   const [teamCreated, setTeamCreated] = useState(false);
   const [acceptingInvite, setAcceptingInvite] = useState(false);
-  const [joinedTeam, setJoinedTeam] = useState(false);
   const [handoff, setHandoff] = useState(false);
   const [step, setStep] = useState(0);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreatedResponse | null>(null);
@@ -606,24 +605,7 @@ function CloudOnboardingInner() {
     };
   }, []);
 
-  // After joining a team, mark onboarding complete and navigate once org is active
-  useEffect(() => {
-    if (joinedTeam && organization && user) {
-      user.update({
-        unsafeMetadata: { ...user.unsafeMetadata, onboardingCompleted: true },
-      }).catch(() => {}).finally(() => {
-        router.push("/dashboard");
-      });
-    }
-  }, [joinedTeam, organization, user, router]);
-
-  function handleTeamCreated(joined = false) {
-    if (joined) {
-      // Joining an existing team — skip the wizard entirely.
-      // Set flag; useEffect above navigates once Clerk activates the org.
-      setJoinedTeam(true);
-      return;
-    }
+  function handleTeamCreated() {
     // Created a new team — continue to the setup wizard
     setHandoff(true);
     handoffTimerRef.current = setTimeout(() => {
@@ -636,22 +618,34 @@ function CloudOnboardingInner() {
   }
 
   const orgId = organization?.id ?? null;
-  const showTeamStep = isCloudMode && !orgId && !teamCreated;
+  const needsTeam = isCloudMode && !orgId && !teamCreated;
 
   const allInvitations = userInvitations?.data ?? [];
   const pendingInvitations = allInvitations.filter(inv => inv.status === "pending");
+
+  // If user already has an active org and didn't just create a new team in this
+  // session, they don't need onboarding at all — mark complete and go to dashboard.
+  // This handles: joining via invitation, auto-activated membership, or landing
+  // on /onboarding with an existing org.
+  useEffect(() => {
+    if (!orgLoaded) return;
+    if (orgId && !teamCreated && user) {
+      user.update({
+        unsafeMetadata: { ...user.unsafeMetadata, onboardingCompleted: true },
+      }).catch(() => {}).finally(() => {
+        router.push("/dashboard");
+      });
+    }
+  }, [orgLoaded, orgId, teamCreated, user, router]);
 
   // Auto-activate first org membership if user has one but no active org
   useEffect(() => {
     if (!orgLoaded || organization) return;
     const memberships = userMemberships?.data ?? [];
     if (memberships.length > 0 && setActive) {
-      // User is a member of an org but doesn't have it active — activate it
       const firstOrg = memberships[0].organization;
       console.log("[onboarding] auto-activating org:", firstOrg.name);
-      setActive({ organization: firstOrg.id }).then(() => {
-        handleTeamCreated(true);  // joined existing team
-      });
+      setActive({ organization: firstOrg.id });
     }
   }, [orgLoaded, organization, userMemberships?.data, setActive]);
 
@@ -664,14 +658,24 @@ function CloudOnboardingInner() {
       if (setActive && result.publicOrganizationData?.id) {
         await setActive({ organization: result.publicOrganizationData.id });
       }
-      setJoinedTeam(true);  // useEffect navigates once org is active
+      // Don't need setJoinedTeam — the orgId effect above will handle the redirect
+      // once Clerk updates organization state
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to accept invitation", "error");
       setAcceptingInvite(false);
     }
   }
 
-  if (showTeamStep) {
+  // While waiting for redirect after org is set, show loading
+  if (orgId && !teamCreated) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" aria-hidden="true" />
+      </div>
+    );
+  }
+
+  if (needsTeam) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen relative">
       <div className={`w-full max-w-2xl px-8 py-12 ${handoff ? "animate-slide-out-up" : "animate-fade-in"}`}>

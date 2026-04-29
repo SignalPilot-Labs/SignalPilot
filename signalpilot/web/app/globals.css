@@ -82,6 +82,13 @@ input[type="checkbox"], input[type="radio"], summary {
 }
 .animate-fade-in { animation: fade-in 0.4s ease-out forwards; }
 
+/* Fade out */
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.animate-fade-out { animation: fade-out 160ms ease-in forwards; }
+
 /* Staggered fade-in for lists */
 .stagger-fade-in > * {
   opacity: 0;
@@ -751,6 +758,7 @@ kbd {
 /* Must appear AFTER all keyframe definitions to win without added specificity. */
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
+  .animate-fade-out,
   .animate-slide-in-left,
   .animate-slide-in-right,
   .animate-slide-in-up,

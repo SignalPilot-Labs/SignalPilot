@@ -15,6 +15,7 @@ import { AuthProvider } from "@/lib/auth-context";
 import { SWRProvider } from "@/lib/swr";
 import { SubscriptionProvider } from "@/lib/subscription-context";
 import { clerkAppearance } from "@/lib/clerk-theme";
+import TierUpgradeCelebration from "@/components/branding/tier-upgrade-celebration";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -53,6 +54,7 @@ export default async function RootLayout({
               <TabTitle />
               <CommandPalette />
             </MainContent>
+            <TierUpgradeCelebration />
           </SubscriptionProvider>
         </AuthProvider>
       </ConnectionProvider>

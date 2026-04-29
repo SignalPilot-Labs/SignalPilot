@@ -271,7 +271,7 @@ class BigQueryConnector(BaseConnector):
 
     # ─── Schema ───────────────────────────────────────────────────────
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         if self._client is None:
             raise RuntimeError("Not connected")
 
@@ -362,11 +362,12 @@ class BigQueryConnector(BaseConnector):
 
     # ─── Sample values ────────────────────────────────────────────────
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip).
 
         Critical for BigQuery where each query job has ~500ms overhead.
         """
+        import time as _time
         if self._client is None or not columns:
             return {}
         try:
@@ -376,7 +377,9 @@ class BigQueryConnector(BaseConnector):
                 job = self._client.query(sql, timeout=30)
                 return [dict(row) for row in job.result(timeout=30)]
 
+            t0 = _time.monotonic()
             rows = await asyncio.to_thread(_run)
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries (also non-blocking)
@@ -392,7 +395,9 @@ class BigQueryConnector(BaseConnector):
                         rows = list(job.result(timeout=10))
                         return [str(row[c]) for row in rows if row[c] is not None]
 
+                    t0 = _time.monotonic()
                     values = await asyncio.to_thread(_run_col)
+                    await self._audit_sql(query.strip(), len(values), (_time.monotonic() - t0) * 1000)
                     if values:
                         result[col] = values
                 except Exception:

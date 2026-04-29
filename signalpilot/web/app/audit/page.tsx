@@ -9,13 +9,14 @@ import {
   Terminal,
   Database as DbIcon,
   Download,
+  Loader2,
   ChevronDown,
   ChevronRight,
   Wrench,
 } from "lucide-react";
 import { getAuditExportUrl } from "@/lib/api";
 import type { AuditEntry } from "@/lib/types";
-import { useAudit, usePlan } from "@/lib/hooks/use-gateway-data";
+import { useAudit, useAuditStats, usePlan } from "@/lib/hooks/use-gateway-data";
 import { useToast } from "@/components/ui/toast";
 import { PageLoader } from "@/components/ui/page-loader";
 import { EmptyList, EmptyState } from "@/components/ui/empty-states";
@@ -49,36 +50,43 @@ export default function AuditPage() {
   const { data: plan } = usePlan();
   const { toast } = useToast();
   const tier = plan?.tier ?? "free";
-  const canExport = tier === "team" || tier === "enterprise";
+  const isLocal = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== "cloud";
+  const canExport = isLocal || tier === "team" || tier === "enterprise" || tier === "unlimited";
 
   const { data, isLoading, mutate: refreshAudit } = useAudit({
     limit: 200,
     event_type: typeFilter || undefined,
     connection_name: undefined,
   });
+  const { data: serverStats, mutate: refreshStats } = useAuditStats();
 
   const entries = data?.entries ?? [];
   const loading = isLoading && entries.length === 0;
 
-  function exportCSV() {
-    const headers = ["timestamp", "event_type", "connection_name", "sql", "tables", "rows_returned", "duration_ms", "blocked", "block_reason"];
-    const rows = filtered.map((e) =>
-      headers.map((h) => {
-        const val = e[h as keyof AuditEntry];
-        if (h === "timestamp") return new Date((val as number) * 1000).toISOString();
-        if (h === "tables") return (val as string[])?.join(";") || "";
-        if (val === null || val === undefined) return "";
-        return String(val).replace(/"/g, '""');
-      })
-    );
-    const csv = [headers.join(","), ...rows.map((r) => r.map((v) => `"${v}"`).join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `signalpilot-audit-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+
+  async function exportFile(format: "csv" | "json") {
+    setExporting(format);
+    toast("preparing report — this may take a moment for large audit logs", "info");
+    try {
+      const { getAuthHeaders } = await import("@/lib/api");
+      const headers = await getAuthHeaders();
+      const url = getAuditExportUrl(format, typeFilter || undefined);
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const blob = await res.blob();
+      const dl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = dl;
+      a.download = `signalpilot-audit-${new Date().toISOString().slice(0, 10)}.${format}`;
+      a.click();
+      URL.revokeObjectURL(dl);
+      toast("export complete", "success");
+    } catch (e) {
+      toast(`export failed: ${e instanceof Error ? e.message : "unknown error"}`, "error");
+    } finally {
+      setExporting(null);
+    }
   }
 
   // Build lookup of child SQL entries by parent_id (mcp_sql + sql types)
@@ -106,11 +114,12 @@ export default function AuditPage() {
   });
 
   const statsData = {
-    total: filtered.length,
-    queries: filtered.filter(e => e.event_type === "query").length,
-    mcp_tools: filtered.filter(e => e.event_type === "mcp_tool").length,
-    executions: filtered.filter(e => e.event_type === "execute").length,
-    blocked: filtered.filter(e => e.blocked).length,
+    total: serverStats?.total ?? filtered.length,
+    queries: serverStats?.queries ?? 0,
+    mcp_tools: serverStats?.mcp_tools ?? 0,
+    sql: serverStats?.sql ?? 0,
+    executions: serverStats?.executions ?? 0,
+    blocked: serverStats?.blocked ?? 0,
   };
 
   // Compute activity density for heatmap (36 time slots from entries)
@@ -140,30 +149,30 @@ export default function AuditPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => canExport ? exportCSV() : toast("upgrade to team plan to export audit logs", "error")}
-            disabled={canExport && filtered.length === 0}
+            onClick={() => canExport ? exportFile("csv") : toast("upgrade to team plan to export audit logs", "error")}
+            disabled={exporting === "csv"}
             className={`flex items-center gap-2 px-3 py-1.5 text-[12px] border transition-all tracking-wider ${
               canExport
-                ? "text-[var(--color-text-dim)] hover:text-[var(--color-text)] border-[var(--color-border)] hover:border-[var(--color-border-hover)] disabled:opacity-30"
+                ? "text-[var(--color-text-dim)] hover:text-[var(--color-text)] border-[var(--color-border)] hover:border-[var(--color-border-hover)] disabled:opacity-50"
                 : "text-[var(--color-text-dim)]/50 border-[var(--color-border)]/50 cursor-not-allowed"
             }`}
           >
-            <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> csv
+            {exporting === "csv" ? <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} /> : <Download className="w-3.5 h-3.5" strokeWidth={1.5} />}
+            {exporting === "csv" ? "preparing..." : "csv"}
           </button>
-          {canExport ? (
-            <a href={getAuditExportUrl("json", typeFilter || undefined)} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all tracking-wider">
-              <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
-            </a>
-          ) : (
-            <button
-              onClick={() => toast("upgrade to team plan to export audit logs", "error")}
-              className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)]/50 border border-[var(--color-border)]/50 cursor-not-allowed transition-all tracking-wider"
-            >
-              <Download className="w-3.5 h-3.5" strokeWidth={1.5} /> compliance
-            </button>
-          )}
-          <button onClick={() => refreshAudit()}
+          <button
+            onClick={() => canExport ? exportFile("json") : toast("upgrade to team plan to export audit logs", "error")}
+            disabled={exporting === "json"}
+            className={`flex items-center gap-2 px-3 py-1.5 text-[12px] border transition-all tracking-wider ${
+              canExport
+                ? "text-[var(--color-text-dim)] hover:text-[var(--color-text)] border-[var(--color-border)] hover:border-[var(--color-border-hover)] disabled:opacity-50"
+                : "text-[var(--color-text-dim)]/50 border-[var(--color-border)]/50 cursor-not-allowed"
+            }`}
+          >
+            {exporting === "json" ? <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} /> : <Download className="w-3.5 h-3.5" strokeWidth={1.5} />}
+            {exporting === "json" ? "preparing..." : "compliance"}
+          </button>
+          <button onClick={() => { refreshAudit(); refreshStats(); }}
             className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
           </button>
@@ -186,14 +195,14 @@ export default function AuditPage() {
         <div className="flex items-center gap-6 mb-6 px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           {[
             { label: "total", value: statsData.total, color: "" },
-            { label: "queries", value: statsData.queries, color: "text-[var(--color-success)]" },
             { label: "mcp tools", value: statsData.mcp_tools, color: "text-[var(--color-text-muted)]" },
-            { label: "executions", value: statsData.executions, color: "text-blue-400" },
+            { label: "internal sql", value: statsData.sql, color: "text-blue-400" },
+            { label: "queries", value: statsData.queries, color: "text-[var(--color-success)]" },
             { label: "blocked", value: statsData.blocked, color: statsData.blocked > 0 ? "text-[var(--color-error)]" : "" },
           ].map(s => (
-            <div key={s.label} className="flex items-center gap-2">
+            <div key={s.label} className="flex items-baseline gap-2">
               <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
-              <span className={`text-xs tabular-nums ${s.color}`}>{s.value}</span>
+              <span className={`text-xs tabular-nums ${s.color}`}>{s.value.toLocaleString()}</span>
             </div>
           ))}
           {/* Latency sparkline from recent entries */}

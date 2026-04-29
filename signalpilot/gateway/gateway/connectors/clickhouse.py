@@ -260,7 +260,7 @@ class ClickHouseConnector(BaseConnector):
         except Exception as e:
             raise RuntimeError(f"ClickHouse query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         if self._client is None and self._http_client is None:
             raise RuntimeError("Not connected")
 
@@ -303,6 +303,8 @@ class ClickHouseConnector(BaseConnector):
             GROUP BY database, table, column
         """
 
+        import time as _time
+
         # Run queries sequentially — clickhouse-driver and clickhouse-connect
         # are NOT thread-safe for concurrent queries on a single connection
         def _fetch(query: str):
@@ -314,10 +316,13 @@ class ClickHouseConnector(BaseConnector):
         def _fetch_all():
             return _fetch(sql), _fetch(table_meta_sql), _fetch(col_stats_sql)
 
+        t0 = _time.monotonic()
         col_result, meta_result, stats_result = await asyncio.to_thread(_fetch_all)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
 
         rows_data, columns_info = col_result
         col_names = [c[0] for c in columns_info]
+        await self._audit_sql(sql.strip(), len(rows_data), elapsed_ms)
 
         # Build table metadata map
         table_meta: dict[str, dict] = {}
@@ -389,17 +394,20 @@ class ClickHouseConnector(BaseConnector):
             schema[key]["columns"].append(col_entry)
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if (self._client is None and self._http_client is None) or not columns:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            t0 = _time.monotonic()
             data = self._raw_execute(sql)
             if isinstance(data, tuple) and len(data) == 2:
                 rows = data[0]
             else:
                 rows = data
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries

@@ -221,7 +221,8 @@ class SnowflakeConnector(BaseConnector):
         except snowflake.connector.Error as e:
             raise RuntimeError(f"Snowflake query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        import time as _time
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -301,7 +302,14 @@ class SnowflakeConnector(BaseConnector):
                 _fetch(cluster_sql, "clustering"),
             )
 
+        t0 = _time.monotonic()
         rows, rc_rows, fk_rows_raw, pk_rows, cluster_rows = await asyncio.to_thread(_fetch_all)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
+        await self._audit_sql(col_sql.strip(), len(rows), elapsed_ms)
+        await self._audit_sql(rc_sql.strip(), len(rc_rows), elapsed_ms)
+        await self._audit_sql(fk_sql.strip(), len(fk_rows_raw), elapsed_ms)
+        await self._audit_sql(pk_sql.strip(), len(pk_rows), elapsed_ms)
+        await self._audit_sql(cluster_sql.strip(), len(cluster_rows), elapsed_ms)
 
         # Build row count + type + size + comment map
         row_counts: dict[str, int] = {}
@@ -381,8 +389,9 @@ class SnowflakeConnector(BaseConnector):
 
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         try:
@@ -395,7 +404,9 @@ class SnowflakeConnector(BaseConnector):
                 cursor.close()
                 return rows
 
+            t0 = _time.monotonic()
             rows = await self._run_in_thread(_run, label="Snowflake sample")
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries if UNION ALL fails

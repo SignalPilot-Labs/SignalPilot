@@ -229,7 +229,8 @@ class DatabricksConnector(BaseConnector):
         except Exception as e:
             raise RuntimeError(f"Databricks query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        import time as _time
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -239,7 +240,7 @@ class DatabricksConnector(BaseConnector):
         # Prefer information_schema (Unity Catalog, Databricks SQL) — single query for all columns
         # Falls back to SHOW TABLES + DESCRIBE TABLE for legacy Hive metastore
         try:
-            cursor.execute("""
+            _col_sql = """
                 SELECT
                     table_schema,
                     table_name,
@@ -252,8 +253,12 @@ class DatabricksConnector(BaseConnector):
                 FROM information_schema.columns
                 WHERE table_schema NOT IN ('information_schema')
                 ORDER BY table_schema, table_name, ordinal_position
-            """)
-            for row in cursor.fetchall():
+            """
+            t0 = _time.monotonic()
+            cursor.execute(_col_sql)
+            _col_rows = cursor.fetchall()
+            await self._audit_sql(_col_sql.strip(), len(_col_rows), (_time.monotonic() - t0) * 1000)
+            for row in _col_rows:
                 s_name = row[0]
                 t_name = row[1]
                 key = f"{s_name}.{t_name}"
@@ -278,12 +283,16 @@ class DatabricksConnector(BaseConnector):
             if schema:
                 try:
                     cursor2 = self._conn.cursor()
-                    cursor2.execute("""
+                    _tables_sql = """
                         SELECT table_schema, table_name, table_type
                         FROM information_schema.tables
                         WHERE table_schema NOT IN ('information_schema')
-                    """)
-                    for row in cursor2.fetchall():
+                    """
+                    t0 = _time.monotonic()
+                    cursor2.execute(_tables_sql)
+                    _tables_rows = cursor2.fetchall()
+                    await self._audit_sql(_tables_sql.strip(), len(_tables_rows), (_time.monotonic() - t0) * 1000)
+                    for row in _tables_rows:
                         key = f"{row[0]}.{row[1]}"
                         if key in schema:
                             tt = (row[2] or "TABLE").upper()
@@ -295,7 +304,7 @@ class DatabricksConnector(BaseConnector):
             # Primary keys via table_constraints + constraint_column_usage (Unity Catalog)
             try:
                 pk_cursor = self._conn.cursor()
-                pk_cursor.execute("""
+                _pk_sql = """
                     SELECT
                         tc.table_schema,
                         tc.table_name,
@@ -307,8 +316,12 @@ class DatabricksConnector(BaseConnector):
                         AND tc.constraint_name = ccu.constraint_name
                     WHERE tc.constraint_type = 'PRIMARY KEY'
                         AND tc.table_schema NOT IN ('information_schema')
-                """)
-                for row in pk_cursor.fetchall():
+                """
+                t0 = _time.monotonic()
+                pk_cursor.execute(_pk_sql)
+                _pk_rows = pk_cursor.fetchall()
+                await self._audit_sql(_pk_sql.strip(), len(_pk_rows), (_time.monotonic() - t0) * 1000)
+                for row in _pk_rows:
                     key = f"{row[0]}.{row[1]}"
                     pk_col = row[2]
                     if key in schema:
@@ -323,7 +336,7 @@ class DatabricksConnector(BaseConnector):
             # Foreign keys via referential_constraints (Unity Catalog)
             try:
                 fk_cursor = self._conn.cursor()
-                fk_cursor.execute("""
+                _fk_sql = """
                     SELECT
                         tc.table_schema AS fk_schema,
                         tc.table_name AS fk_table,
@@ -340,8 +353,12 @@ class DatabricksConnector(BaseConnector):
                         AND tc.constraint_schema = ccu.constraint_schema
                     WHERE tc.constraint_type = 'FOREIGN KEY'
                         AND tc.table_schema NOT IN ('information_schema')
-                """)
-                for row in fk_cursor.fetchall():
+                """
+                t0 = _time.monotonic()
+                fk_cursor.execute(_fk_sql)
+                _fk_rows = fk_cursor.fetchall()
+                await self._audit_sql(_fk_sql.strip(), len(_fk_rows), (_time.monotonic() - t0) * 1000)
+                for row in _fk_rows:
                     key = f"{row[0]}.{row[1]}"
                     if key in schema:
                         if "foreign_keys" not in schema[key]:
@@ -366,9 +383,12 @@ class DatabricksConnector(BaseConnector):
                 try:
                     rc_cursor = self._conn.cursor()
                     safe_table = f"`{table_data['schema']}`.`{table_data['name']}`"
-                    rc_cursor.execute(f"DESCRIBE DETAIL {safe_table}")
+                    _detail_sql = f"DESCRIBE DETAIL {safe_table}"
+                    t0 = _time.monotonic()
+                    rc_cursor.execute(_detail_sql)
                     col_names = [d[0] for d in rc_cursor.description] if rc_cursor.description else []
                     detail = rc_cursor.fetchone()
+                    await self._audit_sql(_detail_sql.strip(), 1 if detail else 0, (_time.monotonic() - t0) * 1000)
                     rc_cursor.close()
                     if detail and col_names:
                         row_dict = dict(zip(col_names, detail))
@@ -389,8 +409,12 @@ class DatabricksConnector(BaseConnector):
 
         # Fallback: SHOW TABLES + DESCRIBE TABLE (legacy Hive metastore)
         try:
-            cursor.execute("SHOW SCHEMAS")
-            schemas_list = [row[0] for row in cursor.fetchall()]
+            _show_schemas_sql = "SHOW SCHEMAS"
+            t0 = _time.monotonic()
+            cursor.execute(_show_schemas_sql)
+            _schemas_rows = cursor.fetchall()
+            await self._audit_sql(_show_schemas_sql.strip(), len(_schemas_rows), (_time.monotonic() - t0) * 1000)
+            schemas_list = [row[0] for row in _schemas_rows]
         except Exception:
             schemas_list = ["default"]
 
@@ -398,8 +422,11 @@ class DatabricksConnector(BaseConnector):
             if schema_name.lower() in ("information_schema",):
                 continue
             try:
-                cursor.execute(f"SHOW TABLES IN `{schema_name}`")
+                _show_tables_sql = f"SHOW TABLES IN `{schema_name}`"
+                t0 = _time.monotonic()
+                cursor.execute(_show_tables_sql)
                 tables = cursor.fetchall()
+                await self._audit_sql(_show_tables_sql.strip(), len(tables), (_time.monotonic() - t0) * 1000)
             except Exception:
                 continue
 
@@ -407,8 +434,11 @@ class DatabricksConnector(BaseConnector):
                 table_name = table_row[1] if len(table_row) > 1 else table_row[0]
                 key = f"{schema_name}.{table_name}"
                 try:
-                    cursor.execute(f"DESCRIBE TABLE `{schema_name}`.`{table_name}`")
+                    _describe_sql = f"DESCRIBE TABLE `{schema_name}`.`{table_name}`"
+                    t0 = _time.monotonic()
+                    cursor.execute(_describe_sql)
                     col_rows = cursor.fetchall()
+                    await self._audit_sql(_describe_sql.strip(), len(col_rows), (_time.monotonic() - t0) * 1000)
                     columns = []
                     for cr in col_rows:
                         col_name = cr[0]
@@ -435,15 +465,18 @@ class DatabricksConnector(BaseConnector):
         cursor.close()
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='`')
             cursor = self._conn.cursor()
+            t0 = _time.monotonic()
             cursor.execute(sql)
             rows = cursor.fetchall()
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             cursor.close()
             return self._parse_sample_union_result(rows)
         except Exception:
@@ -454,8 +487,11 @@ class DatabricksConnector(BaseConnector):
                 try:
                     cursor = self._conn.cursor()
                     safe_col = self._quote_identifier(col)
-                    cursor.execute(f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}")
+                    _col_sql = f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
+                    t0 = _time.monotonic()
+                    cursor.execute(_col_sql)
                     rows = cursor.fetchall()
+                    await self._audit_sql(_col_sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
                     cursor.close()
                     values = [str(row[0]) for row in rows if row[0] is not None]
                     if values:

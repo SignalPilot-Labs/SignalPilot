@@ -79,13 +79,15 @@ class SQLiteConnector(BaseConnector):
             if timeout:
                 self._conn.set_progress_handler(None, 0)
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        import time as _time
         if self._conn is None:
             raise RuntimeError("Not connected")
-        cursor = self._conn.execute(
-            "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
-        )
+        _master_sql = "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
+        t0 = _time.monotonic()
+        cursor = self._conn.execute(_master_sql)
         table_rows = cursor.fetchall()
+        await self._audit_sql(_master_sql.strip(), len(table_rows), (_time.monotonic() - t0) * 1000)
         tables = [row[0] for row in table_rows]
         table_type_map = {row[0]: row[1] for row in table_rows}
 
@@ -96,7 +98,10 @@ class SQLiteConnector(BaseConnector):
             count_parts = [f"SELECT '{t.replace(chr(39), chr(39)+chr(39))}' AS t, COUNT(*) AS c FROM [{t}]" for t in tables]
             try:
                 count_sql = " UNION ALL ".join(count_parts)
-                for row in self._conn.execute(count_sql).fetchall():
+                t0 = _time.monotonic()
+                count_rows = self._conn.execute(count_sql).fetchall()
+                await self._audit_sql(count_sql.strip(), len(count_rows), (_time.monotonic() - t0) * 1000)
+                for row in count_rows:
                     row_counts[row[0]] = row[1]
             except Exception:
                 pass  # Fall back to 0 counts if UNION fails
@@ -139,14 +144,17 @@ class SQLiteConnector(BaseConnector):
             }
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote="[")
+            t0 = _time.monotonic()
             cursor = self._conn.execute(sql)
             rows = cursor.fetchall()
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries

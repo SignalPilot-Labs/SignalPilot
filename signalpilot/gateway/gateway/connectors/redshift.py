@@ -190,7 +190,7 @@ class RedshiftConnector(BaseConnector):
                 pass
             raise RuntimeError(f"Redshift query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -287,6 +287,7 @@ class RedshiftConnector(BaseConnector):
         """
 
         import asyncio
+        import time as _time
 
         # psycopg2 connections are NOT thread-safe — run all queries
         # sequentially in a single background thread to avoid corruption
@@ -308,7 +309,10 @@ class RedshiftConnector(BaseConnector):
                 _fetch(comments_sql, "comments"),
             )
 
+        t0 = _time.monotonic()
         rows, fk_rows_raw, table_info_raw, stats_raw, comments_raw = await asyncio.to_thread(_fetch_all)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
+        await self._audit_sql(sql.strip(), len(rows), elapsed_ms)
 
         # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
@@ -420,8 +424,9 @@ class RedshiftConnector(BaseConnector):
 
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         try:
@@ -430,7 +435,9 @@ class RedshiftConnector(BaseConnector):
                 with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                     cursor.execute(sql)
                     return cursor.fetchall()
+            t0 = _time.monotonic()
             rows = await self._run_in_thread(_run, label="Redshift")
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries if UNION ALL fails

@@ -78,7 +78,14 @@ async function _getAuthHeader(): Promise<string | null> {
   return null;
 }
 
-async function request<T>(path: string, options?: RequestInit, _retried = false): Promise<T> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
+  const auth = await _getAuthHeader();
+  const h: Record<string, string> = {};
+  if (auth) h["Authorization"] = auth;
+  return h;
+}
+
+export async function request<T>(path: string, options?: RequestInit, _retried = false): Promise<T> {
   const authHeader = await _getAuthHeader();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

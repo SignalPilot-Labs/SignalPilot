@@ -34,6 +34,7 @@ export const SWR_KEYS = {
   settings: "/api/settings",
   budgets: "/api/budgets",
   audit: (params?: string) => `/api/audit${params ? `?${params}` : ""}`,
+  auditStats: "/api/audit/stats",
   connectionSchema: (name: string) => `/api/connections/${name}/schema`,
   healthHistory: (name: string) => `/api/connections/${name}/health/history`,
 } as const;
@@ -135,6 +136,14 @@ export function useAudit(params?: { limit?: number; event_type?: string; connect
   return useSWR(
     key,
     () => getAudit(searchParams),
+    { dedupingInterval: 10_000 },
+  );
+}
+
+export function useAuditStats() {
+  return useSWR<{ total: number; mcp_tools: number; queries: number; sql: number; executions: number; blocked: number }>(
+    SWR_KEYS.auditStats,
+    () => import("@/lib/api").then(({ request }) => request(SWR_KEYS.auditStats)),
     { dedupingInterval: 10_000 },
   );
 }

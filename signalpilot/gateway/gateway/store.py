@@ -1240,14 +1240,22 @@ class Store:
         offset: int = 0,
         connection_name: str | None = None,
         event_type: str | None = None,
-    ) -> list[AuditEntry]:
+        return_total: bool = False,
+    ) -> list[AuditEntry] | tuple[list[AuditEntry], int]:
+        from sqlalchemy import func as sa_func
         oid = self.org_id or "local"
-        q = select(GatewayAuditLog).where(GatewayAuditLog.org_id == oid)
+        base = select(GatewayAuditLog).where(GatewayAuditLog.org_id == oid)
         if connection_name:
-            q = q.where(GatewayAuditLog.connection_name == connection_name)
+            base = base.where(GatewayAuditLog.connection_name == connection_name)
         if event_type:
-            q = q.where(GatewayAuditLog.event_type == event_type)
-        q = q.order_by(GatewayAuditLog.timestamp.desc()).offset(offset).limit(limit)
+            base = base.where(GatewayAuditLog.event_type == event_type)
+
+        total = 0
+        if return_total:
+            count_q = select(sa_func.count()).select_from(base.subquery())
+            total = (await self.session.execute(count_q)).scalar() or 0
+
+        q = base.order_by(GatewayAuditLog.timestamp.desc()).offset(offset).limit(limit)
         result = await self.session.execute(q)
         entries = []
         for row in result.scalars():
@@ -1270,6 +1278,8 @@ class Store:
                 client_ip=getattr(row, "client_ip", None),
                 user_agent=getattr(row, "user_agent", None),
             ))
+        if return_total:
+            return entries, total
         return entries
 
     # ─── Schema Endorsements ─────────────────────────────────────────────

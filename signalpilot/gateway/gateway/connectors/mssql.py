@@ -233,7 +233,8 @@ class MSSQLConnector(BaseConnector):
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        import time as _time
         if self._conn is None:
             raise RuntimeError("Not connected")
         self._ensure_connected()
@@ -344,15 +345,18 @@ class MSSQLConnector(BaseConnector):
                 AND OBJECT_SCHEMA_NAME(s.object_id) NOT IN ('sys', 'INFORMATION_SCHEMA')
         """
 
-        def _fetch(query: str) -> list:
+        def _fetch(query: str) -> tuple[list, float]:
+            import time as _time
             try:
                 cursor = self._conn.cursor(as_dict=True)
+                t0 = _time.monotonic()
                 cursor.execute(query)
                 result = cursor.fetchall()
+                elapsed = (_time.monotonic() - t0) * 1000
                 cursor.close()
-                return result
+                return result, elapsed
             except Exception:
-                return []
+                return [], 0.0
 
         def _fetch_all_sequential() -> tuple:
             """Run all metadata queries sequentially — pymssql uses a single connection.
@@ -366,9 +370,14 @@ class MSSQLConnector(BaseConnector):
             )
 
         # Run the synchronous queries in a thread to avoid blocking the event loop
-        rows, rowcount_rows, fk_rows, idx_rows, stat_rows = await asyncio.to_thread(
+        (rows, _col_ms), (rowcount_rows, _rc_ms), (fk_rows, _fk_ms), (idx_rows, _idx_ms), (stat_rows, _stat_ms) = await asyncio.to_thread(
             _fetch_all_sequential
         )
+        await self._audit_sql(col_sql.strip(), len(rows), _col_ms)
+        await self._audit_sql(rowcount_sql.strip(), len(rowcount_rows), _rc_ms)
+        await self._audit_sql(fk_sql.strip(), len(fk_rows), _fk_ms)
+        await self._audit_sql(idx_sql.strip(), len(idx_rows), _idx_ms)
+        await self._audit_sql(stats_sql.strip(), len(stat_rows), _stat_ms)
 
         # Build row count and table size maps
         row_counts: dict[str, int] = {}
@@ -473,8 +482,9 @@ class MSSQLConnector(BaseConnector):
             schema[key]["columns"].append(col_entry)
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         self._ensure_connected()
@@ -491,8 +501,10 @@ class MSSQLConnector(BaseConnector):
                 )
             sql = "\n UNION ALL \n".join(parts)
             cursor = self._conn.cursor(as_dict=True)
+            t0 = _time.monotonic()
             cursor.execute(sql)
             rows = cursor.fetchall()
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             cursor.close()
             return self._parse_sample_union_result(rows)
         except Exception:
@@ -502,10 +514,11 @@ class MSSQLConnector(BaseConnector):
                 try:
                     safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor(as_dict=True)
-                    cursor.execute(
-                        f"SELECT DISTINCT TOP {limit} {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL"
-                    )
+                    _col_sql = f"SELECT DISTINCT TOP {limit} {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL"
+                    t0 = _time.monotonic()
+                    cursor.execute(_col_sql)
                     rows = cursor.fetchall()
+                    await self._audit_sql(_col_sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
                     cursor.close()
                     values = [str(r[col]) for r in rows if r[col] is not None]
                     if values:

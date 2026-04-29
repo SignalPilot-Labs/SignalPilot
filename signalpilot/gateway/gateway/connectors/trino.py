@@ -241,8 +241,9 @@ class TrinoConnector(BaseConnector):
                 raise RuntimeError(f"Trino query timeout: {e}") from e
             raise RuntimeError(f"Trino query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         """Fetch schema using information_schema (fast batch) with SHOW COLUMNS fallback."""
+        import time as _time
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -255,8 +256,12 @@ class TrinoConnector(BaseConnector):
             catalogs = [self._connect_params["catalog"]]
         else:
             try:
-                cursor.execute("SHOW CATALOGS")
-                catalogs = [row[0] for row in cursor.fetchall()
+                _show_catalogs_sql = "SHOW CATALOGS"
+                t0 = _time.monotonic()
+                cursor.execute(_show_catalogs_sql)
+                _catalog_rows = cursor.fetchall()
+                await self._audit_sql(_show_catalogs_sql.strip(), len(_catalog_rows), (_time.monotonic() - t0) * 1000)
+                catalogs = [row[0] for row in _catalog_rows
                            if row[0] not in ("system",)]
             except Exception:
                 catalogs = []
@@ -264,20 +269,32 @@ class TrinoConnector(BaseConnector):
         for catalog in catalogs:
             # Try fast path: information_schema batch query
             try:
-                schema.update(self._fetch_schema_via_information_schema(catalog))
+                cat_schema, cat_audits = self._fetch_schema_via_information_schema(catalog)
+                schema.update(cat_schema)
+                for _sql, _cnt, _ms in cat_audits:
+                    await self._audit_sql(_sql, _cnt, _ms)
                 continue
             except Exception:
                 pass
 
             # Fallback: SHOW commands (slower but works with all connectors)
-            schema.update(self._fetch_schema_via_show(catalog))
+            cat_schema, cat_audits = self._fetch_schema_via_show(catalog)
+            schema.update(cat_schema)
+            for _sql, _cnt, _ms in cat_audits:
+                await self._audit_sql(_sql, _cnt, _ms)
 
         return schema
 
-    def _fetch_schema_via_information_schema(self, catalog: str) -> dict[str, Any]:
-        """Fast batch schema introspection via information_schema."""
+    def _fetch_schema_via_information_schema(self, catalog: str) -> tuple[dict[str, Any], list]:
+        """Fast batch schema introspection via information_schema.
+
+        Returns (schema_dict, audit_records) where audit_records is a list of
+        (sql_text, row_count, elapsed_ms) tuples for the caller to await _audit_sql on.
+        """
+        import time as _time
         cursor = self._conn.cursor()
         qcat = self._quote_ident(catalog)
+        audits: list[tuple[str, int, float]] = []
 
         # Columns + table metadata in one query (with column comment if available)
         col_sql = f"""
@@ -301,8 +318,10 @@ class TrinoConnector(BaseConnector):
         """
 
         try:
+            t0 = _time.monotonic()
             cursor.execute(col_sql)
             rows = cursor.fetchall()
+            audits.append((col_sql.strip(), len(rows), (_time.monotonic() - t0) * 1000))
         except Exception:
             # Fallback without comment column (not all catalogs have it)
             col_sql_no_comment = f"""
@@ -323,8 +342,10 @@ class TrinoConnector(BaseConnector):
                     AND t.table_type IN ('BASE TABLE', 'VIEW')
                 ORDER BY c.table_schema, c.table_name, c.ordinal_position
             """
+            t0 = _time.monotonic()
             cursor.execute(col_sql_no_comment)
             rows = cursor.fetchall()
+            audits.append((col_sql_no_comment.strip(), len(rows), (_time.monotonic() - t0) * 1000))
 
         # Try to get table constraints (primary keys, foreign keys)
         pk_set: set[str] = set()
@@ -341,8 +362,11 @@ class TrinoConnector(BaseConnector):
                     AND tc.table_schema = kcu.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
             """
+            t0 = _time.monotonic()
             cursor.execute(pk_sql)
-            for r in cursor.fetchall():
+            _pk_rows = cursor.fetchall()
+            audits.append((pk_sql.strip(), len(_pk_rows), (_time.monotonic() - t0) * 1000))
+            for r in _pk_rows:
                 pk_set.add(f"{r[0]}.{r[1]}.{r[2]}")
 
             # Foreign keys
@@ -362,8 +386,11 @@ class TrinoConnector(BaseConnector):
                     ON tc.constraint_name = ccu.constraint_name
                 WHERE tc.constraint_type = 'FOREIGN KEY'
             """
+            t0 = _time.monotonic()
             cursor.execute(fk_sql)
-            for r in cursor.fetchall():
+            _fk_rows = cursor.fetchall()
+            audits.append((fk_sql.strip(), len(_fk_rows), (_time.monotonic() - t0) * 1000))
+            for r in _fk_rows:
                 key = f"{catalog}.{r[0]}.{r[1]}"
                 if key not in foreign_keys:
                     foreign_keys[key] = []
@@ -407,8 +434,11 @@ class TrinoConnector(BaseConnector):
             entry = schema[tkey]
             qualified = f"{qcat}.{self._quote_ident(entry['schema'].split('.')[-1])}.{self._quote_ident(entry['name'])}"
             try:
-                cursor.execute(f"SHOW STATS FOR {qualified}")
+                _show_stats_sql = f"SHOW STATS FOR {qualified}"
+                t0 = _time.monotonic()
+                cursor.execute(_show_stats_sql)
                 stat_rows = cursor.fetchall()
+                audits.append((_show_stats_sql.strip(), len(stat_rows), (_time.monotonic() - t0) * 1000))
                 # Last row of SHOW STATS has row_count in column index 6
                 if stat_rows:
                     last_row = stat_rows[-1]
@@ -418,26 +448,40 @@ class TrinoConnector(BaseConnector):
             except Exception:
                 pass  # SHOW STATS not supported by this catalog connector
 
-        return schema
+        return schema, audits
 
-    def _fetch_schema_via_show(self, catalog: str) -> dict[str, Any]:
-        """Fallback schema introspection via SHOW commands."""
+    def _fetch_schema_via_show(self, catalog: str) -> tuple[dict[str, Any], list]:
+        """Fallback schema introspection via SHOW commands.
+
+        Returns (schema_dict, audit_records) where audit_records is a list of
+        (sql_text, row_count, elapsed_ms) tuples for the caller to await _audit_sql on.
+        """
+        import time as _time
         cursor = self._conn.cursor()
         schema: dict[str, Any] = {}
         qcat = self._quote_ident(catalog)
+        audits: list[tuple[str, int, float]] = []
 
         try:
-            cursor.execute(f"SHOW SCHEMAS IN {qcat}")
-            schemas = [row[0] for row in cursor.fetchall()
+            _show_schemas_sql = f"SHOW SCHEMAS IN {qcat}"
+            t0 = _time.monotonic()
+            cursor.execute(_show_schemas_sql)
+            _schema_rows = cursor.fetchall()
+            audits.append((_show_schemas_sql.strip(), len(_schema_rows), (_time.monotonic() - t0) * 1000))
+            schemas = [row[0] for row in _schema_rows
                       if row[0] not in ("information_schema",)]
         except Exception:
-            return schema
+            return schema, audits
 
         for schema_name in schemas:
             qschema = self._quote_ident(schema_name)
             try:
-                cursor.execute(f"SHOW TABLES IN {qcat}.{qschema}")
-                tables = [row[0] for row in cursor.fetchall()]
+                _show_tables_sql = f"SHOW TABLES IN {qcat}.{qschema}"
+                t0 = _time.monotonic()
+                cursor.execute(_show_tables_sql)
+                _table_rows = cursor.fetchall()
+                audits.append((_show_tables_sql.strip(), len(_table_rows), (_time.monotonic() - t0) * 1000))
+                tables = [row[0] for row in _table_rows]
             except Exception:
                 continue
 
@@ -445,9 +489,13 @@ class TrinoConnector(BaseConnector):
                 key = f"{catalog}.{schema_name}.{table_name}"
                 qtable = self._quote_ident(table_name)
                 try:
-                    cursor.execute(f"SHOW COLUMNS IN {qcat}.{qschema}.{qtable}")
+                    _show_cols_sql = f"SHOW COLUMNS IN {qcat}.{qschema}.{qtable}"
+                    t0 = _time.monotonic()
+                    cursor.execute(_show_cols_sql)
+                    _col_rows = cursor.fetchall()
+                    audits.append((_show_cols_sql.strip(), len(_col_rows), (_time.monotonic() - t0) * 1000))
                     columns = []
-                    for row in cursor.fetchall():
+                    for row in _col_rows:
                         columns.append({
                             "name": row[0],
                             "type": row[1],
@@ -463,17 +511,20 @@ class TrinoConnector(BaseConnector):
                 except Exception:
                     continue
 
-        return schema
+        return schema, audits
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
             cursor = self._conn.cursor()
+            t0 = _time.monotonic()
             cursor.execute(sql)
             rows = cursor.fetchall()
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries
@@ -483,10 +534,11 @@ class TrinoConnector(BaseConnector):
                 try:
                     safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor()
-                    cursor.execute(
-                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
-                    )
+                    _col_sql = f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                    t0 = _time.monotonic()
+                    cursor.execute(_col_sql)
                     rows = cursor.fetchall()
+                    await self._audit_sql(_col_sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
                     values = [str(row[0]) for row in rows if row[0] is not None]
                     if values:
                         result[col] = values

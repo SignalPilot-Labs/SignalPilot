@@ -177,7 +177,8 @@ class MySQLConnector(BaseConnector):
 
     # ─── Schema ───────────────────────────────────────────────────────
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        import time as _time
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -246,7 +247,12 @@ class MySQLConnector(BaseConnector):
             )
 
         # Run the synchronous queries in a thread pool to avoid blocking the event loop
+        t0 = _time.monotonic()
         rows, fk_rows, idx_rows = await asyncio.to_thread(_fetch_all_sequential)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
+        await self._audit_sql(sql.strip(), len(rows), elapsed_ms)
+        await self._audit_sql(fk_sql.strip(), len(fk_rows), elapsed_ms)
+        await self._audit_sql(idx_sql.strip(), len(idx_rows), elapsed_ms)
 
         # Build cardinality map from the combined index query
         cardinality: dict[str, int] = {}
@@ -319,16 +325,19 @@ class MySQLConnector(BaseConnector):
 
     # ─── Sample values ────────────────────────────────────────────────
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._conn is None or not columns:
             return {}
         self._ensure_connected()
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            t0 = _time.monotonic()
             with self._conn.cursor() as cursor:
                 cursor.execute(sql)
                 rows = cursor.fetchall()
+            await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries (uses _quote_table to prevent SQL injection)

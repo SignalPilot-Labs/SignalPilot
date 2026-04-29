@@ -1,9 +1,5 @@
 "use client";
 
-import { TierBadge } from "@/components/branding/tier-badge";
-import { TierAccent } from "@/components/branding/tier-accent";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
-
 /**
  * Consistent page header with terminal-style breadcrumb.
  */
@@ -18,11 +14,6 @@ export function PageHeader({
   description: string;
   actions?: React.ReactNode;
 }) {
-  const b = useTierBranding();
-  // Paid tier: TierAccent renders the tinted line; suppress neutral hairline.
-  // Free tier (or non-cloud): TierAccent returns null; show neutral hairline.
-  const isPaidTier = b.enabled && b.tier !== "free";
-
   return (
     <div className="mb-8">
       {/* Title row */}
@@ -30,7 +21,6 @@ export function PageHeader({
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-xl font-light tracking-wide leading-none text-[var(--color-text)]">{title}</h1>
-            <TierBadge />
             <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">{subtitle}</span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
@@ -38,13 +28,7 @@ export function PageHeader({
         {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
       </div>
 
-      {/* Bottom rule — exactly one line. Paid tier: tier-tinted accent.
-          Free / non-cloud: neutral gradient hairline. */}
-      {isPaidTier ? (
-        <TierAccent />
-      ) : (
-        <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
-      )}
+      <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
     </div>
   );
 }

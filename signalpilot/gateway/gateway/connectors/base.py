@@ -28,7 +28,7 @@ active_connection_name_var: contextvars.ContextVar[str | None] = contextvars.Con
 class BaseConnector(ABC):
     """Abstract base class for all database connectors.
 
-    Subclasses MUST implement: connect(), _execute_impl(), get_schema().
+    Subclasses MUST implement: connect(), _execute_impl(), _get_schema_impl().
     Subclasses MAY override: health_check(), close(), _ping(),
         _set_connector_specific_extras(), _identifier_quote.
     """
@@ -51,8 +51,12 @@ class BaseConnector(ABC):
         """Execute query and return rows as list of dicts. Subclasses implement this."""
 
     @abstractmethod
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        """Return schema info: tables with columns. Subclasses implement this."""
+
     async def get_schema(self) -> dict[str, Any]:
-        """Return schema info: tables with columns."""
+        """Fetch schema. Subclasses implement _get_schema_impl with _audit_sql calls."""
+        return await self._get_schema_impl()
 
     # ─── Audited execute (concrete — wraps _execute_impl) ────────────
 
@@ -299,12 +303,13 @@ class BaseConnector(ABC):
 
     # ─── Sample values (shared UNION ALL + fallback) ──────────────────
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
-        """Return sample distinct values for specified columns.
-
-        Default implementation: no-op. Override in subclasses.
-        """
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Return sample distinct values. Override in subclasses."""
         return {}
+
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Fetch sample values. Subclasses implement _get_sample_values_impl with _audit_sql calls."""
+        return await self._get_sample_values_impl(table, columns, limit)
 
     @staticmethod
     def _build_sample_union_sql(

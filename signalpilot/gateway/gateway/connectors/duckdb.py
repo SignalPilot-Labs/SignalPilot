@@ -116,7 +116,7 @@ class DuckDBConnector(BaseConnector):
         except duckdb.Error as e:
             raise RuntimeError(f"DuckDB query error: {e}") from e
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         # For file-based DBs, open a transient connection to avoid holding a write lock
         conn = self._open_transient() if not self._is_memory else self._conn
         if conn is None:
@@ -128,6 +128,7 @@ class DuckDBConnector(BaseConnector):
                 conn.close()
 
     async def _get_schema_with_conn(self, conn) -> dict[str, Any]:
+        import time as _time
 
         # Single optimized query for all columns across all tables
         cols_sql = """
@@ -142,8 +143,10 @@ class DuckDBConnector(BaseConnector):
                 AND t.table_type IN ('BASE TABLE', 'VIEW')
             ORDER BY c.table_schema, c.table_name, c.ordinal_position
         """
+        t0 = _time.monotonic()
         cols_result = conn.execute(cols_sql)
         all_cols = cols_result.fetchall()
+        await self._audit_sql(cols_sql.strip(), len(all_cols), (_time.monotonic() - t0) * 1000)
 
         # Primary keys
         pk_sql = """
@@ -157,8 +160,11 @@ class DuckDBConnector(BaseConnector):
         """
         pk_cols: set[str] = set()
         try:
+            t0 = _time.monotonic()
             pk_result = conn.execute(pk_sql)
-            for row in pk_result.fetchall():
+            pk_rows = pk_result.fetchall()
+            await self._audit_sql(pk_sql.strip(), len(pk_rows), (_time.monotonic() - t0) * 1000)
+            for row in pk_rows:
                 pk_cols.add(f"{row[0]}.{row[1]}.{row[2]}")
         except Exception:
             pass
@@ -182,8 +188,11 @@ class DuckDBConnector(BaseConnector):
         """
         foreign_keys: dict[str, list[dict]] = {}
         try:
+            t0 = _time.monotonic()
             fk_result = conn.execute(fk_sql)
-            for row in fk_result.fetchall():
+            fk_rows = fk_result.fetchall()
+            await self._audit_sql(fk_sql.strip(), len(fk_rows), (_time.monotonic() - t0) * 1000)
+            for row in fk_rows:
                 key = f"{row[0]}.{row[1]}"
                 if key not in foreign_keys:
                     foreign_keys[key] = []
@@ -205,8 +214,11 @@ class DuckDBConnector(BaseConnector):
                 FROM duckdb_tables()
                 WHERE NOT internal
             """
+            t0 = _time.monotonic()
             count_result = conn.execute(count_sql)
-            for row in count_result.fetchall():
+            count_rows = count_result.fetchall()
+            await self._audit_sql(count_sql.strip(), len(count_rows), (_time.monotonic() - t0) * 1000)
+            for row in count_rows:
                 key = f"{row[0]}.{row[1]}"
                 row_counts[key] = row[2] or 0
                 if row[3]:
@@ -222,8 +234,11 @@ class DuckDBConnector(BaseConnector):
                 FROM duckdb_columns()
                 WHERE comment IS NOT NULL AND comment != ''
             """
+            t0 = _time.monotonic()
             cc_result = conn.execute(cc_sql)
-            for row in cc_result.fetchall():
+            cc_rows = cc_result.fetchall()
+            await self._audit_sql(cc_sql.strip(), len(cc_rows), (_time.monotonic() - t0) * 1000)
+            for row in cc_rows:
                 col_key = f"{row[0]}.{row[1]}.{row[2]}"
                 col_comments[col_key] = row[3]
         except Exception:
@@ -255,8 +270,9 @@ class DuckDBConnector(BaseConnector):
             })
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if not columns:
             return {}
         conn = self._open_transient() if not self._is_memory else self._conn
@@ -264,8 +280,10 @@ class DuckDBConnector(BaseConnector):
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
+            t0 = _time.monotonic()
             result = conn.execute(sql)
             rows = result.fetchall()
+            await self._audit_sql(sql, len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result(rows)
         except Exception:
             # Fallback to per-column queries
@@ -274,10 +292,11 @@ class DuckDBConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     safe_col = self._quote_identifier(col)
-                    r = conn.execute(
-                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
-                    )
+                    fallback_sql = f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                    t0 = _time.monotonic()
+                    r = conn.execute(fallback_sql)
                     values = [str(row[0]) for row in r.fetchall()]
+                    await self._audit_sql(fallback_sql, len(values), (_time.monotonic() - t0) * 1000)
                     if values:
                         result[col] = values
                 except Exception:

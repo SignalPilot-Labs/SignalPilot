@@ -182,10 +182,16 @@ class SandboxedSQLiteConnector(BaseConnector):
         data = await self._run_sandboxed(code, timeout=timeout or self._query_timeout)
         return data.get("rows", [])
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         """Get schema via sandbox introspection."""
+        import time as _time
         code = _build_schema_code()
-        return await self._run_sandboxed(code, timeout=30)
+        t0 = _time.monotonic()
+        result = await self._run_sandboxed(code, timeout=30)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
+        table_count = len(result) if isinstance(result, dict) else 0
+        await self._audit_sql(f"SANDBOX: schema introspection ({table_count} tables)", table_count, elapsed_ms)
+        return result
 
     async def health_check(self) -> bool:
         """Check if the SQLite file is accessible via sandbox."""

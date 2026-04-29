@@ -142,10 +142,20 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 // Hook
 // ---------------------------------------------------------------------------
 
+const FALLBACK_SUBSCRIPTION: SubscriptionState = {
+  planTier: "free",
+  status: "active",
+  maxApiKeys: 0,
+  isLoaded: false,
+  pendingDowngradeTo: null,
+  pendingDowngradeDate: null,
+  cancelAtPeriodEnd: false,
+  cancelDate: null,
+  canCreateKey: () => true,
+  refetch: () => {},
+};
+
 export function useSubscription(): SubscriptionState {
   const ctx = useContext(SubscriptionContext);
-  if (ctx === null) {
-    throw new Error("useSubscription must be called inside SubscriptionProvider");
-  }
-  return ctx;
+  return ctx ?? FALLBACK_SUBSCRIPTION;
 }

@@ -154,7 +154,7 @@ class PostgresConnector(BaseConnector):
                 rows = await conn.fetch(sql, *(params or []), timeout=timeout)
                 return [dict(r) for r in rows]
 
-    async def get_schema(self) -> dict[str, Any]:
+    async def _get_schema_impl(self) -> dict[str, Any]:
         if self._pool is None:
             raise RuntimeError("Not connected")
 
@@ -249,9 +249,15 @@ class PostgresConnector(BaseConnector):
         """
 
         # Run queries concurrently using separate connections from pool
+        import time as _time
+
         async def _fetch(query: str):
+            t0 = _time.monotonic()
             async with self._pool.acquire() as c:
-                return await c.fetch(query)
+                result = await c.fetch(query)
+            elapsed = (_time.monotonic() - t0) * 1000
+            await self._audit_sql(query.strip(), len(result), elapsed)
+            return result
 
         rows, fk_rows, count_rows, idx_rows, stat_rows = await asyncio.gather(
             _fetch(sql),
@@ -339,14 +345,17 @@ class PostgresConnector(BaseConnector):
             schema[key]["columns"].append(col_entry)
         return schema
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
+        import time as _time
         if self._pool is None or not columns:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
+            t0 = _time.monotonic()
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(sql)
+            await self._audit_sql(sql, len(rows), (_time.monotonic() - t0) * 1000)
             return self._parse_sample_union_result([dict(r) for r in rows])
         except Exception:
             # Fallback to per-column queries if UNION ALL fails

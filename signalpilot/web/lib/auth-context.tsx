@@ -103,10 +103,21 @@ export function AuthProvider({ clerkEnabled, children }: AuthProviderProps) {
 // Hook
 // ---------------------------------------------------------------------------
 
+const FALLBACK_AUTH: AppAuth = {
+  isAuthenticated: false,
+  isCloudMode: false,
+  isLocalMode: true,
+  clerkEnabled: false,
+  user: null,
+  isLoaded: false,
+  signOut: null,
+  activeOrgId: null,
+  activeOrgName: null,
+};
+
 export function useAppAuth(): AppAuth {
   const ctx = useContext(AuthContext);
-  if (ctx === null) {
-    throw new Error("useAppAuth must be called inside AuthProvider");
-  }
-  return ctx;
+  // Return safe fallback during React transitions / SSR boundary crossings
+  // instead of crashing the entire app
+  return ctx ?? FALLBACK_AUTH;
 }

@@ -309,6 +309,24 @@ async def _ensure_audit_user_id_nullable(engine) -> None:
     logger.info("Ensured user_id is nullable on gateway_audit_logs")
 
 
+async def _ensure_audit_indexes(engine) -> None:
+    """Add performance indexes on gateway_audit_logs for large audit tables."""
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_audit_org_ts "
+            "ON gateway_audit_logs (org_id, timestamp DESC)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_audit_org_event "
+            "ON gateway_audit_logs (org_id, event_type)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_audit_parent "
+            "ON gateway_audit_logs (parent_id) WHERE parent_id IS NOT NULL"
+        ))
+    logger.info("Ensured performance indexes on gateway_audit_logs")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -323,6 +341,7 @@ async def init_db() -> None:
     await _ensure_audit_ip_columns(engine)
     await _ensure_audit_parent_id_column(engine)
     await _ensure_audit_user_id_nullable(engine)
+    await _ensure_audit_indexes(engine)
     logger.info("Gateway database tables initialized")
 
 

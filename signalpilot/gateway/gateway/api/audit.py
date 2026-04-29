@@ -1,4 +1,4 @@
-"""Audit endpoints — GET /api/audit and GET /api/audit/export."""
+"""Audit endpoints — GET /api/audit, /api/audit/stats, and /api/audit/export."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ import time
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select, func as sa_func
 
 from ..scope_guard import RequireScope
+from ..db.models import GatewayAuditLog
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
@@ -22,13 +24,47 @@ async def get_audit(
     connection_name: str | None = Query(default=None, max_length=64),
     event_type: str | None = Query(default=None, max_length=64),
 ):
-    entries = await store.read_audit(
+    entries, total = await store.read_audit(
         limit=limit,
         offset=offset,
         connection_name=connection_name,
         event_type=event_type,
+        return_total=True,
     )
-    return {"entries": entries, "total": len(entries)}
+    return {"entries": entries, "total": total}
+
+
+@router.get("/audit/stats", dependencies=[RequireScope("read")])
+async def get_audit_stats(store: StoreD):
+    """Lightweight aggregate stats — single query, no row scanning."""
+    from sqlalchemy import case, Integer
+    oid = store.org_id or "local"
+    q = (
+        select(
+            GatewayAuditLog.event_type,
+            sa_func.count().label("cnt"),
+            sa_func.sum(case((GatewayAuditLog.blocked == True, 1), else_=0)).label("blocked_cnt"),
+        )
+        .where(GatewayAuditLog.org_id == oid)
+        .group_by(GatewayAuditLog.event_type)
+    )
+    result = await store.session.execute(q)
+    rows = result.all()
+    total = 0
+    by_type: dict[str, int] = {}
+    blocked = 0
+    for event_type, cnt, blocked_cnt in rows:
+        total += cnt
+        by_type[event_type] = cnt
+        blocked += blocked_cnt or 0
+    return {
+        "total": total,
+        "mcp_tools": by_type.get("mcp_tool", 0),
+        "queries": by_type.get("query", 0),
+        "sql": by_type.get("sql", 0),
+        "executions": by_type.get("execute", 0),
+        "blocked": blocked,
+    }
 
 
 @router.get("/audit/export", dependencies=[RequireScope("admin")])
@@ -44,7 +80,7 @@ async def export_audit(
     matching the filter criteria. Suitable for SOC 2, HIPAA, or EU AI Act reporting.
     """
     entries = await store.read_audit(
-        limit=10_000,
+        limit=1_000_000,
         offset=0,
         connection_name=connection_name,
         event_type=event_type,

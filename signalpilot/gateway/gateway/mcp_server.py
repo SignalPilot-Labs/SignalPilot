@@ -181,6 +181,106 @@ async def _get_sandbox_url() -> str:
     return settings.sandbox_manager_url
 
 
+# ─── MCP tool call auditing ──────────────────────────────────────────────────
+
+import functools
+import logging as _logging
+
+_mcp_logger = _logging.getLogger("gateway.mcp_audit")
+
+
+async def _audit_tool_call(
+    tool_name: str,
+    args: dict,
+    result: str | None,
+    duration_ms: float,
+    error: str | None = None,
+    connection_name: str | None = None,
+    sql: str | None = None,
+):
+    """Log an MCP tool call to the gateway audit log and increment usage counter."""
+    from .governance.plan_limits import daily_query_counter
+
+    org_id = mcp_org_id_var.get(None)
+    user_id = mcp_user_id_var.get(None)
+
+    # Increment daily usage counter for every tool call
+    if org_id:
+        daily_query_counter.increment(org_id)
+
+    # Write to audit log
+    try:
+        async with _store_session() as store:
+            await store.append_audit(AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="mcp_tool",
+                connection_name=connection_name,
+                sql=sql,
+                rows_returned=None,
+                cost_usd=None,
+                blocked=error is not None,
+                block_reason=error,
+                duration_ms=duration_ms,
+                agent_id=tool_name,
+                metadata={"args": {k: str(v)[:200] for k, v in args.items()} if args else {}},
+            ))
+    except Exception:
+        _mcp_logger.debug("Failed to audit MCP tool call %s", tool_name, exc_info=True)
+
+
+def _audited_tool(fn):
+    """Decorator that wraps an MCP tool function with audit logging."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        t0 = time.time()
+        tool_name = fn.__name__
+        # Extract connection_name and sql from kwargs if present
+        conn = kwargs.get("connection_name") or (args[0] if args and isinstance(args[0], str) else None)
+        sql_arg = kwargs.get("sql")
+        try:
+            result = await fn(*args, **kwargs)
+            duration_ms = (time.time() - t0) * 1000
+            # Fire-and-forget audit (don't slow down the tool call)
+            import asyncio
+            asyncio.create_task(_audit_tool_call(
+                tool_name=tool_name,
+                args=kwargs,
+                result=str(result)[:200] if result else None,
+                duration_ms=duration_ms,
+                connection_name=conn,
+                sql=sql_arg,
+            ))
+            return result
+        except Exception as exc:
+            duration_ms = (time.time() - t0) * 1000
+            import asyncio
+            asyncio.create_task(_audit_tool_call(
+                tool_name=tool_name,
+                args=kwargs,
+                result=None,
+                duration_ms=duration_ms,
+                error=str(exc)[:200],
+                connection_name=conn,
+                sql=sql_arg,
+            ))
+            raise
+    return wrapper
+
+
+# Patch mcp.tool() to auto-audit all tools
+_original_tool = mcp.tool
+
+def _audited_mcp_tool(*args, **kwargs):
+    """Wrapper around FastMCP.tool() that adds audit logging to every tool."""
+    decorator = _original_tool(*args, **kwargs)
+    def wrapper(fn):
+        return decorator(_audited_tool(fn))
+    return wrapper
+
+mcp.tool = _audited_mcp_tool  # type: ignore[assignment]
+
+
 # ─── Tools ───────────────────────────────────────────────────────────────────
 
 
@@ -288,7 +388,7 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
 
     from .connectors.registry import get_connector
     from .governance.annotations import load_annotations
-    from .governance.plan_limits import get_org_limits, check_query_limit, record_query
+    from .governance.plan_limits import get_org_limits, check_query_limit
 
     async with _store_session() as store:
         # Enforce daily query limit
@@ -369,7 +469,6 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
 
             elapsed_ms = (time.monotonic() - start) * 1000
             health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
-            record_query(store.org_id)
 
             # Apply PII redaction if enabled on this connection (Feature #15)
             from .governance.pii import PIIRedactor

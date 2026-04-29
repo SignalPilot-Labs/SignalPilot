@@ -27,28 +27,24 @@ _SANDBOX_DB_PATH = "data/db.duckdb"  # Relative to workdir (cwd)
 
 def _build_query_code(sql: str, db_path: str = _SANDBOX_DB_PATH) -> str:
     """Build Python code that executes a SQL query and prints JSON results."""
-    escaped_sql = sql.replace("\\", "\\\\").replace("'", "\\'")
-    return textwrap.dedent(f"""\
-        import duckdb, json, datetime, decimal
-        def _serialize(obj):
-            if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
-                return obj.isoformat()
-            if isinstance(obj, datetime.timedelta):
-                return str(obj)
-            if isinstance(obj, decimal.Decimal):
-                return float(obj)
-            if isinstance(obj, bytes):
-                return obj.hex()
-            return str(obj)
-        conn = duckdb.connect('{db_path}', read_only=True)
-        try:
-            result = conn.execute('{escaped_sql}')
-            columns = [desc[0] for desc in result.description]
-            rows = [dict(zip(columns, row)) for row in result.fetchall()]
-            print(json.dumps({{"columns": columns, "rows": rows}}, default=_serialize))
-        finally:
-            conn.close()
-    """)
+    escaped_sql = sql.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+    return (
+        "import duckdb, json, datetime, decimal\n"
+        "def _serialize(obj):\n"
+        "    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)): return obj.isoformat()\n"
+        "    if isinstance(obj, datetime.timedelta): return str(obj)\n"
+        "    if isinstance(obj, decimal.Decimal): return float(obj)\n"
+        "    if isinstance(obj, bytes): return obj.hex()\n"
+        "    return str(obj)\n"
+        f"conn = duckdb.connect('{db_path}', read_only=True)\n"
+        "try:\n"
+        f"    result = conn.execute('{escaped_sql}')\n"
+        "    columns = [desc[0] for desc in result.description]\n"
+        "    rows = [dict(zip(columns, row)) for row in result.fetchall()]\n"
+        "    print(json.dumps({'columns': columns, 'rows': rows}, default=_serialize))\n"
+        "finally:\n"
+        "    conn.close()\n"
+    )
 
 
 def _build_schema_code(db_path: str = _SANDBOX_DB_PATH) -> str:

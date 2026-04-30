@@ -1,15 +1,26 @@
 /research/
 .mcp.json
+CLAUDE.md
 /.claude/
 .idea
 .env
 __pycache__/
 *.pyc
+*.tsbuildinfo
+.next/
+node_modules/
+session-transcript.jsonl
 
 # Benchmark
 benchmark/datasets/
 benchmark/results/
 benchmark/skills/improvements_*.json
+benchmark/_sql_workdir/
+benchmark/tests/tasks/_workdir/
+benchmark/tests/env/
+benchmark/gold_build_dates.json
+benchmark/ref/
+benchmark/docs/
 
 # Self-improve build artifacts
 self-improve/monitor-web/.next/
@@ -25,7 +36,42 @@ self-improve/monitor-web/audit/test-results/
 *.pem
 *.key
 *.pfx
+*.p12
+*.crt
+*.salt
 id_rsa*
+gcp-service-account.json
+
+# Env files
+.env.*
+!.env.example
+!.env.local.example
+
+# SignalPilot web
+signalpilot/web/.next/
+signalpilot/web/node_modules/
+signalpilot/web/tsconfig.tsbuildinfo
+signalpilot/web/next-env.d.ts
+.env.local
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Build artifacts
+dist/
+build/
+
+# Database files
+*.sqlite
+*.db
 
 # Docker volumes / runtime
 *.log

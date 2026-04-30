@@ -1,0 +1,18 @@
+[
+    {
+        "name": "spider2_approach",
+        "description": "General approach for Spider2 benchmark tasks",
+        "prompt": "For Spider2 benchmark questions:\n1. The question asks about data in a specific database — your job is to write SQL that produces the exact answer\n2. Be precise: if the question asks for a count, return exactly one number. If it asks 'which X', return the specific entities\n3. Pay attention to column ordering in the result — match what the question implies\n4. Handle NULL values explicitly — use COALESCE or IFNULL where appropriate\n5. When the question says 'distinct', always use SELECT DISTINCT or COUNT(DISTINCT ...)\n6. For percentage calculations, multiply by 100.0 (not 100) to avoid integer division\n7. Round numeric results to 2 decimal places unless the question specifies otherwise",
+        "category": "sql_generation",
+        "applicable_dbs": ["sqlite"],
+        "priority": 10
+    },
+    {
+        "name": "schema_discovery_sqlite",
+        "description": "SQLite schema discovery strategy for unknown databases",
+        "prompt": "To discover the schema of an unknown SQLite database:\n1. Run: SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name\n2. For each table: SELECT * FROM table_name LIMIT 3 — to see actual data\n3. For column details: PRAGMA table_info(table_name)\n4. For foreign keys: PRAGMA foreign_key_list(table_name)\n5. Check for indexes: PRAGMA index_list(table_name)\n6. Count rows: SELECT COUNT(*) FROM table_name\n\nDo steps 1-2 first to get a broad overview, then dive into specific tables relevant to the question.",
+        "category": "schema_exploration",
+        "applicable_dbs": ["sqlite"],
+        "priority": 9
+    }
+]

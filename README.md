@@ -1,157 +1,282 @@
-# SP Research
+<div align="center">
 
-Autonomous self-improvement agent powered by the Claude Agent SDK. A CEO/Worker loop continuously improves a target codebase on a branch, supervised by a real-time monitor UI.
+# ⚡ SignalPilot Data Agent
 
-## Quick Start
+### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**, +7.45 over JetBrains DataBao (Apr 2026)
+
+**Governed AI agents for your data stack — db, dbt, and more.** Optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).
+
+[![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
+
+**[☁️ Try SignalPilot Cloud — free](https://app.signalpilot.ai/)**
+
+[🚀 Self-host](#try-signalpilot-data-agent) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book a demo](https://cal.com/fahimaziz/autofyn-intro)
+
+</div>
+
+---
+
+## For Agentic Data and Platform Teams
+
+- **Governed production access** — Snowflake, BigQuery, Postgres, dbt with enterprise guardrails
+- **Harness optimization with [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn)** — tune prompts, skills, retrieval to your data
+- **Benchmark-driven evaluation** — same eval rigor that earned [#1 on Spider 2.0-DBT](https://www.signalpilot.ai/benchmark)
+- **Enterprise support** — SSO, private deployments, SLAs
+
+[Talk to us](https://cal.com/fahimaziz/autofyn-intro) · [signalpilot.ai](https://www.signalpilot.ai/)
+
+---
+
+## What SignalPilot Is
+
+**One entrypoint, three pieces of infrastructure** on the same gateway.
+
+Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code)**. Underneath it, three components do the work:
+
+1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 32 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
+2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 32 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
+3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://app.signalpilot.ai) for SSO and hosted history.
+
+---
+
+**Index** — [What It Is](#what-signalpilot-is) · [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
+
+---
+
+## How It Works
+
+Five stages, every task: plan → scan → govern → build → report.
+
+### 01 — Describe what you need
+
+![Describe what you need](docs/images/ask.gif)
+
+- Plain-English goal in chat (e.g. *"Build `shopify__daily_shop` — orders, abandoned checkouts, fulfillment counts by day"*)
+- Parsed into a structured task — no SQL written, no warehouse touched yet
+
+### 02 — Agent scans your project
+
+![Agent scans your project](docs/images/scanning.gif)
+
+- Inspects dbt project + warehouse: sources, staging, marts, missing models
+- Flags date hazards (`current_date`, `now()`)
+- Resolves build order across the DAG — deterministic, not a guess
+
+### 03 — Every query is governed
+
+![Every query is governed](docs/images/governance.gif)
+
+- DDL (`DROP`, `CREATE`, `ALTER`) and DML (`INSERT`, `UPDATE`, `DELETE`) blocked at the parser
+- Auto-`LIMIT` injection on unbounded `SELECT`
+- Per-session budget cap kills queries that would scan over your $ threshold
+- Every query audited: timestamp, agent ID, policy reason, full SQL
+
+### 04 — DAG builds itself
+
+![DAG builds itself](docs/images/dag.gif)
+
+- `dbt parse` runs first to catch structural errors
+- Models materialized in topological order
+- Verifier agent reads dbt errors and proposes fixes (renames, missing CTEs, fan-out, date-spine guards)
+- Tests run after build and feed back into the loop
+
+### 05 — Full audit receipt
+
+![Full audit receipt](docs/images/receipt.gif)
+
+- Structured summary: duration · agent turns · governed queries · queries blocked · models built · columns validated
+- Every line traces back to a specific MCP tool call
+
+---
+
+## Try SignalPilot Data Agent
+
+**Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
 
 ```bash
-# 1. Copy .env and fill in tokens (or configure via the UI)
-cp self-improve/.env.example .env
-# Optional: GIT_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, GITHUB_REPO
-# Credentials can also be configured at http://localhost:3400 (Settings / onboarding)
+# Start SignalPilot
+git clone https://github.com/SignalPilot-Labs/signalpilot.git
+cd signalpilot
+docker compose up -d
+# Web UI available at http://localhost:3200
 
-# 2. Start the stack
-cd self-improve
-docker compose up --build -d
+# Connect the MCP server to Claude Code
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+
+# (Optional) Install the plugin for skills + agents
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
-**URLs after startup:**
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| Monitor UI | http://localhost:3400 | Agent run feed, controls (pause/stop/inject), cost tracking |
-| Monitor API | http://localhost:3401 | SSE event stream, run history, control signals |
+That's it. Claude Code now has governed access to your databases.
 
 ---
 
 ## Architecture
 
+Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, dangerous function blocking, or audit logging by default. SignalPilot does — that's why agents on it set the SOTA on Spider 2.0-DBT.
+
 ```
-           Browser
-              |
-       localhost:3400
-       Monitor Web
-       (Next.js 16)
-              |
-       localhost:3401
-       Monitor API
-       (FastAPI)
-              |
-        +-----+-----+
-        |           |
-     Audit DB    Agent
-     (SQLite)   :8500
-               (Claude SDK)
+┌─────────────────────────────────────────────────────────────┐
+│  Your AI Agent (Claude Code, Agent SDK, any MCP client)     │
+└────────────────────────────┬────────────────────────────────┘
+                             │ MCP Protocol
+┌────────────────────────────▼────────────────────────────────┐
+│  SignalPilot Gateway                                         │
+│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │
+│  │ Governance │ │ Schema       │ │ dbt Project           │ │
+│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │
+│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │
+│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │
+│  └────────────┘ └──────────────┘ └───────────────────────┘ │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+   ┌─────────┐        ┌──────────┐        ┌──────────┐
+   │ DuckDB  │        │ Postgres │        │Snowflake │
+   └─────────┘        └──────────┘        └──────────┘
 ```
 
 ---
 
-## Docker Containers
+## Plugin (Claude Code)
 
-### Self-Improve (`self-improve/docker-compose.yml`)
+The [SignalPilot plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds battle-tested dbt skills to Claude Code — the same skills that power the Spider 2.0-DBT SOTA.
 
-| Container | Image | Port | Purpose |
-|-----------|-------|------|---------|
-| `improve-monitor` | `python:3.12-slim` + `node:22` | 3400, 3401 | Next.js monitor dashboard (3400) + FastAPI backend (3401) |
-| `improve-agent` | `python:3.12-slim` | 8500 | Claude Agent SDK runner with CEO/Worker loop, git, Docker CLI, Playwright |
-| `improve-tunnel` | `cloudflare/cloudflared` | — | Cloudflare tunnel for remote access to monitor UI |
-
----
-
-## Directory Structure
-
-```
-self-improve/
-  agent/                    # Python agent package
-    main.py                 # HTTP server (:8500) + agent run loop
-    runner.py               # Agent execution engine (parallel slot runner)
-    run_manager.py          # Run lifecycle management
-    endpoints.py            # FastAPI endpoint definitions
-    db.py                   # SQLite: runs, tool_calls, audit_log writes
-    git_ops.py              # Branch creation, push, PR creation via gh CLI
-    hooks.py                # PreToolUse/PostToolUse hooks: audit every tool call
-    permissions.py          # Tool permission gating (block dangerous ops)
-    prompt.py               # System/initial/continuation/CEO prompt builders
-    session_gate.py         # MCP tool: time-lock enforcement + end_session
-    signals.py              # Control signal handling (pause/resume/inject/stop)
-    subagents.py            # Sub-agent orchestration
-    tests/                  # pytest suite (unit + integration)
-  monitor/                  # FastAPI backend
-    app.py                  # REST + SSE: runs, tool_calls, control signals
-    models.py               # Pydantic models
-  monitor-web/              # Next.js 16 dashboard
-    app/page.tsx            # Main monitor view
-    components/
-      controls/             # Start/stop/pause/resume/inject buttons
-      feed/                 # Real-time SSE event feed + LLM output viewer
-      sidebar/              # Run list with status badges
-      stats/                # Cost, tokens, tool call counters
-      parallel/             # Parallel run slots UI
-      mobile/               # Mobile-responsive components
-    hooks/                  # useRuns, useSSE, useParallelRuns
-    lib/api.ts              # API client to :3401
-  prompts/                  # Markdown prompt templates
-    system.md               # Agent system prompt
-    initial.md              # First-round task prompt
-    ceo-continuation.md     # CEO review + next-task assignment template
-    session-gate.md         # Time-lock rules
-    stop.md                 # Graceful stop instructions
-    agent-*.md              # Sub-agent role prompts (researcher, reviewer, QA, etc.)
-    continuation-*.md       # Phase-specific continuations
-  .claude/skills/           # Agent skill definitions (copied into work dir)
-  .env.example              # Env var reference
-  Dockerfile.agent          # Agent image (Python + Node + Docker CLI + gh + Playwright)
-  Dockerfile.monitor        # Monitor image (Python + Node multi-stage)
-  docker-compose.yml        # Full self-improve stack
-  monitor-entrypoint.sh     # Starts FastAPI + Next.js in one container
+```bash
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
-### CEO/Worker Loop (timed sessions)
+**Included skills:** `dbt-workflow` (full 5-step lifecycle), `dbt-write`, `dbt-debugging`, `dbt-date-spines`, `duckdb-sql`, `snowflake-sql`, `bigquery-sql`, `sqlite-sql`, `sql-workflow`
 
-When a run has a duration lock (e.g. 4 hours), the agent operates in a two-role loop:
-
-1. **Worker** executes the assigned task, then stops
-2. **CEO (Product Director)** reviews what was done, sees the original prompt, assigns the next task
-3. Repeat until time expires or operator sends `unlock`
-
-Without a duration lock, it's single-shot: one round, then done.
+See [`plugin/README.md`](plugin/README.md) for details.
 
 ---
 
-## Environment Variables
+## Use With Any MCP Client
 
-Configured in `.env` at the project root (or via the monitor UI Settings page):
+> ⚠️ **Experimental for non-Claude clients.** The 32 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GIT_TOKEN` | No | GitHub PAT with repo scope |
-| `CLAUDE_CODE_OAUTH_TOKEN` | No | Claude Code OAuth token (authenticates CLI + SDK) |
-| `GITHUB_REPO` | No | Target repo slug (e.g. `your-org/SignalPilot`) |
-| `MAX_BUDGET_USD` | No | Max budget per agent run in USD (default: `50`) |
-| `SP_BENCHMARK_DIR` | No | Host path for benchmark data |
+### Claude Code (one-liner)
 
-All credentials can be configured via the onboarding flow at `http://localhost:3400`.
+```bash
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+```
+
+### Claude Desktop / Cursor / Any MCP Client
+
+Add to your MCP config (`.mcp.json`, `.cursor/mcp.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "signalpilot": {
+      "type": "http",
+      "url": "http://localhost:3300/mcp"
+    }
+  }
+}
+```
+
+When API keys are configured, add an `Authorization: Bearer YOUR_API_KEY` header.
 
 ---
 
-## Monitor API Reference
+## Connect a Database
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/runs` | List all runs |
-| GET | `/api/runs/{id}` | Run details (cost, tokens, status) |
-| GET | `/api/runs/{id}/tools` | Tool call history |
-| GET | `/api/runs/{id}/audit` | Audit event log |
-| POST | `/api/runs/{id}/pause` | Pause agent |
-| POST | `/api/runs/{id}/resume` | Resume agent |
-| POST | `/api/runs/{id}/inject` | Inject prompt into running agent |
-| POST | `/api/runs/{id}/stop` | Graceful stop (agent commits + creates PR) |
-| POST | `/api/runs/{id}/unlock` | End time-lock after current round |
-| POST | `/api/agent/start` | Start new improvement run |
-| POST | `/api/agent/stop` | Instant stop via in-process queue |
-| POST | `/api/agent/kill` | Immediate cancel, no cleanup |
-| GET | `/api/agent/health` | Agent container status |
-| GET | `/api/stream/{id}` | SSE real-time event stream |
+Via the web UI at `http://localhost:3200`, or via API:
+
+```bash
+curl -X POST http://localhost:3300/api/connections \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-warehouse",
+    "db_type": "duckdb",
+    "database": "/path/to/warehouse.duckdb"
+  }'
+```
+
+Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
+
+---
+
+## MCP Tools
+
+32 governed tools across query execution, schema discovery, dbt intelligence, and model verification.
+
+| Category | Tools |
+|----------|-------|
+| **Query** | `query_database`, `validate_sql`, `explain_query`, `estimate_query_cost`, `debug_cte_query` |
+| **Schema** | `list_tables`, `describe_table`, `explore_table`, `explore_column`, `explore_columns`, `schema_overview`, `schema_ddl`, `schema_link`, `schema_diff`, `schema_statistics` |
+| **Relationships** | `get_relationships`, `find_join_path`, `compare_join_types` |
+| **dbt** | `dbt_error_parser`, `generate_sql_skeleton`, `check_model_schema`, `validate_model_output`, `audit_model_sources`, `analyze_grain` |
+| **Operational** | `list_database_connections`, `connection_health`, `connector_capabilities`, `get_date_boundaries`, `check_budget`, `query_history`, `list_projects`, `get_project` |
+
+See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.
+
+---
+
+## Security
+
+- **Read-only governance** — queries parsed to AST, DDL/DML blocked, 79+ dangerous functions blocked across 7 dialects
+- **Tenant isolation** — API keys, connections, and audit logs are org-scoped
+- **Encryption at rest** — Fernet (AES-128-CBC + HMAC-SHA256)
+- **Audit logging** — every query logged with PII redaction
+- **Rate limiting** — per-IP, per-key, and per-org with brute-force protection
+- **Non-root containers** — gateway runs as UID 10001
+
+See [SECURITY.md](SECURITY.md) for our vulnerability reporting policy.
+
+---
+
+## Project Structure
+
+```
+SignalPilot/
+├── signalpilot/
+│   ├── gateway/              # FastAPI backend — MCP server, REST API, governance
+│   │   └── gateway/
+│   │       ├── api/          # REST API modules
+│   │       ├── connectors/   # 11 database connectors + pooling + SSH tunneling
+│   │       ├── governance/   # Budget, cache, PII redaction, annotations
+│   │       ├── mcp/          # 32 MCP tool definitions (modular package)
+│   │       ├── engine/       # SQL validation, LIMIT injection, function denylist
+│   │       ├── dbt/          # Project scanning, validation, hazard detection
+│   │       ├── db/           # SQLAlchemy ORM models + async engine
+│   │       └── auth.py       # Clerk JWT (cloud) / local auth + org role enforcement
+│   └── web/                  # Next.js 16 frontend — 20 pages, Tailwind CSS
+│       ├── app/              # App router pages (dashboard, connections, query, etc.)
+│       ├── components/       # 20 UI components (sidebar, command palette, etc.)
+│       └── lib/              # API client, auth context, hooks
+├── plugin/                   # Claude Code plugin (10 skills, 1 verifier agent)
+│   ├── agents/               # Verifier agent (7-check post-build protocol)
+│   └── skills/               # dbt-workflow, sql-workflow, db-specific SQL, etc.
+├── sp-sandbox/               # gVisor sandboxed Python execution
+├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 51.56%)
+└── docker-compose.yml        # Full stack: web, gateway, postgres, sandbox
+```
+
+---
+
+## Community
+
+- 🐛 [Open an issue](https://github.com/SignalPilot-Labs/signalpilot/issues) — bugs, feature requests, connector requests
+- 💬 [GitHub Discussions](https://github.com/SignalPilot-Labs/signalpilot/discussions) — questions, ideas, show-and-tell
+- 🔒 [Security policy](SECURITY.md) — report vulnerabilities responsibly
+
+### Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=SignalPilot-Labs/signalpilot)](https://github.com/SignalPilot-Labs/signalpilot/graphs/contributors)
+
+---
+
+## Star History
+
+If SignalPilot is useful, please ⭐ — it helps a ton.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=SignalPilot-Labs/signalpilot&type=Date)](https://star-history.com/#SignalPilot-Labs/signalpilot&Date)
 
 ---
 

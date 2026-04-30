@@ -1,0 +1,161 @@
+"use client";
+
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  type ReactNode,
+} from "react";
+import { useAppAuth } from "@/lib/auth-context";
+import { useBackendClient } from "@/lib/backend-client";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface SubscriptionState {
+  planTier: string;
+  status: string;
+  maxApiKeys: number;
+  isLoaded: boolean;
+  pendingDowngradeTo: string | null;
+  pendingDowngradeDate: string | null;
+  cancelAtPeriodEnd: boolean;
+  cancelDate: string | null;
+  canCreateKey: (currentCount: number) => boolean;
+  refetch: () => void;
+}
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+const SubscriptionContext = createContext<SubscriptionState | null>(null);
+
+// ---------------------------------------------------------------------------
+// Local mode static values — local deployments always have full team-tier access
+// ---------------------------------------------------------------------------
+
+const LOCAL_MODE_SUBSCRIPTION: Omit<SubscriptionState, "canCreateKey" | "refetch"> = {
+  planTier: "team",
+  status: "active",
+  maxApiKeys: 50,
+  isLoaded: true,
+  pendingDowngradeTo: null,
+  pendingDowngradeDate: null,
+  cancelAtPeriodEnd: false,
+  cancelDate: null,
+};
+
+// ---------------------------------------------------------------------------
+// Inner component — called only when isCloudMode && clerkEnabled so hooks work
+// ---------------------------------------------------------------------------
+
+function CloudSubscriptionInner({ children }: { children: ReactNode }) {
+  const { isAuthenticated } = useAppAuth();
+  const client = useBackendClient();
+
+  const [planTier, setPlanTier] = useState("free");
+  const [status, setStatus] = useState("active");
+  const [maxApiKeys, setMaxApiKeys] = useState(50);
+  const [isLoaded, setIsLoaded] = useState(true);
+  const [pendingDowngradeTo, setPendingDowngradeTo] = useState<string | null>(null);
+  const [pendingDowngradeDate, setPendingDowngradeDate] = useState<string | null>(null);
+  const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(false);
+  const [cancelDate, setCancelDate] = useState<string | null>(null);
+
+  const fetchSubscription = useCallback(async () => {
+    if (!isAuthenticated) {
+      setIsLoaded(true);
+      return;
+    }
+    try {
+      const data = await client.getSubscription();
+      setPlanTier(data.plan_tier);
+      setStatus(data.status);
+      setMaxApiKeys(data.max_api_keys);
+      setPendingDowngradeTo(data.pending_downgrade_to);
+      setPendingDowngradeDate(data.pending_downgrade_date);
+      setCancelAtPeriodEnd(data.cancel_at_period_end ?? false);
+      setCancelDate(data.cancel_date ?? null);
+    } catch {
+      // Surface error by leaving defaults (free tier) and marking loaded
+      // so the UI renders rather than spinning indefinitely
+    } finally {
+      setIsLoaded(true);
+    }
+  }, [isAuthenticated, client]);
+
+  useEffect(() => {
+    fetchSubscription();
+  }, [fetchSubscription]);
+
+  const value: SubscriptionState = {
+    planTier,
+    status,
+    maxApiKeys,
+    isLoaded,
+    pendingDowngradeTo,
+    pendingDowngradeDate,
+    cancelAtPeriodEnd,
+    cancelDate,
+    canCreateKey: (currentCount: number) => currentCount < maxApiKeys,
+    refetch: fetchSubscription,
+  };
+
+  return (
+    <SubscriptionContext.Provider value={value}>
+      {children}
+    </SubscriptionContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SubscriptionProvider — wraps children, selects cloud vs local mode branch
+// ---------------------------------------------------------------------------
+
+export function SubscriptionProvider({ children }: { children: ReactNode }) {
+  const { isCloudMode } = useAppAuth();
+
+  if (isCloudMode) {
+    return <CloudSubscriptionInner>{children}</CloudSubscriptionInner>;
+  }
+
+  // Local mode: static full-access subscription, no hooks needed
+  const value: SubscriptionState = {
+    ...LOCAL_MODE_SUBSCRIPTION,
+    canCreateKey: (currentCount: number) =>
+      currentCount < LOCAL_MODE_SUBSCRIPTION.maxApiKeys,
+    refetch: () => {},
+  };
+
+  return (
+    <SubscriptionContext.Provider value={value}>
+      {children}
+    </SubscriptionContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
+const FALLBACK_SUBSCRIPTION: SubscriptionState = {
+  planTier: "free",
+  status: "active",
+  maxApiKeys: 0,
+  isLoaded: false,
+  pendingDowngradeTo: null,
+  pendingDowngradeDate: null,
+  cancelAtPeriodEnd: false,
+  cancelDate: null,
+  canCreateKey: () => true,
+  refetch: () => {},
+};
+
+export function useSubscription(): SubscriptionState {
+  const ctx = useContext(SubscriptionContext);
+  return ctx ?? FALLBACK_SUBSCRIPTION;
+}

@@ -1,0 +1,87 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "signalpilot-gateway"
+version = "0.1.0"
+description = "SignalPilot Gateway — governed MCP server for AI database access"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "httpx>=0.28.0",
+    "sqlglot>=25.0.0",
+    "asyncpg>=0.30.0",
+    "aiofiles>=24.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "cryptography>=44.0.0",
+    "python-multipart>=0.0.9",
+    "typer>=0.15.0",
+    "mcp>=1.0.0",
+    "pyyaml>=6.0.0",
+    "PyJWT>=2.8.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    # Database connectors
+    "pymysql>=1.1.0",
+    "pymssql>=2.3.0",
+    "psycopg2-binary>=2.9.0",
+    "sshtunnel>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.28.0", "moto[kms]>=5.0.0", "boto3>=1.34.0", "ruff>=0.7.0"]
+aws = ["boto3>=1.34.0"]
+snowflake = ["snowflake-connector-python>=3.6.0"]
+bigquery = ["google-cloud-bigquery>=3.20.0"]
+clickhouse = ["clickhouse-driver>=0.2.7"]
+databricks = ["databricks-sql-connector>=3.0.0"]
+trino = ["trino>=0.330.0"]
+all-connectors = [
+    "snowflake-connector-python>=3.6.0",
+    "google-cloud-bigquery>=3.20.0",
+    "clickhouse-driver>=0.2.7",
+    "databricks-sql-connector>=3.0.0",
+    "trino>=0.330.0",
+]
+
+[project.scripts]
+sp = "gateway.cli:app"
+signalpilot-mcp = "gateway.mcp:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gateway"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["**/__pycache__", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "PIE",    # flake8-pie
+    "RUF005", # collection-literal-concatenation (prefer unpacking)
+    "RUF015", # unnecessary-iterable-allocation-for-first-element (prefer next(iter(...)))
+    "RUF100", # unused-noqa (rest of RUF family deferred — see r12)
+    "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
+    "RET",    # flake8-return (enabled r14)
+]
+ignore = [
+    "E501",  # formatter handles long lines
+    "B008",  # Depends() pattern
+    "B904",  # raise … from err — round 2
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F401", "F811"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

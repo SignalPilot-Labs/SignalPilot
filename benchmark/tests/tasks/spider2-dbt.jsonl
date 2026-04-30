@@ -1,0 +1,1 @@
+{"instance_id": "test_dbt_simple001", "instruction": "Create a dbt model called 'customer_summary' that selects all columns from the 'raw_customers' source table. Use materialized='table'."}

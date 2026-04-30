@@ -1,0 +1,69 @@
+FROM python:3.12-slim
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential libpq-dev libssl-dev libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js (required for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI
+# TODO: pin @anthropic-ai/claude-code to an exact version (run: npm show @anthropic-ai/claude-code version)
+RUN npm install -g @anthropic-ai/claude-code
+
+# Python: dbt-duckdb + data tools + Claude Agent SDK + MCP + gateway deps
+# Versions pinned to those installed in this environment (pip show <pkg>).
+# dbt-duckdb, duckdb, pandas, pyarrow: not installed in build env;
+# pin to exact version once verified with: pip show <pkg> inside a built container.
+RUN pip install --no-cache-dir \
+    dbt-duckdb \
+    duckdb \
+    pandas \
+    pyarrow \
+    "claude-agent-sdk==0.1.59" \
+    "httpx==0.28.1" \
+    "mcp[cli]==1.27.0" \
+    "aiofiles==25.1.0" \
+    "pydantic==2.13.0" \
+    "sqlglot==30.6.0"
+
+# Non-root user (Claude CLI requires this)
+RUN useradd -m agentuser \
+    && mkdir -p /home/agentuser/.claude /workspace \
+    && echo '{}' > /home/agentuser/.claude.json \
+    && chown -R agentuser:agentuser /home/agentuser /workspace
+
+USER agentuser
+
+RUN git config --global user.name "Benchmark Agent" \
+    && git config --global user.email "benchmark@noreply.com" \
+    && git config --global --add safe.directory '*'
+
+WORKDIR /workspace
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends gosu libfaketime && rm -rf /var/lib/apt/lists/*
+
+# Copy benchmark + gateway code into image.
+# Build context must be the repo root: docker build -f benchmark/Dockerfile.dbt-agent .
+# Agent has NO access to host filesystem, results, or .env at runtime.
+COPY benchmark/ /app/benchmark/
+COPY signalpilot/gateway/ /app/signalpilot/gateway/
+
+# MCP config pointing to baked-in gateway
+RUN printf '{"mcpServers":{"signalpilot":{"type":"stdio","command":"bash","args":["-c","cd /app/signalpilot/gateway && exec python3 -m gateway.mcp_server"],"env":{"PYTHONPATH":"/app/signalpilot/gateway","SP_GATEWAY_URL":"http://signalpilot-gateway-1:3300"}}}}\n' \
+    > /app/benchmark/mcp_baked_config.json
+
+# dbt wrapper: per-task faketime for deterministic current_date.
+# Only applied to run/compile/build (deps/parse need real clock for SSL).
+# DO_NOT_TRACK + DBT_NO_VERSION_CHECK prevent hanging HTTPS calls under faketime.
+ENV FAKETIME="2024-09-08 12:00:00"
+RUN DBT_REAL=$(which dbt) && \
+    mv "$DBT_REAL" "${DBT_REAL}.real" && \
+    printf '#!/bin/bash\ncase "$1" in\n  run|compile|build|run-operation|seed|snapshot|test)\n    exec env LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 FAKETIME="${FAKETIME:-2024-09-08 12:00:00}" FAKETIME_DONT_FAKE_MONOTONIC=1 FAKETIME_NO_CACHE=1 DO_NOT_TRACK=1 DBT_NO_VERSION_CHECK=1 "${0}.real" "$@"\n    ;;\n  *)\n    exec env DO_NOT_TRACK=1 DBT_NO_VERSION_CHECK=1 "${0}.real" "$@"\n    ;;\nesac\n' > "$DBT_REAL" && \
+    chmod +x "$DBT_REAL"
+
+ENTRYPOINT ["bash"]

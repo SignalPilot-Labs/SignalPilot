@@ -57,7 +57,7 @@ export default function SettingsPage() {
       setSettings(s);
       setBlockedTables(s.blocked_tables || []);
     }).catch(() => {});
-    const stored = localStorage.getItem("sp_api_key") || "";
+    const stored = sessionStorage.getItem("sp_api_key") || localStorage.getItem("sp_api_key") || "";
     setBrowserApiKey(stored);
   }, []);
 

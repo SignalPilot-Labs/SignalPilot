@@ -50,7 +50,7 @@ async def metrics_stream(store: StoreD) -> StreamingResponse:
         try:
             deadline = time.monotonic() + SSE_MAX_DURATION_SECONDS
             while time.monotonic() < deadline:
-                sandboxes = list_sandboxes()
+                sandboxes = list_sandboxes(store.org_id or "")
                 running = sum(1 for s in sandboxes if s.status == "running")
 
                 sandbox_health = "unknown"

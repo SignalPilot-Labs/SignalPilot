@@ -22,6 +22,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
+import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { getSandbox, executeSandbox, deleteSandbox } from "@/lib/api";
 import type { SandboxInfo } from "@/lib/types";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
@@ -39,40 +40,15 @@ interface HistoryEntry {
   htmlContent?: string;
 }
 
-// Pure allowlist sanitizer for pandas DataFrame HTML tables.
-// Keeps only known-safe table elements and a minimal set of safe attributes.
-// Any element or attribute not in the allowlist is removed — this is NOT a
-// denylist; we do not enumerate bad things, we enumerate the only good things.
-// style is intentionally excluded: it is a CSS injection vector even without JS.
-const ALLOWED_TABLE_ELEMENTS = new Set([
-  "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col",
-]);
-const ALLOWED_TABLE_ATTRS = new Set(["colspan", "rowspan", "class"]);
+// Configure DOMPurify with strict allowlist
+const PURIFY_CONFIG: DOMPurifyConfig = {
+  ALLOWED_TAGS: ["table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col", "br", "span", "div", "p", "pre", "code"],
+  ALLOWED_ATTR: ["colspan", "rowspan", "class", "scope"],
+  FORBID_ATTR: ["style", "id", "onclick", "onerror", "onload", "onmouseover"],
+};
 
 function sanitizeTableHtml(html: string): string {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-
-  // Walk every element in the document. Collect in reverse document order so
-  // removing a node does not invalidate the iteration of its ancestors.
-  const allElements = Array.from(doc.body.querySelectorAll("*")).reverse();
-  for (const el of allElements) {
-    if (!ALLOWED_TABLE_ELEMENTS.has(el.tagName.toLowerCase())) {
-      // Replace disallowed element with its text content so we don't silently
-      // swallow visible text that happened to be wrapped in a bad tag.
-      el.replaceWith(document.createTextNode(el.textContent ?? ""));
-      continue;
-    }
-    // Strip disallowed attributes from allowed elements.
-    const attrNames = Array.from(el.attributes).map((a) => a.name);
-    for (const attr of attrNames) {
-      if (!ALLOWED_TABLE_ATTRS.has(attr.toLowerCase())) {
-        el.removeAttribute(attr);
-      }
-    }
-  }
-
-  // Serialize only the body content back to a string.
-  return doc.body.innerHTML;
+  return DOMPurify.sanitize(html, PURIFY_CONFIG);
 }
 
 function extractRichOutput(output: string): {

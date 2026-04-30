@@ -336,7 +336,11 @@ if not _is_cloud:
 
         sandbox_url = await _get_sandbox_url()
 
-        async with httpx.AsyncClient(timeout=timeout + 10) as client:
+        _sbx_headers: dict[str, str] = {}
+        _sbx_token = _os.environ.get("SP_SANDBOX_TOKEN", "")
+        if _sbx_token:
+            _sbx_headers["X-Sandbox-Auth"] = _sbx_token
+        async with httpx.AsyncClient(timeout=timeout + 10, headers=_sbx_headers) as client:
             try:
                 resp = await client.post(
                     f"{sandbox_url}/execute",
@@ -434,7 +438,10 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
 
         # Inject LIMIT
         row_limit = min(row_limit, 10_000)
-        safe_sql = inject_limit(sql, row_limit)
+        try:
+            safe_sql = inject_limit(sql, row_limit)
+        except ValueError as exc:
+            return f"Query blocked: {exc}"
 
         conn_str = await store.get_connection_string(connection_name)
         if not conn_str:
@@ -539,7 +546,11 @@ if not _is_cloud:
         sandbox_url = settings.sandbox_manager_url
 
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            _sandbox_headers: dict[str, str] = {}
+            _sandbox_token = _os.environ.get("SP_SANDBOX_TOKEN", "")
+            if _sandbox_token:
+                _sandbox_headers["X-Sandbox-Auth"] = _sandbox_token
+            async with httpx.AsyncClient(timeout=5, headers=_sandbox_headers) as client:
                 resp = await client.get(f"{sandbox_url}/health")
                 health = resp.json()
         except Exception:
@@ -551,7 +562,8 @@ if not _is_cloud:
             f"Active Sandboxes: {health.get('active_vms', 0)} / {health.get('max_vms', 10)}",
         ]
 
-        sandboxes = list_sandboxes()
+        org_id = mcp_org_id_var.get(None) or ""
+        sandboxes = list_sandboxes(org_id)
         if sandboxes:
             lines.append(f"\nActive sandboxes: {len(sandboxes)}")
             for s in sandboxes:

@@ -35,6 +35,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://signalpilot:signalpilot@db:5432/signalpilot
       SP_DATA_DIR: /data
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_DEPLOYMENT_MODE: local
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
     volumes:
@@ -80,6 +81,7 @@ services:
     pids_limit: 256
     environment:
       SP_GATEWAY_URL: http://gateway:3300
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_MAX_VMS: "10"
     volumes:
       - ${HOST_DATA_DIR:-~}:/host-data:ro

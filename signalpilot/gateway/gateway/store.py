@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .byok import BYOKProvider, DEKCache, decrypt_envelope, encrypt_fields_envelope
+from .deployment import is_cloud_mode
 from .governance.context import current_org_id_var
 from .db.models import (
     GatewayApiKey,
@@ -192,6 +193,27 @@ def _derive_key_legacy_sha256(passphrase: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
+def _derive_key_legacy_cloud_salt(passphrase: str) -> bytes:
+    """Legacy cloud-mode derivation with deterministic salt. Migration fallback only.
+
+    This used a salt derived from the passphrase itself, which defeats the
+    purpose of salting. Kept only to decrypt rows encrypted before the fix.
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    deterministic_salt = hashlib.sha256(
+        b"signalpilot-cloud-salt:" + passphrase.encode()
+    ).digest()[:16]
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=PBKDF2_KEY_LENGTH,
+        salt=deterministic_salt,
+        iterations=PBKDF2_ITERATIONS,
+    )
+    return base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
+
+
 def _get_encryption_key() -> bytes:
     """Return the cached Fernet key, deriving it on first call."""
     global _CACHED_KEY
@@ -210,15 +232,21 @@ def _get_encryption_key() -> bytes:
             return _CACHED_KEY
         except Exception:
             if is_cloud_mode():
-                deterministic_salt = hashlib.sha256(
-                    b"signalpilot-cloud-salt:" + key_str.encode()
-                ).digest()[:16]
+                salt_b64 = os.getenv("SP_ENCRYPTION_SALT")
+                if not salt_b64:
+                    raise RuntimeError(
+                        "SP_ENCRYPTION_SALT is required in cloud mode when "
+                        "SP_ENCRYPTION_KEY is a passphrase (not a raw Fernet key). "
+                        "Generate one with: python -c "
+                        "\"import os,base64; print(base64.b64encode(os.urandom(16)).decode())\""
+                    )
+                salt = base64.b64decode(salt_b64)
                 from cryptography.hazmat.primitives import hashes
                 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
                 kdf = PBKDF2HMAC(
                     algorithm=hashes.SHA256(),
                     length=PBKDF2_KEY_LENGTH,
-                    salt=deterministic_salt,
+                    salt=salt,
                     iterations=PBKDF2_ITERATIONS,
                 )
                 _CACHED_KEY = base64.urlsafe_b64encode(kdf.derive(key_str.encode()))
@@ -279,6 +307,20 @@ def _decrypt_with_migration(encrypted: bytes) -> tuple[str, bool]:
         except Exception:
             pass  # key_str is a passphrase; try legacy derivation.
 
+        # Try legacy cloud-mode derivation (deterministic salt from passphrase).
+        legacy_cloud_key = _derive_key_legacy_cloud_salt(key_str)
+        try:
+            f_cloud = Fernet(legacy_cloud_key)
+            plaintext = f_cloud.decrypt(encrypted).decode()
+            logger.warning(
+                "Credential decrypted with legacy cloud-mode deterministic salt. "
+                "This is deprecated — row will be re-encrypted with proper salt."
+            )
+            return plaintext, True
+        except InvalidToken:
+            pass
+
+        # Try legacy SHA-256 derivation (no KDF at all).
         legacy_key = _derive_key_legacy_sha256(key_str)
         try:
             f_legacy = Fernet(legacy_key)
@@ -558,25 +600,29 @@ _SCAFFOLD_DIRS = [
 ]
 
 
-# ─── Sandboxes (in-memory, not user-scoped — ephemeral) ─────────────────────
+# ─── Sandboxes (in-memory, org-scoped — ephemeral) ──────────────────────────
 
 _active_sandboxes: dict[str, SandboxInfo] = {}
 
 
-def list_sandboxes() -> list[SandboxInfo]:
-    return list(_active_sandboxes.values())
+def list_sandboxes(org_id: str) -> list[SandboxInfo]:
+    return [s for s in _active_sandboxes.values() if s.org_id == org_id]
 
 
-def get_sandbox(sandbox_id: str) -> SandboxInfo | None:
-    return _active_sandboxes.get(sandbox_id)
+def get_sandbox(sandbox_id: str, org_id: str) -> SandboxInfo | None:
+    sb = _active_sandboxes.get(sandbox_id)
+    if sb is None or sb.org_id != org_id:
+        return None
+    return sb
 
 
 def upsert_sandbox(sandbox: SandboxInfo):
     _active_sandboxes[sandbox.id] = sandbox
 
 
-def delete_sandbox(sandbox_id: str) -> bool:
-    if sandbox_id not in _active_sandboxes:
+def delete_sandbox(sandbox_id: str, org_id: str) -> bool:
+    sb = _active_sandboxes.get(sandbox_id)
+    if sb is None or sb.org_id != org_id:
         return False
     del _active_sandboxes[sandbox_id]
     return True
@@ -630,10 +676,21 @@ class Store:
         if self.org_id:
             current_org_id_var.set(self.org_id)
 
+    def _require_org_id(self) -> str:
+        """Return org_id, raising ValueError in cloud mode if unset."""
+        if self.org_id:
+            return self.org_id
+        if is_cloud_mode() and not self._allow_unscoped:
+            raise ValueError(
+                "org_id is required in cloud mode but was not set. "
+                "Ensure resolve_org_id ran before constructing Store."
+            )
+        return "local"
+
     # ─── Settings ────────────────────────────────────────────────────────
 
     async def load_settings(self) -> GatewaySettings:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewaySetting).where(GatewaySetting.org_id == oid)
         )
@@ -647,7 +704,7 @@ class Store:
         return GatewaySettings(**data)
 
     async def save_settings(self, settings: GatewaySettings):
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewaySetting).where(GatewaySetting.org_id == oid)
         )
@@ -690,7 +747,7 @@ class Store:
         return ConnectionInfo(**row.to_info_dict()) if row else None
 
     async def create_connection(self, conn: ConnectionCreate) -> ConnectionInfo:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         uid = self.user_id
         # Check uniqueness
         existing = await self.get_connection(conn.name)
@@ -821,7 +878,7 @@ class Store:
         return ConnectionInfo(**db_conn.to_info_dict())
 
     async def delete_connection(self, name: str) -> bool:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(
                 GatewayConnection.org_id == oid, GatewayConnection.name == name
@@ -841,7 +898,7 @@ class Store:
         return True
 
     async def update_connection(self, name: str, update_data: ConnectionUpdate) -> ConnectionInfo | None:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(
                 GatewayConnection.org_id == oid, GatewayConnection.name == name
@@ -936,7 +993,7 @@ class Store:
         return ConnectionInfo(**row.to_info_dict())
 
     async def get_connection_string(self, name: str) -> str | None:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection).join(
                 GatewayConnection,
@@ -993,7 +1050,7 @@ class Store:
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection).join(
                 GatewayConnection,
@@ -1055,7 +1112,7 @@ class Store:
     # ─── Projects ────────────────────────────────────────────────────────
 
     async def list_projects(self) -> list[ProjectInfo]:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayProject).where(GatewayProject.org_id == oid)
         )
@@ -1063,7 +1120,7 @@ class Store:
         return [ProjectInfo(**{c.key: getattr(r, c.key) for c in GatewayProject.__table__.columns}) for r in rows]
 
     async def get_project(self, name: str) -> ProjectInfo | None:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayProject).where(
                 GatewayProject.org_id == oid, GatewayProject.name == name
@@ -1075,7 +1132,7 @@ class Store:
         return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
 
     async def create_project(self, proj: ProjectCreate) -> ProjectInfo:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         existing = await self.get_project(proj.name)
         if existing:
             raise ValueError(f"Project '{proj.name}' already exists")
@@ -1173,7 +1230,7 @@ class Store:
         return _PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
 
     async def update_project(self, name: str, update_data: ProjectUpdate) -> ProjectInfo | None:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayProject).where(
                 GatewayProject.org_id == oid, GatewayProject.name == name
@@ -1190,7 +1247,7 @@ class Store:
         return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
 
     async def delete_project(self, name: str) -> bool:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayProject).where(
                 GatewayProject.org_id == oid, GatewayProject.name == name
@@ -1210,7 +1267,7 @@ class Store:
     # ─── Audit ───────────────────────────────────────────────────────────
 
     async def append_audit(self, entry: AuditEntry):
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         self.session.add(GatewayAuditLog(
             id=entry.id or str(uuid.uuid4()),
             org_id=oid,
@@ -1243,7 +1300,7 @@ class Store:
         return_total: bool = False,
     ) -> list[AuditEntry] | tuple[list[AuditEntry], int]:
         from sqlalchemy import func as sa_func
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         base = select(GatewayAuditLog).where(GatewayAuditLog.org_id == oid)
         if connection_name:
             base = base.where(GatewayAuditLog.connection_name == connection_name)
@@ -1340,7 +1397,7 @@ class Store:
         return schema
 
     async def _get_conn_row(self, name: str) -> GatewayConnection | None:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(
                 GatewayConnection.org_id == oid, GatewayConnection.name == name
@@ -1354,7 +1411,7 @@ class Store:
         if self._allow_unscoped:
             result = await self.session.execute(select(GatewayApiKey))
         else:
-            oid = self.org_id or "local"
+            oid = self._require_org_id()
             result = await self.session.execute(
                 select(GatewayApiKey).where(GatewayApiKey.org_id == oid)
             )
@@ -1367,7 +1424,13 @@ class Store:
     async def create_api_key(
         self, name: str, scopes: list[str], expires_at: str | None = None
     ) -> tuple[ApiKeyRecord, str]:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
+        # In cloud mode, refuse to mint keys without a real org_id.
+        if is_cloud_mode() and (not oid or oid == "local"):
+            raise ValueError(
+                "Cannot create API key in cloud mode without a valid org_id. "
+                "org_id must not be None, empty, or 'local'."
+            )
         raw_key = "sp_" + secrets.token_hex(16)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         key_id = str(uuid.uuid4())
@@ -1388,7 +1451,7 @@ class Store:
         return record, raw_key
 
     async def delete_api_key(self, key_id: str) -> bool:
-        oid = self.org_id or "local"
+        oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayApiKey).where(
                 GatewayApiKey.org_id == oid, GatewayApiKey.id == key_id
@@ -1402,6 +1465,16 @@ class Store:
         return True
 
     async def validate_stored_api_key(self, raw_key: str) -> ApiKeyRecord | None:
+        """Validate an API key by its raw token and return the matching record.
+
+        TRUST BOUNDARY NOTE: This function searches cross-tenant by design.
+        The key hash is the sole lookup mechanism — there is no org_id filter
+        because the caller does not yet know which org the key belongs to.
+        The ``org_id`` on the matched key becomes the authoritative tenant
+        context for the rest of the request.  In cloud mode we reject keys
+        whose org_id is missing or set to "local" to prevent accidental
+        cross-tenant access to shared namespaces.
+        """
         import hmac as _hmac
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         # Search all keys (not org-scoped — validation doesn't know org yet)
@@ -1412,6 +1485,11 @@ class Store:
         if not row:
             return None
         if not _hmac.compare_digest(row.key_hash, key_hash):
+            return None
+        # In cloud mode, reject keys with missing or "local" org_id to prevent
+        # a compromised/buggy key from granting access to the shared namespace.
+        if is_cloud_mode() and (not row.org_id or row.org_id == "local"):
+            logger.warning("Rejecting API key %s with invalid org_id in cloud mode", row.id)
             return None
         # Check expiry before allowing access
         if row.expires_at is not None:

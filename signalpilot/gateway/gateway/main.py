@@ -251,28 +251,31 @@ app = FastAPI(
 )
 
 # CORS
-_ALLOWED_ORIGINS = [
-    "http://localhost:3200",
-    "http://localhost:3000",
-    "http://127.0.0.1:3200",
-    "http://127.0.0.1:3000",
-]
-_extra_origins = os.getenv("SP_ALLOWED_ORIGINS", "")
-if _extra_origins:
-    for _origin in (o.strip() for o in _extra_origins.split(",") if o.strip()):
-        if _origin == "*":
-            logger.warning(
-                "SP_ALLOWED_ORIGINS contains '*' — wildcard origin is not allowed "
-                "with allow_credentials=True; skipping."
-            )
-            continue
-        if not (_origin.startswith("http://") or _origin.startswith("https://")):
-            logger.warning(
-                "SP_ALLOWED_ORIGINS entry %r is not a valid HTTP/HTTPS origin; skipping.",
-                _origin,
-            )
-            continue
-        _ALLOWED_ORIGINS.append(_origin)
+def _build_allowed_origins() -> list[str]:
+    raw = os.environ.get("SP_ALLOWED_ORIGINS", "")
+    if is_cloud_mode():
+        if not raw:
+            return [
+                "https://signalpilot.ai",
+                "https://www.signalpilot.ai",
+                "https://app.signalpilot.ai",
+            ]
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        validated = []
+        for origin in origins:
+            if not origin.startswith("https://"):
+                logger.warning(
+                    "CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin
+                )
+                continue
+            validated.append(origin)
+        return validated
+    else:
+        if not raw:
+            return ["http://localhost:3000", "http://localhost:3200"]
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
+_ALLOWED_ORIGINS = _build_allowed_origins()
 
 # Middleware stack (last added = outermost = runs first)
 # Execution order (outermost → innermost):

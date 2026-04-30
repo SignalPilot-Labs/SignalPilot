@@ -8,6 +8,7 @@ The URL is configurable from the settings page, enabling BYOS deployments.
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 
@@ -35,6 +36,9 @@ class SandboxClient:
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        sandbox_token = os.environ.get("SP_SANDBOX_TOKEN", "")
+        if sandbox_token:
+            headers["X-Sandbox-Auth"] = sandbox_token
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=headers,

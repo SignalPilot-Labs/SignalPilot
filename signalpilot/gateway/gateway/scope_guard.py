@@ -13,6 +13,13 @@ from fastapi import Depends, HTTPException, Request
 from .models import VALID_API_KEY_SCOPES  # noqa: F401 — imported for reference
 
 
+async def _resolve_user_id(request: Request) -> str:
+    """Lazy wrapper around auth.resolve_user_id to avoid circular imports."""
+    from .auth import resolve_user_id
+
+    return await resolve_user_id(request)
+
+
 def require_scopes(request: Request, *required: str) -> None:
     """Check that the authenticated request has all required scopes.
 
@@ -54,7 +61,11 @@ def require_scopes(request: Request, *required: str) -> None:
 
 
 def RequireScope(*scopes: str) -> Any:
-    """FastAPI dependency factory for scope enforcement.
+    """FastAPI dependency factory that enforces BOTH authentication AND scope.
+
+    Depends on resolve_user_id so that JWT verification always runs before
+    scope checking — preventing unauthenticated requests from passing through
+    when an endpoint uses only RequireScope without an explicit UserID dependency.
 
     Usage:
         @router.post("/endpoint", dependencies=[RequireScope("write", "execute")])
@@ -65,7 +76,7 @@ def RequireScope(*scopes: str) -> Any:
         async def my_endpoint(_: None = RequireScope("admin")):
             ...
     """
-    def _check(request: Request) -> None:
+    async def _check(request: Request, _user_id: str = Depends(_resolve_user_id)) -> None:
         require_scopes(request, *scopes)
 
     return Depends(_check)

@@ -185,11 +185,12 @@ export function clearAppState() {
   // 1. Clear entire SWR cache (no revalidation — data is gone)
   mutate(() => true, undefined, { revalidate: false });
 
-  // 2. Clear all SignalPilot localStorage keys
+  // 2. Clear all SignalPilot storage keys
   try {
     localStorage.removeItem("sp_active_connection");
     localStorage.removeItem("sp_api_key");
     localStorage.removeItem("sp_query_history");
+    sessionStorage.removeItem("sp_api_key");
   } catch {}
 
   // 3. Reset the Clerk token getter in api.ts

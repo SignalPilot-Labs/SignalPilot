@@ -70,7 +70,10 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
         ))
         raise HTTPException(status_code=400, detail=f"Query blocked: {validation.blocked_reason}")
 
-    safe_sql = inject_limit(req.sql, req.row_limit, dialect=dialect)
+    try:
+        safe_sql = inject_limit(req.sql, req.row_limit, dialect=dialect)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Query blocked: {exc}") from exc
 
     conn_str = await store.get_connection_string(req.connection_name)
     if not conn_str:
@@ -188,7 +191,10 @@ async def explain_query(req: DirectQueryRequest, store: StoreD):
     if not validation.ok:
         raise HTTPException(status_code=400, detail=f"Query blocked: {validation.blocked_reason}")
 
-    safe_sql = inject_limit(req.sql, req.row_limit, dialect=dialect)
+    try:
+        safe_sql = inject_limit(req.sql, req.row_limit, dialect=dialect)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Query blocked: {exc}") from exc
 
     try:
         extras = await store.get_credential_extras(req.connection_name)

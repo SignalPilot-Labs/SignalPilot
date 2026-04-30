@@ -28,6 +28,14 @@ if is_cloud_mode() and not os.environ.get("CLERK_PUBLISHABLE_KEY"):
         "JWT authentication will fail."
     )
 
+EXPECTED_AUDIENCE = os.environ.get("CLERK_JWT_AUDIENCE", "")
+
+if is_cloud_mode() and not EXPECTED_AUDIENCE:
+    logger.warning(
+        "CLERK_JWT_AUDIENCE not set — audience verification disabled. "
+        "Set this for production security."
+    )
+
 LOCAL_USER_ID = "local"
 LOCAL_ORG_ID = "local"
 
@@ -107,12 +115,18 @@ async def resolve_user_id(request: Request) -> str:
 
     try:
         signing_key = client.get_signing_key_from_jwt(token)
+        decode_kwargs: dict = dict(
+            algorithms=["RS256"],
+            issuer=_expected_issuer,
+        )
+        if EXPECTED_AUDIENCE:
+            decode_kwargs["audience"] = EXPECTED_AUDIENCE
+        else:
+            decode_kwargs["options"] = {"verify_aud": False}
         claims = jwt.decode(
             token,
             signing_key.key,
-            algorithms=["RS256"],
-            issuer=_expected_issuer,
-            options={"verify_aud": False},
+            **decode_kwargs,
         )
         user_id = claims.get("sub")
         if not user_id:

@@ -17,7 +17,7 @@ import uuid
 from fastapi import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-_REQUEST_ID_PATTERN = re.compile(r"[a-zA-Z0-9\-]{1,64}")
+_REQUEST_ID_PATTERN = re.compile(r"[a-zA-Z0-9\-_.]{1,64}")
 
 
 def _validate_request_id(value: str) -> bool:

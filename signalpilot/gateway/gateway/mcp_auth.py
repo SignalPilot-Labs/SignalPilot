@@ -197,6 +197,13 @@ class MCPAuthMiddleware:
                 has_user_keys = len(keys) > 0
 
                 if not has_user_keys:
+                    from .deployment import is_cloud_mode
+                    if is_cloud_mode():
+                        await _send_401(
+                            send,
+                            "No API keys configured. Create an API key in the SignalPilot dashboard.",
+                        )
+                        return
                     global _warned_no_backend_url
                     if not _warned_no_backend_url:
                         logger.info(
@@ -231,6 +238,16 @@ class MCPAuthMiddleware:
 
                 if "state" not in scope:
                     scope["state"] = {}
+                # In cloud mode, reject keys that lack a real org_id — falling
+                # back to "local" would grant access to the shared namespace.
+                from .deployment import is_cloud_mode
+                if is_cloud_mode() and (not matched.org_id or matched.org_id == "local"):
+                    logger.warning(
+                        "MCP auth: rejecting key %s with invalid org_id in cloud mode",
+                        matched.id,
+                    )
+                    await _send_401(send, "API key has no valid organization. Please re-create the key.")
+                    return
                 key_org_id = matched.org_id or "local"
                 key_user_id = matched.user_id or "local"
                 scope["state"]["auth"] = {
@@ -257,8 +274,11 @@ def _extract_client_ip(scope: dict[str, Any]) -> str | None:
     headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
     for name, value in headers:
         if name.lower() == b"x-forwarded-for":
-            # X-Forwarded-For may contain a comma-separated list; first is the client
-            return value.decode("latin-1").split(",")[0].strip()
+            # Use rightmost IP (closest proxy) — more resistant to spoofing
+            # than leftmost (client-claimed). In production, configure a
+            # reverse proxy to strip/overwrite X-Forwarded-For.
+            parts = value.decode("latin-1").split(",")
+            return parts[-1].strip()
     for name, value in headers:
         if name.lower() == b"x-real-ip":
             return value.decode("latin-1").strip()

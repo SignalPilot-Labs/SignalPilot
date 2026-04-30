@@ -14,19 +14,37 @@ const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 const clerkEnabled = IS_CLOUD_MODE;
 
 // ---------------------------------------------------------------------------
+// Nonce generation — edge-runtime-safe (no Node crypto.randomBytes)
+// ---------------------------------------------------------------------------
+
+function generateNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  // btoa-safe: convert bytes to a binary string then base64-encode
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+// ---------------------------------------------------------------------------
 // Security header helper — applied in BOTH paths
 // ---------------------------------------------------------------------------
 
 function applySecurityHeaders(
   response: NextResponse,
   withClerk: boolean,
-  request: NextRequest
+  request: NextRequest,
+  nonce: string
 ): void {
   const gatewayUrl =
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
   let connectSrc = `'self' ${gatewayUrl}`;
-  let scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'";
+  // Nonce-based script-src: 'strict-dynamic' trusts scripts loaded by nonced
+  // scripts, so explicit host allowlists are only needed for older browsers.
+  // 'unsafe-inline' is ignored by browsers that support 'strict-dynamic' but
+  // serves as a fallback for older ones. 'unsafe-eval' is removed entirely.
+  let scriptSrc = `'self' 'nonce-${nonce}' 'strict-dynamic'`;
   let imgSrc = "'self' data: blob:";
   // Fix JetBrains Mono CSP bug: cdn.jsdelivr.net was not in font-src
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
@@ -38,6 +56,7 @@ function applySecurityHeaders(
   if (withClerk) {
     connectSrc +=
       " https://*.clerk.accounts.dev https://*.signalpilot.ai https://clerk-telemetry.com";
+    // Explicit origins kept as fallback for browsers without strict-dynamic
     scriptSrc += " https://*.clerk.accounts.dev https://*.signalpilot.ai https://challenges.cloudflare.com";
     imgSrc += " https://img.clerk.com";
     workerSrc += " blob:";
@@ -59,6 +78,7 @@ function applySecurityHeaders(
       `img-src ${imgSrc}`,
       `font-src ${fontSrc}`,
       `frame-src ${frameSrc}`,
+      "object-src 'none'",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -111,14 +131,29 @@ if (clerkEnabled) {
       await auth.protect();
     }
 
-    const response = NextResponse.next();
-    applySecurityHeaders(response, true, req);
+    const nonce = generateNonce();
+
+    // Forward nonce to server components via request header
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set("x-nonce", nonce);
+
+    const response = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
+    applySecurityHeaders(response, true, req, nonce);
     return response;
   });
 } else {
   middlewareExport = (req: NextRequest) => {
-    const response = NextResponse.next();
-    applySecurityHeaders(response, false, req);
+    const nonce = generateNonce();
+
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set("x-nonce", nonce);
+
+    const response = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
+    applySecurityHeaders(response, false, req, nonce);
     return response;
   };
 }

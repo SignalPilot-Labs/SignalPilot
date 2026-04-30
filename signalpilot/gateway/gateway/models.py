@@ -454,6 +454,7 @@ class SandboxCreate(BaseModel):
 
 class SandboxInfo(BaseModel):
     id: str
+    org_id: str = ""
     vm_id: str | None = None
     connection_name: str | None = None
     label: str = ""

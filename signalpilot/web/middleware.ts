@@ -40,11 +40,12 @@ function applySecurityHeaders(
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
   let connectSrc = `'self' ${gatewayUrl}`;
-  // Nonce-based script-src: 'strict-dynamic' trusts scripts loaded by nonced
-  // scripts, so explicit host allowlists are only needed for older browsers.
-  // 'unsafe-inline' is ignored by browsers that support 'strict-dynamic' but
-  // serves as a fallback for older ones. 'unsafe-eval' is removed entirely.
-  let scriptSrc = `'self' 'nonce-${nonce}' 'strict-dynamic'`;
+  // CSP script-src: nonce + strict-dynamic for modern browsers.
+  // 'unsafe-inline' is kept as fallback because Next.js injects inline scripts
+  // for hydration/chunk preloading that don't carry the nonce. Browsers that
+  // support 'strict-dynamic' IGNORE 'unsafe-inline' (per CSP spec), so modern
+  // browsers get nonce-only enforcement. 'unsafe-eval' is removed entirely.
+  let scriptSrc = `'self' 'unsafe-inline' 'nonce-${nonce}' 'strict-dynamic'`;
   let imgSrc = "'self' data: blob:";
   // Fix JetBrains Mono CSP bug: cdn.jsdelivr.net was not in font-src
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";

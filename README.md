@@ -2,15 +2,13 @@
 
 # ⚡ SignalPilot Data Agent
 
-### 🏆 Officially ranked #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**
+### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**, +7.45 over runner-up (Apr 2026)
 
-**+7.45 points above the next best agent (Databao by JetBrains, 44.11). New SOTA on the 68-task dbt benchmark as of Apr 21, 2026.**
-
-**Governed AI agents with connector suites and access to your data stack (db, dbt and more), optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).**
+**Governed AI agents for your data stack — db, dbt, and more.** Optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).
 
 [![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
 
-[🚀 Try SignalPilot](#try-signalpilot-data-agent) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](benchmark/) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro)
+[🚀 Try SignalPilot](#try-signalpilot-data-agent) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro)
 
 </div>
 
@@ -18,24 +16,22 @@
 
 ## For Agentic Data and Platform Teams
 
-We partner with data, analytics, and platform teams who want to put AI agents to work on real warehouse workloads — safely.
+- **Governed production access** — Snowflake, BigQuery, Postgres, dbt with enterprise guardrails
+- **Harness optimization with [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn)** — tune prompts, skills, retrieval to your data
+- **Benchmark-driven evaluation** — same eval rigor that earned [#1 on Spider 2.0-DBT](https://www.signalpilot.ai/benchmark)
+- **Enterprise support** — SSO, private deployments, SLAs
 
-- **Governed production access** — bring SignalPilot into your Snowflake / BigQuery / Postgres / dbt stack with enterprise guardrails.
-- **Harness & agent optimization with AutoFyn** — we tune your agent harness, prompts, skills, and retrieval to hit production accuracy targets on *your* data, not a leaderboard.
-- **Benchmark-driven evaluation** — we bring the same eval rigor that earned us the official #1 spot on Spider 2.0-DBT (51.56, +7.45 over the runner-up) into your environment: custom task suites, regression tracking, and measurable lift.
-- **Enterprise support** — SSO, private deployments, SLAs, and hands-on engineering support.
-
-**Talk to us** about your data, dbt, or agent harness optimization workload: [cal.com/fahimaziz/autofyn-intro](https://cal.com/fahimaziz/autofyn-intro) · Learn more at [signalpilot.ai](https://www.signalpilot.ai/).
+[Talk to us](https://cal.com/fahimaziz/autofyn-intro) · [signalpilot.ai](https://www.signalpilot.ai/)
 
 ---
 
-**Index** — [How It Works](#how-it-works) · [Try SignalPilot](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Use With Claude Code](#use-with-claude-code-plugin) · [Use With Any MCP Client](#use-with-any-mcp-client) · [Connect a Database](#connect-a-database) · [Project Structure](#project-structure) · [Community](#community)
+**Index** — [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
 
 ---
 
 ## How It Works
 
-Five stages run on every task. The agent never writes SQL ad-hoc against your warehouse — it plans, scans, governs, builds, and reports through the SignalPilot gateway.
+Five stages, every task: plan → scan → govern → build → report.
 
 ### 01 — Describe what you need
 
@@ -76,13 +72,10 @@ Five stages run on every task. The agent never writes SQL ad-hoc against your wa
 
 - Structured summary: duration · agent turns · governed queries · queries blocked · models built · columns validated
 - Every line traces back to a specific MCP tool call
-- One artifact for compliance, debugging, and cost review
 
 ---
 
 ## Try SignalPilot Data Agent
-
-**Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
 
 ```bash
 # Start SignalPilot
@@ -126,17 +119,11 @@ Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit loggi
    └─────────┘        └──────────┘        └──────────┘
 ```
 
-**Governance** — Every query is read-only, LIMIT-injected, DDL/DML-blocked, and audit-logged. Your AI agent cannot drop tables, modify data, or run unbounded queries.
-
-**Schema Discovery** — 10+ tools for exploring databases without writing SQL: table lists, column types, sample data, join path discovery, value distributions.
-
-**dbt Intelligence** — Project mapping, parse validation, model schema checking, fan-out detection, cardinality auditing, date boundary analysis.
-
 ---
 
 ## Use With Claude Code (Plugin)
 
-The [`plugin/`](plugin/) directory is a Claude Code plugin that adds all SignalPilot tools + battle-tested dbt skills to your normal Claude Code session.
+The [`plugin/`](plugin/) directory adds SignalPilot tools + dbt skills to Claude Code.
 
 ```bash
 # Add the marketplace and install
@@ -163,8 +150,6 @@ See [`plugin/README.md`](plugin/README.md) for full details on included skills a
 ---
 
 ## Use With Any MCP Client
-
-SignalPilot exposes a standard MCP server via streamable-http transport.
 
 ### Claude Code / Claude Desktop
 

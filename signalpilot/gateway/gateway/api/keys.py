@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Response
 
 from ..auth import OrgAdmin, OrgID, UserID
 from ..models import ApiKeyCreate, ApiKeyCreatedResponse, ApiKeyResponse
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")

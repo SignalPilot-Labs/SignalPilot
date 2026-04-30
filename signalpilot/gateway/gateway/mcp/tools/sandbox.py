@@ -37,7 +37,7 @@ if not _is_cloud:
             The stdout output from the code, or an error message.
         """
         # Cloud mode gate
-        from gateway.deployment import is_cloud_mode
+        from gateway.runtime.mode import is_cloud_mode
 
         if is_cloud_mode():
             return "Error: Code execution is not available in cloud mode"

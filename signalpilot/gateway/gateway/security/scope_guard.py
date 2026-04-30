@@ -10,12 +10,12 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, Request
 
-from .models import VALID_API_KEY_SCOPES  # noqa: F401 — imported for reference
+from ..models import VALID_API_KEY_SCOPES  # noqa: F401 — imported for reference
 
 
 async def _resolve_user_id(request: Request) -> str:
     """Lazy wrapper around auth.resolve_user_id to avoid circular imports."""
-    from .auth import resolve_user_id
+    from ..auth import resolve_user_id
 
     return await resolve_user_id(request)
 

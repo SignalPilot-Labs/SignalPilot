@@ -1,4 +1,4 @@
-"""Tests for AWSKMSProvider, byok_factory, and security status BYOK fields.
+"""Tests for AWSKMSProvider, byok.factory, and security status BYOK fields.
 
 AWS KMS calls are mocked using moto. Factory tests use no external dependencies.
 Security status tests mock the DB session directly.
@@ -14,8 +14,8 @@ import pytest
 from moto import mock_aws
 
 from gateway.byok import BYOKKeyError, LocalBYOKProvider, decrypt_envelope, encrypt_envelope
-from gateway.byok_aws import AWSKMSProvider, _extract_region_from_arn
-from gateway.byok_factory import make_provider, make_provider_for_key
+from gateway.byok.aws_kms import AWSKMSProvider, _extract_region_from_arn
+from gateway.byok.factory import make_provider, make_provider_for_key
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -275,7 +275,7 @@ class TestAWSKMSProviderRetry:
 
             dek = await provider.generate_dek()
             # Patch asyncio.sleep to avoid actual delay in tests
-            with patch("gateway.byok_aws.asyncio.sleep", new_callable=AsyncMock):
+            with patch("gateway.byok.aws_kms.asyncio.sleep", new_callable=AsyncMock):
                 wrapped = await provider.wrap_dek("org1", "alias1", dek)
 
             assert call_count[0] == 2
@@ -283,7 +283,7 @@ class TestAWSKMSProviderRetry:
             assert len(wrapped) > 0
 
 
-# ─── byok_factory tests ───────────────────────────────────────────────────────
+# ─── byok.factory tests ───────────────────────────────────────────────────────
 
 
 class TestMakeProvider:
@@ -423,7 +423,7 @@ class TestLifespanEnvVarIntegration:
 
     def test_make_provider_called_with_local_default(self):
         """When SP_BYOK_PROVIDER is unset, make_provider is called with 'local'."""
-        with patch("gateway.byok_factory.make_provider") as mock_factory:
+        with patch("gateway.byok.factory.make_provider") as mock_factory:
             mock_factory.return_value = LocalBYOKProvider()
 
             # Simulate the lifespan logic
@@ -435,7 +435,7 @@ class TestLifespanEnvVarIntegration:
 
                 config = json.loads(config_raw)
 
-            from gateway.byok_factory import make_provider
+            from gateway.byok.factory import make_provider
 
             make_provider(provider_type, config)
             # Without env var, provider_type should be "local"

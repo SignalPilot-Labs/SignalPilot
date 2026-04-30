@@ -8,7 +8,7 @@ from ..auth import UserID
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")

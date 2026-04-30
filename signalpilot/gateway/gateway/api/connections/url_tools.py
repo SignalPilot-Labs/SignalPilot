@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 from gateway.api.connections._build_url import _BUILD_URL_FIELD_LIMITS
 from gateway.api.connections._router import router
 from gateway.auth import UserID
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 
 @router.post("/connections/parse-url", dependencies=[RequireScope("read")])

@@ -14,7 +14,7 @@ from gateway.api.schema.linking._data import _AGG_KEYWORDS, _TIME_KEYWORDS
 from gateway.api.schema.linking._renderers import render_compact, render_condensed, render_ddl, render_json
 from gateway.api.schema.linking._scoring_pass import apply_fk_propagation, score_tables, select_linked_keys
 from gateway.api.schema.linking._terms import extract_terms
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
 

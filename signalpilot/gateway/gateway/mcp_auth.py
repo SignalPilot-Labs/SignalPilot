@@ -212,7 +212,7 @@ class MCPAuthMiddleware:
                 has_user_keys = len(keys) > 0
 
                 if not has_user_keys:
-                    from .deployment import is_cloud_mode
+                    from .runtime.mode import is_cloud_mode
 
                     if is_cloud_mode():
                         await _send_401(
@@ -261,7 +261,7 @@ class MCPAuthMiddleware:
                     scope["state"] = {}
                 # In cloud mode, reject keys that lack a real org_id — falling
                 # back to "local" would grant access to the shared namespace.
-                from .deployment import is_cloud_mode
+                from .runtime.mode import is_cloud_mode
 
                 if is_cloud_mode() and (not matched.org_id or matched.org_id == "local"):
                     logger.warning(

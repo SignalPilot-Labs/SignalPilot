@@ -4,7 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
-from ..deployment import is_cloud_mode
+from ..runtime.mode import is_cloud_mode
 from .audit import router as audit_router
 from .budget import router as budget_router
 from .byok import router as byok_router

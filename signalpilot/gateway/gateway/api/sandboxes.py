@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..auth import OrgID, UserID
 from ..models import AuditEntry, ExecuteRequest, SandboxCreate
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from ..store import (
     delete_sandbox,
     get_sandbox,

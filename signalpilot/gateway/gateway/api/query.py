@@ -16,7 +16,7 @@ from ..governance.annotations import load_annotations
 from ..governance.budget import budget_ledger
 from ..governance.plan_limits import check_query_limit, get_org_limits, record_query
 from ..models import AuditEntry
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import SQLGLOT_DIALECTS, StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")

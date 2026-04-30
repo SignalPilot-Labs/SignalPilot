@@ -14,7 +14,7 @@ import logging
 import random
 import re
 
-from .byok import BYOKKeyError, BYOKProvider  # noqa: F401 (re-exported for clarity)
+from .provider import BYOKKeyError, BYOKProvider  # noqa: F401 (re-exported for clarity)
 
 logger = logging.getLogger(__name__)
 

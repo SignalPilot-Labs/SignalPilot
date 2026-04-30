@@ -20,13 +20,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api import register_routers
 from .byok import DEKCache
-from .byok_factory import make_provider
+from .byok.factory import make_provider
 from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .correlation import RequestCorrelationMiddleware
 from .db.engine import close_db, get_session_factory, init_db
-from .deployment import is_cloud_mode
 from .governance.context import current_org_id_var
 from .middleware import (
     APIKeyAuthMiddleware,
@@ -36,6 +35,7 @@ from .middleware import (
     enforce_principal_rate_limit,
 )
 from .models import ConnectionUpdate
+from .runtime.mode import is_cloud_mode
 from .store import Store, configure_byok
 from .store.crypto import _validate_encryption_health
 

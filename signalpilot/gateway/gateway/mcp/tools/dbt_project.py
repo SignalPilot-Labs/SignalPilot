@@ -59,7 +59,7 @@ if not _is_cloud:
         """
         import asyncio
 
-        from gateway.deployment import is_cloud_mode
+        from gateway.runtime.mode import is_cloud_mode
 
         if is_cloud_mode():
             return "Error: dbt project map is not available in cloud mode"
@@ -107,7 +107,7 @@ if not _is_cloud:
         import asyncio
         from pathlib import Path as _Path
 
-        from gateway.deployment import is_cloud_mode
+        from gateway.runtime.mode import is_cloud_mode
 
         if is_cloud_mode():
             return "Error: dbt project validation is not available in cloud mode"
@@ -156,7 +156,7 @@ if not _is_cloud:
         Returns:
             Structured error summary with model name, type, location, message, and suggested fix.
         """
-        from gateway.deployment import is_cloud_mode
+        from gateway.runtime.mode import is_cloud_mode
 
         if is_cloud_mode():
             return "Error: dbt error parsing is not available in cloud mode"

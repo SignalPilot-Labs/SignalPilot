@@ -7,7 +7,7 @@ from gateway.api.deps import StoreD
 from gateway.connectors.health_monitor import health_monitor
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 
 @router.get("/connections/stats", dependencies=[RequireScope("read")])

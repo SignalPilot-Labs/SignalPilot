@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gateway.byok_aws import _extract_region_from_arn
+from gateway.byok.aws_kms import _extract_region_from_arn
 
 # ─── H1: Invalid SP_BYOK_PROVIDER_CONFIG halts startup ───────────────────────
 
@@ -116,7 +116,7 @@ class TestExtractRegionFromArnSanitized:
         """The full ARN must appear in the server-side error log (for debugging)."""
 
         bad_arn = "notanarn"
-        with patch("gateway.byok_aws.logger") as mock_logger:
+        with patch("gateway.byok.aws_kms.logger") as mock_logger:
             with pytest.raises(ValueError):
                 _extract_region_from_arn(bad_arn)
             mock_logger.error.assert_called_once()

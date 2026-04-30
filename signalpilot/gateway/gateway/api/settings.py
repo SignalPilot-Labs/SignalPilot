@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from ..auth import OrgAdmin
 from ..models import GatewaySettings
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD, reset_sandbox_client
 
 REDACTED_MASK = "****"

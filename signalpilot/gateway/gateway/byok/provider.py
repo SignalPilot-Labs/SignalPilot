@@ -28,7 +28,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db.models import GatewayConnection, GatewayCredential
+from ..db.models import GatewayConnection, GatewayCredential
 
 logger = logging.getLogger(__name__)
 

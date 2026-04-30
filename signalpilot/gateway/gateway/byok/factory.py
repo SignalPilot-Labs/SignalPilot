@@ -12,9 +12,9 @@ Dependency direction:
 
 from __future__ import annotations
 
-from .byok import BYOKProvider, LocalBYOKProvider
-from .byok_aws import AWSKMSProvider
-from .db.models import GatewayBYOKKey
+from ..db.models import GatewayBYOKKey
+from .aws_kms import AWSKMSProvider
+from .provider import BYOKProvider, LocalBYOKProvider
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -47,7 +47,7 @@ def make_provider(provider_type: str, provider_config: dict | None = None) -> BY
         ValueError: If provider_type is an unknown string.
     """
     if provider_type == PROVIDER_TYPE_LOCAL:
-        from .deployment import is_cloud_mode
+        from gateway.runtime.mode import is_cloud_mode
 
         if is_cloud_mode():
             raise ValueError("Local BYOK provider is not available in cloud mode. Use aws_kms, gcp_kms, or azure_kv.")

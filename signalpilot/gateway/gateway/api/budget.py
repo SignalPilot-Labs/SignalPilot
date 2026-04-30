@@ -9,7 +9,7 @@ from ..auth import UserID
 from ..connectors.pool_manager import pool_manager
 from ..governance.annotations import generate_skeleton, load_annotations
 from ..governance.budget import budget_ledger
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")

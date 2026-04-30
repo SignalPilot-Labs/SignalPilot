@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_auth_settings
 from .db.engine import get_db
-from .deployment import is_cloud_mode
+from .runtime.mode import is_cloud_mode
 
 logger = logging.getLogger(__name__)
 

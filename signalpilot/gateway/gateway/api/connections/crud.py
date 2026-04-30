@@ -13,7 +13,7 @@ from gateway.auth import OrgAdmin
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
 from gateway.models import ConnectionCreate, ConnectionUpdate
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 from gateway.store import CredentialEncryptionError
 
 

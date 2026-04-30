@@ -35,7 +35,7 @@ from ..models import (
     BYOKRotateRequest,
     BYOKRotateResponse,
 )
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from ..store import _decrypt_with_migration, _encrypt
 from .deps import StoreD
 

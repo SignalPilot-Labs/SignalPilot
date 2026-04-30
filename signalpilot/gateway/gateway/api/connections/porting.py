@@ -11,7 +11,7 @@ from gateway.api.connections._router import router
 from gateway.api.connections._validation import _validate_connection_params
 from gateway.api.deps import StoreD
 from gateway.models import ConnectionCreate
-from gateway.scope_guard import RequireScope, require_scopes
+from gateway.security.scope_guard import RequireScope, require_scopes
 from gateway.store import CredentialEncryptionError
 
 logger = logging.getLogger(__name__)

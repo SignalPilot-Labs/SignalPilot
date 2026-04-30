@@ -83,7 +83,7 @@ def _get_encryption_key() -> bytes:
 
     from cryptography.fernet import Fernet
 
-    from gateway.deployment import is_cloud_mode
+    from gateway.runtime.mode import is_cloud_mode
 
     key_str = os.getenv("SP_ENCRYPTION_KEY")
     if key_str:

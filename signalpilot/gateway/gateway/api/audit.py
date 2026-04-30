@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from ..config import get_governance_settings
 from ..db.models import GatewayAuditLog
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
 MAX_EXPORT_ROWS = get_governance_settings().sp_max_export_rows

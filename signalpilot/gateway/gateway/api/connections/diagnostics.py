@@ -11,7 +11,7 @@ from gateway.api.connections._router import router
 from gateway.api.deps import StoreD, sanitize_db_error
 from gateway.auth import UserID
 from gateway.connectors.pool_manager import pool_manager
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 
 @router.get("/network/info", dependencies=[RequireScope("admin")])

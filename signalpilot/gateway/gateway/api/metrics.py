@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ..auth import UserID
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from ..store import list_sandboxes
 from .deps import StoreD, get_sandbox_client_with_store
 

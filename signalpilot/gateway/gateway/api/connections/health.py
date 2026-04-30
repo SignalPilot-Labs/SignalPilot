@@ -5,7 +5,7 @@ from fastapi import HTTPException, Query
 from gateway.api.connections._router import router
 from gateway.auth import OrgID, UserID
 from gateway.connectors.health_monitor import health_monitor
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 
 @router.get("/connections/health", dependencies=[RequireScope("read")])

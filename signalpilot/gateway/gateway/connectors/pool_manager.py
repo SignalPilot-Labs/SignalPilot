@@ -250,7 +250,7 @@ class PoolManager:
 
             # Cloud mode: reject all local database connections (file-based and in-memory)
             # Only MotherDuck (md:) DuckDB is allowed in cloud mode
-            from ..deployment import is_cloud_mode
+            from ..runtime.mode import is_cloud_mode
 
             if is_cloud_mode():
                 if db_type == "sqlite":

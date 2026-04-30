@@ -30,7 +30,6 @@ from gateway.db.models import (
     GatewayProject,
     GatewaySetting,
 )
-from gateway.deployment import is_cloud_mode
 from gateway.engine import redact_sql_literals
 from gateway.governance.context import current_org_id_var
 from gateway.models import (
@@ -48,6 +47,7 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
 from gateway.store.crypto import (

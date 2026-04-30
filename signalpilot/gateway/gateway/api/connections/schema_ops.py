@@ -10,7 +10,7 @@ from gateway.api.deps import StoreD, sanitize_db_error
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
 from gateway.models import ConnectionUpdate
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 
 @router.post("/connections/{name}/schema/refresh", dependencies=[RequireScope("write")])

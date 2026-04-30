@@ -6,7 +6,7 @@ from gateway.api.connections._router import router
 from gateway.api.connections._tiers import _CONNECTOR_TIERS
 from gateway.api.deps import StoreD
 from gateway.auth import UserID
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 
 @router.get("/connectors/capabilities", dependencies=[RequireScope("read")])

@@ -15,7 +15,7 @@ from gateway.api.schema._constants import _re_refine
 from gateway.api.schema._router import router
 from gateway.connectors.schema_cache import schema_cache
 from gateway.schema_utils import _infer_implicit_joins
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
 

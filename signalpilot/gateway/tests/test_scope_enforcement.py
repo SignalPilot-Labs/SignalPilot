@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gateway.models import VALID_API_KEY_SCOPES, ApiKeyCreate, ApiKeyRecord
-from gateway.scope_guard import require_scopes
+from gateway.security.scope_guard import require_scopes
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -6,7 +6,7 @@ from gateway.network_validation import validate_cloud_warehouse_params, validate
 
 def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
     """Validate connection parameters before persisting. Returns list of error messages."""
-    from gateway.deployment import is_cloud_mode
+    from gateway.runtime.mode import is_cloud_mode
 
     errors: list[str] = []
 

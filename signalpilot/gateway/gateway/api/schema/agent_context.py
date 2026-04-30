@@ -21,7 +21,7 @@ from gateway.schema_utils import (
     _deduplicate_partitioned_tables,
     _infer_implicit_joins,
 )
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
 

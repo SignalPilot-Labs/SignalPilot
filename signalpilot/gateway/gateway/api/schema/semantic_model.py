@@ -14,7 +14,7 @@ from gateway.api.deps import (
 from gateway.api.schema._router import router
 from gateway.api.schema._scoring import _levenshtein
 from gateway.api.schema._semantic_store import _load_semantic_model, _save_semantic_model
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
 

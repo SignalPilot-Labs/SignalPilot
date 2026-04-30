@@ -7,7 +7,7 @@ import secrets
 
 import gateway.store._atomic as _atomic
 import gateway.store._constants as _constants
-from gateway.deployment import is_cloud_mode
+from gateway.runtime.mode import is_cloud_mode
 
 logger = logging.getLogger(__name__)
 

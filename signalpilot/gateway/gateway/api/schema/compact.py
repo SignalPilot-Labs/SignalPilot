@@ -24,7 +24,7 @@ from gateway.schema_utils import (
     _infer_implicit_joins,
     compress_type,
 )
-from gateway.scope_guard import RequireScope
+from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,7 @@ class TestPostgresConnector:
 
     @pytest.fixture
     def connector(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         return PostgresConnector()
 
@@ -78,7 +78,7 @@ class TestMySQLConnector:
 
     @pytest.fixture
     def connector(self):
-        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
 
         return MySQLConnector()
 
@@ -126,7 +126,7 @@ class TestClickHouseConnector:
 
     @pytest.fixture
     def connector(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         return ClickHouseConnector()
 
@@ -167,7 +167,7 @@ class TestClickHouseConnector:
 class TestDuckDBConnector:
     @pytest.fixture
     def connector(self):
-        from gateway.connectors.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
 
         return DuckDBConnector()
 
@@ -202,7 +202,7 @@ class TestDuckDBConnector:
 class TestSQLiteConnector:
     @pytest.fixture
     def connector(self):
-        from gateway.connectors.sqlite import SQLiteConnector
+        from gateway.connectors.drivers.sqlite import SQLiteConnector
 
         return SQLiteConnector()
 
@@ -245,10 +245,10 @@ class TestConnectorRegistry:
             )
 
     def test_get_connector_returns_correct_types(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
-        from gateway.connectors.duckdb import DuckDBConnector
-        from gateway.connectors.mysql import MySQLConnector
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
         from gateway.connectors.registry import get_connector
 
         assert isinstance(get_connector("postgres"), PostgresConnector)
@@ -595,7 +595,7 @@ class TestConnectionValidation:
 
 class TestSnowflakeURLParsing:
     def test_pipe_delimited_format(self):
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         c = SnowflakeConnector()
         params = c._parse_connection("snowflake://acct|user|pass|db|wh|schema|role")
@@ -608,7 +608,7 @@ class TestSnowflakeURLParsing:
         assert params["role"] == "role"
 
     def test_standard_url_format(self):
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         c = SnowflakeConnector()
         params = c._parse_connection("snowflake://myuser:mypass@xy12345/mydb/myschema?warehouse=WH&role=ADMIN")
@@ -621,7 +621,7 @@ class TestSnowflakeURLParsing:
         assert params["role"] == "ADMIN"
 
     def test_account_only_format(self):
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         c = SnowflakeConnector()
         params = c._parse_connection("xy12345")
@@ -636,7 +636,7 @@ class TestPostgresEnhancedSchema:
 
     @pytest.mark.asyncio
     async def test_schema_has_indexes(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         await c.connect(self.CONN_STR)
@@ -652,7 +652,7 @@ class TestPostgresEnhancedSchema:
 
     @pytest.mark.asyncio
     async def test_schema_has_column_stats(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         await c.connect(self.CONN_STR)
@@ -671,7 +671,7 @@ class TestPostgresEnhancedSchema:
 
     @pytest.mark.asyncio
     async def test_sample_values(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         await c.connect(self.CONN_STR)
@@ -688,7 +688,7 @@ class TestPostgresEnhancedSchema:
 class TestDuckDBSampleValues:
     @pytest.mark.asyncio
     async def test_sample_values(self):
-        from gateway.connectors.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
 
         c = DuckDBConnector()
         await c.connect(":memory:")
@@ -707,7 +707,7 @@ class TestDuckDBSampleValues:
 class TestSQLiteSampleValues:
     @pytest.mark.asyncio
     async def test_sample_values(self):
-        from gateway.connectors.sqlite import SQLiteConnector
+        from gateway.connectors.drivers.sqlite import SQLiteConnector
 
         c = SQLiteConnector()
         await c.connect(":memory:")
@@ -939,7 +939,7 @@ class TestTableGrouping:
 
 class TestClickHouseURLParsing:
     def test_native_tcp(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse://admin:pass@myhost:9000/analytics")
@@ -949,7 +949,7 @@ class TestClickHouseURLParsing:
         assert params["database"] == "analytics"
 
     def test_native_tls(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouses://admin:pass@cloud.clickhouse.com/analytics")
@@ -958,7 +958,7 @@ class TestClickHouseURLParsing:
         assert params.get("secure") is True
 
     def test_http_protocol(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse+http://admin:pass@myhost:8123/analytics")
@@ -967,7 +967,7 @@ class TestClickHouseURLParsing:
         assert params["database"] == "analytics"
 
     def test_https_protocol(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse+https://admin:pass@cloud.clickhouse.com/analytics")
@@ -976,7 +976,7 @@ class TestClickHouseURLParsing:
         assert params.get("secure") is True
 
     def test_default_port_native(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse://default@localhost/default")
@@ -1100,7 +1100,7 @@ class TestDatabricksURLParsing:
     """Test Databricks connection string parsing."""
 
     def test_pipe_delimited_format(self):
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
 
         c = DatabricksConnector()
         params = c._parse_connection(
@@ -1113,7 +1113,7 @@ class TestDatabricksURLParsing:
         assert params["schema"] == "my_schema"
 
     def test_url_format(self):
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
 
         c = DatabricksConnector()
         params = c._parse_connection(
@@ -1126,7 +1126,7 @@ class TestDatabricksURLParsing:
         assert params["schema"] == "my_schema"
 
     def test_host_only_format(self):
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
 
         c = DatabricksConnector()
         params = c._parse_connection("my-workspace.cloud.databricks.com")
@@ -1139,7 +1139,7 @@ class TestMySQLSSLConfig:
     """Test MySQL SSL configuration support."""
 
     def test_ssl_config_sets_correctly(self):
-        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
 
         c = MySQLConnector()
         ssl_config = {
@@ -1151,7 +1151,7 @@ class TestMySQLSSLConfig:
         assert c._ssl_config["enabled"] is True
 
     def test_ssl_config_none_by_default(self):
-        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
 
         c = MySQLConnector()
         assert c._ssl_config is None
@@ -1160,7 +1160,7 @@ class TestMySQLSSLConfig:
         """Verify pool_manager passes ssl_config to MySQL connector."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
         from gateway.connectors.pool_manager import PoolManager
 
         pm = PoolManager()
@@ -1183,7 +1183,7 @@ class TestPostgresSSLConfig:
     """Tests for PostgreSQL SSL certificate support."""
 
     def test_ssl_config_stored(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         ssl_config = {"enabled": True, "mode": "verify-full", "ca_cert": "PEM-DATA"}
@@ -1191,7 +1191,7 @@ class TestPostgresSSLConfig:
         assert c._ssl_config == ssl_config
 
     def test_ssl_context_built_for_verify_full(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         c.set_ssl_config(
@@ -1221,7 +1221,7 @@ class TestPostgresSSLConfig:
                 pass
 
     def test_ssl_config_none_by_default(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         assert c._ssl_config is None
@@ -1229,8 +1229,8 @@ class TestPostgresSSLConfig:
     def test_pool_manager_wires_ssl_for_postgres(self):
         from unittest.mock import AsyncMock, patch
 
+        from gateway.connectors.drivers.postgres import PostgresConnector
         from gateway.connectors.pool_manager import PoolManager
-        from gateway.connectors.postgres import PostgresConnector
 
         pm = PoolManager()
         mock_connector = PostgresConnector()
@@ -1252,7 +1252,7 @@ class TestRedshiftSSLConfig:
     """Tests for Redshift SSL certificate support."""
 
     def test_ssl_config_stored(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         c = RedshiftConnector()
         ssl_config = {"enabled": True, "mode": "verify-ca", "ca_cert": "PEM-DATA"}
@@ -1260,7 +1260,7 @@ class TestRedshiftSSLConfig:
         assert c._ssl_config == ssl_config
 
     def test_ssl_kwargs_built(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         c = RedshiftConnector()
         c.set_ssl_config(
@@ -1285,8 +1285,8 @@ class TestRedshiftSSLConfig:
     def test_pool_manager_wires_ssl_for_redshift(self):
         from unittest.mock import AsyncMock, patch
 
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         from gateway.connectors.pool_manager import PoolManager
-        from gateway.connectors.redshift import RedshiftConnector
 
         pm = PoolManager()
         mock_connector = RedshiftConnector()
@@ -1308,7 +1308,7 @@ class TestClickHouseSSLConfig:
     """Tests for ClickHouse SSL certificate support."""
 
     def test_ssl_config_stored(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         ssl_config = {"enabled": True, "mode": "require"}
@@ -1316,7 +1316,7 @@ class TestClickHouseSSLConfig:
         assert c._ssl_config == ssl_config
 
     def test_ssl_config_none_by_default(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         assert c._ssl_config is None
@@ -1324,7 +1324,7 @@ class TestClickHouseSSLConfig:
     def test_pool_manager_wires_ssl_for_clickhouse(self):
         from unittest.mock import AsyncMock, patch
 
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
         from gateway.connectors.pool_manager import PoolManager
 
         pm = PoolManager()
@@ -1430,7 +1430,7 @@ class TestCredentialExtrasStandardization:
         assert hasattr(BaseConnector, "set_credential_extras")
 
     def test_postgres_extracts_ssl(self):
-        from gateway.connectors.postgres import PostgresConnector
+        from gateway.connectors.drivers.postgres import PostgresConnector
 
         c = PostgresConnector()
         c.set_credential_extras({"ssl_config": {"enabled": True, "mode": "require"}})
@@ -1438,7 +1438,7 @@ class TestCredentialExtrasStandardization:
         assert c._ssl_config["mode"] == "require"
 
     def test_mysql_extracts_ssl(self):
-        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
 
         c = MySQLConnector()
         c.set_credential_extras({"ssl_config": {"enabled": True, "ca_cert": "test"}})
@@ -1446,14 +1446,14 @@ class TestCredentialExtrasStandardization:
         assert c._ssl_config["ca_cert"] == "test"
 
     def test_clickhouse_extracts_ssl(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         c.set_credential_extras({"ssl_config": {"enabled": True}})
         assert c._ssl_config is not None
 
     def test_redshift_extracts_ssl(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         c = RedshiftConnector()
         c.set_credential_extras({"ssl_config": {"enabled": True, "mode": "verify-ca"}})
@@ -1461,14 +1461,14 @@ class TestCredentialExtrasStandardization:
         assert c._ssl_config["mode"] == "verify-ca"
 
     def test_snowflake_extracts_credentials(self):
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         c = SnowflakeConnector()
         c.set_credential_extras({"account": "test-acct", "warehouse": "WH1"})
         assert c._credential_extras["account"] == "test-acct"
 
     def test_databricks_extracts_credentials(self):
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
 
         c = DatabricksConnector()
         c.set_credential_extras({"http_path": "/sql/1.0/warehouses/abc", "access_token": "tok"})
@@ -1478,8 +1478,8 @@ class TestCredentialExtrasStandardization:
         """Pool manager now uses a single set_credential_extras call for all DB types."""
         from unittest.mock import AsyncMock, patch
 
+        from gateway.connectors.drivers.postgres import PostgresConnector
         from gateway.connectors.pool_manager import PoolManager
-        from gateway.connectors.postgres import PostgresConnector
 
         pm = PoolManager()
         mock_connector = PostgresConnector()
@@ -1612,13 +1612,13 @@ class TestSnowflakeKeyPairAuth:
         assert extras["account"] == "test-account"
 
     def test_snowflake_connector_load_private_key_method_exists(self):
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         connector = SnowflakeConnector()
         assert hasattr(connector, "_load_private_key")
 
     def test_set_credential_extras_with_private_key(self):
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         connector = SnowflakeConnector()
         connector.set_credential_extras(
@@ -1639,18 +1639,18 @@ class TestClickHouseHTTPFallback:
     """Test ClickHouse connector with HTTP fallback support."""
 
     def test_has_http_import(self):
-        from gateway.connectors.clickhouse import HAS_CLICKHOUSE_HTTP
+        from gateway.connectors.drivers.clickhouse import HAS_CLICKHOUSE_HTTP
 
         # Should be True or False — just verify the flag exists
         assert isinstance(HAS_CLICKHOUSE_HTTP, bool)
 
     def test_has_native_import(self):
-        from gateway.connectors.clickhouse import HAS_CLICKHOUSE_NATIVE
+        from gateway.connectors.drivers.clickhouse import HAS_CLICKHOUSE_NATIVE
 
         assert isinstance(HAS_CLICKHOUSE_NATIVE, bool)
 
     def test_connector_has_http_client_attr(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         assert hasattr(c, "_http_client")
@@ -1658,7 +1658,7 @@ class TestClickHouseHTTPFallback:
         assert c._use_http is False
 
     def test_raw_execute_raises_when_disconnected(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         with pytest.raises(RuntimeError, match="No active ClickHouse connection"):
@@ -1666,7 +1666,7 @@ class TestClickHouseHTTPFallback:
 
     def test_parse_http_url_sets_use_http(self):
         """clickhouse+http:// URL sets use_http flag in parsed params."""
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse+http://default:pass@host:8123/mydb")
@@ -1675,7 +1675,7 @@ class TestClickHouseHTTPFallback:
 
     def test_parse_https_url_sets_secure(self):
         """clickhouse+https:// URL sets both use_http and secure flags."""
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse+https://user:pass@host:8443/mydb")
@@ -1685,7 +1685,7 @@ class TestClickHouseHTTPFallback:
 
     def test_parse_native_url_no_use_http(self):
         """clickhouse:// URL does not set use_http flag."""
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         params = c._parse_connection_string("clickhouse://default:pass@host:9000/mydb")
@@ -1702,7 +1702,7 @@ class TestParallelSchemaFetching:
         """Redshift get_schema uses asyncio.to_thread for parallel queries."""
         import inspect
 
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         source = inspect.getsource(RedshiftConnector.get_schema)
         assert "asyncio.gather" in source or "asyncio.to_thread" in source
@@ -1711,7 +1711,7 @@ class TestParallelSchemaFetching:
         """Snowflake get_schema uses asyncio.to_thread for parallel queries."""
         import inspect
 
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         source = inspect.getsource(SnowflakeConnector.get_schema)
         assert "asyncio.gather" in source
@@ -1720,7 +1720,7 @@ class TestParallelSchemaFetching:
         """ClickHouse uses sequential fetch for thread-safety."""
         import inspect
 
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         source = inspect.getsource(ClickHouseConnector.get_schema)
         assert "_fetch_all" in source  # Sequential wrapper
@@ -2098,7 +2098,7 @@ class TestDuckDBSchemaImprovements:
         """DuckDB get_schema queries PRIMARY KEY constraints."""
         import inspect
 
-        from gateway.connectors.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
 
         source = inspect.getsource(DuckDBConnector.get_schema)
         assert "PRIMARY KEY" in source
@@ -2107,7 +2107,7 @@ class TestDuckDBSchemaImprovements:
         """DuckDB get_schema queries duckdb_tables() for row counts."""
         import inspect
 
-        from gateway.connectors.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
 
         source = inspect.getsource(DuckDBConnector.get_schema)
         assert "duckdb_tables" in source
@@ -2115,7 +2115,7 @@ class TestDuckDBSchemaImprovements:
     @pytest.mark.asyncio
     async def test_duckdb_pk_and_row_count(self):
         """DuckDB schema includes primary_key and row_count fields."""
-        from gateway.connectors.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
 
         conn = DuckDBConnector()
         await conn.connect(":memory:")
@@ -2142,7 +2142,7 @@ class TestSQLiteForeignKeys:
         """SQLite connect() enables PRAGMA foreign_keys."""
         import inspect
 
-        from gateway.connectors.sqlite import SQLiteConnector
+        from gateway.connectors.drivers.sqlite import SQLiteConnector
 
         source = inspect.getsource(SQLiteConnector.connect)
         assert "PRAGMA foreign_keys" in source
@@ -3093,7 +3093,7 @@ class TestMSSQLConnector:
 
     @pytest.fixture
     def connector(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         return MSSQLConnector()
 
@@ -3160,7 +3160,7 @@ class TestMSSQLURLParsing:
     """Test MSSQL connection string parsing for all supported formats."""
 
     def test_standard_mssql_url(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         c = MSSQLConnector()
         params = c._parse_connection_string("mssql://admin:pass@myhost:1434/mydb")
@@ -3171,7 +3171,7 @@ class TestMSSQLURLParsing:
         assert params["database"] == "mydb"
 
     def test_pymssql_url(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         c = MSSQLConnector()
         params = c._parse_connection_string("mssql+pymssql://sa:pw@localhost:1433/master")
@@ -3180,7 +3180,7 @@ class TestMSSQLURLParsing:
         assert params["database"] == "master"
 
     def test_sqlserver_url(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         c = MSSQLConnector()
         params = c._parse_connection_string("sqlserver://user:p%40ss@server.example.com/proddb")
@@ -3189,7 +3189,7 @@ class TestMSSQLURLParsing:
         assert params["database"] == "proddb"
 
     def test_default_port(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         c = MSSQLConnector()
         params = c._parse_connection_string("mssql://sa:pass@myhost/mydb")
@@ -3200,7 +3200,7 @@ class TestTrinoURLParsing:
     """Test Trino connection string parsing."""
 
     def test_standard_trino_url(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
 
         c = TrinoConnector()
         params = c._parse_connection("trino://admin@trinohost:8080/hive/default")
@@ -3211,7 +3211,7 @@ class TestTrinoURLParsing:
         assert params["schema"] == "default"
 
     def test_trino_https_url(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
 
         c = TrinoConnector()
         params = c._parse_connection("trino+https://user@secure.trino.io:443/catalog")
@@ -3221,7 +3221,7 @@ class TestTrinoURLParsing:
         assert params["catalog"] == "catalog"
 
     def test_trino_with_password(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
 
         c = TrinoConnector()
         params = c._parse_connection("trino://user:secret@host:8443/cat/sch")
@@ -3231,7 +3231,7 @@ class TestTrinoURLParsing:
         assert params["schema"] == "sch"
 
     def test_trino_with_query_params(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
 
         c = TrinoConnector()
         params = c._parse_connection("trino://user@host:8080/cat?verify=false&request_timeout=30")
@@ -3239,7 +3239,7 @@ class TestTrinoURLParsing:
         assert params["request_timeout"] == "30"
 
     def test_trino_default_port(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
 
         c = TrinoConnector()
         params = c._parse_connection("trino://user@myhost/catalog")
@@ -3342,7 +3342,7 @@ class TestRedshiftSchemaMetadata:
         """Verify Redshift connector uses SVV_TABLE_INFO fields, not pg_table_def."""
         import inspect
 
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         source = inspect.getsource(RedshiftConnector.get_schema)
         # Must use SVV_TABLE_INFO for diststyle (not pg_table_def)
@@ -3358,7 +3358,7 @@ class TestRedshiftSchemaMetadata:
         """Verify Redshift connector logs metadata query failures."""
         import inspect
 
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         source = inspect.getsource(RedshiftConnector.get_schema)
         assert "logger.info" in source
@@ -3366,7 +3366,7 @@ class TestRedshiftSchemaMetadata:
     def test_redshift_schema_output_structure(self):
         """Verify expected output fields in Redshift schema."""
         # Just test that the connector can be instantiated and has the right methods
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
 
         c = RedshiftConnector()
         assert hasattr(c, "get_schema")
@@ -3382,7 +3382,7 @@ class TestSnowflakeClusteringMetadata:
         """Verify Snowflake get_schema includes SHOW TABLES query for clustering."""
         import inspect
 
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         source = inspect.getsource(SnowflakeConnector.get_schema)
         assert "SHOW TABLES" in source
@@ -3393,7 +3393,7 @@ class TestSnowflakeClusteringMetadata:
         """Verify Snowflake connector logs metadata query failures."""
         import inspect
 
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         source = inspect.getsource(SnowflakeConnector.get_schema)
         assert "logger.info" in source
@@ -3402,7 +3402,7 @@ class TestSnowflakeClusteringMetadata:
         """Verify Snowflake sample values uses batched UNION ALL."""
         import inspect
 
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         source = inspect.getsource(SnowflakeConnector.get_sample_values)
         assert "_build_sample_union_sql" in source
@@ -3415,14 +3415,14 @@ class TestSampleValuesBatching:
         """Every connector's get_sample_values should reference _build_sample_union_sql."""
         import inspect
 
-        from gateway.connectors.bigquery import BigQueryConnector
-        from gateway.connectors.clickhouse import ClickHouseConnector
-        from gateway.connectors.databricks import DatabricksConnector
-        from gateway.connectors.duckdb import DuckDBConnector
-        from gateway.connectors.mssql import MSSQLConnector
-        from gateway.connectors.mysql import MySQLConnector
-        from gateway.connectors.sqlite import SQLiteConnector
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.bigquery import BigQueryConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
+        from gateway.connectors.drivers.sqlite import SQLiteConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
 
         for cls in [
             MySQLConnector,
@@ -3442,7 +3442,7 @@ class TestSampleValuesBatching:
     @pytest.mark.asyncio
     async def test_mysql_batched_sample_values(self):
         """Test MySQL sample values with batched UNION ALL on live database."""
-        from gateway.connectors.mysql import MySQLConnector
+        from gateway.connectors.drivers.mysql import MySQLConnector
 
         c = MySQLConnector()
         await c.connect("mysql://analyst:An4lyst!P4ss@host.docker.internal:3307/test_analytics")
@@ -3458,7 +3458,7 @@ class TestSampleValuesBatching:
     @pytest.mark.asyncio
     async def test_clickhouse_batched_sample_values(self):
         """Test ClickHouse sample values with batched UNION ALL on live database."""
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         c = ClickHouseConnector()
         await c.connect("clickhouse://default:test123@host.docker.internal:9100/test_analytics")
@@ -3472,7 +3472,7 @@ class TestSampleValuesBatching:
     @pytest.mark.asyncio
     async def test_mssql_batched_sample_values(self):
         """Test MSSQL sample values with batched UNION ALL on live database."""
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         c = MSSQLConnector()
         await c.connect("mssql://sa:Test%4012345@host.docker.internal:1434/testdb")

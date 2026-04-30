@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import BaseConnector
+from ..base import BaseConnector
 
 try:
     from clickhouse_driver import Client as CHClient

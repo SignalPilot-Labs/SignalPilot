@@ -25,7 +25,7 @@ def mock_bigquery():
 class TestBigQueryCostControls:
     def test_maximum_bytes_billed_set_via_extras(self):
         """maximum_bytes_billed from credential_extras should be stored."""
-        from gateway.connectors.bigquery import BigQueryConnector
+        from gateway.connectors.drivers.bigquery import BigQueryConnector
         connector = BigQueryConnector()
         connector.set_credential_extras({
             "maximum_bytes_billed": 10737418240,  # 10GB
@@ -36,7 +36,7 @@ class TestBigQueryCostControls:
 
     def test_maximum_bytes_billed_string_conversion(self):
         """String values for maximum_bytes_billed should be converted to int."""
-        from gateway.connectors.bigquery import BigQueryConnector
+        from gateway.connectors.drivers.bigquery import BigQueryConnector
         connector = BigQueryConnector()
         connector.set_credential_extras({
             "maximum_bytes_billed": "5368709120",  # 5GB as string
@@ -45,7 +45,7 @@ class TestBigQueryCostControls:
 
     def test_format_bytes_helper(self):
         """_format_bytes should format bytes into human-readable strings."""
-        from gateway.connectors.bigquery import BigQueryConnector
+        from gateway.connectors.drivers.bigquery import BigQueryConnector
         assert BigQueryConnector._format_bytes(0) == "0.0 B"
         assert BigQueryConnector._format_bytes(1024) == "1.0 KB"
         assert BigQueryConnector._format_bytes(1073741824) == "1.0 GB"
@@ -53,13 +53,13 @@ class TestBigQueryCostControls:
 
     def test_last_job_stats_initially_none(self):
         """get_last_job_stats should return None before any query."""
-        from gateway.connectors.bigquery import BigQueryConnector
+        from gateway.connectors.drivers.bigquery import BigQueryConnector
         connector = BigQueryConnector()
         assert connector.get_last_job_stats() is None
 
     def test_location_set_via_extras_without_credentials(self):
         """Location should be stored even without credentials_json."""
-        from gateway.connectors.bigquery import BigQueryConnector
+        from gateway.connectors.drivers.bigquery import BigQueryConnector
         connector = BigQueryConnector()
         connector._location = ""
         connector.set_credential_extras({

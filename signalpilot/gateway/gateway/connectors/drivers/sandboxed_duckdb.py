@@ -17,7 +17,7 @@ import logging
 import textwrap
 from typing import Any
 
-from .base import BaseConnector
+from ..base import BaseConnector
 
 logger = logging.getLogger(__name__)
 
@@ -124,14 +124,14 @@ class SandboxedDuckDBConnector(BaseConnector):
         # Lazily get sandbox client
         if self._sandbox_client is None:
             try:
-                from ..api.deps import get_sandbox_client
+                from ...api.deps import get_sandbox_client
 
                 self._sandbox_client = get_sandbox_client()
             except Exception:
                 # During test_credentials, sandbox client may not be initialized yet.
                 import os
 
-                from ..network import SandboxClient
+                from ...network import SandboxClient
 
                 url = os.environ.get("SP_SANDBOX_MANAGER_URL", "http://localhost:8180")
                 self._sandbox_client = SandboxClient(base_url=url)

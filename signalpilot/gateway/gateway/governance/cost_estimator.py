@@ -209,7 +209,7 @@ class CostEstimator:
         Also checks against maximum_bytes_billed safety limit if configured.
         """
         try:
-            from ..connectors.bigquery import BigQueryConnector
+            from ..connectors.drivers.bigquery import BigQueryConnector
 
             if isinstance(connector, BigQueryConnector):
                 dry_result = await connector.dry_run(sql)

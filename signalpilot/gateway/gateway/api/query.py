@@ -171,7 +171,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
         }
     if info.db_type == "bigquery":
         try:
-            from ..connectors.bigquery import BigQueryConnector
+            from ..connectors.drivers.bigquery import BigQueryConnector
 
             if isinstance(connector, BigQueryConnector):
                 job_stats = connector.get_last_job_stats()

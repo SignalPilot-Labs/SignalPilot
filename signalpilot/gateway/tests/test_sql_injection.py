@@ -174,7 +174,7 @@ class TestClickHouseQuoteIdentifier:
     """Unit tests for ClickHouseConnector._quote_identifier."""
 
     def _make_connector(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
 
         return ClickHouseConnector.__new__(ClickHouseConnector)
 
@@ -213,7 +213,7 @@ class TestMssqlStringLiteralEscaping:
     """Unit tests for MSSQL string literal escaping in get_sample_values."""
 
     def _make_connector(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
 
         conn = MSSQLConnector.__new__(MSSQLConnector)
         conn._conn = MagicMock()

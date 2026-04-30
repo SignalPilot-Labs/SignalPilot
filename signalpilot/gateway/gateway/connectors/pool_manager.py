@@ -266,11 +266,11 @@ class PoolManager:
                 and not connection_string.startswith("md:")
                 and connection_string != ":memory:"
             ):
-                from .sandboxed_duckdb import SandboxedDuckDBConnector
+                from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
 
                 connector = SandboxedDuckDBConnector()
             elif db_type == "sqlite" and connection_string and connection_string != ":memory:":
-                from .sandboxed_sqlite import SandboxedSQLiteConnector
+                from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
 
                 connector = SandboxedSQLiteConnector()
             else:

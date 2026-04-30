@@ -1,16 +1,16 @@
 from .base import BaseConnector
-from .bigquery import BigQueryConnector
-from .clickhouse import ClickHouseConnector
-from .databricks import DatabricksConnector
-from .duckdb import DuckDBConnector
-from .mssql import MSSQLConnector
-from .mysql import MySQLConnector
-from .postgres import PostgresConnector
-from .redshift import RedshiftConnector
+from .drivers.bigquery import BigQueryConnector
+from .drivers.clickhouse import ClickHouseConnector
+from .drivers.databricks import DatabricksConnector
+from .drivers.duckdb import DuckDBConnector
+from .drivers.mssql import MSSQLConnector
+from .drivers.mysql import MySQLConnector
+from .drivers.postgres import PostgresConnector
+from .drivers.redshift import RedshiftConnector
+from .drivers.snowflake import SnowflakeConnector
+from .drivers.trino import TrinoConnector
 from .registry import get_connector
-from .snowflake import SnowflakeConnector
 from .ssh_tunnel import SSHTunnel
-from .trino import TrinoConnector
 
 __all__ = [
     "BaseConnector",

@@ -10,7 +10,7 @@ import asyncio
 import json
 from typing import Any
 
-from .base import BaseConnector
+from ..base import BaseConnector
 
 try:
     from google.cloud import bigquery

@@ -16,7 +16,7 @@ import logging
 import textwrap
 from typing import Any
 
-from .base import BaseConnector
+from ..base import BaseConnector
 from .sandboxed_duckdb import SandboxedDuckDBConnector  # reuse _translate_path
 
 logger = logging.getLogger(__name__)
@@ -142,13 +142,13 @@ class SandboxedSQLiteConnector(BaseConnector):
         logger.info("SandboxedSQLite: translated path -> %s", self._host_path)
         if self._sandbox_client is None:
             try:
-                from ..api.deps import get_sandbox_client
+                from ...api.deps import get_sandbox_client
 
                 self._sandbox_client = get_sandbox_client()
             except Exception:
                 import os
 
-                from ..network import SandboxClient
+                from ...network import SandboxClient
 
                 url = os.environ.get("SP_SANDBOX_MANAGER_URL", "http://localhost:8180")
                 self._sandbox_client = SandboxClient(base_url=url)

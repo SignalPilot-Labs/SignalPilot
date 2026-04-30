@@ -1,5 +1,7 @@
 # Sandbox audit logs lack `org_id` / `key_id` correlation fields
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: sandbox-audit-log-leaks-client-ip-but-not-org-id
 - Severity: Low
 - Cloud impact: Partial

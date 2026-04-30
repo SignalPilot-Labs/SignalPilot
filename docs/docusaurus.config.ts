@@ -11,8 +11,10 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://SignalPilot-Labs.github.io',
-  baseUrl: '/SignalPilot/',
+  url: process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : 'https://SignalPilot-Labs.github.io',
+  baseUrl: process.env.VERCEL ? '/' : '/SignalPilot/',
 
   organizationName: 'SignalPilot-Labs',
   projectName: 'SignalPilot',

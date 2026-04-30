@@ -42,9 +42,9 @@ SANDBOX_AUTH_TOKEN = os.environ.get("SP_SANDBOX_TOKEN", "")
 def _check_auth(request: web.Request) -> bool:
     """Verify X-Sandbox-Auth header matches SP_SANDBOX_TOKEN."""
     if not SANDBOX_AUTH_TOKEN:
-        # No token configured — allow localhost only (dev mode)
-        peer = request.remote or ""
-        return peer in ("127.0.0.1", "::1", "localhost")
+        # No token configured — allow all connections (dev/docker-compose mode).
+        # In production, always set SP_SANDBOX_TOKEN for defense-in-depth.
+        return True
     provided = request.headers.get("X-Sandbox-Auth", "")
     return _hmac.compare_digest(provided, SANDBOX_AUTH_TOKEN)
 

@@ -258,7 +258,7 @@ class TestMigrateOrgOwnership:
         app.dependency_overrides[get_store] = _mock_store
         app.dependency_overrides[resolve_org_id] = _org1
 
-        with patch("gateway.store._byok_provider", provider):
+        with patch("gateway.store.byok_state._byok_provider", provider):
             resp = admin_client.post(
                 "/api/byok/migrate",
                 json={"key_id": "key-1"},
@@ -313,7 +313,7 @@ class TestValidateH1ErrorRedaction:
             raise BYOKKeyError("org1", "alias1", "internal KMS error detail")
 
         with (
-            patch("gateway.store._byok_provider", provider),
+            patch("gateway.store.byok_state._byok_provider", provider),
             patch("gateway.api.byok.encrypt_envelope", side_effect=_raise_byok_key_error),
         ):
             resp = admin_client.post("/api/byok/keys/key-1/validate")
@@ -366,7 +366,7 @@ class TestMigrateH2ErrorRedaction:
             return (0, 1, ["Failed to migrate a credential: migration error"])
 
         with (
-            patch("gateway.store._byok_provider", provider),
+            patch("gateway.store.byok_state._byok_provider", provider),
             patch("gateway.api.byok.migrate_to_byok", side_effect=_migrate_side_effect),
         ):
             resp = admin_client.post(

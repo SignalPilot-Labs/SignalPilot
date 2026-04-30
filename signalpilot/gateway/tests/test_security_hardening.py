@@ -217,14 +217,14 @@ class TestLocalDbPathValidation:
         assert self._validate("md:organization/my_db") == "md:organization/my_db"
 
     def test_path_within_data_dir_is_allowed(self):
-        from gateway.store import DATA_DIR
+        from gateway.store._constants import DATA_DIR
 
         valid_path = str(DATA_DIR / "test.duckdb")
         assert self._validate(valid_path) == valid_path
 
     def test_relative_path_resolves_within_data_dir(self):
         """A relative path that resolves inside DATA_DIR should be allowed."""
-        from gateway.store import DATA_DIR
+        from gateway.store._constants import DATA_DIR
 
         # Build a path that resolves within DATA_DIR
         relative = str(DATA_DIR / "subdir" / ".." / "test.duckdb")
@@ -319,7 +319,7 @@ class TestConnectionStringBypass:
         """A connection_string within DATA_DIR should not produce path errors."""
         from gateway.api.connections import _validate_connection_params
         from gateway.models import ConnectionCreate
-        from gateway.store import DATA_DIR
+        from gateway.store._constants import DATA_DIR
 
         conn = ConnectionCreate(
             name="safe",

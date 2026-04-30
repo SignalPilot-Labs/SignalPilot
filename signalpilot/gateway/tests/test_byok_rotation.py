@@ -353,8 +353,8 @@ class TestRotateEndpoint:
         store = self._make_store()
         store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with patch("gateway.api.byok.rotate_byok_key", new=AsyncMock(return_value=(2, 0, []))):
                     response = await rotate_byok_key_endpoint(
                         key_id="key-old",
@@ -378,8 +378,8 @@ class TestRotateEndpoint:
         store = self._make_store()
         store.session.execute = AsyncMock(return_value=self._make_key_result(None))
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with pytest.raises(HTTPException) as exc_info:
                     await rotate_byok_key_endpoint(
                         key_id="missing-key",
@@ -403,8 +403,8 @@ class TestRotateEndpoint:
         store = self._make_store()
         store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(None)])
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with pytest.raises(HTTPException) as exc_info:
                     await rotate_byok_key_endpoint(
                         key_id="key-old",
@@ -425,8 +425,8 @@ class TestRotateEndpoint:
 
         store = self._make_store()
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with pytest.raises(HTTPException) as exc_info:
                     await rotate_byok_key_endpoint(
                         key_id="key-same",
@@ -447,7 +447,7 @@ class TestRotateEndpoint:
 
         store = self._make_store()
 
-        with patch("gateway.store._byok_provider", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=None):
             with pytest.raises(HTTPException) as exc_info:
                 await rotate_byok_key_endpoint(
                     key_id="key-old",
@@ -470,8 +470,8 @@ class TestRotateEndpoint:
         store = self._make_store()
         store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with patch("gateway.api.byok.rotate_byok_key", new=AsyncMock(return_value=(1, 0, []))):
                     await rotate_byok_key_endpoint(
                         key_id="key-old",
@@ -494,8 +494,8 @@ class TestRotateEndpoint:
         store = self._make_store()
         store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with patch(
                     "gateway.api.byok.rotate_byok_key",
                     new=AsyncMock(return_value=(1, 1, ["Failed to rotate a credential: rotation error"])),
@@ -521,8 +521,8 @@ class TestRotateEndpoint:
         store = self._make_store()
         store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
-        with patch("gateway.store._byok_provider", new=MagicMock()):
-            with patch("gateway.store._dek_cache", new=None):
+        with patch("gateway.store.byok_state._byok_provider", new=MagicMock()):
+            with patch("gateway.store.byok_state._dek_cache", new=None):
                 with patch(
                     "gateway.api.byok.rotate_byok_key",
                     new=AsyncMock(side_effect=RuntimeError("DB connection lost")),

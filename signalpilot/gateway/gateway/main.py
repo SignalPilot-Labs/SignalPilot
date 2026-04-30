@@ -36,7 +36,8 @@ from .middleware import (
     enforce_principal_rate_limit,
 )
 from .models import ConnectionUpdate
-from .store import Store, _validate_encryption_health, configure_byok
+from .store import Store, configure_byok
+from .store.crypto import _validate_encryption_health
 
 logger = logging.getLogger(__name__)
 

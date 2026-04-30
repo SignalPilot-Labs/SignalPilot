@@ -1,13 +1,7 @@
-"""
-Persistent store backed by PostgreSQL.
-
-All operations are scoped to a user_id. In local mode user_id is always "local".
-Credentials are encrypted at rest using Fernet (AES-128-CBC + HMAC-SHA256).
-"""
+"""Store class — all DB-backed operations scoped by org_id."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import logging
@@ -18,27 +12,28 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote as url_quote
 
 from sqlalchemy import delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .byok import BYOKProvider, DEKCache, decrypt_envelope, encrypt_fields_envelope
-from .db.models import (
+import gateway.store._constants as _constants
+import gateway.store.byok_state as byok_state
+import gateway.store.dbt_templates as dbt_templates
+import gateway.store.paths as paths
+from gateway.byok import decrypt_envelope, encrypt_fields_envelope
+from gateway.db.models import (
     GatewayApiKey,
     GatewayAuditLog,
-    GatewayBYOKKey,
     GatewayConnection,
     GatewayCredential,
-    GatewayOrg,
     GatewayProject,
     GatewaySetting,
 )
-from .deployment import is_cloud_mode
-from .engine import redact_sql_literals
-from .governance.context import current_org_id_var
-from .models import (
+from gateway.deployment import is_cloud_mode
+from gateway.engine import redact_sql_literals
+from gateway.governance.context import current_org_id_var
+from gateway.models import (
     ApiKeyRecord,
     AuditEntry,
     ConnectionCreate,
@@ -50,626 +45,18 @@ from .models import (
     ProjectInfo,
     ProjectStorage,
     ProjectUpdate,
-    SandboxInfo,
     SSHTunnelConfig,
     SSLConfig,
 )
+from gateway.store._constants import CURRENT_KEY_VERSION
+from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
+from gateway.store.crypto import (
+    CredentialEncryptionError,
+    _decrypt_with_migration,
+    _encrypt,
+)
 
 logger = logging.getLogger(__name__)
-
-DATA_DIR = Path(os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
-
-# Legacy bare SHA-256 derivation is disabled by default. Existing deployments
-# that still have rows encrypted with the old key can temporarily set
-# SP_ALLOW_LEGACY_CRYPTO=true while migrating, then disable it again.
-_ALLOW_LEGACY_CRYPTO = os.environ.get("SP_ALLOW_LEGACY_CRYPTO", "false").lower() == "true"
-
-PBKDF2_ITERATIONS = 600_000
-PBKDF2_KEY_LENGTH = 32
-SALT_FILE_NAME = ".encryption_salt"
-KEY_FILE_NAME = ".encryption_key"
-
-# Key version tracking for rotation support.
-# Bump this constant when rotating to a new key material. When bumped, the operator
-# sets the new key via SP_ENCRYPTION_KEY and the old key is kept for decryption
-# of legacy rows (future multi-key read logic). Currently only version 1 exists.
-# key_version is orthogonal to _decrypt_with_migration: that handles "which derivation
-# method" while key_version handles "which key material".
-CURRENT_KEY_VERSION = 1
-
-
-class CredentialEncryptionError(Exception):
-    """Raised when credential encryption or decryption fails in a non-recoverable way."""
-
-
-# Module-level key cache — populated on first call, reused thereafter.
-# Avoids re-running PBKDF2 (≈200 ms) on every encrypt/decrypt call.
-_CACHED_KEY: bytes | None = None
-
-# Module-level BYOK state — set by configure_byok() before any BYOK credentials
-# are decrypted. Phase 2 will call configure_byok() from the application lifespan
-# handler (main.py startup). Phase 1 only adds the decrypt routing; the globals
-# remain None unless explicitly configured.
-_byok_provider: BYOKProvider | None = None
-_dek_cache: DEKCache | None = None
-
-
-def configure_byok(provider: BYOKProvider, cache: DEKCache | None = None) -> None:
-    """Set the module-level BYOK provider and optional DEK cache.
-
-    Call this during application startup before any requests are served.
-    Phase 2 will wire this into the FastAPI lifespan handler in main.py.
-    """
-    global _byok_provider, _dek_cache
-    _byok_provider = provider
-    _dek_cache = cache
-
-
-async def _resolve_byok_key(
-    session: AsyncSession,
-    org_id: str,
-    key_alias: str | None = None,
-) -> GatewayBYOKKey | None:
-    """Resolve the active BYOK key for an org.
-
-    If key_alias is provided, looks up by org_id + key_alias + status='active'.
-    If key_alias is None, looks up the org's default_byok_key_id from GatewayOrg,
-    then loads that key.
-
-    Returns the GatewayBYOKKey row or None if not found.
-    """
-    if key_alias is not None:
-        result = await session.execute(
-            select(GatewayBYOKKey).where(
-                GatewayBYOKKey.org_id == org_id,
-                GatewayBYOKKey.key_alias == key_alias,
-                GatewayBYOKKey.status == "active",
-            )
-        )
-        return result.scalar_one_or_none()
-
-    # No alias: look up the org's default key
-    org_result = await session.execute(select(GatewayOrg).where(GatewayOrg.org_id == org_id))
-    org_row = org_result.scalar_one_or_none()
-    if org_row is None or not org_row.default_byok_key_id:
-        return None
-
-    key_result = await session.execute(
-        select(GatewayBYOKKey).where(
-            GatewayBYOKKey.id == org_row.default_byok_key_id,
-            GatewayBYOKKey.status == "active",
-        )
-    )
-    return key_result.scalar_one_or_none()
-
-
-# ─── Atomic file helper ──────────────────────────────────────────────────────
-
-
-def _atomic_create_file(path: Path, content: bytes, mode: int = 0o600) -> bytes:
-    """Atomically create a file with content.
-
-    Uses O_CREAT | O_EXCL which is POSIX-atomic: exactly one process wins the
-    creation race. If the file already exists, the existing content is returned.
-    """
-    try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-        try:
-            os.write(fd, content)
-        finally:
-            os.close(fd)
-        return content
-    except FileExistsError:
-        return path.read_bytes()
-
-
-# ─── Encryption ──────────────────────────────────────────────────────────────
-
-
-def _load_or_create_salt() -> bytes:
-    """Load or create the persistent PBKDF2 salt stored at SP_DATA_DIR/.encryption_salt.
-
-    Uses atomic O_CREAT | O_EXCL to prevent TOCTOU: two simultaneous starts
-    cannot each write a different salt and diverge.
-    """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    salt_file = DATA_DIR / SALT_FILE_NAME
-    return _atomic_create_file(salt_file, os.urandom(16))
-
-
-def _derive_key_pbkdf2(passphrase: str) -> bytes:
-    """Derive a Fernet-compatible key from a passphrase using PBKDF2-HMAC-SHA256."""
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-    salt = _load_or_create_salt()
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=PBKDF2_KEY_LENGTH,
-        salt=salt,
-        iterations=PBKDF2_ITERATIONS,
-    )
-    raw_key = kdf.derive(passphrase.encode())
-    return base64.urlsafe_b64encode(raw_key)
-
-
-def _derive_key_legacy_sha256(passphrase: str) -> bytes:
-    """Legacy (insecure) key derivation via SHA-256. Used only for migration fallback."""
-    digest = hashlib.sha256(passphrase.encode()).digest()
-    return base64.urlsafe_b64encode(digest)
-
-
-def _derive_key_legacy_cloud_salt(passphrase: str) -> bytes:
-    """Legacy cloud-mode derivation with deterministic salt. Migration fallback only.
-
-    This used a salt derived from the passphrase itself, which defeats the
-    purpose of salting. Kept only to decrypt rows encrypted before the fix.
-    """
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-    deterministic_salt = hashlib.sha256(b"signalpilot-cloud-salt:" + passphrase.encode()).digest()[:16]
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=PBKDF2_KEY_LENGTH,
-        salt=deterministic_salt,
-        iterations=PBKDF2_ITERATIONS,
-    )
-    return base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
-
-
-def _get_encryption_key() -> bytes:
-    """Return the cached Fernet key, deriving it on first call."""
-    global _CACHED_KEY
-    if _CACHED_KEY is not None:
-        return _CACHED_KEY
-
-    from cryptography.fernet import Fernet
-
-    from .deployment import is_cloud_mode
-
-    key_str = os.getenv("SP_ENCRYPTION_KEY")
-    if key_str:
-        try:
-            Fernet(key_str.encode())
-            # Already a valid Fernet key — use directly.
-            _CACHED_KEY = key_str.encode()
-            return _CACHED_KEY
-        except Exception:
-            if is_cloud_mode():
-                salt_b64 = os.getenv("SP_ENCRYPTION_SALT")
-                if not salt_b64:
-                    raise RuntimeError(
-                        "SP_ENCRYPTION_SALT is required in cloud mode when "
-                        "SP_ENCRYPTION_KEY is a passphrase (not a raw Fernet key). "
-                        "Generate one with: python -c "
-                        '"import os,base64; print(base64.b64encode(os.urandom(16)).decode())"'
-                    )
-                salt = base64.b64decode(salt_b64)
-                from cryptography.hazmat.primitives import hashes
-                from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-                kdf = PBKDF2HMAC(
-                    algorithm=hashes.SHA256(),
-                    length=PBKDF2_KEY_LENGTH,
-                    salt=salt,
-                    iterations=PBKDF2_ITERATIONS,
-                )
-                _CACHED_KEY = base64.urlsafe_b64encode(kdf.derive(key_str.encode()))
-            else:
-                _CACHED_KEY = _derive_key_pbkdf2(key_str)
-            return _CACHED_KEY
-    else:
-        if is_cloud_mode():
-            raise RuntimeError(
-                "SP_ENCRYPTION_KEY environment variable is required in cloud mode. "
-                "Cannot auto-generate encryption key from filesystem."
-            )
-        key_file = DATA_DIR / KEY_FILE_NAME
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        key = Fernet.generate_key()
-        _CACHED_KEY = _atomic_create_file(key_file, key).strip()
-        return _CACHED_KEY
-
-
-def _encrypt(data: str) -> bytes:
-    from cryptography.fernet import Fernet
-
-    f = Fernet(_get_encryption_key())
-    return f.encrypt(data.encode())
-
-
-def _decrypt(encrypted: bytes) -> str:
-    from cryptography.fernet import Fernet
-
-    f = Fernet(_get_encryption_key())
-    return f.decrypt(encrypted).decode()
-
-
-def _decrypt_with_migration(encrypted: bytes) -> tuple[str, bool]:
-    """Decrypt ciphertext, falling back to legacy key derivation if needed.
-
-    Returns:
-        (plaintext, needs_migration) where needs_migration is True when the
-        legacy SHA-256 path was used and the caller should re-encrypt the row
-        with the current PBKDF2-derived key.
-    """
-    from cryptography.fernet import Fernet, InvalidToken
-
-    key_str = os.getenv("SP_ENCRYPTION_KEY")
-
-    # Fast path: try primary (PBKDF2-derived or direct Fernet) key first.
-    try:
-        return _decrypt(encrypted), False
-    except InvalidToken:
-        pass
-
-    # Only attempt legacy fallback when env var is a passphrase (not a raw Fernet key).
-    if key_str:
-        try:
-            Fernet(key_str.encode())
-            # key_str is a valid raw Fernet key — no legacy path makes sense.
-            raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
-        except CredentialEncryptionError:
-            raise
-        except Exception:
-            pass  # key_str is a passphrase; try legacy derivation.
-
-        # Try legacy cloud-mode derivation (deterministic salt from passphrase).
-        legacy_cloud_key = _derive_key_legacy_cloud_salt(key_str)
-        try:
-            f_cloud = Fernet(legacy_cloud_key)
-            plaintext = f_cloud.decrypt(encrypted).decode()
-            logger.warning(
-                "Credential decrypted with legacy cloud-mode deterministic salt. "
-                "This is deprecated — row will be re-encrypted with proper salt."
-            )
-            return plaintext, True
-        except InvalidToken:
-            pass
-
-        # Try legacy SHA-256 derivation (no KDF at all).
-        if _ALLOW_LEGACY_CRYPTO:
-            legacy_key = _derive_key_legacy_sha256(key_str)
-            try:
-                f_legacy = Fernet(legacy_key)
-                plaintext = f_legacy.decrypt(encrypted).decode()
-                logger.warning(
-                    "Credential decrypted with DEPRECATED legacy SHA-256 key derivation. "
-                    "Re-encrypt credentials to remove this dependency. "
-                    "Set SP_ALLOW_LEGACY_CRYPTO=false after migration."
-                )
-                return plaintext, True  # needs_migration=True
-            except InvalidToken:
-                pass
-        else:
-            logger.debug("Legacy SHA-256 crypto disabled (SP_ALLOW_LEGACY_CRYPTO=false)")
-
-    raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
-
-
-def _validate_encryption_health() -> bool:
-    """Verify that the current encryption key can round-trip encrypt/decrypt.
-
-    Returns True if healthy, False otherwise. Called at startup.
-    """
-    try:
-        test_plaintext = "health-check-" + secrets.token_hex(8)
-        ciphertext = _encrypt(test_plaintext)
-        recovered = _decrypt(ciphertext)
-        return recovered == test_plaintext
-    except Exception as exc:
-        logger.error("Encryption health check failed: %s", exc)
-        return False
-
-
-# ─── Local DB path validation ────────────────────────────────────────────────
-
-
-def _validate_local_db_path(path: str) -> str:
-    """Validate that a DuckDB/SQLite path is within DATA_DIR.
-
-    Allowed special values:
-      - ":memory:"       — in-memory database
-      - paths starting with "md:" — MotherDuck cloud connection
-
-    All other paths are resolved to an absolute canonical form and must fall
-    within DATA_DIR. Using Path.resolve() canonicalizes ".." traversal and
-    symlinks.
-
-    Note: TOCTOU risk — a symlink could be created after validation but before
-    DuckDB opens the file. Accepted risk: the attacker would need write access
-    within DATA_DIR to exploit this.
-
-    Raises:
-        ValueError: if the resolved path is not within DATA_DIR.
-    """
-    if path == ":memory:" or path.startswith("md:"):
-        return path
-
-    resolved = Path(path).resolve()
-    allowed_base = DATA_DIR.resolve()
-
-    try:
-        resolved.relative_to(allowed_base)
-        return path
-    except ValueError:
-        raise ValueError(f"Database path not allowed: must be within the data directory ({DATA_DIR})")
-
-
-# ─── Connection string builder (pure function) ──────────────────────────────
-
-
-def _build_connection_string(conn: ConnectionCreate) -> str:
-    if conn.db_type == DBType.postgres:
-        user = url_quote(conn.username or "", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        host = conn.host or "localhost"
-        port = conn.port or 5432
-        db = conn.database or "postgres"
-        ssl_mode = (
-            conn.ssl_config.mode if conn.ssl_config and conn.ssl_config.enabled else ("require" if conn.ssl else "")
-        )
-        ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
-        return f"postgresql://{user}{pw}@{host}:{port}/{db}{ssl_param}"
-    elif conn.db_type == DBType.mysql:
-        user = url_quote(conn.username or "", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        host = conn.host or "localhost"
-        port = conn.port or 3306
-        db = conn.database or ""
-        return f"mysql+pymysql://{user}{pw}@{host}:{port}/{db}"
-    elif conn.db_type == DBType.duckdb:
-        return conn.database or ":memory:"
-    elif conn.db_type == DBType.sqlite:
-        return conn.database or ":memory:"
-    elif conn.db_type == DBType.snowflake:
-        account = conn.account or ""
-        user = url_quote(conn.username or "", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        db = conn.database or ""
-        schema = conn.schema_name or ""
-        path = f"/{db}/{schema}" if schema else f"/{db}" if db else ""
-        params = []
-        if conn.warehouse:
-            params.append(f"warehouse={url_quote(conn.warehouse, safe='')}")
-        if conn.role:
-            params.append(f"role={url_quote(conn.role, safe='')}")
-        query = f"?{'&'.join(params)}" if params else ""
-        return f"snowflake://{user}{pw}@{account}{path}{query}"
-    elif conn.db_type == DBType.bigquery:
-        return conn.project or ""
-    elif conn.db_type == DBType.redshift:
-        user = url_quote(conn.username or "", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        host = conn.host or "localhost"
-        port = conn.port or 5439
-        db = conn.database or "dev"
-        ssl_param = "?sslmode=require" if conn.ssl else ""
-        return f"redshift://{user}{pw}@{host}:{port}/{db}{ssl_param}"
-    elif conn.db_type == DBType.clickhouse:
-        user = url_quote(conn.username or "default", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        host = conn.host or "localhost"
-        db = conn.database or "default"
-        use_http = conn.protocol == "http"
-        use_ssl = conn.ssl or (conn.ssl_config and conn.ssl_config.enabled)
-        if use_http:
-            scheme = "clickhouse+https" if use_ssl else "clickhouse+http"
-            port = conn.port or (8443 if use_ssl else 8123)
-        else:
-            scheme = "clickhouses" if use_ssl else "clickhouse"
-            port = conn.port or (9440 if use_ssl else 9000)
-        return f"{scheme}://{user}{pw}@{host}:{port}/{db}"
-    elif conn.db_type == DBType.databricks:
-        host = conn.host or ""
-        http_path = url_quote(conn.http_path or "", safe="/")
-        token = url_quote(conn.access_token or "", safe="")
-        params = []
-        if conn.catalog:
-            params.append(f"catalog={url_quote(conn.catalog, safe='')}")
-        if conn.schema_name:
-            params.append(f"schema={url_quote(conn.schema_name, safe='')}")
-        query = f"?{'&'.join(params)}" if params else ""
-        return f"databricks://{token}@{host}/{http_path}{query}"
-    elif conn.db_type == DBType.mssql:
-        user = url_quote(conn.username or "sa", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        host = conn.host or "localhost"
-        port = conn.port or 1433
-        db = conn.database or "master"
-        return f"mssql://{user}{pw}@{host}:{port}/{db}"
-    elif conn.db_type == DBType.trino:
-        user = url_quote(conn.username or "trino", safe="")
-        pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        host = conn.host or "localhost"
-        port = conn.port or 8080
-        catalog = conn.catalog or ""
-        schema = conn.schema_name or ""
-        path = f"/{catalog}/{schema}" if schema else f"/{catalog}" if catalog else ""
-        return f"trino://{user}{pw}@{host}:{port}{path}"
-    return ""
-
-
-def _extract_credential_extras(conn: ConnectionCreate) -> dict:
-    extras: dict = {}
-    if conn.ssh_tunnel and conn.ssh_tunnel.enabled:
-        extras["ssh_tunnel"] = conn.ssh_tunnel.model_dump()
-    if conn.ssl_config and conn.ssl_config.enabled:
-        extras["ssl_config"] = conn.ssl_config.model_dump()
-    if conn.credentials_json:
-        extras["credentials_json"] = conn.credentials_json
-    if conn.db_type == DBType.bigquery:
-        for attr in ("location", "maximum_bytes_billed", "project", "dataset"):
-            val = getattr(conn, attr, None)
-            if val is not None:
-                extras[attr] = val
-    if conn.access_token:
-        extras["access_token"] = conn.access_token
-    # NOTE: password is intentionally excluded from extras — it is already
-    # embedded in the encrypted connection string.  Storing it twice doubles
-    # the blast radius of a credential leak.  Consumers that need the raw
-    # password (e.g. dbt profiles.yml generation) should extract it from
-    # the connection string at use-time.
-    if conn.db_type == DBType.snowflake:
-        for attr in ("account", "warehouse", "schema_name", "role", "username"):
-            extras[attr] = getattr(conn, attr, None)
-        if conn.private_key:
-            extras["private_key"] = conn.private_key
-        if conn.private_key_passphrase:
-            extras["private_key_passphrase"] = conn.private_key_passphrase
-    if conn.db_type == DBType.databricks:
-        for attr in ("http_path", "access_token", "catalog", "schema_name"):
-            extras[attr] = getattr(conn, attr, None)
-    if conn.db_type == DBType.duckdb and getattr(conn, "motherduck_token", None):
-        extras["motherduck_token"] = conn.motherduck_token
-    for attr in ("connection_timeout", "query_timeout", "keepalive_interval"):
-        val = getattr(conn, attr, None)
-        if val is not None and (attr != "keepalive_interval" or val > 0):
-            extras[attr] = val
-    return extras
-
-
-# ─── dbt project templates (pure) ───────────────────────────────────────────
-
-_DBT_PROJECT_YML_TEMPLATE = """\
-name: '{name}'
-version: '1.0.0'
-config-version: 2
-profile: '{name}'
-
-model-paths: ["models"]
-analysis-paths: ["analyses"]
-test-paths: ["tests"]
-seed-paths: ["seeds"]
-macro-paths: ["macros"]
-snapshot-paths: ["snapshots"]
-
-clean-targets:
-  - "target"
-  - "dbt_packages"
-"""
-
-_PACKAGES_YML_TEMPLATE = """\
-packages: []
-"""
-
-_PROFILES_DUCKDB = """\
-{name}:
-  target: dev
-  outputs:
-    dev:
-      type: duckdb
-      path: '{database}'
-"""
-
-_PROFILES_POSTGRES = """\
-{name}:
-  target: dev
-  outputs:
-    dev:
-      type: postgres
-      host: '{host}'
-      port: {port}
-      user: '{username}'
-      dbname: '{database}'
-      schema: public
-"""
-
-_PROFILES_SNOWFLAKE = """\
-{name}:
-  target: dev
-  outputs:
-    dev:
-      type: snowflake
-      account: '{account}'
-      user: '{username}'
-      database: '{database}'
-      warehouse: '{warehouse}'
-      schema: public
-      role: '{role}'
-"""
-
-_PROFILES_BIGQUERY = """\
-{name}:
-  target: dev
-  outputs:
-    dev:
-      type: bigquery
-      method: service-account
-      project: '{project}'
-      dataset: '{dataset}'
-      location: '{location}'
-"""
-
-_PROFILES_PLACEHOLDER = """\
-# TODO: Configure profile for {db_type}
-# See https://docs.getdbt.com/docs/core/connect-data-platform
-{name}:
-  target: dev
-  outputs:
-    dev:
-      type: '{db_type}'
-"""
-
-_SCAFFOLD_DIRS = [
-    "models/staging",
-    "models/marts",
-    "analyses",
-    "tests",
-    "seeds",
-    "macros",
-    "snapshots",
-]
-
-
-# ─── Sandboxes (in-memory, org-scoped — ephemeral) ──────────────────────────
-
-_active_sandboxes: dict[str, SandboxInfo] = {}
-
-
-def list_sandboxes(org_id: str) -> list[SandboxInfo]:
-    return [s for s in _active_sandboxes.values() if s.org_id == org_id]
-
-
-def get_sandbox(sandbox_id: str, org_id: str) -> SandboxInfo | None:
-    sb = _active_sandboxes.get(sandbox_id)
-    if sb is None or sb.org_id != org_id:
-        return None
-    return sb
-
-
-def upsert_sandbox(sandbox: SandboxInfo):
-    _active_sandboxes[sandbox.id] = sandbox
-
-
-def delete_sandbox(sandbox_id: str, org_id: str) -> bool:
-    sb = _active_sandboxes.get(sandbox_id)
-    if sb is None or sb.org_id != org_id:
-        return False
-    del _active_sandboxes[sandbox_id]
-    return True
-
-
-# ─── Local API Key (file-based, only for local mode) ────────────────────────
-
-
-def get_local_api_key() -> str | None:
-    from .deployment import is_cloud_mode
-
-    if is_cloud_mode():
-        return None
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    key_file = DATA_DIR / "local_api_key"
-    new_key = "sp_local_" + secrets.token_hex(16)
-    result = _atomic_create_file(key_file, new_key.encode()).decode().strip()
-    if result:
-        return result
-    # File existed but was empty (should not occur with O_EXCL writes, but guard anyway).
-    key_file.unlink(missing_ok=True)
-    new_key2 = "sp_local_" + secrets.token_hex(16)
-    logger.info("Generated new local API key (stored in %s)", key_file)
-    return _atomic_create_file(key_file, new_key2.encode()).decode().strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -777,7 +164,7 @@ class Store:
         # host/port/database/username from the URL so they're stored as metadata
         # for display and editing.
         if conn.connection_string and not conn.host:
-            from .url_parser import parse_connection_url
+            from gateway.url_parser import parse_connection_url
 
             try:
                 db_type_str = conn.db_type.value if hasattr(conn.db_type, "value") else conn.db_type
@@ -866,17 +253,17 @@ class Store:
         if conn.db_type in (DBType.duckdb, DBType.sqlite):
             is_sandboxed = raw_cred not in (":memory:",) and not raw_cred.startswith("md:")
             if not is_sandboxed:
-                _validate_local_db_path(raw_cred)
+                paths._validate_local_db_path(raw_cred)
         extras = _extract_credential_extras(conn)
 
         # BYOK encrypt path: use envelope encryption when org has BYOK configured
         byok_key = None
-        if oid and _byok_provider is not None:
-            byok_key = await _resolve_byok_key(self.session, oid, conn.byok_key_alias)
+        if oid and byok_state._byok_provider is not None:
+            byok_key = await byok_state._resolve_byok_key(self.session, oid, conn.byok_key_alias)
 
-        if byok_key is not None and _byok_provider is not None:
+        if byok_key is not None and byok_state._byok_provider is not None:
             ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-                _byok_provider,
+                byok_state._byok_provider,
                 oid,
                 byok_key.key_alias,
                 [raw_cred, json.dumps(extras)],
@@ -1012,7 +399,7 @@ class Store:
                 if create_obj.db_type in ("duckdb", "sqlite"):
                     is_sandboxed = raw_cred not in (":memory:",) and not raw_cred.startswith("md:")
                     if not is_sandboxed:
-                        _validate_local_db_path(raw_cred)
+                        paths._validate_local_db_path(raw_cred)
                 extras = _extract_credential_extras(create_obj)
                 # Update credential row
                 cred_result = await self.session.execute(
@@ -1027,12 +414,12 @@ class Store:
                     org_id = row.org_id
                     key_alias = row.byok_key_alias
                     byok_key = None
-                    if org_id and _byok_provider is not None:
-                        byok_key = await _resolve_byok_key(self.session, org_id, key_alias)
+                    if org_id and byok_state._byok_provider is not None:
+                        byok_key = await byok_state._resolve_byok_key(self.session, org_id, key_alias)
 
-                    if byok_key is not None and _byok_provider is not None:
+                    if byok_key is not None and byok_state._byok_provider is not None:
                         ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-                            _byok_provider,
+                            byok_state._byok_provider,
                             org_id,  # type: ignore[arg-type]
                             byok_key.key_alias,
                             [raw_cred, json.dumps(extras)],
@@ -1077,7 +464,7 @@ class Store:
         cred_row, conn_row = row_pair
 
         if cred_row.encryption_mode == "byok":
-            if _byok_provider is None:
+            if byok_state._byok_provider is None:
                 raise CredentialEncryptionError("BYOK provider not configured")
             if cred_row.wrapped_dek is None:
                 raise CredentialEncryptionError("Credential is in BYOK mode but has no wrapped DEK")
@@ -1086,12 +473,12 @@ class Store:
             if not org_id or not key_alias:
                 raise CredentialEncryptionError("Connection is missing BYOK configuration for decryption")
             return await decrypt_envelope(
-                provider=_byok_provider,
+                provider=byok_state._byok_provider,
                 org_id=org_id,
                 key_alias=key_alias,
                 wrapped_dek=cred_row.wrapped_dek,
                 ciphertext=cred_row.connection_string_enc,
-                cache=_dek_cache,
+                cache=byok_state._dek_cache,
                 credential_id=cred_row.id,
             )
 
@@ -1134,7 +521,7 @@ class Store:
             return {}
 
         if cred_row.encryption_mode == "byok":
-            if _byok_provider is None:
+            if byok_state._byok_provider is None:
                 raise CredentialEncryptionError("BYOK provider not configured")
             if cred_row.wrapped_dek is None:
                 raise CredentialEncryptionError("Credential is in BYOK mode but has no wrapped DEK")
@@ -1143,12 +530,12 @@ class Store:
             if not org_id or not key_alias:
                 raise CredentialEncryptionError("Connection is missing BYOK configuration for decryption")
             extras_json = await decrypt_envelope(
-                provider=_byok_provider,
+                provider=byok_state._byok_provider,
                 org_id=org_id,
                 key_alias=key_alias,
                 wrapped_dek=cred_row.wrapped_dek,
                 ciphertext=cred_row.extras_enc,
-                cache=_dek_cache,
+                cache=byok_state._dek_cache,
                 credential_id=cred_row.id,
             )
             return json.loads(extras_json)
@@ -1227,18 +614,18 @@ class Store:
         return info
 
     def _create_new_project(self, proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
-        project_dir = DATA_DIR / "projects" / proj.name
+        project_dir = _constants.DATA_DIR / "projects" / proj.name
         project_dir.mkdir(parents=True, exist_ok=True)
-        for d in _SCAFFOLD_DIRS:
+        for d in dbt_templates._SCAFFOLD_DIRS:
             (project_dir / d).mkdir(parents=True, exist_ok=True)
         for d in ("models/staging", "models/marts"):
             (project_dir / d / ".gitkeep").touch()
-        (project_dir / "dbt_project.yml").write_text(_DBT_PROJECT_YML_TEMPLATE.format(name=proj.name))
+        (project_dir / "dbt_project.yml").write_text(dbt_templates._DBT_PROJECT_YML_TEMPLATE.format(name=proj.name))
         profiles_path = project_dir / "profiles.yml"
         profiles_path.write_text(self._generate_profiles_yml(proj.name, connection))
         os.chmod(str(profiles_path), 0o600)
         os.chmod(str(project_dir), 0o700)
-        (project_dir / "packages.yml").write_text(_PACKAGES_YML_TEMPLATE)
+        (project_dir / "packages.yml").write_text(dbt_templates._PACKAGES_YML_TEMPLATE)
         return ProjectInfo(
             id=str(uuid.uuid4()),
             name=proj.name,
@@ -1256,7 +643,7 @@ class Store:
         if not local.exists() or not (local / "dbt_project.yml").exists():
             raise ValueError(f"Path '{local}' does not exist or lacks dbt_project.yml")
         if proj.link_mode == "copy":
-            project_dir = DATA_DIR / "projects" / proj.name
+            project_dir = _constants.DATA_DIR / "projects" / proj.name
             shutil.copytree(str(local), str(project_dir), dirs_exist_ok=True)
             storage = ProjectStorage.managed
         else:
@@ -1277,9 +664,9 @@ class Store:
     def _generate_profiles_yml(self, project_name: str, connection: ConnectionInfo) -> str:
         db = connection.db_type
         if db == "duckdb":
-            return _PROFILES_DUCKDB.format(name=project_name, database=connection.database or ":memory:")
+            return dbt_templates._PROFILES_DUCKDB.format(name=project_name, database=connection.database or ":memory:")
         if db == "postgres":
-            return _PROFILES_POSTGRES.format(
+            return dbt_templates._PROFILES_POSTGRES.format(
                 name=project_name,
                 host=connection.host or "localhost",
                 port=connection.port or 5432,
@@ -1287,7 +674,7 @@ class Store:
                 database=connection.database or "",
             )
         if db == "snowflake":
-            return _PROFILES_SNOWFLAKE.format(
+            return dbt_templates._PROFILES_SNOWFLAKE.format(
                 name=project_name,
                 account=connection.account or "",
                 username=connection.username or "",
@@ -1296,13 +683,13 @@ class Store:
                 role=connection.role or "",
             )
         if db == "bigquery":
-            return _PROFILES_BIGQUERY.format(
+            return dbt_templates._PROFILES_BIGQUERY.format(
                 name=project_name,
                 project=connection.project or "",
                 dataset=connection.dataset or "",
                 location=getattr(connection, "location", "US") or "US",
             )
-        return _PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
+        return dbt_templates._PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
 
     async def update_project(self, name: str, update_data: ProjectUpdate) -> ProjectInfo | None:
         oid = self._require_org_id()

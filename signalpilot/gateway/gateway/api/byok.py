@@ -117,7 +117,7 @@ async def create_byok_key(
 
     # For local provider: auto-register the key material in memory
     from ..byok import LocalBYOKProvider
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if isinstance(provider, LocalBYOKProvider):
         provider.register_key(org_id, body.key_alias)
@@ -246,7 +246,7 @@ async def delete_byok_key(
 
     # Revoke key from local provider (deletes key material from disk)
     from ..byok import LocalBYOKProvider
-    from ..store import _byok_provider as current_provider
+    from ..store.byok_state import _byok_provider as current_provider
 
     if isinstance(current_provider, LocalBYOKProvider):
         current_provider.revoke_key(org_id, key.key_alias)
@@ -265,7 +265,7 @@ async def validate_byok_key(
     _role: OrgAdmin,
 ) -> dict:
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -307,7 +307,7 @@ async def migrate_credentials_to_byok(
 
     org_id is derived from JWT, not the request body.
     """
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -347,8 +347,8 @@ async def revert_credentials_to_managed(
 
     org_id is derived from JWT, not the request body.
     """
-    from ..store import _byok_provider as provider
-    from ..store import _dek_cache as cache
+    from ..store.byok_state import _byok_provider as provider
+    from ..store.byok_state import _dek_cache as cache
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -379,8 +379,8 @@ async def rotate_byok_key_endpoint(
 
     org_id is derived from JWT. key_id is the OLD key to rotate FROM.
     """
-    from ..store import _byok_provider as provider
-    from ..store import _dek_cache as cache
+    from ..store.byok_state import _byok_provider as provider
+    from ..store.byok_state import _dek_cache as cache
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")

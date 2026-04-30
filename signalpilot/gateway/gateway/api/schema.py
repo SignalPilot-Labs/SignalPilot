@@ -22,9 +22,7 @@ from ..schema_utils import (
     compress_type,
 )
 from ..scope_guard import RequireScope
-from ..store import (
-    DATA_DIR,
-)
+from ..store._constants import DATA_DIR
 from .deps import (
     StoreD,
     apply_schema_filter,

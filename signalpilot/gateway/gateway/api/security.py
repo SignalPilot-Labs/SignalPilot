@@ -10,7 +10,8 @@ from sqlalchemy import func, or_, select
 
 from ..auth import OrgAdmin, OrgID
 from ..db.models import GatewayBYOKKey, GatewayCredential
-from ..store import CURRENT_KEY_VERSION, _validate_encryption_health
+from ..store import CURRENT_KEY_VERSION
+from ..store.crypto import _validate_encryption_health
 from .deps import StoreD
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
 
     # Read the module-level provider — import at function scope to pick up the
     # current value (configure_byok may have been called after module import).
-    from ..store import _byok_provider as current_provider  # noqa: PLC0415
+    from ..store.byok_state import _byok_provider as current_provider  # noqa: PLC0415
 
     byok_provider_type = type(current_provider).__name__ if current_provider is not None else "none"
 

@@ -184,7 +184,7 @@ class TestSecurityStatusOrgScoping:
         mock_store.session.execute = _mock_execute
 
         with (
-            patch("gateway.store._validate_encryption_health", return_value=True),
+            patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
             result = await security_status(mock_store, "org1")
@@ -224,7 +224,7 @@ class TestSecurityStatusOrgScoping:
 
             mock_store.session.execute = _mock_execute
             with (
-                patch("gateway.store._validate_encryption_health", return_value=True),
+                patch("gateway.store.crypto._validate_encryption_health", return_value=True),
                 patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
             ):
                 return await security_status(mock_store, org_id)
@@ -274,7 +274,7 @@ class TestSecurityStatusOrgScoping:
         mock_store.session.execute = _mock_execute
 
         with (
-            patch("gateway.store._validate_encryption_health", return_value=True),
+            patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
             result = await security_status(mock_store, "org-xyz")

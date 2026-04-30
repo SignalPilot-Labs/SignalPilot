@@ -21,7 +21,7 @@ async def parse_url_endpoint(_: UserID, request: Request):
     if len(url) > 4096:
         raise HTTPException(status_code=422, detail="URL must be at most 4096 characters")
 
-    from gateway.url_parser import parse_connection_url
+    from gateway.network import parse_connection_url
 
     result = parse_connection_url(url, db_type=body.get("db_type", ""))
     if not result:

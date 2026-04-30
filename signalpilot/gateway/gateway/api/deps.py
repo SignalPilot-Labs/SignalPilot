@@ -21,7 +21,7 @@ from fastapi import Depends, HTTPException
 from ..auth import DBSession, OrgID, UserID
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
-from ..sandbox_client import SandboxClient
+from ..network import SandboxClient
 from ..store import Store
 
 # ─── Store dependency ────────────────────────────────────────────────────────

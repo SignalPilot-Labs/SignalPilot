@@ -19,7 +19,7 @@ from gateway.api.schema._router import router
 from gateway.api.schema._scoring import _fuzzy_match
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
-from gateway.schema_utils import _infer_implicit_joins
+from gateway.schema.utils import _infer_implicit_joins
 from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)

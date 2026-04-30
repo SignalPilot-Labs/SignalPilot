@@ -164,7 +164,7 @@ class Store:
         # host/port/database/username from the URL so they're stored as metadata
         # for display and editing.
         if conn.connection_string and not conn.host:
-            from gateway.url_parser import parse_connection_url
+            from gateway.network import parse_connection_url
 
             try:
                 db_type_str = conn.db_type.value if hasattr(conn.db_type, "value") else conn.db_type

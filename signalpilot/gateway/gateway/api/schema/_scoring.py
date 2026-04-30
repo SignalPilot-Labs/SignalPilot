@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from gateway.schema_utils import _infer_implicit_joins
+from gateway.schema.utils import _infer_implicit_joins
 
 
 def _levenshtein(s1: str, s2: str) -> int:

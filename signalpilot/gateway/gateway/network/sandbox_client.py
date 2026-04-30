@@ -14,7 +14,7 @@ import uuid
 
 import httpx
 
-from .models import ExecuteResult, SandboxInfo
+from ..models import ExecuteResult, SandboxInfo
 
 logger = logging.getLogger(__name__)
 

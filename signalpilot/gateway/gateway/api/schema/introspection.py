@@ -18,7 +18,7 @@ from gateway.api.schema._identifiers import _quote_identifier, _quote_table_name
 from gateway.api.schema._router import router
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
-from gateway.schema_utils import (
+from gateway.schema.utils import (
     STRING_COLUMN_TYPES,
     _compress_schema,
     _deduplicate_partitioned_tables,

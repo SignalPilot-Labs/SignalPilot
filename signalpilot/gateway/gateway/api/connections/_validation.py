@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gateway.models import ConnectionCreate
-from gateway.network_validation import validate_cloud_warehouse_params, validate_connection_params
+from gateway.network import validate_cloud_warehouse_params, validate_connection_params
 
 
 def _validate_connection_params(conn: ConnectionCreate) -> list[str]:

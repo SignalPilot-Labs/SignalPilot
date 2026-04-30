@@ -148,7 +148,7 @@ class SandboxedSQLiteConnector(BaseConnector):
             except Exception:
                 import os
 
-                from ..sandbox_client import SandboxClient
+                from ..network import SandboxClient
 
                 url = os.environ.get("SP_SANDBOX_MANAGER_URL", "http://localhost:8180")
                 self._sandbox_client = SandboxClient(base_url=url)

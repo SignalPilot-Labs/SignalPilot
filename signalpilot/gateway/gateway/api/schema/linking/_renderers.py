@@ -10,7 +10,7 @@ from gateway.api.schema.linking._data import _DIALECT_HINTS
 from gateway.api.schema.linking._hints import build_query_hints
 from gateway.api.schema.linking._samples import maybe_fetch_missing_samples
 from gateway.connectors.schema_cache import schema_cache
-from gateway.schema_utils import TYPE_COMPRESSION_MAP, compress_type
+from gateway.schema.utils import TYPE_COMPRESSION_MAP, compress_type
 
 
 def render_condensed(

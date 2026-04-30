@@ -17,7 +17,7 @@ from gateway.api.schema._router import router
 from gateway.api.schema._semantic_store import _load_semantic_model
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
-from gateway.schema_utils import (
+from gateway.schema.utils import (
     _deduplicate_partitioned_tables,
     _infer_implicit_joins,
 )

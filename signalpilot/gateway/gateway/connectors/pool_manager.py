@@ -11,7 +11,8 @@ import contextlib
 import logging
 import random
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from .base import BaseConnector
@@ -44,6 +45,33 @@ _URI_SCHEMES: dict[str, list[str]] = {
 }
 
 
+def _safe_pool_key_for_log(key: str) -> str:
+    """Return a log-safe representation of a pool key.
+
+    Pool keys have the format ``db_type:connection_string``. If the connection
+    string looks like a URL (contains ``://``), parse it and return only the
+    host and port — never the credentials. Non-URL formats (bare project IDs,
+    file paths) are returned as-is since they do not contain embedded passwords.
+    """
+    colon_idx = key.find(":")
+    if colon_idx == -1:
+        return key
+    db_type = key[:colon_idx]
+    remainder = key[colon_idx + 1 :]
+    if "://" not in remainder:
+        # Non-URL format (BigQuery project ID, DuckDB/SQLite path) — safe to log.
+        return key
+    try:
+        parsed = urlparse(remainder)
+        host = parsed.hostname or ""
+        port = parsed.port
+        if port:
+            return f"{db_type}:{host}:{port}"
+        return f"{db_type}:{host}"
+    except Exception:
+        return f"{db_type}:<redacted>"
+
+
 def _rewrite_connection_string(
     connection_string: str,
     db_type: str,
@@ -56,14 +84,14 @@ def _rewrite_connection_string(
         normalized = connection_string
         trino_https = False
         if db_type == "redshift" and normalized.startswith("redshift://"):
-            normalized = "postgresql://" + normalized[len("redshift://"):]
+            normalized = "postgresql://" + normalized[len("redshift://") :]
         elif db_type == "clickhouse" and normalized.startswith("clickhouse://"):
-            normalized = "http://" + normalized[len("clickhouse://"):]
+            normalized = "http://" + normalized[len("clickhouse://") :]
         elif db_type == "mysql" and normalized.startswith("mysql+pymysql://"):
-            normalized = "http://" + normalized[len("mysql+pymysql://"):]
+            normalized = "http://" + normalized[len("mysql+pymysql://") :]
         elif db_type == "trino" and normalized.startswith("trino+https://"):
             trino_https = True
-            normalized = "http://" + normalized[len("trino+https://"):]
+            normalized = "http://" + normalized[len("trino+https://") :]
 
         parsed = urlparse(normalized)
         # Replace host and port
@@ -85,17 +113,17 @@ def _rewrite_connection_string(
 
         # Restore original scheme
         if db_type == "redshift" and connection_string.startswith("redshift://"):
-            result = "redshift://" + result[len("postgresql://"):]
+            result = "redshift://" + result[len("postgresql://") :]
         elif db_type == "clickhouse":
-            result = "clickhouse://" + result[len("http://"):]
+            result = "clickhouse://" + result[len("http://") :]
         elif db_type == "mysql" and connection_string.startswith("mysql+pymysql://"):
-            result = "mysql+pymysql://" + result[len("http://"):]
+            result = "mysql+pymysql://" + result[len("http://") :]
         elif db_type == "trino" and trino_https:
-            result = "trino+https://" + result[len("http://"):]
+            result = "trino+https://" + result[len("http://") :]
 
         return result
     except Exception as e:
-        logger.warning("Failed to rewrite connection string for SSH tunnel: %s", e)
+        logger.warning("Failed to rewrite connection string for SSH tunnel: %s", type(e).__name__)
         return connection_string
 
 
@@ -105,13 +133,13 @@ def _extract_host_port(connection_string: str, db_type: str) -> tuple[str, int]:
     try:
         normalized = connection_string
         if db_type == "clickhouse" and normalized.startswith("clickhouse://"):
-            normalized = "http://" + normalized[len("clickhouse://"):]
+            normalized = "http://" + normalized[len("clickhouse://") :]
         elif db_type == "mysql" and normalized.startswith("mysql+pymysql://"):
-            normalized = "http://" + normalized[len("mysql+pymysql://"):]
+            normalized = "http://" + normalized[len("mysql+pymysql://") :]
         elif db_type == "redshift" and normalized.startswith("redshift://"):
-            normalized = "postgresql://" + normalized[len("redshift://"):]
+            normalized = "postgresql://" + normalized[len("redshift://") :]
         elif db_type == "trino" and normalized.startswith("trino+https://"):
-            normalized = "http://" + normalized[len("trino+https://"):]
+            normalized = "http://" + normalized[len("trino+https://") :]
 
         parsed = urlparse(normalized)
         host = parsed.hostname or "localhost"
@@ -139,12 +167,22 @@ class PoolManager:
 
     # Error substrings that indicate non-transient failures (don't retry these)
     _NON_TRANSIENT_ERRORS = (
-        "authentication failed", "auth", "password",
-        "database not found", "does not exist",
-        "invalid catalog", "permission denied", "access denied",
-        "not installed", "no module", "import error",
-        "invalid connection string", "invalid dsn",
-        "certificate", "ssl", "tls",
+        "authentication failed",
+        "auth",
+        "password",
+        "database not found",
+        "does not exist",
+        "invalid catalog",
+        "permission denied",
+        "access denied",
+        "not installed",
+        "no module",
+        "import error",
+        "invalid connection string",
+        "invalid dsn",
+        "certificate",
+        "ssl",
+        "tls",
     )
 
     @staticmethod
@@ -159,7 +197,12 @@ class PoolManager:
             return True
         # RuntimeError wrapping transient causes
         if isinstance(error, RuntimeError):
-            return "timeout" in err_lower or "unreachable" in err_lower or "connection refused" in err_lower or "connection lost" in err_lower
+            return (
+                "timeout" in err_lower
+                or "unreachable" in err_lower
+                or "connection refused" in err_lower
+                or "connection lost" in err_lower
+            )
         return False
 
     async def acquire(
@@ -205,7 +248,33 @@ class PoolManager:
                     del self._tunnels[key]
                 del self._pools[key]
 
-            connector = get_connector(db_type)
+            # Cloud mode: reject all local database connections (file-based and in-memory)
+            # Only MotherDuck (md:) DuckDB is allowed in cloud mode
+            from ..runtime.mode import is_cloud_mode
+
+            if is_cloud_mode():
+                if db_type == "sqlite":
+                    raise RuntimeError("SQLite connections are not available in cloud mode")
+                if db_type == "duckdb" and connection_string and not connection_string.startswith("md:"):
+                    raise RuntimeError("Only MotherDuck (md:) DuckDB connections are available in cloud mode")
+
+            # Use sandboxed connectors for local file-based databases (DuckDB, SQLite)
+            # that live on the host filesystem and can't be opened directly from Docker.
+            if (
+                db_type == "duckdb"
+                and connection_string
+                and not connection_string.startswith("md:")
+                and connection_string != ":memory:"
+            ):
+                from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
+
+                connector = SandboxedDuckDBConnector()
+            elif db_type == "sqlite" and connection_string and connection_string != ":memory:":
+                from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
+
+                connector = SandboxedSQLiteConnector()
+            else:
+                connector = get_connector(db_type)
 
             # Pass credential extras to connector via standardized interface.
             # Each connector's set_credential_extras() extracts what it needs
@@ -234,17 +303,17 @@ class PoolManager:
                 local_host, local_port = tunnel.start(remote_host, remote_port)
 
                 # Rewrite connection string to use tunnel's local port
-                actual_conn_str = _rewrite_connection_string(
-                    connection_string, db_type, local_host, local_port
-                )
+                actual_conn_str = _rewrite_connection_string(connection_string, db_type, local_host, local_port)
                 self._tunnels[key] = tunnel
-                logger.info("SSH tunnel active for %s, connecting via %s:%d", key, local_host, local_port)
+                logger.info(
+                    "SSH tunnel active for %s, connecting via %s:%d",
+                    _safe_pool_key_for_log(key),
+                    local_host,
+                    local_port,
+                )
 
             # Track keepalive interval if provided
-            keepalive = (
-                credential_extras.get("keepalive_interval", 0)
-                if credential_extras else 0
-            )
+            keepalive = credential_extras.get("keepalive_interval", 0) if credential_extras else 0
 
             # Connect with retry logic (exponential backoff + jitter)
             last_error: Exception | None = None
@@ -269,10 +338,14 @@ class PoolManager:
                             del self._tunnels[key]
                         raise
                     # Exponential backoff: 0.5s, 1s, 2s + jitter
-                    backoff = (0.5 * (2 ** attempt)) + random.uniform(0, 0.5)
+                    backoff = (0.5 * (2**attempt)) + random.uniform(0, 0.5)
                     logger.warning(
                         "Transient connection error for %s (attempt %d/%d), retrying in %.1fs: %s",
-                        db_type, attempt + 1, max_retries, backoff, e,
+                        db_type,
+                        attempt + 1,
+                        max_retries,
+                        backoff,
+                        e,
                     )
                     await asyncio.sleep(backoff)
                     # Re-create connector for fresh state
@@ -311,9 +384,11 @@ class PoolManager:
                         healthy = await connector.health_check()
                         if healthy:
                             self._last_keepalive[key] = now
-                            logger.debug("Keepalive ping OK for %s", key[:40])
+                            logger.debug("Keepalive ping OK for %s", _safe_pool_key_for_log(key))
                         else:
-                            logger.warning("Keepalive ping failed for %s — removing from pool", key[:40])
+                            logger.warning(
+                                "Keepalive ping failed for %s — removing from pool", _safe_pool_key_for_log(key)
+                            )
                             try:
                                 await connector.close()
                             except Exception:
@@ -325,7 +400,7 @@ class PoolManager:
                                 self._tunnels[key].stop()
                                 del self._tunnels[key]
                     except Exception as e:
-                        logger.warning("Keepalive error for %s: %s", key[:40], e)
+                        logger.warning("Keepalive error for %s: %s", _safe_pool_key_for_log(key), e)
                         self._last_keepalive[key] = now  # Don't spam retries
 
     async def release(self, db_type: str, connection_string: str) -> None:
@@ -342,17 +417,24 @@ class PoolManager:
         db_type: str,
         connection_string: str,
         credential_extras: dict | None = None,
+        connection_name: str | None = None,
     ) -> AsyncIterator[BaseConnector]:
         """Context manager that acquires a connector and guarantees release.
 
+        All SQL executed through the yielded connector is automatically
+        logged to the audit trail via BaseConnector.execute().
+
         Usage:
-            async with pool_manager.connection("postgres", conn_str) as connector:
+            async with pool_manager.connection("postgres", conn_str, connection_name="mydb") as connector:
                 rows = await connector.execute(sql)
         """
         connector = await self.acquire(db_type, connection_string, credential_extras=credential_extras)
+        if connection_name:
+            connector._audit_connection_name = connection_name
         try:
             yield connector
         finally:
+            connector._audit_connection_name = None
             await self.release(db_type, connection_string)
 
     async def cleanup_idle(self) -> int:
@@ -360,10 +442,7 @@ class PoolManager:
         now = time.monotonic()
         closed = 0
         async with self._lock:
-            stale_keys = [
-                k for k, (_, last_used) in self._pools.items()
-                if now - last_used > self._idle_timeout
-            ]
+            stale_keys = [k for k, (_, last_used) in self._pools.items() if now - last_used > self._idle_timeout]
             for key in stale_keys:
                 connector, _ = self._pools.pop(key)
                 try:
@@ -450,10 +529,12 @@ class PoolManager:
             pools.append(pool_info)
         tunnels = []
         for key, tunnel in self._tunnels.items():
-            tunnels.append({
-                "key": key[:80],
-                "active": tunnel.is_active if hasattr(tunnel, "is_active") else True,
-            })
+            tunnels.append(
+                {
+                    "key": key[:80],
+                    "active": tunnel.is_active if hasattr(tunnel, "is_active") else True,
+                }
+            )
         return {
             "pool_count": len(self._pools),
             "tunnel_count": len(self._tunnels),

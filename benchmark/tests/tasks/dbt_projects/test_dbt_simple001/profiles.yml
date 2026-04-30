@@ -1,0 +1,7 @@
+test_dbt_simple001:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'test_dbt_simple001.duckdb') }}"
+      threads: 1

@@ -1,1 +1,0 @@
-Final stretch approaching. Work on deeper improvements: harden the SQL governance engine, add new connector capabilities, improve observability and structured logging. If benchmarks are available, run them and optimize based on results. Commit each change.

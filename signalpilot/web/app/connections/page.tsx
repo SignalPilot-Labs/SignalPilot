@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, type MutableRefObject } from "react";
 import {
   Plus,
   Trash2,
@@ -29,9 +29,12 @@ import {
   Filter,
   Download,
   Upload,
+  Folder,
+  FileText,
+  ArrowLeft,
+  HardDrive,
 } from "lucide-react";
 import {
-  getConnections,
   createConnection,
   updateConnection,
   deleteConnection,
@@ -39,8 +42,10 @@ import {
   testConnection,
   getConnectionSchema,
   searchConnectionSchema,
-  getConnectionsHealth,
   detectPII,
+  getPIIConfig,
+  setPIIConfig,
+  detectAndSavePII,
   refreshConnectionSchema,
   getSchemaEndorsements,
   setSchemaEndorsements,
@@ -54,8 +59,11 @@ import {
   getConnectionSchemaDiff,
   exploreColumns,
   getConnectionHealthHistory,
+  browseFiles,
 } from "@/lib/api";
 import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
+import { useConnections, useConnectionsHealth, usePlan, invalidateConnections, invalidateHealth } from "@/lib/hooks/use-gateway-data";
+import { PageLoader } from "@/components/ui/page-loader";
 import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot, MiniBar, Sparkline } from "@/components/ui/data-viz";
@@ -63,6 +71,166 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useConnection } from "@/lib/connection-context";
+
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+
+/* ── Local DB File Picker (DuckDB / SQLite) ── */
+function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder = "/path/to/database.duckdb", hint = "paste a file path or browse to select a file", id, inputRef, error }: { value: string; onChange: (v: string) => void; pattern?: string; placeholder?: string; hint?: string; id?: string; inputRef?: React.Ref<HTMLInputElement>; error?: string }) {
+  const [browsing, setBrowsing] = useState(false);
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
+  const [files, setFiles] = useState<{ name: string; path: string; size_bytes: number }[]>([]);
+  const [directories, setDirectories] = useState<{ name: string; path: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
+
+  const browse = useCallback(async (path?: string) => {
+    setLoading(true);
+    setBrowseError(null);
+    try {
+      const data = await browseFiles(path, pattern);
+      setCurrentPath(data.path);
+      setFiles(data.files || []);
+      setDirectories(data.directories || []);
+      if (data.error) setBrowseError(data.error);
+    } catch (e) {
+      setBrowseError(e instanceof Error ? e.message : "Failed to browse files");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const openBrowser = useCallback(() => {
+    setBrowsing(true);
+    browse();
+  }, [browse]);
+
+  const selectFile = useCallback((filePath: string) => {
+    onChange(filePath);
+    setBrowsing(false);
+  }, [onChange]);
+
+  const goUp = useCallback(() => {
+    if (!currentPath) return;
+    const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
+    browse(parent);
+  }, [currentPath, browse]);
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  return (
+    <div className="col-span-2">
+      {/* Selected file display + browse button */}
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">database file</label>
+      <div className="flex gap-2">
+        <input
+          id={id}
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={error && id ? `${id}-error` : undefined}
+          className={`flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none${error ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`}
+        />
+        <button
+          type="button"
+          onClick={openBrowser}
+          className="px-3 py-1.5 text-[12px] tracking-wider border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)] transition-all flex items-center gap-1.5"
+        >
+          <HardDrive size={13} />
+          browse
+        </button>
+      </div>
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      {!error && (
+        <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
+          {hint}
+        </p>
+      )}
+
+      {/* File browser modal */}
+      {browsing && (
+        <div className="mt-2 border border-[var(--color-border)] bg-[var(--color-bg-code)]">
+          {/* Header */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]/30">
+            <button
+              type="button"
+              onClick={goUp}
+              className="p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+              title="Go up"
+            >
+              <ArrowLeft size={14} />
+            </button>
+            <span className="text-[11px] text-[var(--color-text-muted)] font-mono truncate flex-1">
+              {currentPath || "..."}
+            </span>
+            <button
+              type="button"
+              onClick={() => setBrowsing(false)}
+              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider"
+            >
+              close
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="max-h-[240px] overflow-y-auto">
+            {loading && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 size={16} className="animate-spin text-[var(--color-text-dim)]" />
+              </div>
+            )}
+
+            {browseError && (
+              <div className="px-3 py-2 text-[11px] text-red-400 tracking-wider">{browseError}</div>
+            )}
+
+            {!loading && !browseError && files.length === 0 && directories.length === 0 && (
+              <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] tracking-wider text-center">
+                no matching files found in this directory
+              </div>
+            )}
+
+            {!loading && directories.map((dir) => (
+              <button
+                key={dir.path}
+                type="button"
+                onClick={() => browse(dir.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-bg)]/50 transition-colors border-b border-[var(--color-border)]/30"
+              >
+                <Folder size={14} className="text-[var(--color-text-dim)] flex-shrink-0" />
+                <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider truncate">{dir.name}/</span>
+              </button>
+            ))}
+
+            {!loading && files.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                onClick={() => selectFile(file.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-accent)]/10 transition-colors border-b border-[var(--color-border)]/30 group"
+              >
+                <FileText size={14} className="text-[var(--color-accent)] flex-shrink-0" />
+                <span className="text-[12px] text-[var(--color-text)] tracking-wider truncate flex-1 group-hover:text-[var(--color-accent)]">
+                  {file.name}
+                </span>
+                <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+                  {formatSize(file.size_bytes)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ── DB type configuration ── */
 interface DBTypeConfig {
@@ -307,7 +475,7 @@ const CONNECTION_PRESETS: ConnectionPreset[] = [
     label: "MotherDuck",
     db_type: "duckdb",
     icon: "🦆",
-    defaults: { database: "md:", description: "MotherDuck cloud DuckDB" },
+    defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" },
   },
   {
     label: "SSH Tunnel (any DB)",
@@ -427,49 +595,93 @@ function DbTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
 /* ── Form field components ── */
 function FormInput({
   label, value, onChange, type = "text", placeholder, hint, required, className = "", error,
+  id, inputRef,
 }: {
   label: string; value: string; onChange: (v: string) => void;
   type?: string; placeholder?: string; hint?: string; required?: boolean; className?: string; error?: string;
+  id?: string; inputRef?: React.Ref<HTMLInputElement>;
 }) {
+  const [visible, setVisible] = useState(false);
+  const isSecret = type === "password";
   return (
     <div className={className}>
-      <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
         {label}{required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </label>
-      <input
-        type={type}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
-          error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
-        }`}
-      />
-      {error && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      <div className="relative">
+        <input
+          id={id}
+          ref={inputRef}
+          type={isSecret && !visible ? "password" : "text"}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={error && id ? `${id}-error` : undefined}
+          className={`w-full px-3 py-2 ${isSecret ? "pr-9" : ""} bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
+            error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
+          }`}
+        />
+        {isSecret && (
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => setVisible(!visible)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
+          >
+            {visible ? <EyeOff className="w-3.5 h-3.5" strokeWidth={1.5} /> : <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />}
+          </button>
+        )}
+      </div>
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      {error && !id && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
       {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
     </div>
   );
 }
 
 function FormTextArea({
-  label, value, onChange, placeholder, hint, rows = 4, className = "",
+  label, value, onChange, placeholder, hint, rows = 4, className = "", error,
+  id, inputRef,
 }: {
   label: string; value: string; onChange: (v: string) => void;
-  placeholder?: string; hint?: string; rows?: number; className?: string;
+  placeholder?: string; hint?: string; rows?: number; className?: string; error?: string;
+  id?: string; inputRef?: React.Ref<HTMLTextAreaElement>;
 }) {
   return (
     <div className={className}>
-      <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">{label}</label>
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">{label}</label>
       <textarea
+        id={id}
+        ref={inputRef}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={rows}
-        className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono resize-y"
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={error && id ? `${id}-error` : undefined}
+        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide font-mono resize-y ${
+          error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
+        }`}
       />
-      {hint && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      {error && !id && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
     </div>
   );
+}
+
+/** One-shot spread helper: returns id + inputRef + error for a given field key. */
+function fieldProps(
+  key: string,
+  formErrors: Record<string, string>,
+  refMap: MutableRefObject<Record<string, HTMLElement | null>>,
+) {
+  return {
+    id: key,
+    inputRef: (el: HTMLElement | null) => { refMap.current[key] = el; },
+    error: formErrors[key],
+  };
 }
 
 /* ── Connection form state ── */
@@ -552,6 +764,7 @@ interface FormState {
   trino_client_key: string;
   trino_krb_service_name: string;
   // DuckDB / MotherDuck
+  duckdb_mode: "local" | "motherduck" | "memory";
   motherduck_token: string;
   // Tags
   tags: string[];
@@ -593,6 +806,7 @@ const defaultForm: FormState = {
   redshift_cluster_id: "", redshift_workgroup: "",
   azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
   trino_https: false, trino_auth_method: "none", trino_jwt_token: "", trino_client_cert: "", trino_client_key: "", trino_krb_service_name: "trino",
+  duckdb_mode: "memory",
   motherduck_token: "",
   tags: [], tagInput: "",
   schema_refresh_enabled: false, schema_refresh_interval: "300",
@@ -661,13 +875,20 @@ function parseConnectionUrl(url: string, dbType: DBType): Partial<FormState> {
   try {
     if (dbType === "postgres" || dbType === "mysql" || dbType === "redshift" || dbType === "clickhouse" || dbType === "mssql") {
       const parsed = new URL(url.replace(/^(postgresql|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver):/, "http:"));
-      return {
+      const result: Partial<FormState> = {
         host: parsed.hostname || "",
         port: parsed.port || String(DB_CONFIGS[dbType].defaultPort),
         database: parsed.pathname.replace(/^\//, "") || "",
         username: decodeURIComponent(parsed.username || ""),
         password: decodeURIComponent(parsed.password || ""),
       };
+      // Extract SSL mode from query params (e.g., ?sslmode=require)
+      const sslmode = parsed.searchParams.get("sslmode");
+      if (sslmode && sslmode !== "disable") {
+        result.ssl_enabled = true;
+        result.ssl_mode = sslmode as FormState["ssl_mode"];
+      }
+      return result;
     }
     if (dbType === "snowflake") {
       // snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
@@ -731,10 +952,41 @@ function validateForm(form: FormState): Record<string, string> {
     if (isNaN(port) || port < 1 || port > 65535) errors.port = "port must be 1-65535";
   }
 
+  // §9 gap-fill: username required for connectors that use it
+  if (["postgres", "mysql", "redshift", "clickhouse", "mssql", "snowflake"].includes(form.db_type) && !form.connection_string) {
+    if (!form.username.trim()) errors.username = "username is required";
+  }
+
+  // §9 gap-fill: catalog required for trino
+  if (form.db_type === "trino" && !form.connection_string) {
+    if (!form.catalog.trim()) errors.catalog = "catalog is required";
+  }
+
+  // §9 gap-fill: database required for duckdb/sqlite (local mode)
+  if ((form.db_type === "duckdb" || form.db_type === "sqlite") && !form.connection_string) {
+    if (!form.database.trim()) errors.database = "database file path is required";
+  }
+
+  // Gap 1+2: database required for standard relational connectors
+  if (["postgres", "mysql", "mssql", "clickhouse", "redshift"].includes(form.db_type) && !form.connection_string) {
+    if (!form.database.trim()) errors.database = "database is required";
+  }
+
   if (form.db_type === "snowflake") {
     if (!form.account.trim()) errors.account = "account identifier is required";
     else if (!form.account.includes(".") && !form.account.includes("-")) {
       errors.account = "use full identifier: org-account or account.region";
+    }
+    // Gap 4: key-pair / OAuth token validation
+    if (form.snowflake_auth_method === "key_pair" && !form.sf_private_key.trim()) {
+      errors.sf_private_key = "private key (PEM) is required for key-pair auth";
+    }
+    if (form.snowflake_auth_method === "key_pair" && form.sf_private_key.trim()
+        && !form.sf_private_key.trim().startsWith("-----BEGIN")) {
+      errors.sf_private_key = "must be a PEM-format private key (-----BEGIN ... PRIVATE KEY-----)";
+    }
+    if (form.snowflake_auth_method === "oauth" && !form.sf_oauth_token.trim()) {
+      errors.sf_oauth_token = "OAuth access token is required";
     }
   }
 
@@ -745,6 +997,17 @@ function validateForm(form: FormState): Record<string, string> {
     } else if (form.bq_auth_method === "service_account" && form.credentials_json.trim()) {
       try { JSON.parse(form.credentials_json); } catch { errors.credentials_json = "invalid JSON format"; }
     }
+    // Gap 5: bq_oauth_token required when OAuth method selected
+    if (form.bq_auth_method === "oauth" && !form.bq_oauth_token.trim()) {
+      errors.bq_oauth_token = "OAuth access token is required";
+    }
+  }
+
+  // Gap 3: Azure AD required fields
+  if (form.db_type === "mssql" && form.azure_ad_auth) {
+    if (!form.azure_tenant_id.trim()) errors.azure_tenant_id = "tenant ID is required for Azure AD auth";
+    if (!form.azure_client_id.trim()) errors.azure_client_id = "client ID is required for Azure AD auth";
+    if (!form.azure_client_secret.trim()) errors.azure_client_secret = "client secret is required for Azure AD auth";
   }
 
   if (form.db_type === "databricks") {
@@ -771,6 +1034,11 @@ function validateForm(form: FormState): Record<string, string> {
     if (isNaN(sshPort) || sshPort < 1 || sshPort > 65535) errors.ssh_port = "SSH port must be 1-65535";
   }
 
+  // Gap 7: SSL CA cert required for verify modes
+  if (form.ssl_enabled && form.ssl_mode.startsWith("verify") && !form.ssl_ca_cert.trim()) {
+    errors.ssl_ca_cert = "CA certificate is required for verify-ca / verify-full mode";
+  }
+
   // Timeout validation (if provided, must be positive integers)
   if (form.connection_timeout) {
     const ct = parseInt(form.connection_timeout);
@@ -791,18 +1059,23 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     description: form.description,
   };
 
-  if (form.connectionMode === "url" && form.connection_string) {
+  const isUrlMode = form.connectionMode === "url" && form.connection_string;
+
+  if (isUrlMode) {
     payload.connection_string = form.connection_string;
   }
 
   const config = DB_CONFIGS[form.db_type];
 
-  // Common host/port fields
-  if (config.fields.includes("host")) payload.host = form.host;
-  if (config.fields.includes("port")) payload.port = parseInt(form.port) || config.defaultPort;
-  if (config.fields.includes("database")) payload.database = form.database;
-  if (config.fields.includes("username")) payload.username = form.username;
-  if (config.fields.includes("password")) payload.password = form.password;
+  // Common host/port fields — skip when using connection_string to avoid
+  // overwriting parsed values with form defaults (e.g., "localhost:5432").
+  if (!isUrlMode) {
+    if (config.fields.includes("host")) payload.host = form.host;
+    if (config.fields.includes("port")) payload.port = parseInt(form.port) || config.defaultPort;
+    if (config.fields.includes("database")) payload.database = form.database;
+    if (config.fields.includes("username")) payload.username = form.username;
+    if (config.fields.includes("password")) payload.password = form.password;
+  }
 
   // Snowflake
   if (config.fields.includes("account")) payload.account = form.account;
@@ -977,8 +1250,21 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
 }
 
 /* ── DB-specific form sections ── */
-function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+function ConnectionFieldsForm({
+  form, setForm, formErrors, fieldRefs, clearServerError,
+}: {
+  form: FormState;
+  setForm: (f: FormState) => void;
+  formErrors: Record<string, string>;
+  fieldRefs: MutableRefObject<Record<string, HTMLElement | null>>;
+  clearServerError: (key: string) => void;
+}) {
   const config = DB_CONFIGS[form.db_type];
+
+  /** Wrap onChange to also clear the server error for this field key. */
+  function field(key: keyof FormState, update: (v: string) => void) {
+    return (v: string) => { update(v); clearServerError(key as string); };
+  }
 
   // URL mode
   if (form.connectionMode === "url") {
@@ -1000,6 +1286,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           label="connection string"
           value={form.connection_string}
           onChange={(v) => {
+            clearServerError("connection_string");
             const detected = detectDbTypeFromUrl(v);
             if (detected && detected !== form.db_type) {
               // Auto-switch DB type when URL scheme is recognized
@@ -1012,6 +1299,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           placeholder={urlHints[form.db_type] || "paste any connection string — db type auto-detected"}
           hint={form.db_type === "clickhouse" ? "native: clickhouse://... | HTTP: clickhouse+http://..." : "paste a URL — database type is auto-detected from the scheme"}
           className="col-span-2"
+          {...fieldProps("connection_string", formErrors, fieldRefs)}
         />
         {hasValidUrl && (
           <div className="col-span-2 -mt-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
@@ -1053,8 +1341,8 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
   if (form.db_type === "snowflake") {
     return (
       <>
-        <FormInput label="account identifier" value={form.account} onChange={(v) => setForm({ ...form, account: v })} placeholder="org-account" hint="e.g., xy12345.us-east-1" required />
-        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="ANALYTICS_USER" required />
+        <FormInput label="account identifier" value={form.account} onChange={field("account", (v) => setForm({ ...form, account: v }))} placeholder="org-account" hint="e.g., xy12345.us-east-1" required {...fieldProps("account", formErrors, fieldRefs)} />
+        <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="ANALYTICS_USER" required {...fieldProps("username", formErrors, fieldRefs)} />
         <div className="col-span-2 mb-1">
           <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
           <div className="flex gap-2">
@@ -1092,12 +1380,13 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
               hint="RSA private key for Snowflake key-pair authentication"
               rows={4}
               className="col-span-2"
+              {...(fieldProps("sf_private_key", formErrors, fieldRefs) as { id: string; inputRef: React.Ref<HTMLTextAreaElement>; error: string | undefined })}
             />
             <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
           </>
         ) : (
           <>
-            <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" />
+            <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" {...fieldProps("sf_oauth_token", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Create a Snowflake security integration (CREATE SECURITY INTEGRATION ... TYPE = EXTERNAL_OAUTH) and configure your IdP to issue tokens.</div>
               <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
@@ -1123,7 +1412,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     const bqAuthLabels: Record<string, string> = { service_account: "service account", oauth: "OAuth token", adc: "application default" };
     return (
       <>
-        <FormInput label="gcp project id" value={form.project} onChange={(v) => setForm({ ...form, project: v })} placeholder="my-project-123" required />
+        <FormInput label="gcp project id" value={form.project} onChange={field("project", (v) => setForm({ ...form, project: v }))} placeholder="my-project-123" required {...fieldProps("project", formErrors, fieldRefs)} />
         <FormInput label="default dataset" value={form.dataset} onChange={(v) => setForm({ ...form, dataset: v })} placeholder="analytics" hint="optional — default dataset for queries" />
 
         {/* Auth method selector */}
@@ -1152,16 +1441,17 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           <FormTextArea
             label="service account json"
             value={form.credentials_json}
-            onChange={(v) => setForm({ ...form, credentials_json: v })}
+            onChange={field("credentials_json", (v) => setForm({ ...form, credentials_json: v }))}
             placeholder='{"type": "service_account", "project_id": "...", ...}'
             hint="paste the full service account JSON key file contents"
             rows={6}
             className="col-span-2"
+            {...(fieldProps("credentials_json", formErrors, fieldRefs) as { id: string; inputRef: React.Ref<HTMLTextAreaElement>; error: string | undefined })}
           />
         )}
         {form.bq_auth_method === "oauth" && (
           <>
-            <FormInput label="OAuth access token" value={form.bq_oauth_token} onChange={(v) => setForm({ ...form, bq_oauth_token: v })} type="password" required className="col-span-2" hint="from Google Cloud OAuth flow or gcloud auth print-access-token" />
+            <FormInput label="OAuth access token" value={form.bq_oauth_token} onChange={(v) => setForm({ ...form, bq_oauth_token: v })} type="password" required className="col-span-2" hint="from Google Cloud OAuth flow or gcloud auth print-access-token" {...fieldProps("bq_oauth_token", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Create an OAuth client in GCP Console → APIs & Services → Credentials → OAuth 2.0 Client ID.</div>
               <div><span className="text-[var(--color-text-muted)]">scopes:</span> Token must include https://www.googleapis.com/auth/bigquery scope.</div>
@@ -1211,8 +1501,8 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
   if (form.db_type === "databricks") {
     return (
       <>
-        <FormInput label="server hostname" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="adb-1234567890123456.7.azuredatabricks.net" required />
-        <FormInput label="http path" value={form.http_path} onChange={(v) => setForm({ ...form, http_path: v })} placeholder="/sql/1.0/warehouses/abc123" hint="SQL warehouse or cluster HTTP path" required />
+        <FormInput label="server hostname" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="adb-1234567890123456.7.azuredatabricks.net" required {...fieldProps("host", formErrors, fieldRefs)} />
+        <FormInput label="http path" value={form.http_path} onChange={field("http_path", (v) => setForm({ ...form, http_path: v }))} placeholder="/sql/1.0/warehouses/abc123" hint="SQL warehouse or cluster HTTP path" required {...fieldProps("http_path", formErrors, fieldRefs)} />
         {/* Auth method selector */}
         <div className="col-span-2 mb-1">
           <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
@@ -1234,11 +1524,11 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
           </div>
         </div>
         {form.databricks_auth_method === "pat" ? (
-          <FormInput label="access token" value={form.access_token} onChange={(v) => setForm({ ...form, access_token: v })} type="password" hint="personal access token (PAT)" required className="col-span-2" />
+          <FormInput label="access token" value={form.access_token} onChange={field("access_token", (v) => setForm({ ...form, access_token: v }))} type="password" hint="personal access token (PAT)" required className="col-span-2" {...fieldProps("access_token", formErrors, fieldRefs)} />
         ) : form.databricks_auth_method === "oauth_m2m" ? (
           <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5">
-            <FormInput label="client ID" value={form.dbx_oauth_client_id} onChange={(v) => setForm({ ...form, dbx_oauth_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="service principal application (client) ID" required />
-            <FormInput label="client secret" value={form.dbx_oauth_client_secret} onChange={(v) => setForm({ ...form, dbx_oauth_client_secret: v })} type="password" hint="service principal client secret" required />
+            <FormInput label="client ID" value={form.dbx_oauth_client_id} onChange={field("dbx_oauth_client_id", (v) => setForm({ ...form, dbx_oauth_client_id: v }))} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="service principal application (client) ID" required {...fieldProps("dbx_oauth_client_id", formErrors, fieldRefs)} />
+            <FormInput label="client secret" value={form.dbx_oauth_client_secret} onChange={field("dbx_oauth_client_secret", (v) => setForm({ ...form, dbx_oauth_client_secret: v }))} type="password" hint="service principal client secret" required {...fieldProps("dbx_oauth_client_secret", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Account Console → User Management → Service Principals → Add. Grant CAN USE on the SQL Warehouse and data access on Unity Catalog.</div>
               <div><span className="text-[var(--color-text-muted)]">recommended:</span> OAuth M2M is the production-grade auth method. PATs are workspace-scoped and expire.</div>
@@ -1268,10 +1558,10 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     const trinoAuthLabels: Record<string, string> = { none: "no auth", password: "password", jwt: "JWT token", certificate: "client cert", kerberos: "Kerberos" };
     return (
       <>
-        <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="trino.example.com" required />
-        <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder={form.trino_https ? "443" : "8080"} />
-        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="trino" />
-        <FormInput label="catalog" value={form.catalog} onChange={(v) => setForm({ ...form, catalog: v })} placeholder="hive" hint="default catalog for queries" />
+        <FormInput label="host" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="trino.example.com" required {...fieldProps("host", formErrors, fieldRefs)} />
+        <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder={form.trino_https ? "443" : "8080"} {...fieldProps("port", formErrors, fieldRefs)} />
+        <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="trino" {...fieldProps("username", formErrors, fieldRefs)} />
+        <FormInput label="catalog" value={form.catalog} onChange={field("catalog", (v) => setForm({ ...form, catalog: v }))} placeholder="hive" hint="default catalog for queries" {...fieldProps("catalog", formErrors, fieldRefs)} />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="default" hint="optional — default schema" />
 
         {/* Auth method selector */}
@@ -1365,29 +1655,133 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
     );
   }
 
-  // DuckDB/SQLite — just path
-  if (form.db_type === "duckdb" || form.db_type === "sqlite") {
-    const isMotherDuck = form.db_type === "duckdb" && form.database.startsWith("md:");
+  // SQLite — mode selector: local file or in-memory
+  if (form.db_type === "sqlite") {
+    const sqliteMode = form.database === ":memory:" ? "memory" : "local";
     return (
       <>
-        <FormInput
-          label="database path"
-          value={form.database}
-          onChange={(v) => setForm({ ...form, database: v })}
-          placeholder={form.db_type === "duckdb" ? ":memory: or /path/to/db.duckdb or md:my_db" : ":memory: or /path/to/db.sqlite"}
-          hint={form.db_type === "duckdb" ? "file path, :memory:, or md:<db_name> for MotherDuck cloud" : "file path or :memory:"}
-          className="col-span-2"
-        />
-        {isMotherDuck && (
-          <FormInput
-            label="MotherDuck token"
-            value={form.motherduck_token}
-            onChange={(v) => setForm({ ...form, motherduck_token: v })}
-            type="password"
-            placeholder="eyJ..."
-            hint="personal access token from app.motherduck.com"
-            className="col-span-2"
-          />
+        <div className="col-span-2 mb-1">
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <div className="flex gap-2">
+            {([
+              { key: "local", label: "local file" },
+              { key: "memory", label: "in-memory" },
+            ] as const).filter(({ key }) => !(IS_CLOUD_MODE && key === "local")).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  if (key === "memory") setForm({ ...form, database: ":memory:" });
+                  else setForm({ ...form, database: form.database === ":memory:" ? "" : form.database });
+                }}
+                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                  sqliteMode === key
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {!IS_CLOUD_MODE && sqliteMode === "local" && (
+          <div className="col-span-2">
+            <LocalDBFilePicker
+              value={form.database}
+              onChange={(v) => { setForm({ ...form, database: v }); clearServerError("database"); }}
+              pattern="*.sqlite,*.db"
+              placeholder="/path/to/database.sqlite"
+              hint="paste a file path or browse to select a .sqlite or .db file"
+              {...fieldProps("database", formErrors, fieldRefs)}
+            />
+          </div>
+        )}
+
+        {sqliteMode === "memory" && (
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts.
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // DuckDB — mode selector: in-memory, local file, or MotherDuck
+  if (form.db_type === "duckdb") {
+    return (
+      <>
+        <div className="col-span-2 mb-1">
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <div className="flex gap-2">
+            {([
+              { key: "local", label: "local file" },
+              { key: "motherduck", label: "MotherDuck" },
+              { key: "memory", label: "in-memory" },
+            ] as const).filter(({ key }) => !(IS_CLOUD_MODE && (key === "local" || key === "memory"))).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  const updates: Partial<FormState> = { duckdb_mode: key };
+                  if (key === "memory") updates.database = ":memory:";
+                  else if (key === "motherduck") updates.database = form.database.startsWith("md:") ? form.database : "md:";
+                  else updates.database = form.database === ":memory:" || form.database.startsWith("md:") ? "" : form.database;
+                  setForm({ ...form, ...updates });
+                }}
+                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                  form.duckdb_mode === key
+                    ? "border-[var(--color-text)] text-[var(--color-text)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {!IS_CLOUD_MODE && form.duckdb_mode === "local" && (
+          <div className="col-span-2">
+            <LocalDBFilePicker
+              value={form.database}
+              onChange={(v) => { setForm({ ...form, database: v }); clearServerError("database"); }}
+              pattern="*.duckdb"
+              placeholder="/path/to/database.duckdb"
+              hint="paste a file path or browse to select a .duckdb file"
+              {...fieldProps("database", formErrors, fieldRefs)}
+            />
+          </div>
+        )}
+
+        {form.duckdb_mode === "motherduck" && (
+          <>
+            <FormInput
+              label="database name"
+              value={form.database.startsWith("md:") ? form.database.slice(3) : form.database}
+              onChange={field("database", (v) => setForm({ ...form, database: `md:${v}` }))}
+              placeholder="my_database"
+              hint="MotherDuck database name (without md: prefix)"
+              required
+              {...fieldProps("database", formErrors, fieldRefs)}
+            />
+            <FormInput
+              label="token"
+              value={form.motherduck_token}
+              onChange={(v) => setForm({ ...form, motherduck_token: v })}
+              type="password"
+              placeholder="eyJ..."
+              hint="personal access token from app.motherduck.com"
+              required
+            />
+          </>
+        )}
+
+        {form.duckdb_mode === "memory" && (
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts. Use MotherDuck for persistent cloud-hosted DuckDB.
+          </div>
         )}
       </>
     );
@@ -1423,10 +1817,10 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
               : "native protocol — fastest performance, direct binary protocol"}
           </p>
         </div>
-        <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="localhost" required />
-        <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder={form.ch_protocol === "http" ? httpPort : nativePort} />
-        <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="default" required />
-        <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="default" required />
+        <FormInput label="host" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="localhost" required {...fieldProps("host", formErrors, fieldRefs)} />
+        <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder={form.ch_protocol === "http" ? httpPort : nativePort} {...fieldProps("port", formErrors, fieldRefs)} />
+        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="default" required {...fieldProps("database", formErrors, fieldRefs)} />
+        <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="default" required {...fieldProps("username", formErrors, fieldRefs)} />
         <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
       </>
     );
@@ -1436,12 +1830,12 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
   if (form.db_type === "mssql") {
     return (
       <>
-        <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="sqlserver.example.com" hint="hostname or IP — for named instances: host\\INSTANCE" required />
-        <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="1433" hint="default 1433 — Azure SQL uses 1433" />
-        <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="master" required />
+        <FormInput label="host" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="sqlserver.example.com" hint="hostname or IP — for named instances: host\\INSTANCE" required {...fieldProps("host", formErrors, fieldRefs)} />
+        <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder="1433" hint="default 1433 — Azure SQL uses 1433" {...fieldProps("port", formErrors, fieldRefs)} />
+        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="master" required {...fieldProps("database", formErrors, fieldRefs)} />
         {!form.azure_ad_auth && (
           <>
-            <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="sa" hint="SQL Server login" required />
+            <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="sa" hint="SQL Server login" required {...fieldProps("username", formErrors, fieldRefs)} />
             <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
           </>
         )}
@@ -1463,9 +1857,9 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         </div>
         {form.azure_ad_auth && (
           <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-blue-500/20 bg-blue-500/5">
-            <FormInput label="tenant ID" value={form.azure_tenant_id} onChange={(v) => setForm({ ...form, azure_tenant_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="Azure AD directory (tenant) ID" required />
-            <FormInput label="client ID" value={form.azure_client_id} onChange={(v) => setForm({ ...form, azure_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="App registration (client) ID" required />
-            <FormInput label="client secret" value={form.azure_client_secret} onChange={(v) => setForm({ ...form, azure_client_secret: v })} type="password" hint="Service principal client secret" required className="col-span-2" />
+            <FormInput label="tenant ID" value={form.azure_tenant_id} onChange={(v) => setForm({ ...form, azure_tenant_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="Azure AD directory (tenant) ID" required {...fieldProps("azure_tenant_id", formErrors, fieldRefs)} />
+            <FormInput label="client ID" value={form.azure_client_id} onChange={(v) => setForm({ ...form, azure_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="App registration (client) ID" required {...fieldProps("azure_client_id", formErrors, fieldRefs)} />
+            <FormInput label="client secret" value={form.azure_client_secret} onChange={(v) => setForm({ ...form, azure_client_secret: v })} type="password" hint="Service principal client secret" required className="col-span-2" {...fieldProps("azure_client_secret", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Azure Portal → App Registrations → New → Add API Permission for Azure SQL Database. Create a contained DB user: CREATE USER [app-name] FROM EXTERNAL PROVIDER.</div>
               <div><span className="text-[var(--color-text-muted)]">managed identity:</span> For Azure VMs/containers, leave client secret empty to use system-assigned managed identity (coming soon).</div>
@@ -1485,12 +1879,12 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
   if (form.db_type === "redshift") {
     return (
       <>
-        <FormInput label="cluster endpoint" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="my-cluster.abc123xyz.us-east-1.redshift.amazonaws.com" hint="Redshift console → Clusters → Properties → Endpoint" required />
-        <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="5439" />
-        <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="dev" hint="default database is 'dev'" required />
+        <FormInput label="cluster endpoint" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="my-cluster.abc123xyz.us-east-1.redshift.amazonaws.com" hint="Redshift console → Clusters → Properties → Endpoint" required {...fieldProps("host", formErrors, fieldRefs)} />
+        <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder="5439" {...fieldProps("port", formErrors, fieldRefs)} />
+        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="dev" hint="default database is 'dev'" required {...fieldProps("database", formErrors, fieldRefs)} />
         {!form.iam_auth && (
           <>
-            <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="awsuser" required />
+            <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="awsuser" required {...fieldProps("username", formErrors, fieldRefs)} />
             <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
           </>
         )}
@@ -1512,7 +1906,7 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
         </div>
         {form.iam_auth && (
           <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5">
-            <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="awsuser" hint="Redshift DB user to get temporary credentials for" required />
+            <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="awsuser" hint="Redshift DB user to get temporary credentials for" required {...fieldProps("username", formErrors, fieldRefs)} />
             <FormInput label="AWS region" value={form.aws_region} onChange={(v) => setForm({ ...form, aws_region: v })} placeholder="us-east-1" hint="Redshift cluster region" />
             <FormInput label="cluster ID" value={form.redshift_cluster_id} onChange={(v) => setForm({ ...form, redshift_cluster_id: v })} placeholder="my-redshift-cluster" hint="provisioned cluster ID (auto-detected from endpoint if blank)" />
             <FormInput label="workgroup" value={form.redshift_workgroup} onChange={(v) => setForm({ ...form, redshift_workgroup: v })} placeholder="default" hint="for Redshift Serverless only" />
@@ -1540,10 +1934,10 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
   const ph = placeholders[form.db_type] || { host: "localhost", db: "mydb", user: "user" };
   return (
     <>
-      <FormInput label="host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder={ph.host} required />
-      <FormInput label="port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder={String(config.defaultPort)} />
-      <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder={ph.db} required />
-      <FormInput label="username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder={ph.user} required />
+      <FormInput label="host" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder={ph.host} required {...fieldProps("host", formErrors, fieldRefs)} />
+      <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder={String(config.defaultPort)} {...fieldProps("port", formErrors, fieldRefs)} />
+      <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder={ph.db} required />
+      <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder={ph.user} required {...fieldProps("username", formErrors, fieldRefs)} />
       {!form.iam_auth && (
         <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" />
       )}
@@ -1595,7 +1989,12 @@ function ConnectionFieldsForm({ form, setForm }: { form: FormState; setForm: (f:
 }
 
 /* ── SSL Config Section ── */
-function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+function SSLSection({ form, setForm, formErrors, fieldRefs }: {
+  form: FormState;
+  setForm: (f: FormState) => void;
+  formErrors: Record<string, string>;
+  fieldRefs: MutableRefObject<Record<string, HTMLElement | null>>;
+}) {
   const config = DB_CONFIGS[form.db_type];
   if (!config.supportsSSL) return null;
 
@@ -1639,7 +2038,7 @@ function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState
           <div />
           {form.ssl_mode !== "disable" && (
             <>
-              <FormTextArea label="ca certificate (pem)" value={form.ssl_ca_cert} onChange={(v) => setForm({ ...form, ssl_ca_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint={form.ssl_mode.startsWith("verify") ? "required for certificate verification" : "optional — root CA for server verification"} rows={3} />
+              <FormTextArea label="ca certificate (pem)" value={form.ssl_ca_cert} onChange={(v) => setForm({ ...form, ssl_ca_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint={form.ssl_mode.startsWith("verify") ? "required for certificate verification" : "optional — root CA for server verification"} rows={3} {...(fieldProps("ssl_ca_cert", formErrors, fieldRefs) as { id: string; inputRef: React.Ref<HTMLTextAreaElement>; error: string | undefined })} />
               <FormTextArea label="client certificate (pem)" value={form.ssl_client_cert} onChange={(v) => setForm({ ...form, ssl_client_cert: v })} placeholder="-----BEGIN CERTIFICATE-----" hint="optional — for mutual TLS (mTLS) authentication" rows={3} />
               <FormTextArea label="client key (pem)" value={form.ssl_client_key} onChange={(v) => setForm({ ...form, ssl_client_key: v })} placeholder="-----BEGIN PRIVATE KEY-----" hint="required when using client certificate" rows={3} className="col-span-2" />
             </>
@@ -1651,7 +2050,16 @@ function SSLSection({ form, setForm }: { form: FormState; setForm: (f: FormState
 }
 
 /* ── SSH Tunnel Section ── */
-function SSHSection({ form, setForm, serverIp }: { form: FormState; setForm: (f: FormState) => void; serverIp?: string | null }) {
+function SSHSection({
+  form, setForm, serverIp, formErrors, fieldRefs, clearServerError,
+}: {
+  form: FormState;
+  setForm: (f: FormState) => void;
+  serverIp?: string | null;
+  formErrors: Record<string, string>;
+  fieldRefs: MutableRefObject<Record<string, HTMLElement | null>>;
+  clearServerError: (key: string) => void;
+}) {
   const config = DB_CONFIGS[form.db_type];
   if (!config.supportsSSH) return null;
 
@@ -1669,9 +2077,9 @@ function SSHSection({ form, setForm, serverIp }: { form: FormState; setForm: (f:
       </button>
       {form.ssh_enabled && (
         <div className="grid grid-cols-2 gap-4 mt-3 animate-fade-in">
-          <FormInput label="ssh host" value={form.ssh_host} onChange={(v) => setForm({ ...form, ssh_host: v })} placeholder="bastion.example.com" required />
-          <FormInput label="ssh port" value={form.ssh_port} onChange={(v) => setForm({ ...form, ssh_port: v })} placeholder="22" />
-          <FormInput label="ssh username" value={form.ssh_username} onChange={(v) => setForm({ ...form, ssh_username: v })} placeholder="ubuntu" required />
+          <FormInput label="ssh host" value={form.ssh_host} onChange={(v) => { setForm({ ...form, ssh_host: v }); clearServerError("ssh_host"); }} placeholder="bastion.example.com" required {...fieldProps("ssh_host", formErrors, fieldRefs)} />
+          <FormInput label="ssh port" value={form.ssh_port} onChange={(v) => { setForm({ ...form, ssh_port: v }); clearServerError("ssh_port"); }} placeholder="22" {...fieldProps("ssh_port", formErrors, fieldRefs)} />
+          <FormInput label="ssh username" value={form.ssh_username} onChange={(v) => { setForm({ ...form, ssh_username: v }); clearServerError("ssh_username"); }} placeholder="ubuntu" required {...fieldProps("ssh_username", formErrors, fieldRefs)} />
           <div>
             <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">auth method</label>
             <select
@@ -1685,11 +2093,11 @@ function SSHSection({ form, setForm, serverIp }: { form: FormState; setForm: (f:
             </select>
           </div>
           {form.ssh_auth_method === "password" && (
-            <FormInput label="ssh password" value={form.ssh_password} onChange={(v) => setForm({ ...form, ssh_password: v })} type="password" className="col-span-2" />
+            <FormInput label="ssh password" value={form.ssh_password} onChange={(v) => { setForm({ ...form, ssh_password: v }); clearServerError("ssh_password"); }} type="password" className="col-span-2" {...fieldProps("ssh_password", formErrors, fieldRefs)} />
           )}
           {form.ssh_auth_method === "key" && (
             <>
-              <FormTextArea label="private key (pem)" value={form.ssh_private_key} onChange={(v) => setForm({ ...form, ssh_private_key: v })} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" rows={4} className="col-span-2" />
+              <FormTextArea label="private key (pem)" value={form.ssh_private_key} onChange={(v) => { setForm({ ...form, ssh_private_key: v }); clearServerError("ssh_private_key"); }} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" rows={4} className="col-span-2" {...(fieldProps("ssh_private_key", formErrors, fieldRefs) as { id: string; inputRef: React.Ref<HTMLTextAreaElement>; error: string | undefined })} />
               <FormInput label="key passphrase" value={form.ssh_key_passphrase} onChange={(v) => setForm({ ...form, ssh_key_passphrase: v })} type="password" hint="leave empty if key is not encrypted" className="col-span-2" />
             </>
           )}
@@ -1742,8 +2150,10 @@ function SSHSection({ form, setForm, serverIp }: { form: FormState; setForm: (f:
 export default function ConnectionsPage() {
   const { toast } = useToast();
   const { refreshConnections: syncGlobalConnections } = useConnection();
-  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
+  const { data: swrConnections, isLoading: connectionsLoading } = useConnections();
+  const connections = swrConnections ?? [];
   const [showForm, setShowForm] = useState(false);
+  const [securityBannerExpanded, setSecurityBannerExpanded] = useState(false);
   const [editingConnection, setEditingConnection] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { status: string; message: string; phases?: { phase: string; status: string; message: string; duration_ms?: number }[]; total_duration_ms?: number }>>({});
@@ -1753,9 +2163,16 @@ export default function ConnectionsPage() {
   const [expandedConn, setExpandedConn] = useState<string | null>(null);
   const [schemaData, setSchemaData] = useState<Record<string, { tables: Record<string, { schema: string; name: string; columns: { name: string; type: string; nullable: boolean; primary_key?: boolean }[] }> }>>({});
   const [schemaLoading, setSchemaLoading] = useState<string | null>(null);
-  const [healthData, setHealthData] = useState<Record<string, ConnectionHealthStats>>({});
+  const { data: swrHealthData } = useConnectionsHealth();
+  const { data: planData } = usePlan();
+  const healthData: Record<string, ConnectionHealthStats> = (() => {
+    const map: Record<string, ConnectionHealthStats> = {};
+    if (swrHealthData) for (const h of swrHealthData.connections) map[h.connection_name] = h;
+    return map;
+  })();
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
+  const [piiConfig, setPiiConfig] = useState<Record<string, { enabled: boolean; rules: Record<string, string> }>>({});
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState<Record<string, string>>({});
   const [schemaSearchResults, setSchemaSearchResults] = useState<Record<string, { result_count: number; total_tables: number; tables: Record<string, any> }>>({});
@@ -1775,37 +2192,40 @@ export default function ConnectionsPage() {
   const [exploredData, setExploredData] = useState<Record<string, { columns: { name: string; type: string; sample_values?: string[]; value_stats?: { min: unknown; max: unknown; avg: number | null } }[] }>>({});
   const [healthHistory, setHealthHistory] = useState<Record<string, number[]>>({});
 
-  // Real-time form validation — computed on every form change
-  const formErrors = showForm ? validateForm(form) : {};
+  // Field ref map for scroll+focus on first invalid field
+  const fieldRefs = useRef<Record<string, HTMLElement | null>>({});
+  // Server-side validation errors mapped back to field keys
+  const [serverFieldErrors, setServerFieldErrors] = useState<Record<string, string>>({});
+
+  // Real-time form validation — computed on every form change.
+  // errors render live because validateForm recomputes on every render; this is the existing behavior.
+  const validateErrors = showForm ? validateForm(form) : {};
+  const formErrors: Record<string, string> = { ...validateErrors, ...serverFieldErrors };
   const hasFormErrors = Object.keys(formErrors).length > 0;
 
   const refresh = useCallback(() => {
-    getConnections().then((conns) => {
-      setConnections(conns);
-      // Fetch latency sparkline history for each connection (background)
-      for (const conn of conns) {
-        getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
-          const latencies = res.buckets
-            .map((b) => b.avg_latency_ms)
-            .filter((v): v is number => v !== null);
-          if (latencies.length >= 2) {
-            setHealthHistory((prev) => ({ ...prev, [conn.name]: latencies }));
-          }
-        }).catch(() => {});
-      }
-    }).catch(() => {});
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) map[h.connection_name] = h;
-        setHealthData(map);
-      })
-      .catch(() => {});
+    invalidateConnections();
+    invalidateHealth();
     // Sync the global connection context so other pages see updates
     syncGlobalConnections();
   }, [syncGlobalConnections]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  // Load PII config and sparkline history whenever the connection list changes
+  useEffect(() => {
+    for (const conn of connections) {
+      if ((conn as any).pii_enabled || (conn as any).pii_rules) {
+        setPiiConfig((prev) => ({ ...prev, [conn.name]: { enabled: (conn as any).pii_enabled || false, rules: (conn as any).pii_rules || {} } }));
+      }
+      getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
+        const latencies = res.buckets
+          .map((b) => b.avg_latency_ms)
+          .filter((v): v is number => v !== null);
+        if (latencies.length >= 2) {
+          setHealthHistory((prev) => ({ ...prev, [conn.name]: latencies }));
+        }
+      }).catch(() => {});
+    }
+  }, [connections]);
 
   // Fetch server IP for whitelist guidance
   useEffect(() => {
@@ -1816,6 +2236,8 @@ export default function ConnectionsPage() {
 
   function handleDbTypeChange(newType: DBType) {
     const config = DB_CONFIGS[newType];
+    // Switching db_type invalidates connector-specific server errors (e.g. catalog for trino)
+    setServerFieldErrors({});
     setForm({
       ...form,
       db_type: newType,
@@ -1826,6 +2248,13 @@ export default function ConnectionsPage() {
   }
 
   async function handleCreate() {
+    const errors = { ...validateForm(form), ...serverFieldErrors };
+    const n = Object.keys(errors).length;
+    if (n > 0) {
+      scrollToFirstInvalidField(errors);
+      toast(`Please fix ${n} field${n > 1 ? "s" : ""} before saving`, "error");
+      return;
+    }
     setSaving(true);
     try {
       const payload = buildCreatePayload(form);
@@ -1841,9 +2270,101 @@ export default function ConnectionsPage() {
       setShowForm(false);
       setEditingConnection(null);
       setForm({ ...defaultForm });
+      setServerFieldErrors({});
       setShowAdvanced(false);
       refresh();
-    } catch (e) { toast(_parseError(e), "error"); } finally { setSaving(false); }
+    } catch (e) { handleServerError(e); } finally { setSaving(false); }
+  }
+
+  // §6 priority order for scroll/focus — first hit wins.
+  // In URL mode, validateForm early-returns so only name and connection_string produce errors.
+  const FIELD_PRIORITY = [
+    "name", "connection_string",
+    "host", "port", "account", "project", "credentials_json",
+    "http_path", "access_token", "dbx_oauth_client_id", "dbx_oauth_client_secret",
+    "sf_private_key", "sf_oauth_token",
+    "bq_oauth_token",
+    "database", "catalog", "username",
+    "azure_tenant_id", "azure_client_id", "azure_client_secret",
+    "ssl_ca_cert",
+    "ssh_host", "ssh_port", "ssh_username", "ssh_password", "ssh_private_key",
+    "connection_timeout", "query_timeout",
+  ] as const;
+
+  /** Map gateway validation_errors[] strings to field keys (§7). */
+  function mapServerValidationErrors(messages: string[]): { fieldErrors: Record<string, string>; unmapped: string[] } {
+    const fieldErrors: Record<string, string> = {};
+    const unmapped: string[] = [];
+    // Evaluated in order — SSH patterns first, then specific-vendor, then generic. First match per message wins.
+    const mappingTable: [string, string][] = [
+      ["SSH tunnel requires a bastion host", "ssh_host"],
+      ["SSH tunnel requires a username", "ssh_username"],
+      ["SSH tunnel with key auth requires a private key", "ssh_private_key"],
+      ["SSH tunnel with password auth requires a password", "ssh_password"],
+      ["Databricks requires a server hostname", "host"],
+      ["Databricks requires an HTTP path", "http_path"],
+      ["Databricks requires a personal access token", "access_token"],
+      ["Snowflake requires an account identifier", "account"],
+      ["Snowflake requires a username", "username"],
+      ["BigQuery requires a GCP project ID", "project"],
+      ["BigQuery requires service account credentials JSON", "credentials_json"],
+      ["Trino requires a host", "host"],
+      ["Trino requires a catalog", "catalog"],
+      ["requires a host", "host"],
+      ["requires a username", "username"],
+      ["requires a database file path", "database"],   // duckdb/sqlite — must win
+      ["requires a database", "database"],              // pg/mysql/mssql/clickhouse/redshift — generic fallback
+    ];
+    for (const msg of messages) {
+      let matched = false;
+      for (const [substr, key] of mappingTable) {
+        if (msg.includes(substr)) {
+          fieldErrors[key] = fieldErrors[key] ?? msg;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) unmapped.push(msg);
+    }
+    return { fieldErrors, unmapped };
+  }
+
+  /** Scroll to and focus the first invalid field, expanding collapsed sections as needed. */
+  function scrollToFirstInvalidField(errors: Record<string, string>) {
+    const firstKey = FIELD_PRIORITY.find((k) => errors[k]);
+    if (!firstKey) return;
+
+    const isSshField = ["ssh_host", "ssh_port", "ssh_username", "ssh_password", "ssh_private_key"].includes(firstKey);
+    const isAdvancedField = ["connection_timeout", "query_timeout"].includes(firstKey);
+    const isSslField = firstKey === "ssl_ca_cert";
+    const isAzureAdField = ["azure_tenant_id", "azure_client_id", "azure_client_secret"].includes(firstKey);
+
+    const focusEl = () => {
+      requestAnimationFrame(() => {
+        const el = fieldRefs.current[firstKey];
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        requestAnimationFrame(() => {
+          fieldRefs.current[firstKey]?.focus({ preventScroll: true });
+        });
+      });
+    };
+
+    if (isSslField) {
+      if (!showAdvanced) setShowAdvanced(true);
+      setAdvancedTab("security");
+    } else if (isSshField) {
+      if (!showAdvanced) setShowAdvanced(true);
+      setAdvancedTab("security");
+      if (!form.ssh_enabled) setForm((prev) => ({ ...prev, ssh_enabled: true }));
+    } else if (isAdvancedField) {
+      if (!showAdvanced) setShowAdvanced(true);
+      setAdvancedTab("performance");
+    } else if (isAzureAdField) {
+      if (!form.azure_ad_auth) setForm((prev) => ({ ...prev, azure_ad_auth: true }));
+    }
+
+    // Double-rAF is safe whether or not we just expanded a section
+    focusEl();
   }
 
   function _parseError(e: unknown): string {
@@ -1862,7 +2383,48 @@ export default function ConnectionsPage() {
     return msg.replace(/^Error:\s*\d+:\s*/, "").replace(/^"?(.*?)"?$/, "$1").slice(0, 200);
   }
 
+  /** Attempt to parse gateway validation_errors from an error, map to fields, scroll to first. Falls back to _parseError toast. */
+  function handleServerError(e: unknown) {
+    const msg = String(e);
+    // Strip "Error: <status>: " prefix to get raw body
+    const body = msg.replace(/^Error:\s*\d+:\s*/, "");
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (parsed && typeof parsed === "object") {
+        const obj = parsed as Record<string, unknown>;
+        const validationArr =
+          (obj.detail && typeof obj.detail === "object" && (obj.detail as Record<string, unknown>).validation_errors) ||
+          obj.validation_errors;
+        if (Array.isArray(validationArr) && validationArr.every((v) => typeof v === "string")) {
+          const { fieldErrors, unmapped } = mapServerValidationErrors(validationArr as string[]);
+          if (Object.keys(fieldErrors).length > 0) {
+            setServerFieldErrors((prev) => ({ ...prev, ...fieldErrors }));
+            const mergedErrors = { ...formErrors, ...fieldErrors };
+            scrollToFirstInvalidField(mergedErrors);
+          }
+          if (unmapped.length > 0) {
+            toast(unmapped.join("; "), "error");
+          } else if (Object.keys(fieldErrors).length === 0) {
+            // validation_errors was empty/unparseable — avoid silent failure
+            toast(_parseError(e), "error");
+          }
+          return;
+        }
+      }
+    } catch {
+      // JSON parse failed — fall through to _parseError
+    }
+    toast(_parseError(e), "error");
+  }
+
   async function handleSaveAndTest() {
+    const errors = { ...validateForm(form), ...serverFieldErrors };
+    const n = Object.keys(errors).length;
+    if (n > 0) {
+      scrollToFirstInvalidField(errors);
+      toast(`Please fix ${n} field${n > 1 ? "s" : ""} before saving`, "error");
+      return;
+    }
     setSaving(true);
     try {
       const payload = buildCreatePayload(form);
@@ -1875,6 +2437,7 @@ export default function ConnectionsPage() {
       setShowForm(false);
       setEditingConnection(null);
       setForm({ ...defaultForm });
+      setServerFieldErrors({});
       setShowAdvanced(false);
       refresh();
       // Auto-test after save
@@ -1883,10 +2446,17 @@ export default function ConnectionsPage() {
       const result = await testConnection(connName);
       setTestResult((prev) => ({ ...prev, [connName]: result }));
       toast(result.status === "healthy" ? `${connName}: connection healthy` : `${connName}: ${result.message}`, result.status === "healthy" ? "success" : "error");
-    } catch (e) { toast(_parseError(e), "error"); } finally { setSaving(false); }
+    } catch (e) { handleServerError(e); } finally { setSaving(false); }
   }
 
   async function handlePreTest() {
+    const errors = { ...validateForm(form), ...serverFieldErrors };
+    const n = Object.keys(errors).length;
+    if (n > 0) {
+      scrollToFirstInvalidField(errors);
+      toast(`Please fix ${n} field${n > 1 ? "s" : ""} before saving`, "error");
+      return;
+    }
     setPreTesting(true);
     setPreTestResult(null);
     try {
@@ -1900,7 +2470,7 @@ export default function ConnectionsPage() {
         toast(failedPhase?.message || result.message, "error");
       }
     } catch (e) {
-      toast(_parseError(e), "error");
+      handleServerError(e);
       setPreTestResult({ status: "error", message: _parseError(e), phases: [] });
     } finally {
       setPreTesting(false);
@@ -1971,12 +2541,14 @@ export default function ConnectionsPage() {
     });
     setEditingConnection(conn.name);
     setShowForm(true);
+    setServerFieldErrors({}); // clear stale server errors when loading a connection (§8)
     const hasCustomTimeouts = (conn.connection_timeout && conn.connection_timeout !== 15) || (conn.query_timeout && conn.query_timeout !== 120) || (conn.keepalive_interval && conn.keepalive_interval > 0);
     setShowAdvanced(!!(conn.ssl || conn.ssh_tunnel?.enabled || conn.schema_refresh_interval || conn.schema_filter_include?.length || conn.schema_filter_exclude?.length || hasCustomTimeouts));
   }
 
   async function handleTest(name: string) {
     setTesting(name);
+    setDiagResults((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
       const result = await testConnection(name);
       setTestResult((prev) => ({ ...prev, [name]: result }));
@@ -1998,6 +2570,7 @@ export default function ConnectionsPage() {
 
   async function handleDiagnose(name: string) {
     setDiagnosing(name);
+    setTestResult((prev) => { const next = { ...prev }; delete next[name]; return next; });
     try {
       const result = await diagnoseConnection(name);
       setDiagResults((prev) => ({ ...prev, [name]: result }));
@@ -2063,10 +2636,42 @@ export default function ConnectionsPage() {
   async function handleScanPII(name: string) {
     setPiiLoading(name);
     try {
-      const data = await detectPII(name);
-      setPiiData((prev) => ({ ...prev, [name]: data }));
-    } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
+      const data = await detectAndSavePII(name);
+      // Update PII display data
+      const detections: Record<string, Record<string, string>> = {};
+      for (const [col, rule] of Object.entries(data.rules)) {
+        const table = "_all";
+        if (!detections[table]) detections[table] = {};
+        detections[table][col] = rule;
+      }
+      setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: Object.keys(detections).length, detections } }));
+      setPiiConfig((prev) => ({ ...prev, [name]: { enabled: data.enabled, rules: data.rules } }));
+      toast(`${name}: ${data.columns_flagged} PII columns detected and redaction enabled`, "success");
+    } catch {
+      // Fallback to detect-only
+      try {
+        const data = await detectPII(name);
+        setPiiData((prev) => ({ ...prev, [name]: data }));
+      } catch { setPiiData((prev) => ({ ...prev, [name]: { tables_scanned: 0, tables_with_pii: 0, detections: {} } })); }
+    }
     finally { setPiiLoading(null); }
+  }
+
+  async function handleTogglePII(name: string) {
+    const current = piiConfig[name];
+    if (!current) {
+      // No config yet — run detection first
+      await handleScanPII(name);
+      return;
+    }
+    const newEnabled = !current.enabled;
+    try {
+      const result = await setPIIConfig(name, { enabled: newEnabled, rules: current.rules });
+      setPiiConfig((prev) => ({ ...prev, [name]: result }));
+      toast(`${name}: PII redaction ${newEnabled ? "enabled" : "disabled"}`, newEnabled ? "success" : "info");
+    } catch (e) {
+      toast(`Failed to toggle PII: ${e instanceof Error ? e.message : "unknown error"}`, "error");
+    }
   }
 
   const searchTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -2131,6 +2736,8 @@ export default function ConnectionsPage() {
 
   const config = DB_CONFIGS[form.db_type];
 
+  if (connectionsLoading) return <PageLoader label="loading connections" />;
+
   return (
     <div className="p-8 animate-fade-in">
       <input
@@ -2175,9 +2782,61 @@ export default function ConnectionsPage() {
         status={<StatusDot status={connections.length > 0 ? "healthy" : "unknown"} size={4} />}
       >
         <div className="flex items-center gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">registered: <code className="text-[12px] text-[var(--color-text)]">{connections.length}</code></span>
+          <span className="text-[var(--color-text-dim)]">
+            connections:{" "}
+            <code className={`text-[12px] ${planData && planData.limits.connections !== "unlimited" && connections.length >= (planData.limits.connections as number) ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
+              {connections.length}/{planData?.limits.connections === "unlimited" ? "∞" : (planData?.limits.connections ?? "—")}
+            </code>
+          </span>
+          {planData && (
+            <span className="text-[var(--color-text-dim)]">
+              plan: <code className="text-[12px] text-[var(--color-text)]">{planData.tier}</code>
+            </span>
+          )}
         </div>
       </TerminalBar>
+
+      {/* ─── Security Banner ─── */}
+      <div className="mb-4 border border-emerald-500/20 bg-emerald-500/5">
+        <button
+          type="button"
+          onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)}
+          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-emerald-500/5 transition-colors"
+          aria-expanded={securityBannerExpanded}
+          aria-controls="security-banner-details"
+        >
+          <Shield className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" strokeWidth={1.5} />
+          <span className="flex-1 text-[11px] text-emerald-400/90 tracking-wider leading-relaxed">
+            All database credentials are encrypted at rest using AES-128 with HMAC-SHA256 authentication. Passwords and secrets never leave this server unencrypted.
+          </span>
+          {securityBannerExpanded
+            ? <ChevronDown className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />}
+        </button>
+        {securityBannerExpanded && (
+          <div
+            id="security-banner-details"
+            role="region"
+            aria-label="Security details"
+            className="px-4 pb-3 border-t border-emerald-500/10 animate-fade-in"
+          >
+            <ul className="mt-2.5 space-y-1.5">
+              {[
+                "Credentials are encrypted before storage using Fernet symmetric encryption",
+                "Encryption keys are derived using PBKDF2 with 600,000 iterations",
+                "Connection strings, passwords, API keys, and private keys are all encrypted",
+                "Credentials are only decrypted in-memory when establishing database connections",
+                "Audit logging tracks all credential access",
+              ].map((item, i) => (
+                <li key={i} className="flex items-start gap-2 text-[11px] text-emerald-400/70 tracking-wider">
+                  <Lock className="w-2.5 h-2.5 mt-0.5 flex-shrink-0 text-emerald-500/50" strokeWidth={1.5} />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
 
       {/* ─── Create Connection Form ─── */}
       {showForm && (
@@ -2199,7 +2858,7 @@ export default function ConnectionsPage() {
             <div className="mb-5">
               <label className="block text-[12px] text-[var(--color-text-dim)] mb-2 tracking-wider">database type</label>
               <div className="flex flex-wrap gap-1.5">
-                {DB_TYPE_ORDER.map((dbType) => {
+                {DB_TYPE_ORDER.filter((t) => !IS_CLOUD_MODE || t !== "sqlite").map((dbType) => {
                   const cfg = DB_CONFIGS[dbType];
                   const isSelected = form.db_type === dbType;
                   return (
@@ -2259,7 +2918,7 @@ export default function ConnectionsPage() {
                   <div className="px-3 py-2 bg-[var(--color-bg-hover)] border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] tracking-wide">{editingConnection}</div>
                 </div>
               ) : (
-                <FormInput label="connection name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="prod-analytics" hint="alphanumeric, dashes, underscores" required error={form.name.length > 0 ? formErrors.name : undefined} />
+                <FormInput label="connection name" value={form.name} onChange={(v) => { setForm({ ...form, name: v }); setServerFieldErrors((prev) => { if (!("name" in prev)) return prev; const { name: _, ...rest } = prev; return rest; }); }} placeholder="prod-analytics" hint="alphanumeric, dashes, underscores" required {...fieldProps("name", formErrors, fieldRefs)} />
               )}
               <FormInput label="description" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Production analytics DB" />
             </div>
@@ -2330,7 +2989,7 @@ export default function ConnectionsPage() {
 
             {/* DB-specific fields */}
             <div className="grid grid-cols-2 gap-4 mb-4">
-              <ConnectionFieldsForm form={form} setForm={setForm} />
+              <ConnectionFieldsForm form={form} setForm={setForm} formErrors={formErrors} fieldRefs={fieldRefs} clearServerError={(key) => setServerFieldErrors((prev) => { if (!(key in prev)) return prev; const { [key]: _, ...rest } = prev; return rest; })} />
             </div>
 
             {/* Connection string preview with copy button */}
@@ -2403,8 +3062,8 @@ export default function ConnectionsPage() {
                     {/* Security tab */}
                     {advancedTab === "security" && (
                       <div className="animate-fade-in">
-                    <SSLSection form={form} setForm={setForm} />
-                    <SSHSection form={form} setForm={setForm} serverIp={serverIp} />
+                    <SSLSection form={form} setForm={setForm} formErrors={formErrors} fieldRefs={fieldRefs} />
+                    <SSHSection form={form} setForm={setForm} serverIp={serverIp} formErrors={formErrors} fieldRefs={fieldRefs} clearServerError={(key) => setServerFieldErrors((prev) => { if (!(key in prev)) return prev; const { [key]: _, ...rest } = prev; return rest; })} />
                     {/* Connection Scope + Read-only (HEX pattern) */}
                     <div className="border-t border-[var(--color-border)] pt-4 mt-4">
                       <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
@@ -2488,20 +3147,30 @@ export default function ConnectionsPage() {
                           </div>
                           <div className="grid grid-cols-3 gap-4">
                             <div>
-                              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection timeout</label>
+                              {(() => { const { id: ctId, inputRef: ctRef, error: ctError } = fieldProps("connection_timeout", formErrors, fieldRefs); return (
+                              <>
+                              <label htmlFor={ctId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection timeout</label>
                               <div className="flex items-center gap-1.5">
-                                <input type="number" min="1" max="300" value={form.connection_timeout} onChange={(e) => setForm({ ...form, connection_timeout: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
+                                <input type="number" min="1" max="300" id={ctId} ref={ctRef as React.Ref<HTMLInputElement>} aria-invalid={ctError ? "true" : undefined} aria-describedby={ctError ? `${ctId}-error` : undefined} value={form.connection_timeout} onChange={(e) => setForm({ ...form, connection_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tabular-nums${ctError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
                                 <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">sec</span>
                               </div>
+                              {ctError && <p id={`${ctId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{ctError}</p>}
                               <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max time to establish connection</p>
+                              </>
+                              ); })()}
                             </div>
                             <div>
-                              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">query timeout</label>
+                              {(() => { const { id: qtId, inputRef: qtRef, error: qtError } = fieldProps("query_timeout", formErrors, fieldRefs); return (
+                              <>
+                              <label htmlFor={qtId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">query timeout</label>
                               <div className="flex items-center gap-1.5">
-                                <input type="number" min="1" max="3600" value={form.query_timeout} onChange={(e) => setForm({ ...form, query_timeout: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
+                                <input type="number" min="1" max="3600" id={qtId} ref={qtRef as React.Ref<HTMLInputElement>} aria-invalid={qtError ? "true" : undefined} aria-describedby={qtError ? `${qtId}-error` : undefined} value={form.query_timeout} onChange={(e) => setForm({ ...form, query_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tabular-nums${qtError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
                                 <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">sec</span>
                               </div>
+                              {qtError && <p id={`${qtId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{qtError}</p>}
                               <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max query execution time</p>
+                              </>
+                              ); })()}
                             </div>
                             <div>
                               <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">keepalive interval</label>
@@ -2650,8 +3319,11 @@ export default function ConnectionsPage() {
             {(() => {
               const warnings: string[] = [];
               const cfg = DB_CONFIGS[form.db_type];
-              // Warn if SSL not enabled on a production-capable connector
-              if (cfg.supportsSSL && !form.ssl_enabled && !["duckdb", "sqlite"].includes(form.db_type)) {
+              // Warn if SSL not enabled on a production-capable connector.
+              // In URL mode, check the connection string for sslmode= param.
+              const urlHasSsl = form.connectionMode === "url" && form.connection_string &&
+                /[?&]sslmode=(require|verify-ca|verify-full|prefer|allow)/i.test(form.connection_string);
+              if (cfg.supportsSSL && !form.ssl_enabled && !urlHasSsl && !["duckdb", "sqlite"].includes(form.db_type)) {
                 warnings.push("SSL/TLS is not enabled. Recommended for production databases to encrypt traffic in transit.");
               }
               // Warn if using password auth for Snowflake (key-pair is preferred per HEX)
@@ -2681,18 +3353,18 @@ export default function ConnectionsPage() {
 
             {/* Action buttons */}
             <div className="flex items-center gap-3 mt-5 pt-4 border-t border-[var(--color-border)]">
-              <button onClick={handleCreate} disabled={saving || preTesting || (!editingConnection && !form.name)} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
+              <button onClick={handleCreate} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {editingConnection ? "update connection" : "save connection"}
               </button>
-              <button onClick={handlePreTest} disabled={saving || preTesting} className="flex items-center gap-2 px-4 py-2 border border-emerald-500/30 text-xs text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50 transition-all tracking-wider">
+              <button onClick={handlePreTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-emerald-500/30 text-xs text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50 transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
                 {preTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TestTube className="w-3.5 h-3.5" strokeWidth={1.5} />}
                 test connection
               </button>
-              <button onClick={handleSaveAndTest} disabled={saving || preTesting || (!editingConnection && !form.name) || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
+              <button onClick={handleSaveAndTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingConnection ? "update & test" : "save & test"}
               </button>
-              <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setServerFieldErrors({}); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
                 cancel
               </button>
               {editingConnection && (
@@ -2754,9 +3426,14 @@ export default function ConnectionsPage() {
             const tables = schemaData[conn.name]?.tables;
             const connConfig = DB_CONFIGS[conn.db_type as DBType] || DB_CONFIGS.postgres;
 
-            // Build display string
+            // Build display string — prefer connection_string for URL-mode connections
             let displayStr = "";
-            if (conn.host && conn.port) {
+            if ((conn as any).connection_string && !conn.host) {
+              try {
+                const u = new URL((conn as any).connection_string.replace(/^(postgresql|postgres|redshift|clickhouse|mysql\+pymysql|mssql|mssql\+pymssql|sqlserver|trino(\+https)?|snowflake|databricks):/, "http:"));
+                displayStr = `${u.hostname}${u.port ? `:${u.port}` : ""}${u.pathname !== "/" ? u.pathname : ""}`;
+              } catch { displayStr = "(connection string)"; }
+            } else if (conn.host && conn.port) {
               displayStr = `${conn.host}:${conn.port}/${conn.database || ""}`;
             } else if (conn.account) {
               displayStr = `${conn.account}/${conn.database || ""}`;
@@ -2796,6 +3473,20 @@ export default function ConnectionsPage() {
                           {CONNECTOR_TIERS[conn.db_type as DBType]?.label || "T3"}
                         </span>
                       </Tooltip>
+                      <Tooltip content="Credentials encrypted at rest with AES-128 + HMAC-SHA256" position="top">
+                        <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-emerald-500/30 text-emerald-400/80 tracking-wider cursor-default">
+                          <Lock className="w-2.5 h-2.5" strokeWidth={1.5} />
+                          encrypted
+                        </span>
+                      </Tooltip>
+                      {(conn as any).byok_key_alias && (
+                        <Tooltip content={`Credentials encrypted with your key: ${(conn as any).byok_key_alias}`} position="top">
+                          <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-purple-500/30 text-purple-400/80 tracking-wider cursor-default">
+                            <Shield className="w-2.5 h-2.5" strokeWidth={1.5} />
+                            byok
+                          </span>
+                        </Tooltip>
+                      )}
                       {conn.ssl && (
                         <span className="text-[11px] px-1 py-0.5 border border-[var(--color-success)]/30 text-[var(--color-success)] tracking-wider">ssl</span>
                       )}
@@ -2960,10 +3651,15 @@ export default function ConnectionsPage() {
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
-                      {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" strokeWidth={1.5} />}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider"
+                      title={piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
+                    >
+                      {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className={`w-3 h-3 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : ""}`} strokeWidth={1.5} />}
                       pii
-                      {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
+                      {piiConfig[conn.name]?.enabled && (
+                        <span className="ml-1 px-1 py-0.5 border border-emerald-500/30 text-emerald-400 text-[11px]">on</span>
+                      )}
+                      {!piiConfig[conn.name]?.enabled && piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
                         <span className="ml-1 px-1 py-0.5 border badge-warning text-[11px] tabular-nums">
                           {piiData[conn.name].tables_with_pii}
                         </span>
@@ -3302,34 +3998,63 @@ export default function ConnectionsPage() {
                 )}
 
                 {/* PII Detection Results */}
-                {piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
+                {(piiConfig[conn.name] || (piiData[conn.name] && piiData[conn.name].tables_with_pii > 0)) && (
                   <div className="border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Shield className="w-3.5 h-3.5 text-[var(--color-warning)]" strokeWidth={1.5} />
-                      <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
-                        pii detected: {piiData[conn.name].tables_with_pii} table{piiData[conn.name].tables_with_pii > 1 ? "s" : ""}
-                      </span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Shield className={`w-3.5 h-3.5 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : "text-[var(--color-warning)]"}`} strokeWidth={1.5} />
+                        <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                          pii redaction — {Object.keys(piiConfig[conn.name]?.rules || {}).length} columns
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleTogglePII(conn.name)}
+                        className={`px-2.5 py-1 text-[11px] tracking-wider border transition-all ${
+                          piiConfig[conn.name]?.enabled
+                            ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        {piiConfig[conn.name]?.enabled ? "redaction on" : "redaction off"}
+                      </button>
                     </div>
-                    <div className="space-y-2">
-                      {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
-                        <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
-                          <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
-                          <div className="flex flex-wrap gap-2">
-                            {Object.entries(columns).map(([col, rule]) => (
-                              <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
-                                rule === "drop" ? "badge-error" :
-                                rule === "hash" ? "border-purple-500/30 text-purple-400" :
-                                "badge-warning"
-                              }`}>
-                                {col} ({rule})
-                              </span>
-                            ))}
+                    {piiConfig[conn.name]?.rules && Object.keys(piiConfig[conn.name].rules).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {Object.entries(piiConfig[conn.name].rules).map(([col, rule]) => (
+                          <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                            rule === "hide" ? "badge-warning" :
+                            rule === "hash" ? "border-purple-500/30 text-purple-400" :
+                            "badge-warning"
+                          }`}>
+                            {col} ({rule})
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {piiData[conn.name] && Object.keys(piiData[conn.name].detections).length > 0 && (
+                      <div className="space-y-2">
+                        {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
+                          <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
+                            <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
+                            <div className="flex flex-wrap gap-2">
+                              {Object.entries(columns).map(([col, rule]) => (
+                                <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                  rule === "hide" ? "badge-warning" :
+                                  rule === "hash" ? "border-purple-500/30 text-purple-400" :
+                                  "badge-warning"
+                                }`}>
+                                  {col} ({rule})
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                     <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
-                      add these rules to schema.yml annotations for automatic pii redaction.
+                      {piiConfig[conn.name]?.enabled
+                        ? "queries will automatically redact flagged columns (hash, mask, or drop)."
+                        : "click the toggle to activate automatic pii redaction on query results."}
                     </p>
                   </div>
                 )}

@@ -11,7 +11,7 @@ class TestRedshiftIAMAuth:
     """Test Redshift IAM auth configuration."""
 
     def test_iam_auth_defaults(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         c = RedshiftConnector()
         assert c._iam_auth is False
         assert c._iam_region == "us-east-1"
@@ -19,7 +19,7 @@ class TestRedshiftIAMAuth:
         assert c._iam_workgroup == ""
 
     def test_iam_auth_enabled_via_extras(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         c = RedshiftConnector()
         c.set_credential_extras({
             "auth_method": "iam",
@@ -31,7 +31,7 @@ class TestRedshiftIAMAuth:
         assert c._iam_cluster_id == "my-cluster"
 
     def test_iam_serverless_workgroup(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         c = RedshiftConnector()
         c.set_credential_extras({
             "iam_auth": True,
@@ -43,13 +43,13 @@ class TestRedshiftIAMAuth:
         assert c._iam_cluster_id == ""
 
     def test_generate_iam_credentials_method_exists(self):
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         c = RedshiftConnector()
         assert hasattr(c, "_generate_iam_credentials")
 
     def test_iam_without_explicit_keys(self):
         """IAM auth should work without explicit AWS keys (uses env/instance profile)."""
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         c = RedshiftConnector()
         c.set_credential_extras({"auth_method": "iam"})
         assert c._iam_auth is True
@@ -61,14 +61,14 @@ class TestMSSQLAzureADAuth:
     """Test MSSQL Azure AD / Entra ID auth configuration."""
 
     def test_azure_ad_defaults(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
         c = MSSQLConnector()
         assert c._azure_ad_auth is False
         assert c._azure_tenant_id == ""
         assert c._azure_client_id == ""
 
     def test_azure_ad_enabled_via_extras(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
         c = MSSQLConnector()
         c.set_credential_extras({
             "auth_method": "azure_ad",
@@ -82,12 +82,12 @@ class TestMSSQLAzureADAuth:
         assert c._azure_client_secret == "secret-789"
 
     def test_acquire_token_method_exists(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
         c = MSSQLConnector()
         assert hasattr(c, "_acquire_azure_ad_token")
 
     def test_non_azure_ad_does_not_enable(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
         c = MSSQLConnector()
         c.set_credential_extras({"connection_timeout": 30})
         assert c._azure_ad_auth is False

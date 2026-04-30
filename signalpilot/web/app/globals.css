@@ -38,6 +38,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Cursor — all interactive elements get pointer ── */
+a, button, [role="button"], [role="tab"], select, label[for],
+input[type="checkbox"], input[type="radio"], summary {
+  cursor: pointer;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -76,6 +82,13 @@ body {
 }
 .animate-fade-in { animation: fade-in 0.4s ease-out forwards; }
 
+/* Fade out */
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.animate-fade-out { animation: fade-out 160ms ease-in forwards; }
+
 /* Staggered fade-in for lists */
 .stagger-fade-in > * {
   opacity: 0;
@@ -108,12 +121,26 @@ body {
 }
 .animate-slide-in-right { animation: slide-in-right 0.3s ease-out forwards; }
 
+/* Slide in from bottom */
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-in-up { animation: slide-in-up 0.3s ease-out forwards; }
+
 /* Slide out to right */
 @keyframes slide-out-right {
   from { opacity: 1; transform: translateX(0); }
   to { opacity: 0; transform: translateX(8px); }
 }
 .animate-slide-out-right { animation: slide-out-right 0.2s ease-in forwards; }
+
+/* Slide out upward (exit: pending-button success, onboarding handoff) */
+@keyframes slide-out-up {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-6px); }
+}
+.animate-slide-out-up { animation: slide-out-up 160ms ease-in forwards; }
 
 /* Scale in */
 @keyframes scale-in {
@@ -364,10 +391,15 @@ input[type="number"] {
   background: var(--color-text);
 }
 
-/* ── Terminal input placeholder ── */
+/* ── Input placeholder — dim enough to not look like real text ── */
+textarea::placeholder,
+input::placeholder {
+  color: var(--color-text-dim);
+  opacity: 0.35;
+}
 textarea:focus::placeholder,
 input:focus::placeholder {
-  opacity: 0.3;
+  opacity: 0.25;
 }
 
 /* ── Code block styling ── */
@@ -720,4 +752,28 @@ kbd {
 .tab-active-indicator {
   animation: tab-indicator 0.2s ease-out forwards;
   transform-origin: left;
+}
+
+/* ── Reduced motion — neutralize all custom keyframe animations ── */
+/* Must appear AFTER all keyframe definitions to win without added specificity. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-fade-out,
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-slide-in-up,
+  .animate-slide-out-right,
+  .animate-slide-out-up,
+  .animate-scale-in,
+  .animate-shimmer,
+  .animate-count-up,
+  .animate-data-flow,
+  .pulse-dot,
+  .glow-pulse,
+  .cursor-blink,
+  .stagger-fade-in > * {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
 }

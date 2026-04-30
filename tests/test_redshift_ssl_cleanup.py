@@ -11,7 +11,7 @@ class TestRedshiftSSLCleanup:
     def test_cleanup_temp_files_removes_files(self):
         """_cleanup_temp_files should remove all tracked temp files."""
         import tempfile
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         connector = RedshiftConnector()
 
         # Create actual temp files
@@ -36,7 +36,7 @@ class TestRedshiftSSLCleanup:
 
     def test_cleanup_handles_missing_files(self):
         """_cleanup_temp_files should handle already-deleted files gracefully."""
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         connector = RedshiftConnector()
         connector._temp_files = ["/tmp/nonexistent_file_xyz.pem"]
         # Should not raise
@@ -45,7 +45,7 @@ class TestRedshiftSSLCleanup:
 
     def test_build_ssl_kwargs_creates_temp_files(self):
         """_build_ssl_kwargs should create temp files and track them."""
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         connector = RedshiftConnector()
         connector._ssl_config = {
             "mode": "verify-ca",
@@ -62,14 +62,14 @@ class TestRedshiftSSLCleanup:
 
     def test_default_timeouts(self):
         """Default timeout values should be sensible."""
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         connector = RedshiftConnector()
         assert connector._connect_timeout == 15
         assert connector._query_timeout == 30
 
     def test_credential_extras_sets_timeouts(self):
         """set_credential_extras should update timeout settings."""
-        from gateway.connectors.redshift import RedshiftConnector
+        from gateway.connectors.drivers.redshift import RedshiftConnector
         connector = RedshiftConnector()
         connector.set_credential_extras({
             "connection_timeout": 30,

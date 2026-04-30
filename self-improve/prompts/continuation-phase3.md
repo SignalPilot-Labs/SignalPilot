@@ -1,1 +1,0 @@
-Keep going. Focus on test coverage now — find the most critical untested code paths and write meaningful integration tests. Test the SQL validation engine, the gateway endpoints, and the connector logic. Commit each test file separately.

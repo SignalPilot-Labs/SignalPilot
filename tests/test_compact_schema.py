@@ -5,11 +5,8 @@ properly inlines sample values for ENUM-like columns (Spider2.0 optimization).
 """
 
 import pytest
-import sys
-import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", "gateway"))
-from gateway.main import _compress_schema
+from signalpilot.gateway.gateway.schema_utils import _compress_schema
 
 
 def _make_table(name: str, columns: list[dict], **kwargs) -> dict:

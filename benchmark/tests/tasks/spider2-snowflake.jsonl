@@ -1,0 +1,1 @@
+{"instance_id": "test_sf_current_date", "instruction": "Query the Snowflake INFORMATION_SCHEMA.DATABASES table and return the database_name column for all databases. Order by database_name ascending.", "db": "SNOWFLAKE", "schema": "INFORMATION_SCHEMA"}

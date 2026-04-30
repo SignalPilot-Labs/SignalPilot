@@ -22,6 +22,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
+import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { getSandbox, executeSandbox, deleteSandbox } from "@/lib/api";
 import type { SandboxInfo } from "@/lib/types";
 import { StatusDot, MiniBar } from "@/components/ui/data-viz";
@@ -37,6 +38,17 @@ interface HistoryEntry {
   execution_ms?: number;
   imageData?: string;
   htmlContent?: string;
+}
+
+// Configure DOMPurify with strict allowlist
+const PURIFY_CONFIG: DOMPurifyConfig = {
+  ALLOWED_TAGS: ["table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col", "br", "span", "div", "p", "pre", "code"],
+  ALLOWED_ATTR: ["colspan", "rowspan", "class", "scope"],
+  FORBID_ATTR: ["style", "id", "onclick", "onerror", "onload", "onmouseover"],
+};
+
+function sanitizeTableHtml(html: string): string {
+  return DOMPurify.sanitize(html, PURIFY_CONFIG);
 }
 
 function extractRichOutput(output: string): {
@@ -57,7 +69,7 @@ function extractRichOutput(output: string): {
 
   const htmlTableMatch = output.match(/<table[\s\S]*?<\/table>/i);
   if (htmlTableMatch) {
-    html = htmlTableMatch[0];
+    html = sanitizeTableHtml(htmlTableMatch[0]);
     text = text.replace(htmlTableMatch[0], "[HTML Table]");
   }
 
@@ -426,7 +438,7 @@ export default function SandboxDetailPage() {
         {sandbox.boot_ms != null && (
           <span className="tabular-nums">boot: {sandbox.boot_ms.toFixed(0)}ms</span>
         )}
-        <span className="ml-auto tabular-nums">python3 · firecracker</span>
+        <span className="ml-auto tabular-nums">python3 · gvisor</span>
       </div>
 
       {/* Terminal output */}
@@ -506,7 +518,7 @@ export default function SandboxDetailPage() {
         {running && (
           <div className="flex items-center gap-2 text-[var(--color-text-dim)] text-[12px] py-2 tracking-wider">
             <Loader2 className="w-3 h-3 animate-spin" />
-            <span>executing in isolated firecracker microvm...</span>
+            <span>executing in isolated gvisor sandbox...</span>
           </div>
         )}
       </div>
@@ -572,7 +584,7 @@ export default function SandboxDetailPage() {
         </div>
         <div className="flex items-center justify-between px-4 pb-3">
           <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
-            isolated firecracker microvm · ctrl+enter to execute · tab to indent
+            isolated gvisor sandbox · ctrl+enter to execute · tab to indent
           </p>
           {code.length > 0 && (
             <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
@@ -585,7 +597,7 @@ export default function SandboxDetailPage() {
       <ConfirmDialog
         open={showKillConfirm}
         title="kill sandbox"
-        message="Terminate this sandbox VM? Any running processes will be killed and unsaved state will be lost."
+        message="Terminate this sandbox? Any running processes will be killed and unsaved state will be lost."
         confirmLabel="kill"
         variant="danger"
         onConfirm={confirmKill}

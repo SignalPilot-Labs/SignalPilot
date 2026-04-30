@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
+import { mutate } from "swr";
 import {
   Activity,
   RefreshCw,
@@ -17,16 +18,21 @@ import {
   BarChart3,
 } from "lucide-react";
 import {
-  getConnectionsHealth,
   getConnectionHealth,
   testConnection,
-  getConnections,
-  getCacheStats,
-  getSchemaCache,
 } from "@/lib/api";
+
+const isCloud = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
+import {
+  useConnections,
+  useConnectionsHealth,
+  useSchemaCache,
+  SWR_KEYS,
+} from "@/lib/hooks/use-gateway-data";
 import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
 import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { PageLoader } from "@/components/ui/page-loader";
 import { RingGauge, StatusDot, Sparkline, MiniBar } from "@/components/ui/data-viz";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TimeAgo } from "@/components/ui/time-ago";
@@ -40,8 +46,8 @@ const statusConfig: Record<string, { color: string; bg: string; icon: React.Elem
 };
 
 /* ── Latency bar with SVG visualization ── */
-function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: number | null; maxMs?: number }) {
-  if (value === null) return null;
+function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: number | null | undefined; maxMs?: number }) {
+  if (value == null) return null;
   const pct = Math.min(100, (value / maxMs) * 100);
   const color = value < 50 ? "var(--color-success)" : value < 200 ? "var(--color-warning)" : "var(--color-error)";
 
@@ -64,8 +70,8 @@ function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: numbe
 }
 
 /* ── Latency percentile distribution visualization ── */
-function LatencyDistribution({ p50, p95, p99 }: { p50: number | null; p95: number | null; p99: number | null }) {
-  const values = [p50, p95, p99].filter((v): v is number => v !== null);
+function LatencyDistribution({ p50, p95, p99 }: { p50: number | null | undefined; p95: number | null | undefined; p99: number | null | undefined }) {
+  const values = [p50, p95, p99].filter((v): v is number => v != null);
   if (values.length < 2) return null;
   const max = Math.max(...values, 1);
 
@@ -76,7 +82,7 @@ function LatencyDistribution({ p50, p95, p99 }: { p50: number | null; p95: numbe
         { label: "p95", value: p95, color: "var(--color-warning)" },
         { label: "p99", value: p99, color: "var(--color-error)" },
       ].map(({ label, value, color }) => {
-        if (value === null) return null;
+        if (value == null) return null;
         const h = Math.max(4, (value / max) * 24);
         return (
           <Tooltip key={label} content={`${label}: ${value.toFixed(1)}ms`} position="top">
@@ -92,36 +98,23 @@ function LatencyDistribution({ p50, p95, p99 }: { p50: number | null; p95: numbe
 }
 
 export default function HealthPage() {
-  const [healthData, setHealthData] = useState<ConnectionHealthStats[]>([]);
-  const [connections, setConnections] = useState<ConnectionInfo[]>([]);
-  const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { status: string; message: string }>>({});
-  const [cacheStats, setCacheStats] = useState<{ entries: number; max_entries: number; hits: number; misses: number; hit_rate: number } | null>(null);
-  const [schemaCache, setSchemaCache] = useState<{ cached_connections: number; total_entries: number; ttl_seconds: number } | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [health, conns, cache, schema] = await Promise.all([
-        getConnectionsHealth().catch(() => ({ connections: [] })),
-        getConnections().catch(() => []),
-        getCacheStats().catch(() => null),
-        getSchemaCache().catch(() => null),
-      ]);
-      setHealthData(health.connections);
-      setConnections(conns);
-      setCacheStats(cache);
-      setSchemaCache(schema);
-    } finally { setLoading(false); }
-  }, []);
+  const { data: connectionsData, isLoading: connectionsLoading } = useConnections();
+  const { data: healthRaw, isLoading: healthLoading, mutate: mutateHealth } = useConnectionsHealth(autoRefresh);
+  const { data: schemaCache } = useSchemaCache();
 
-  useEffect(() => {
-    refresh();
-    if (!autoRefresh) return;
-    const i = setInterval(refresh, 10000);
-    return () => clearInterval(i);
-  }, [refresh, autoRefresh]);
+  const connections = connectionsData ?? [];
+  const healthData = healthRaw?.connections ?? [];
+  const loading = connectionsLoading && healthLoading;
+
+  function handleRefresh() {
+    mutate(SWR_KEYS.connections);
+    mutate(SWR_KEYS.connectionsHealth);
+    mutate(SWR_KEYS.schemaCache);
+  }
 
   async function handleTest(name: string) {
     setTesting(name);
@@ -130,7 +123,10 @@ export default function HealthPage() {
       setTestResults((prev) => ({ ...prev, [name]: result }));
       try {
         const h = await getConnectionHealth(name);
-        setHealthData((prev) => prev.map((item) => item.connection_name === name ? h : item));
+        mutateHealth((prev) => {
+          if (!prev) return prev;
+          return { ...prev, connections: prev.connections.map((item) => item.connection_name === name ? h : item) };
+        }, false);
       } catch {}
     } catch (e) {
       setTestResults((prev) => ({ ...prev, [name]: { status: "error", message: String(e) } }));
@@ -155,7 +151,7 @@ export default function HealthPage() {
               <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-none" />
               auto (10s)
             </label>
-            <button onClick={refresh} disabled={loading}
+            <button onClick={handleRefresh} disabled={loading}
               className="flex items-center gap-1.5 px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} />
               refresh
@@ -175,7 +171,7 @@ export default function HealthPage() {
       </TerminalBar>
 
       {/* Overview cards */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className={`grid ${isCloud ? "grid-cols-2" : "grid-cols-3"} gap-px mb-8 bg-[var(--color-border)] stagger-fade-in`}>
         {/* Connections */}
         <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
@@ -205,43 +201,22 @@ export default function HealthPage() {
           <p className="text-xl font-light tabular-nums">{avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--"}</p>
           <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
         </div>
-        {/* Query Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap className={`w-3.5 h-3.5 ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query cache</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <RingGauge
-              value={cacheStats ? cacheStats.hit_rate * 100 : 0}
-              max={100}
-              size={32}
-              strokeWidth={3}
-              color={cacheStats && cacheStats.hit_rate > 0.7 ? "var(--color-success)" : cacheStats && cacheStats.hit_rate > 0.3 ? "var(--color-warning)" : "var(--color-error)"}
-            />
-            <div>
-              <p className={`text-lg font-light tabular-nums ${cacheStats && cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" : ""}`}>{cacheStats ? `${(cacheStats.hit_rate * 100).toFixed(1)}%` : "--"}</p>
-              <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">{cacheStats ? `${cacheStats.hits} hits / ${cacheStats.misses} misses` : "hit rate"}</p>
+        {/* Schema Cache — local mode only */}
+        {!isCloud && (
+          <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
+            <div className="flex items-center gap-2 mb-3">
+              <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
             </div>
+            <p className="text-xl font-light tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
+            <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
           </div>
-        </div>
-        {/* Schema Cache */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
-          </div>
-          <p className="text-xl font-light tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
-          <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
-        </div>
+        )}
       </div>
 
       {/* Connection health cards */}
       {loading && healthData.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24">
-          <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)] mb-3" />
-          <p className="text-xs text-[var(--color-text-dim)] tracking-wider">loading health data...</p>
-        </div>
+        <PageLoader label="loading health" />
       ) : healthData.length === 0 ? (
         <EmptyState
           icon={EmptyChart}
@@ -253,7 +228,7 @@ export default function HealthPage() {
           <div className="section-header">
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connection health</span>
           </div>
-          <div className="grid grid-cols-2 gap-px bg-[var(--color-border)] stagger-fade-in">
+          <div className={`grid ${isCloud ? "grid-cols-1" : "grid-cols-2"} gap-px bg-[var(--color-border)] stagger-fade-in`}>
             {healthData.map((health) => {
               const cfg = statusConfig[health.status] || statusConfig.unknown;
               const StatusIcon = cfg.icon;
@@ -356,68 +331,24 @@ export default function HealthPage() {
         </div>
       )}
 
-      {/* Cache Details */}
-      {cacheStats && (
+      {/* Schema Cache details — local mode only */}
+      {!isCloud && schemaCache && (
         <div className="mt-8">
           <div className="section-header mb-4">
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">cache performance</span>
+            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
           </div>
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
-            <div className="grid grid-cols-2 gap-8">
-              <div>
-                <div className="text-[12px] text-[var(--color-text-dim)] mb-3 flex items-center gap-2 tracking-wider">
-                  <BarChart3 className="w-3 h-3" strokeWidth={1.5} /> query cache
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "connections", value: schemaCache.cached_connections },
+                { label: "entries", value: schemaCache.total_entries },
+                { label: "ttl", value: `${schemaCache.ttl_seconds}s` },
+              ].map((s) => (
+                <div key={s.label}>
+                  <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</p>
+                  <p className="text-xs font-light tabular-nums">{s.value}</p>
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex justify-between text-[12px] mb-1">
-                      <span className="text-[var(--color-text-dim)] tracking-wider">hit rate</span>
-                      <span className="tabular-nums">{(cacheStats.hit_rate * 100).toFixed(1)}%</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-[var(--color-bg)] overflow-hidden">
-                      <div className="h-full bg-[var(--color-success)] transition-all" style={{ width: `${cacheStats.hit_rate * 100}%` }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-[12px] mb-1">
-                      <span className="text-[var(--color-text-dim)] tracking-wider">capacity</span>
-                      <span className="tabular-nums">{cacheStats.entries} / {cacheStats.max_entries}</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-[var(--color-bg)] overflow-hidden">
-                      <div className="h-full bg-[var(--color-text-dim)] transition-all" style={{ width: `${(cacheStats.entries / cacheStats.max_entries) * 100}%` }} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 pt-1">
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits.toLocaleString()}</p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">misses</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses.toLocaleString()}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              {schemaCache && (
-                <div>
-                  <div className="text-[12px] text-[var(--color-text-dim)] mb-3 flex items-center gap-2 tracking-wider">
-                    <TrendingUp className="w-3 h-3" strokeWidth={1.5} /> schema cache
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { label: "connections", value: schemaCache.cached_connections },
-                      { label: "entries", value: schemaCache.total_entries },
-                      { label: "ttl", value: `${schemaCache.ttl_seconds}s` },
-                    ].map((s) => (
-                      <div key={s.label}>
-                        <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</p>
-                        <p className="text-xs font-light tabular-nums">{s.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              ))}
             </div>
           </div>
         </div>

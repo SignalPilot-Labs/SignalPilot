@@ -1,10 +1,15 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useId } from "react";
 
 /**
  * Terminal-aesthetic tooltip — appears above the trigger element.
  * Pure CSS positioning with a micro entrance animation.
+ *
+ * Accessibility: the outer wrapper is focusable (tabIndex={0}) so keyboard users
+ * can reach tooltips wrapping non-interactive content. If children are already
+ * interactive (e.g. a <button>), this creates two tab stops — document that
+ * case if it arises and conditionally omit tabIndex then.
  */
 export function Tooltip({
   content,
@@ -19,6 +24,7 @@ export function Tooltip({
 }) {
   const [visible, setVisible] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const tooltipId = useId();
 
   function handleEnter() {
     timeoutRef.current = setTimeout(() => setVisible(true), delay);
@@ -43,12 +49,18 @@ export function Tooltip({
   return (
     <span
       className="relative inline-flex"
+      tabIndex={0}
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
+      onFocus={handleEnter}
+      onBlur={handleLeave}
+      aria-describedby={visible ? tooltipId : undefined}
     >
       {children}
       {visible && (
         <span
+          id={tooltipId}
+          role="tooltip"
           className={`absolute z-50 ${positionClasses[position]} px-2 py-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[12px] text-[var(--color-text-muted)] whitespace-nowrap tracking-wider animate-fade-in pointer-events-none`}
         >
           {content}

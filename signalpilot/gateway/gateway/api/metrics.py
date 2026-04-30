@@ -9,54 +9,80 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from .deps import get_sandbox_client, load_settings, schema_cache
-from ..governance.cache import query_cache
-from ..store import get_connection, list_connections, list_sandboxes
+from ..auth import UserID
+from ..security.scope_guard import RequireScope
+from ..store import list_sandboxes
+from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")
+
+# ─── SSE resource-limit constants ────────────────────────────────────────────
+
+MAX_SSE_CONNECTIONS: int = 20
+SSE_MAX_DURATION_SECONDS: int = 3600
+_SSE_RETRY_AFTER_SECONDS: int = 30
+
+_sse_semaphore = asyncio.Semaphore(MAX_SSE_CONNECTIONS)
 
 # ─── SSE metrics stream ──────────────────────────────────────────────────────
 
 
-@router.get("/metrics")
-async def metrics_stream():
-    """Server-Sent Events stream of live gateway metrics."""
+@router.get("/metrics", dependencies=[RequireScope("read")])
+async def metrics_stream(store: StoreD) -> StreamingResponse:
+    """Server-Sent Events stream of live gateway metrics.
+
+    Returns operational metrics only. Internal details (sandbox manager URL,
+    query/schema cache stats) are intentionally omitted to prevent infrastructure
+    topology leakage to authenticated but potentially untrusted callers.
+
+    Enforces a global cap of MAX_SSE_CONNECTIONS concurrent streams. Streams
+    automatically close after SSE_MAX_DURATION_SECONDS; clients should reconnect.
+    """
+    if _sse_semaphore.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many concurrent SSE connections. Try again later.",
+            headers={"Retry-After": str(_SSE_RETRY_AFTER_SECONDS)},
+        )
 
     async def generate():
-        while True:
-            settings = load_settings()
-            sandboxes = list_sandboxes()
-            running = sum(1 for s in sandboxes if s.status == "running")
+        await _sse_semaphore.acquire()
+        try:
+            deadline = time.monotonic() + SSE_MAX_DURATION_SECONDS
+            while time.monotonic() < deadline:
+                sandboxes = list_sandboxes(store.org_id or "")
+                running = sum(1 for s in sandboxes if s.status == "running")
 
-            sandbox_health = "unknown"
-            try:
-                client = get_sandbox_client()
-                data = await client.health()
-                sandbox_health = data.get("status", "unknown")
-                kvm_available = data.get("kvm_available", False)
-                active_vms = data.get("active_vms", 0)
-                max_vms = data.get("max_vms", 10)
-            except Exception:
-                kvm_available = False
-                active_vms = 0
-                max_vms = 10
+                sandbox_health = "unknown"
+                try:
+                    client = await get_sandbox_client_with_store(store)
+                    data = await client.health()
+                    sandbox_health = data.get("status", "unknown")
+                    sandbox_available = data.get("status") == "healthy"
+                    active_sandbox_instances = data.get("active_vms", 0)
+                    max_sandbox_instances = data.get("max_vms", 10)
+                except Exception:
+                    sandbox_available = False
+                    active_sandbox_instances = 0
+                    max_sandbox_instances = 10
 
-            payload = {
-                "timestamp": time.time(),
-                "sandbox_manager": settings.sandbox_manager_url,
-                "sandbox_health": sandbox_health,
-                "kvm_available": kvm_available,
-                "active_sandboxes": len(sandboxes),
-                "running_sandboxes": running,
-                "active_vms": active_vms,
-                "max_vms": max_vms,
-                "connections": len(list_connections()),
-                "query_cache": query_cache.stats(),
-                "schema_cache": schema_cache.stats(),
-            }
+                connections = await store.list_connections()
 
-            yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(5)
+                payload = {
+                    "timestamp": time.time(),
+                    "sandbox_health": sandbox_health,
+                    "sandbox_available": sandbox_available,
+                    "active_sandboxes": len(sandboxes),
+                    "running_sandboxes": running,
+                    "active_sandbox_instances": active_sandbox_instances,
+                    "max_sandbox_instances": max_sandbox_instances,
+                    "connections": len(connections),
+                }
+
+                yield f"data: {json.dumps(payload)}\n\n"
+                await asyncio.sleep(5)
+        finally:
+            _sse_semaphore.release()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -74,39 +100,70 @@ _CONNECTOR_TIERS = {
         "tier": 1,
         "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": True,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": True, "parallel_schema": True,
-            "table_sizes": True, "iam_auth": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": True,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": True,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": True,
+            "parallel_schema": True,
+            "table_sizes": True,
+            "iam_auth": True,
         },
     },
     "mysql": {
         "tier": 1,
         "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "table_sizes": True, "iam_auth": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": True,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "table_sizes": True,
+            "iam_auth": True,
         },
     },
     "snowflake": {
         "tier": 1,
         "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": True,
-            "key_pair_auth": True, "oauth_auth": True, "warehouse_config": True,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": True,
+            "key_pair_auth": True,
+            "oauth_auth": True,
+            "warehouse_config": True,
             "table_sizes": True,
         },
     },
@@ -114,13 +171,23 @@ _CONNECTOR_TIERS = {
         "tier": 1,
         "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": False, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": False, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "partitioning_info": True, "clustering_info": True,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": False,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": False,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "partitioning_info": True,
+            "clustering_info": True,
             "service_account_auth": True,
         },
     },
@@ -128,65 +195,117 @@ _CONNECTOR_TIERS = {
         "tier": 2,
         "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": True,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": True,
-            "dist_sort_keys": True, "iam_auth": True, "table_sizes": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": True,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": True,
+            "dist_sort_keys": True,
+            "iam_auth": True,
+            "table_sizes": True,
         },
     },
     "clickhouse": {
         "tier": 2,
         "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": False, "indexes": False, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "engine_info": True, "sorting_key_info": True,
-            "native_and_http": True, "table_sizes": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": False,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "engine_info": True,
+            "sorting_key_info": True,
+            "native_and_http": True,
+            "table_sizes": True,
         },
     },
     "databricks": {
         "tier": 2,
         "label": "Tier 2 — Stable",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": False,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "unity_catalog": True, "pat_auth": True, "table_sizes": True,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": False,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "unity_catalog": True,
+            "pat_auth": True,
+            "table_sizes": True,
         },
     },
     "mssql": {
         "tier": 2,
         "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "table_sizes": True, "azure_ad_auth": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": True,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "table_sizes": True,
+            "azure_ad_auth": True,
         },
     },
     "trino": {
         "tier": 2,
         "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
+            "ssl": True,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
             "federated_query": True,
         },
     },
@@ -194,12 +313,21 @@ _CONNECTOR_TIERS = {
         "tier": 3,
         "label": "Tier 3 — Basic",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
-            "connection_pooling": False, "parallel_schema": False,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": False,
+            "connection_pooling": False,
+            "parallel_schema": False,
             "motherduck": True,
         },
     },
@@ -207,19 +335,28 @@ _CONNECTOR_TIERS = {
         "tier": 3,
         "label": "Tier 3 — Basic",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": False,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
-            "connection_pooling": False, "parallel_schema": False,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": False,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": False,
+            "connection_pooling": False,
+            "parallel_schema": False,
         },
     },
 }
 
 
-@router.get("/connectors/capabilities")
-async def get_connector_capabilities(db_type: str | None = None):
+@router.get("/connectors/capabilities", dependencies=[RequireScope("read")])
+async def get_connector_capabilities(_: UserID, db_type: str | None = None):
     """Return connector tier classification and feature matrix.
 
     HEX-style tier system showing which features each connector supports.
@@ -245,13 +382,15 @@ async def get_connector_capabilities(db_type: str | None = None):
     for dt, info in _CONNECTOR_TIERS.items():
         feature_count = sum(1 for v in info["features"].values() if v)
         total_features = len(info["features"])
-        tiers[info["tier"]].append({
-            "db_type": dt,
-            **info,
-            "feature_score": round(feature_count / total_features * 100),
-            "feature_count": feature_count,
-            "total_features": total_features,
-        })
+        tiers[info["tier"]].append(
+            {
+                "db_type": dt,
+                **info,
+                "feature_score": round(feature_count / total_features * 100),
+                "feature_count": feature_count,
+                "total_features": total_features,
+            }
+        )
 
     return {
         "tier_1": tiers[1],
@@ -261,13 +400,13 @@ async def get_connector_capabilities(db_type: str | None = None):
     }
 
 
-@router.get("/connections/{name}/capabilities")
-async def get_connection_capabilities(name: str):
+@router.get("/connections/{name}/capabilities", dependencies=[RequireScope("read")])
+async def get_connection_capabilities(name: str, store: StoreD):
     """Return capabilities for a specific connection based on its db_type.
 
     Combines tier info with live connection status for a complete picture.
     """
-    info = get_connection(name)
+    info = await store.get_connection(name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 

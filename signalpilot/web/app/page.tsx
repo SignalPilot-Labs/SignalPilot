@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAppAuth } from "@/lib/auth-context";
 
 /**
  * Landing / boot sequence page.
  * Shows a brief terminal-style boot animation then redirects to dashboard.
+ * In cloud mode, unauthenticated users are redirected to /sign-in instead.
  * Gives the product a strong first impression — "infra that takes itself seriously."
  */
 
@@ -18,8 +20,8 @@ const BOOT_LINES: { text: string; delay: number; color: string; check?: boolean 
   { text: "├── row_limit", delay: 850, color: "text-[var(--color-text-dim)]", check: true },
   { text: "├── pii_redact", delay: 1000, color: "text-[var(--color-text-dim)]", check: true },
   { text: "└── audit_log", delay: 1150, color: "text-[var(--color-text-dim)]", check: true },
-  { text: "firecracker sandbox: connected", delay: 1400, color: "text-[var(--color-success)]" },
-  { text: "kvm acceleration: available", delay: 1550, color: "text-[var(--color-success)]" },
+  { text: "gvisor sandbox: connected", delay: 1400, color: "text-[var(--color-success)]" },
+  { text: "sandbox runtime: available", delay: 1550, color: "text-[var(--color-success)]" },
   { text: "mcp server: listening", delay: 1700, color: "text-[var(--color-success)]" },
   { text: "", delay: 1850, color: "" },
   { text: "ready. redirecting to dashboard...", delay: 1950, color: "text-[var(--color-text-muted)]" },
@@ -27,6 +29,7 @@ const BOOT_LINES: { text: string; delay: number; color: string; check?: boolean 
 
 export default function Home() {
   const router = useRouter();
+  const { isAuthenticated, isCloudMode, isLoaded } = useAppAuth();
   const [visibleLines, setVisibleLines] = useState<number>(0);
   const [showCursor, setShowCursor] = useState(true);
 
@@ -36,11 +39,6 @@ export default function Home() {
       setTimeout(() => setVisibleLines(i + 1), line.delay)
     );
 
-    // Redirect after boot sequence
-    const redirect = setTimeout(() => {
-      router.push("/dashboard");
-    }, 3200);
-
     // Cursor blink
     const cursorInterval = setInterval(() => {
       setShowCursor((prev) => !prev);
@@ -48,13 +46,39 @@ export default function Home() {
 
     return () => {
       timers.forEach(clearTimeout);
-      clearTimeout(redirect);
       clearInterval(cursorInterval);
     };
-  }, [router]);
+  }, []);
+
+  // Redirect after boot sequence — wait for Clerk to load before deciding where
+  useEffect(() => {
+    if (!isLoaded) return; // wait for Clerk to initialize
+
+    const redirect = setTimeout(() => {
+      if (isCloudMode && !isAuthenticated) {
+        router.push("/sign-in");
+      } else {
+        router.push("/dashboard");
+      }
+    }, 3200);
+
+    return () => clearTimeout(redirect);
+  }, [router, isLoaded, isAuthenticated, isCloudMode]);
+
+  // Skip button respects the same logic
+  const handleSkip = () => {
+    if (isCloudMode && !isAuthenticated) {
+      router.push("/sign-in");
+    } else {
+      router.push("/dashboard");
+    }
+  };
+
+  const skipLabel =
+    isCloudMode && !isAuthenticated ? "sign in →" : "skip → dashboard";
 
   return (
-    <div className="flex items-center justify-center min-h-screen -ml-56 relative">
+    <div className="flex items-center justify-center min-h-screen relative">
       {/* Background grid pulse — centered radial */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
         <svg width="100%" height="100%" className="opacity-[0.025]">
@@ -177,10 +201,10 @@ export default function Home() {
         {/* Skip link */}
         <div className="mt-4 text-center">
           <button
-            onClick={() => router.push("/dashboard")}
+            onClick={handleSkip}
             className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
           >
-            skip &rarr; dashboard
+            {skipLabel}
           </button>
         </div>
       </div>

@@ -1,1 +1,0 @@
-Continue working. Focus on the highest-severity issues first — CRITICAL and HIGH findings from the security audit, any actual bugs, and missing input validation at system boundaries. Commit each fix separately.

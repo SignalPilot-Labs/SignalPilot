@@ -24,19 +24,21 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
 import { CodeBlock } from "@/components/ui/code-block";
+import { SectionHeader } from "@/components/ui/section-header";
 
-function SectionHeader({ icon: Icon, title, iconColor }: { icon: React.ElementType; title: string; iconColor?: string }) {
-  return (
-    <div className="section-header mb-4">
-      <div className="flex items-center gap-2">
-        <Icon className={`w-3.5 h-3.5 ${iconColor || "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
-        <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{title}</span>
-      </div>
-    </div>
-  );
-}
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 export default function SettingsPage() {
+  if (IS_CLOUD_MODE) {
+    return (
+      <div className="p-10">
+        <PageHeader title="settings" subtitle="cloud mode" description="Gateway settings are managed by the platform in cloud mode." />
+        <p className="text-[13px] text-[var(--color-text-dim)] mt-4">
+          Use <a href="/settings/api-keys" className="underline">API Keys</a>, <a href="/settings/byok" className="underline">BYOK</a>, or <a href="/security" className="underline">Security</a> pages instead.
+        </p>
+      </div>
+    );
+  }
   const { toast } = useToast();
   const [settings, setSettings] = useState<GatewaySettings | null>(null);
   const [saving, setSaving] = useState(false);
@@ -55,7 +57,7 @@ export default function SettingsPage() {
       setSettings(s);
       setBlockedTables(s.blocked_tables || []);
     }).catch(() => {});
-    const stored = localStorage.getItem("sp_api_key") || "";
+    const stored = sessionStorage.getItem("sp_api_key") || localStorage.getItem("sp_api_key") || "";
     setBrowserApiKey(stored);
   }, []);
 
@@ -125,55 +127,14 @@ export default function SettingsPage() {
         </div>
       </TerminalBar>
 
-      {/* Browser Authentication */}
+      {/* BYOS Sandbox Configuration */}
+      {!IS_CLOUD_MODE && (
       <section className="mb-8">
-        <SectionHeader icon={Key} title="browser authentication" />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-4">
-            <div className="flex items-start gap-3 p-3 border border-[var(--color-border)] bg-[var(--color-bg)]">
-              <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
-              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
-                if the gateway has an api key configured, enter it here. stored in localStorage, sent as Bearer token.
-              </p>
-            </div>
-            <div>
-              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">api key</label>
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showApiKey ? "text" : "password"}
-                    value={browserApiKey}
-                    onChange={(e) => setBrowserApiKey(e.target.value)}
-                    placeholder="enter gateway api key"
-                    className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
-                  />
-                  <button onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
-                    {showApiKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                  </button>
-                </div>
-                <button onClick={handleSaveBrowserKey}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs tracking-wider uppercase transition-all hover:opacity-90">
-                  <Key className="w-3 h-3" /> save
-                </button>
-              </div>
-              {browserKeySaved && (
-                <span className="flex items-center gap-1 mt-2 text-[12px] text-[var(--color-success)] tracking-wider animate-fade-in">
-                  <CheckCircle2 className="w-3 h-3" /> saved
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* BYOF Firecracker Configuration */}
-      <section className="mb-8">
-        <SectionHeader icon={Server} title="firecracker sandbox (byof)" />
+        <SectionHeader icon={Server} title="sandbox configuration (byos)" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="p-6 space-y-4">
             <p className="text-[12px] text-[var(--color-text-dim)] -mt-1 mb-2 tracking-wider">
-              bring your own firecracker — point to any sandbox manager endpoint.
+              bring your own sandbox — point to any sandbox manager endpoint.
             </p>
             <div>
               <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">provider</label>
@@ -181,7 +142,7 @@ export default function SettingsPage() {
                 onChange={(e) => setSettings({ ...settings, sandbox_provider: e.target.value as "local" | "remote" })}
                 className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]">
                 <option value="local">local (same machine / docker)</option>
-                <option value="remote">remote (byof hosted instance)</option>
+                <option value="remote">remote (byos hosted instance)</option>
               </select>
             </div>
             <div>
@@ -238,6 +199,7 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+      )}
 
       {/* Governance Defaults */}
       <section className="mb-8">
@@ -338,7 +300,7 @@ export default function SettingsPage() {
               <input type="text" value={settings.gateway_url}
                 onChange={(e) => setSettings({ ...settings, gateway_url: e.target.value })}
                 className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide" />
-              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandbox vms use to call back to the gateway</p>
+              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">url sandboxes use to call back to the gateway</p>
             </div>
             <div>
               <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">gateway api key</label>
@@ -374,65 +336,43 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* MCP Integration */}
+      {/* Browser Authentication */}
       <section className="mb-8">
-        <SectionHeader icon={Cpu} title="mcp integration" />
+        <SectionHeader icon={Key} title="browser authentication" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-          <div className="p-6 space-y-5">
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-              connect claude code or any mcp client to signalpilot:
-            </p>
-
-            {/* Step-by-step setup */}
-            <div className="space-y-3">
-              {[
-                { step: "01", label: "install", code: "pip install signalpilot" },
-                { step: "02", label: "register", code: "claude mcp add signalpilot -- python -m gateway.mcp_server" },
-                { step: "03", label: "verify", code: "claude mcp list | grep signalpilot" },
-              ].map((s) => (
-                <div key={s.step} className="flex items-start gap-3">
-                  <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider mt-2.5 w-5">{s.step}</span>
-                  <div className="flex-1">
-                    <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
-                    <CodeBlock
-                      code={s.code}
-                      language="bash"
-                      showLineNumbers={false}
-                      maxHeight="3rem"
-                    />
-                  </div>
-                </div>
-              ))}
+          <div className="p-6 space-y-4">
+            <div className="flex items-start gap-3 p-3 border border-[var(--color-border)] bg-[var(--color-bg)]">
+              <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
+              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                if the gateway has an api key configured, enter it here. stored in localStorage, sent as Bearer token.
+              </p>
             </div>
-
-            {/* Available tools */}
-            <div className="pt-3 border-t border-[var(--color-border)]">
-              <div className="flex items-center gap-2 mb-3">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                  <rect x="1" y="1" width="10" height="10" stroke="var(--color-success)" strokeWidth="1" fill="none" opacity="0.4" />
-                  <path d="M4 6L5.5 7.5L8 4.5" stroke="var(--color-success)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">available tools</span>
+            <div>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">api key</label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showApiKey ? "text" : "password"}
+                    value={browserApiKey}
+                    onChange={(e) => setBrowserApiKey(e.target.value)}
+                    placeholder="enter gateway api key"
+                    className="w-full px-3 py-2 pr-10 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                  />
+                  <button onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
+                    {showApiKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  </button>
+                </div>
+                <button onClick={handleSaveBrowserKey}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs tracking-wider uppercase transition-all hover:opacity-90">
+                  <Key className="w-3 h-3" /> save
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { name: "query_database", desc: "governed sql queries" },
-                  { name: "execute_code", desc: "sandbox code execution" },
-                  { name: "describe_table", desc: "schema introspection" },
-                  { name: "check_budget", desc: "spending limit status" },
-                ].map(tool => (
-                  <div key={tool.name} className="flex items-center gap-2.5 px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors group">
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0">
-                      <rect width="10" height="10" fill="var(--color-success)" opacity="0.15" />
-                      <rect x="2.5" y="2.5" width="5" height="5" fill="var(--color-success)" />
-                    </svg>
-                    <div className="min-w-0">
-                      <code className="text-[12px] text-[var(--color-text-muted)] tracking-wider block">{tool.name}</code>
-                      <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">{tool.desc}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {browserKeySaved && (
+                <span className="flex items-center gap-1 mt-2 text-[12px] text-[var(--color-success)] tracking-wider animate-fade-in">
+                  <CheckCircle2 className="w-3 h-3" /> saved
+                </span>
+              )}
             </div>
           </div>
         </div>

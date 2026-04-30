@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function NotFound() {
   return (
-    <div className="flex items-center justify-center min-h-screen -ml-56">
+    <div className="flex items-center justify-center min-h-screen">
       <div className="text-center max-w-md">
         {/* Terminal-style 404 SVG */}
         <svg width="240" height="140" viewBox="0 0 240 140" fill="none" className="mx-auto mb-8">

@@ -30,9 +30,7 @@ class TestValidateSQL:
         assert "name" in result.columns
 
     def test_select_with_join(self):
-        result = validate_sql(
-            "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id"
-        )
+        result = validate_sql("SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id")
         assert result.ok
         assert "users" in result.tables
         assert "orders" in result.tables

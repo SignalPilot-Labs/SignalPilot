@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", 
 class TestSnowflakeConnectorParsing:
     def test_pipe_delimited_format(self):
         """Legacy pipe-delimited format should be parsed correctly."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         result = connector._parse_connection("snowflake://myaccount|myuser|mypass|mydb|mywh|myschema|myrole")
         assert result["account"] == "myaccount"
@@ -23,7 +23,7 @@ class TestSnowflakeConnectorParsing:
 
     def test_url_format(self):
         """Standard URL format should be parsed correctly."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         result = connector._parse_connection("snowflake://myuser:mypass@myaccount/mydb/myschema?warehouse=mywh&role=myrole")
         assert result["account"] == "myaccount"
@@ -36,7 +36,7 @@ class TestSnowflakeConnectorParsing:
 
     def test_account_only_fallback(self):
         """Plain account string should parse with empty credentials."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         result = connector._parse_connection("xy12345.us-east-1")
         assert result["account"] == "xy12345.us-east-1"
@@ -44,7 +44,7 @@ class TestSnowflakeConnectorParsing:
 
     def test_credential_extras_timeout(self):
         """set_credential_extras should update timeout settings."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         connector.set_credential_extras({
             "connection_timeout": 30,
@@ -57,21 +57,21 @@ class TestSnowflakeConnectorParsing:
 
     def test_default_keepalive(self):
         """Default keepalive should be 15 minutes."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         assert connector._keepalive is True
         assert connector._keepalive_heartbeat == 900
 
     def test_disable_ocsp_via_url(self):
         """URL parameter disable_ocsp_checks=true should be parsed."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         result = connector._parse_connection("snowflake://user:pass@account/db/schema?disable_ocsp_checks=true")
         assert result.get("disable_ocsp_checks") is True
 
     def test_oauth_credential_extras(self):
         """OAuth token and auth method from credential extras should be stored."""
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         connector.set_credential_extras({
             "auth_method": "oauth",
@@ -83,7 +83,7 @@ class TestSnowflakeConnectorParsing:
     def test_oauth_missing_token_raises(self):
         """OAuth auth without a token should raise RuntimeError."""
         import asyncio
-        from gateway.connectors.snowflake import SnowflakeConnector
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
         connector = SnowflakeConnector()
         connector.set_credential_extras({"auth_method": "oauth"})
         with pytest.raises(RuntimeError, match="OAuth auth requires an access token"):

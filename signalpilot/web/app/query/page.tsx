@@ -454,7 +454,7 @@ export default function QueryExplorerPage() {
 
       {/* Schema context panel */}
       {showSchema && (
-        <div className="mb-4 border border-[var(--color-border)] bg-[var(--color-bg-card)] flex-shrink-0 animate-fade-in">
+        <div className="mb-4 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-fade-in" style={{ maxHeight: "25vh" }}>
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <Table2 className="w-3 h-3 text-blue-400" strokeWidth={1.5} />
@@ -487,7 +487,7 @@ export default function QueryExplorerPage() {
               <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
             </div>
           ) : (
-            <pre className="px-4 py-3 text-[12px] text-[var(--color-text-muted)] overflow-x-auto font-mono leading-relaxed max-h-[200px] overflow-y-auto whitespace-pre">
+            <pre className="px-4 py-3 text-[12px] text-[var(--color-text-muted)] overflow-x-auto font-mono leading-relaxed overflow-y-auto whitespace-pre" style={{ maxHeight: "calc(25vh - 40px)" }}>
               {schemaContext}
             </pre>
           )}

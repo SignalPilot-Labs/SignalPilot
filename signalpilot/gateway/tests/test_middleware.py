@@ -1,9 +1,10 @@
 """Tests for the middleware layer — authentication, rate limiting, security headers."""
 
-import pytest
 import time
 
-from gateway.middleware import APIKeyAuthMiddleware, RateLimitMiddleware
+import pytest
+
+from gateway.http import APIKeyAuthMiddleware, RateLimitMiddleware
 
 
 class TestRateLimitMiddleware:
@@ -34,11 +35,19 @@ class TestMiddlewarePublicPaths:
     """Verify public path list."""
 
     def test_health_is_public(self):
-        from gateway.middleware import PUBLIC_PATHS
+        from gateway.http import PUBLIC_PATHS
+
         assert "/health" in PUBLIC_PATHS
 
     def test_api_endpoints_not_public(self):
-        from gateway.middleware import PUBLIC_PATHS
+        from gateway.http import PUBLIC_PATHS
+
         assert "/api/settings" not in PUBLIC_PATHS
         assert "/api/connections" not in PUBLIC_PATHS
         assert "/api/query" not in PUBLIC_PATHS
+
+    def test_metrics_not_public(self):
+        """Metrics endpoint must require auth to prevent infrastructure topology leakage."""
+        from gateway.http import PUBLIC_PATHS
+
+        assert "/api/metrics" not in PUBLIC_PATHS

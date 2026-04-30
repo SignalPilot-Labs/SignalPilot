@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 # DuckDB connector tests — tests against in-memory DuckDB
-from signalpilot.gateway.gateway.connectors.duckdb import DuckDBConnector, HAS_DUCKDB
+from signalpilot.gateway.gateway.connectors.drivers.duckdb import DuckDBConnector, HAS_DUCKDB
 from signalpilot.gateway.gateway.connectors.pool_manager import PoolManager
 
 

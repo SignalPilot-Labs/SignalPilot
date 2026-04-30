@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", 
 class TestDatabricksConnectorParsing:
     def test_pipe_delimited_format(self):
         """Pipe-delimited legacy format should be parsed correctly."""
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
         connector = DatabricksConnector()
         result = connector._parse_connection("databricks://myhost.databricks.net|/sql/1.0/warehouses/abc|token123|main|default")
         assert result["host"] == "myhost.databricks.net"
@@ -22,7 +22,7 @@ class TestDatabricksConnectorParsing:
 
     def test_url_format(self):
         """URL format with query params should be parsed correctly."""
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
         connector = DatabricksConnector()
         result = connector._parse_connection("databricks://mytoken@myhost.databricks.net/sql/1.0/warehouses/xyz?catalog=prod&schema=analytics")
         assert result["host"] == "myhost.databricks.net"
@@ -32,7 +32,7 @@ class TestDatabricksConnectorParsing:
 
     def test_host_only_fallback(self):
         """Plain host string should parse as host with empty credentials."""
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
         connector = DatabricksConnector()
         result = connector._parse_connection("myhost.databricks.net")
         assert result["host"] == "myhost.databricks.net"
@@ -40,7 +40,7 @@ class TestDatabricksConnectorParsing:
 
     def test_credential_extras_stored(self):
         """set_credential_extras should store timeout settings."""
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
         connector = DatabricksConnector()
         connector.set_credential_extras({
             "connection_timeout": 60,
@@ -51,7 +51,7 @@ class TestDatabricksConnectorParsing:
 
     def test_default_timeouts(self):
         """Default timeout values should be sensible."""
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
         connector = DatabricksConnector()
         assert connector._connection_timeout == 30
         assert connector._query_timeout is None
@@ -59,7 +59,7 @@ class TestDatabricksConnectorParsing:
     def test_schema_entry_has_foreign_keys_field(self):
         """Schema entries should initialize foreign_keys as empty list."""
         # This verifies the schema structure matches what implicit join detection expects
-        from gateway.connectors.databricks import DatabricksConnector
+        from gateway.connectors.drivers.databricks import DatabricksConnector
         connector = DatabricksConnector()
         # The schema building code initializes foreign_keys: []
         # We can't test the full flow without a live connection,

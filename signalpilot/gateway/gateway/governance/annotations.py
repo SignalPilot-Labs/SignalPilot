@@ -7,7 +7,8 @@ Loads YAML sidecar files with:
 - PII flags with redaction rules (hash, mask, drop)
 - Blocked tables that agents should never query
 
-Annotations are stored in ~/.signalpilot/schema.yml or alongside dbt models.
+Annotations are stored alongside dbt models or in SP_DATA_DIR.
+Cache is keyed by (org_id, connection_name) to isolate orgs.
 """
 
 from __future__ import annotations
@@ -18,8 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..config import get_governance_settings
+
 try:
     import yaml
+
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -28,6 +32,7 @@ except ImportError:
 @dataclass
 class ColumnAnnotation:
     """Annotations for a single column."""
+
     description: str = ""
     business_name: str = ""
     unit: str = ""
@@ -39,6 +44,7 @@ class ColumnAnnotation:
 @dataclass
 class TableAnnotation:
     """Annotations for a single table."""
+
     description: str = ""
     owner: str = ""
     sensitivity: str = "internal"
@@ -50,6 +56,7 @@ class TableAnnotation:
 @dataclass
 class SchemaAnnotations:
     """Full set of annotations for a connection."""
+
     connection_name: str = ""
     tables: dict[str, TableAnnotation] = field(default_factory=dict)
 
@@ -105,25 +112,38 @@ class SchemaAnnotations:
         return result
 
 
-# TTL cache for annotations to avoid re-reading YAML on every query
-_annotations_cache: dict[str, tuple[float, SchemaAnnotations]] = {}
-_ANNOTATIONS_TTL = float(os.getenv("SP_ANNOTATIONS_TTL", "60"))  # seconds
+# TTL cache for annotations to avoid re-reading YAML on every query.
+# Keyed by (org_id, connection_name).
+_annotations_cache: dict[tuple[str, str], tuple[float, SchemaAnnotations]] = {}
+_ANNOTATIONS_TTL = get_governance_settings().sp_annotations_ttl  # seconds
 
 
 def load_annotations(
+    org_id: str,
     connection_name: str,
     search_paths: list[str | Path] | None = None,
 ) -> SchemaAnnotations:
     """Load schema annotations from YAML files (cached with TTL).
 
-    Searches in order:
-    1. Custom paths provided
-    2. ~/.signalpilot/annotations/{connection_name}.yml
-    3. ~/.signalpilot/schema.yml
+    In local mode (org_id == "local"):
+      - First tries per-org path: data_dir/annotations/local/{connection_name}.yml(.yaml)
+      - Falls back to flat path: data_dir/annotations/{connection_name}.yml(.yaml)
+
+    In cloud mode (org_id != "local"):
+      - Only tries per-org path: data_dir/annotations/{org_id}/{connection_name}.yml(.yaml)
+      - The flat fallback is DISABLED to prevent cross-tenant file reads.
+        Returns empty annotations if the per-org file is absent (fail closed).
+
+    Args:
+        org_id: The organisation identifier. "local" for local-mode deployments.
+        connection_name: The connection to load annotations for.
+        search_paths: Optional explicit paths (bypasses cache and FS search order).
     """
+    cache_key = (org_id, connection_name)
+
     # Check cache first (skip cache if custom search_paths provided)
-    if not search_paths and connection_name in _annotations_cache:
-        cached_at, cached = _annotations_cache[connection_name]
+    if not search_paths and cache_key in _annotations_cache:
+        cached_at, cached = _annotations_cache[cache_key]
         if time.monotonic() - cached_at < _ANNOTATIONS_TTL:
             return cached
 
@@ -131,40 +151,68 @@ def load_annotations(
         return SchemaAnnotations(connection_name=connection_name)
 
     data_dir = Path(os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
-    paths_to_try = []
+    paths_to_try: list[Path] = []
 
     if search_paths:
         paths_to_try.extend(Path(p) for p in search_paths)
-
-    paths_to_try.extend([
-        data_dir / "annotations" / f"{connection_name}.yml",
-        data_dir / "annotations" / f"{connection_name}.yaml",
-        data_dir / "schema.yml",
-        data_dir / "schema.yaml",
-    ])
+    elif org_id == "local":
+        # Local mode: per-org path first, then flat fallback
+        paths_to_try.extend(
+            [
+                data_dir / "annotations" / "local" / f"{connection_name}.yml",
+                data_dir / "annotations" / "local" / f"{connection_name}.yaml",
+                data_dir / "annotations" / f"{connection_name}.yml",
+                data_dir / "annotations" / f"{connection_name}.yaml",
+            ]
+        )
+    else:
+        # Cloud mode: per-org path only — flat fallback disabled (fail closed)
+        paths_to_try.extend(
+            [
+                data_dir / "annotations" / org_id / f"{connection_name}.yml",
+                data_dir / "annotations" / org_id / f"{connection_name}.yaml",
+            ]
+        )
 
     for path in paths_to_try:
         if path.exists():
             try:
                 result = _parse_annotation_file(path, connection_name)
                 if not search_paths:
-                    _annotations_cache[connection_name] = (time.monotonic(), result)
+                    _annotations_cache[cache_key] = (time.monotonic(), result)
                 return result
             except Exception:
                 continue
 
     empty = SchemaAnnotations(connection_name=connection_name)
     if not search_paths:
-        _annotations_cache[connection_name] = (time.monotonic(), empty)
+        _annotations_cache[cache_key] = (time.monotonic(), empty)
     return empty
 
 
-def invalidate_annotations_cache(connection_name: str | None = None):
-    """Clear cached annotations. Call when annotations are updated."""
-    if connection_name:
-        _annotations_cache.pop(connection_name, None)
-    else:
+def invalidate_annotations_cache(
+    org_id: str | None = None,
+    connection_name: str | None = None,
+) -> None:
+    """Clear cached annotations.
+
+    - Both None: clear all entries.
+    - org_id only: clear all entries for that org.
+    - Both given: clear one entry.
+    """
+    if org_id is None and connection_name is None:
         _annotations_cache.clear()
+    elif org_id is not None and connection_name is not None:
+        _annotations_cache.pop((org_id, connection_name), None)
+    elif org_id is not None:
+        keys_to_remove = [k for k in _annotations_cache if k[0] == org_id]
+        for k in keys_to_remove:
+            del _annotations_cache[k]
+    else:
+        # connection_name only — clear all entries with that connection across orgs
+        keys_to_remove = [k for k in _annotations_cache if k[1] == connection_name]
+        for k in keys_to_remove:
+            del _annotations_cache[k]
 
 
 def _parse_annotation_file(path: Path, connection_name: str) -> SchemaAnnotations:
@@ -218,7 +266,7 @@ def generate_skeleton(schema: dict[str, Any], connection_name: str) -> str:
     """
     lines = [
         f"# Schema annotations for {connection_name}",
-        f"# Generated by SignalPilot — fill in descriptions and PII rules",
+        "# Generated by SignalPilot — fill in descriptions and PII rules",
         "",
         "tables:",
     ]
@@ -226,17 +274,17 @@ def generate_skeleton(schema: dict[str, Any], connection_name: str) -> str:
     for key, table_info in schema.items():
         table_name = table_info.get("name", key)
         lines.append(f"  {table_name}:")
-        lines.append(f"    description: \"\"")
-        lines.append(f"    owner: \"\"")
-        lines.append(f"    sensitivity: internal")
-        lines.append(f"    blocked: false")
-        lines.append(f"    columns:")
+        lines.append('    description: ""')
+        lines.append('    owner: ""')
+        lines.append("    sensitivity: internal")
+        lines.append("    blocked: false")
+        lines.append("    columns:")
 
         for col in table_info.get("columns", []):
             col_name = col.get("name", "unknown")
             col_type = col.get("type", "")
             lines.append(f"      {col_name}:")
-            lines.append(f"        description: \"\"  # {col_type}")
+            lines.append(f'        description: ""  # {col_type}')
             # Suggest PII rules for common column names
             pii_suggestion = _suggest_pii_rule(col_name)
             if pii_suggestion:

@@ -1,1 +1,0 @@
-You're in the final phase. Polish and wrap up: ensure all new code has tests, clean up any rough edges, verify the system works end-to-end. When you're satisfied with your work, call end_session with a summary of everything you accomplished and the change count.

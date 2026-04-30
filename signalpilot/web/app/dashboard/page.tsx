@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Terminal,
   Database,
@@ -13,10 +15,19 @@ import {
   BarChart3,
   ArrowRight,
   Loader2,
+  CreditCard,
+  Key,
+  Plug,
+  Plus,
 } from "lucide-react";
-import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
+import { subscribeMetrics } from "@/lib/api";
+import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, usePlan, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
+import { useAppAuth } from "@/lib/auth-context";
+import { useSubscription } from "@/lib/subscription-context";
+import { useBackendClient } from "@/lib/backend-client";
+import type { UsageSummaryResponse, DailyUsagePoint } from "@/lib/backend-client";
 import { GovernancePipeline } from "@/components/ui/governance-pipeline";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
@@ -24,6 +35,11 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SystemDiagram } from "@/components/ui/system-diagram";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
+import { DashboardSkeleton } from "@/components/ui/skeleton";
+import { useOnboardingStatus } from "@/lib/onboarding";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { TierWordmark } from "@/components/branding/tier-wordmark";
+import { TierBadge } from "@/components/branding/tier-badge";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -33,6 +49,8 @@ function MetricCard({
   icon: Icon,
   accentColor,
   sparkValues,
+  actionHref,
+  actionLabel,
 }: {
   label: string;
   value: string | number;
@@ -40,12 +58,21 @@ function MetricCard({
   icon: React.ElementType;
   accentColor?: string;
   sparkValues?: number[];
+  actionHref?: string;
+  actionLabel?: string;
 }) {
   return (
     <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
-      <div className="flex items-center gap-2 mb-3">
-        <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
-        <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
+        </div>
+        {actionHref && (
+          <Link href={actionHref} className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+            <Plus className="w-2.5 h-2.5" />{actionLabel || "add"}
+          </Link>
+        )}
       </div>
       <p className="text-2xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
       {subtext && (
@@ -86,59 +113,431 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
   block: { label: "BLK", color: "text-[var(--color-error)]" },
 };
 
-export default function DashboardPage() {
-  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-  const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
-  const [budgetData, setBudgetData] = useState<{
-    sessions: Record<string, unknown>[];
-    total_spent_usd: number;
-  } | null>(null);
-  const { connections } = useConnection();
-  const [auditStats, setAuditStats] = useState({
-    queries: 0,
-    executions: 0,
-    blocks: 0,
-    total: 0,
-  });
-  const [cacheStats, setCacheStats] = useState<{
-    entries: number;
-    max_entries: number;
-    hits: number;
-    misses: number;
-    hit_rate: number;
-  } | null>(null);
-  const [connHealth, setConnHealth] = useState<Record<string, ConnectionHealthStats>>({});
+/* ── Cloud status section ── */
 
+/** Inner content for the subscription/keys/MCP grid.
+ *  Receives keyCount as a prop — no internal fetch needed. */
+function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
+  const { status } = useSubscription();
+  const { data: plan } = usePlan();
+  const planTier = plan?.tier ?? "free";
+  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
+
+  const statusLabel = status === "past_due" ? "past due" : status;
+
+  // MCP endpoint detection — static check, no API call
+  const mcpUrl =
+    process.env.NEXT_PUBLIC_MCP_URL ||
+    process.env.NEXT_PUBLIC_GATEWAY_URL ||
+    null;
+  const mcpConfigured = Boolean(mcpUrl);
+  const mcpDisplay = mcpUrl
+    ? mcpUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    : null;
+
+  const showUpgrade = planTier === "free" || planTier === "pro";
+
+  return (
+    <div className="grid grid-cols-3 gap-px mb-4 bg-[var(--color-border)] border border-[var(--color-border)]">
+      {/* Card 1: Subscription */}
+      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="flex items-center gap-2 mb-3">
+          <CreditCard className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <span className="text-[12px] leading-none text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            subscription
+          </span>
+        </div>
+        <div className="mb-1.5">
+          {planTier === "free" ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
+              <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
+            </span>
+          ) : (
+            <TierBadge />
+          )}
+        </div>
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+          {statusLabel}
+        </p>
+        {showUpgrade && (
+          <Link
+            href="/settings/billing"
+            className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+          >
+            upgrade <ArrowRight className="w-3 h-3" />
+          </Link>
+        )}
+      </div>
+
+      {/* Card 2: API Keys */}
+      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="flex items-center gap-2 mb-3">
+          <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            api keys
+          </span>
+        </div>
+        <p className="text-2xl font-light metric-value text-[var(--color-text)]">
+          {keyCount === null ? (
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
+          ) : keyCount === -1 ? (
+            "—"
+          ) : (
+            keyCount
+          )}
+        </p>
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+          of {maxApiKeys} allowed
+        </p>
+        <Link
+          href="/settings/api-keys"
+          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        >
+          manage <ArrowRight className="w-3 h-3" />
+        </Link>
+      </div>
+
+      {/* Card 3: MCP Endpoint */}
+      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="flex items-center gap-2 mb-3">
+          <Plug className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            mcp endpoint
+          </span>
+        </div>
+        <div className="flex items-center gap-2 mb-1.5">
+          <StatusDot
+            status={mcpConfigured ? "healthy" : "error"}
+            size={4}
+            pulse={mcpConfigured}
+          />
+          <span className={`text-[12px] tracking-wider ${mcpConfigured ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
+            {mcpConfigured ? "configured" : "not configured"}
+          </span>
+        </div>
+        {mcpDisplay && (
+          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider font-mono truncate">
+            {mcpDisplay}
+          </p>
+        )}
+        <Link
+          href="/settings/mcp-connect"
+          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        >
+          connect <ArrowRight className="w-3 h-3" />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/** Usage analytics card — receives summary and sparkPoints as props, no fetch of its own. */
+function UsageAnalyticsContent({
+  summary,
+  sparkPoints,
+}: {
+  summary: UsageSummaryResponse | null;
+  sparkPoints: DailyUsagePoint[] | null;
+}) {
+  const sparkValues = sparkPoints ? sparkPoints.map((d) => d.requests) : [];
+  const last7DaysTotal = summary?.total_requests_7d ?? null;
+  const activeKeys = summary?.active_keys ?? null;
+  const latestActivity = summary?.last_activity_at ?? null;
+
+  return (
+    <div className="mb-4">
+      <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+        {/* Card 1: Total requests (7d) */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <BarChart3 className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+              requests (7d)
+            </span>
+          </div>
+          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
+            {last7DaysTotal === null ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
+            ) : last7DaysTotal.toLocaleString()}
+          </p>
+          {sparkValues.length >= 2 && (
+            <div className="mt-2">
+              <Sparkline
+                values={sparkValues}
+                width={80}
+                height={20}
+                color="var(--color-success)"
+                fillOpacity={0.1}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Card 2: Active keys */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+              active keys
+            </span>
+          </div>
+          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
+            {activeKeys === null ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
+            ) : activeKeys}
+          </p>
+          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+            {summary !== null ? `of ${summary.active_keys} active (7d)` : ""}
+          </p>
+        </div>
+
+        {/* Card 3: Last activity */}
+        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+              last activity
+            </span>
+          </div>
+          {summary === null ? (
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
+          ) : latestActivity ? (
+            <TimeAgo
+              timestamp={new Date(latestActivity).getTime()}
+              className="text-lg font-light text-[var(--color-text)] tracking-wider"
+            />
+          ) : (
+            <p className="text-lg font-light text-[var(--color-text-dim)] tracking-wider">—</p>
+          )}
+        </div>
+      </div>
+
+      {/* View details link */}
+      <div className="flex justify-end mt-2">
+        <Link
+          href="/settings/usage"
+          aria-label="view full usage analytics"
+          className="inline-flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        >
+          view details <ArrowRight className="w-3 h-3" />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/** Shared content component that fetches keys + usage summary in parallel and
+ *  passes them to CloudStatusContent and UsageAnalyticsContent. */
+function CloudAndUsageContent() {
+  const client = useBackendClient();
+  const [keyCount, setKeyCount] = useState<number | null>(null);
+  const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
+  const [sparkPoints, setSparkPoints] = useState<DailyUsagePoint[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Fetch keys for key count and usage summary + daily sparkline in parallel
+    Promise.all([
+      client.getApiKeys(),
+      client.getUsageSummary().catch(() => null),
+      client.getUsageDaily(7).catch(() => null),
+    ]).then(([keysData, summaryData, dailyRes]) => {
+      if (cancelled) return;
+      setKeyCount(keysData.length);
+
+      if (summaryData !== null) {
+        setSummary(summaryData);
+      } else {
+        // Fall back to mock summary derived from keys
+        import("@/lib/mock-usage").then(({ generateDailyUsage, generateKeyUsage, getRateLimitStatus }) => {
+          if (cancelled) return;
+          const mockKeyStats = keysData.map((k) => generateKeyUsage(k));
+          const mockRateLimit = getRateLimitStatus("free");
+          const mockSummary: UsageSummaryResponse = {
+            total_requests: mockKeyStats.reduce((sum, s) => sum + s.totalRequests, 0),
+            total_requests_today: mockRateLimit.used,
+            total_requests_7d: mockKeyStats.reduce((sum, s) => sum + s.last7Days, 0),
+            total_requests_30d: mockKeyStats.reduce((sum, s) => sum + s.totalRequests, 0),
+            daily_limit: mockRateLimit.limit,
+            daily_used: mockRateLimit.used,
+            daily_reset_at: mockRateLimit.resetAt,
+            active_keys: mockKeyStats.filter((s) => s.last7Days > 0).length,
+            last_activity_at: mockKeyStats.reduce<string | null>((latest, s) => {
+              if (!latest) return s.lastUsedAt;
+              return s.lastUsedAt > latest ? s.lastUsedAt : latest;
+            }, null),
+          };
+          setSummary(mockSummary);
+          const mockDaily = generateDailyUsage(keysData, 7);
+          setSparkPoints(mockDaily);
+        });
+        return;
+      }
+
+      if (dailyRes !== null) {
+        setSparkPoints(dailyRes.points);
+      } else {
+        import("@/lib/mock-usage").then(({ generateDailyUsage }) => {
+          if (cancelled) return;
+          setSparkPoints(generateDailyUsage(keysData, 7));
+        });
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setKeyCount(-1);
+        setSummary({
+          total_requests: 0,
+          total_requests_today: 0,
+          total_requests_7d: 0,
+          total_requests_30d: 0,
+          daily_limit: 1000,
+          daily_used: 0,
+          daily_reset_at: new Date(Date.now() + 86400000).toISOString(),
+          active_keys: 0,
+          last_activity_at: null,
+        });
+        setSparkPoints([]);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [client]);
+
+  return (
+    <>
+      <CloudStatusContent keyCount={keyCount} />
+      <UsageAnalyticsContent summary={summary} sparkPoints={sparkPoints} />
+    </>
+  );
+}
+
+/** Gate — calls useAppAuth() and conditionally renders CloudAndUsageContent.
+ *  useBackendClient() is NEVER called here; it lives only in CloudAndUsageContent. */
+function CloudStatusSection() {
+  const { isCloudMode } = useAppAuth();
+  if (!isCloudMode) return null;
+  return <CloudAndUsageContent />;
+}
+
+/* ── Signed-in user greeting ── */
+function UserGreeting() {
+  const { isCloudMode, user } = useAppAuth();
+  const b = useTierBranding();
+
+  if (!isCloudMode || !user) return null;
+
+  const email = user.email ?? "—";
+
+  const showTierPrefix = b.enabled && b.tier !== "free";
+
+  return (
+    <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
+      {showTierPrefix && (
+        <>
+          <TierWordmark variant="header" />
+          <span className="mx-2 text-[var(--color-text-dim)]">·</span>
+        </>
+      )}
+      signed in as{" "}
+      <span className="text-[var(--color-text-muted)]">{email}</span>
+    </p>
+  );
+}
+
+/* ── DashboardOnboardingCheck — only rendered when isCloudMode is true ── */
+function DashboardOnboardingCheck() {
+  const router = useRouter();
+  const { activeOrgId, isAuthenticated } = useAppAuth();
+  const { isComplete, isLoading, markComplete } = useOnboardingStatus();
+  const [autoCompleting, setAutoCompleting] = useState(false);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    // Not signed in — nothing to do, auth protection handled by middleware
+    if (!isAuthenticated) return;
+
+    if (isComplete === true) return; // already done
+
+    if (activeOrgId) {
+      // User has an active org but onboarding flag not set.
+      // Auto-mark complete — they don't need the wizard.
+      setAutoCompleting(true);
+      markComplete()
+        .catch(() => {})
+        .finally(() => setAutoCompleting(false));
+    } else {
+      // No org — send to onboarding to create/join a team
+      router.push("/onboarding");
+    }
+  }, [isLoading, isComplete, activeOrgId, isAuthenticated, router, markComplete]);
+
+  if (isLoading || autoCompleting || (isComplete === false && !activeOrgId)) {
+    return <DashboardSkeleton />;
+  }
+
+  return <DashboardContent />;
+}
+
+/* ── DashboardGate — new default export ── */
+export default function DashboardGate() {
+  const { isCloudMode, isLoaded } = useAppAuth();
+
+  if (!isLoaded) {
+    return <DashboardSkeleton />;
+  }
+
+  if (isCloudMode) {
+    return <DashboardOnboardingCheck />;
+  }
+
+  return <DashboardContent />;
+}
+
+function DashboardContent() {
+  const { isCloudMode } = useAppAuth();
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+  const { connections } = useConnection();
+
+  // SWR data hooks
+  const { data: auditData } = useAudit({ limit: 50 });
+  const { data: budgetData } = useBudgets();
+  const { data: cacheStats } = useCacheStats();
+  const { data: healthData } = useConnectionsHealth();
+
+  // Derive audit entries + stats from SWR data
+  const recentAudit: AuditEntry[] = auditData?.entries ?? [];
+  const auditStats = useMemo(() => {
+    const stats = { queries: 0, executions: 0, blocks: 0, total: recentAudit.length };
+    for (const e of recentAudit) {
+      if (e.event_type === "query") stats.queries++;
+      else if (e.event_type === "execute") stats.executions++;
+      if (e.blocked) stats.blocks++;
+    }
+    return stats;
+  }, [recentAudit]);
+
+  // Derive connection health map from SWR data
+  const connHealth = useMemo(() => {
+    const map: Record<string, ConnectionHealthStats> = {};
+    if (healthData?.connections) {
+      for (const h of healthData.connections) {
+        map[h.connection_name] = h;
+      }
+    }
+    return map;
+  }, [healthData]);
+
+  // Prefetch common data on mount for faster navigation to other pages
+  useEffect(() => { prefetchCommonData(); }, []);
+
+  // SSE metrics subscription — live stream, not a REST fetch
   useEffect(() => {
     const unsub = subscribeMetrics((data) => {
       setMetrics(data);
     });
-
-    getAudit({ limit: 50 })
-      .then((res) => {
-        setRecentAudit(res.entries);
-        const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
-        for (const e of res.entries) {
-          if (e.event_type === "query") stats.queries++;
-          else if (e.event_type === "execute") stats.executions++;
-          if (e.blocked) stats.blocks++;
-        }
-        setAuditStats(stats);
-      })
-      .catch(() => {});
-
-    getBudgets().then(setBudgetData).catch(() => {});
-    getCacheStats().then(setCacheStats).catch(() => {});
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) {
-          map[h.connection_name] = h;
-        }
-        setConnHealth(map);
-      })
-      .catch(() => {});
-
     return unsub;
   }, []);
 
@@ -161,26 +560,30 @@ export default function DashboardPage() {
         path="dashboard --watch"
         status={
           <StatusDot
-            status={metrics?.sandbox_health === "healthy" && metrics?.kvm_available ? "healthy" : metrics ? "error" : "unknown"}
+            status={metrics?.sandbox_health === "healthy" && metrics?.sandbox_available ? "healthy" : metrics ? "error" : "unknown"}
             size={4}
             pulse={metrics?.sandbox_health === "healthy"}
           />
         }
       >
         <div className="flex items-center gap-8 text-xs">
-          <div className="flex items-center gap-2">
-            <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
-            <code className="text-[12px] text-[var(--color-text)]">
-              {metrics?.sandbox_manager || "—"}
-            </code>
-            <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
-          </div>
-          <div className="flex items-center gap-2">
-            <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">kvm:</span>
-            <StatusBadge ok={metrics ? metrics.kvm_available : null} />
-          </div>
+          {!isCloudMode && (
+            <div className="flex items-center gap-2">
+              <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
+              <code className="text-[12px] text-[var(--color-text)]">
+                {metrics?.sandbox_manager || "—"}
+              </code>
+              <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
+            </div>
+          )}
+          {!isCloudMode && (
+            <div className="flex items-center gap-2">
+              <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[var(--color-text-dim)]">sandbox:</span>
+              <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
+            </div>
+          )}
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
@@ -197,23 +600,28 @@ export default function DashboardPage() {
       </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
-        <MetricCard
-          label="active sandboxes"
-          value={metrics?.active_sandboxes ?? "—"}
-          subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
-          icon={Terminal}
-        />
-        <MetricCard
-          label="active vms"
-          value={metrics ? `${metrics.active_vms} / ${metrics.max_vms}` : "—"}
-          icon={Cpu}
-        />
+      <div className={`grid ${isCloudMode ? "grid-cols-2" : "grid-cols-4"} gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in`}>
+        {!isCloudMode && (
+          <MetricCard
+            label="active sandboxes"
+            value={metrics?.active_sandboxes ?? "—"}
+            subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
+            icon={Terminal}
+          />
+        )}
+        {!isCloudMode && (
+          <MetricCard
+            label="sandbox instances"
+            value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
+            icon={Cpu}
+          />
+        )}
         <MetricCard
           label="connections"
           value={connections.length}
           subtext={connections.length > 0 ? connections.map(c => c.db_type).filter((v, i, a) => a.indexOf(v) === i).join(", ") : undefined}
           icon={Database}
+          actionHref="/connections?action=new"
         />
         <MetricCard
           label="total spent"
@@ -316,7 +724,7 @@ export default function DashboardPage() {
       <div className="mb-8">
         <SystemDiagram
           connections={connections.length}
-          activeSandboxes={metrics?.active_sandboxes ?? 0}
+          activeSandboxes={isCloudMode ? 0 : (metrics?.active_sandboxes ?? 0)}
           governanceActive={true}
         />
       </div>
@@ -334,9 +742,9 @@ export default function DashboardPage() {
                 recent activity
               </span>
             </div>
-            <a href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            <Link href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
               view all <ArrowRight className="w-3 h-3" />
-            </a>
+            </Link>
           </div>
           <div className="divide-y divide-[var(--color-border)]">
             {recentAudit.length === 0 ? (
@@ -435,9 +843,14 @@ export default function DashboardPage() {
                   connections
                 </span>
               </div>
-              <a href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-                manage <ArrowRight className="w-3 h-3" />
-              </a>
+              <div className="flex items-center gap-3">
+                <Link href="/connections?action=new" className="flex items-center gap-1 px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+                  <Plus className="w-3 h-3" /> add
+                </Link>
+                <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                  manage <ArrowRight className="w-3 h-3" />
+                </Link>
+              </div>
             </div>
             <div className="divide-y divide-[var(--color-border)]">
               {connections.length === 0 ? (

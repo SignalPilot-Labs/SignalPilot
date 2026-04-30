@@ -13,16 +13,18 @@ from enum import Enum
 from typing import Any
 
 
-class PIIRule(str, Enum):
+class PIIRule(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Redaction strategy for PII columns."""
-    hash = "hash"       # SHA-256 hash of the value
-    mask = "mask"       # Partial masking (e.g., j***@email.com)
-    drop = "drop"       # Remove the column entirely
+
+    hash = "hash"  # SHA-256 hash of the value
+    mask = "mask"  # Partial masking (e.g., j***@email.com)
+    hide = "hide"  # Replace value with ***** (column still visible)
 
 
 @dataclass
 class PIIColumnConfig:
     """Configuration for a single PII column."""
+
     table: str
     column: str
     rule: PIIRule
@@ -36,13 +38,19 @@ class PIIRedactor:
     Rules are loaded from schema annotations (schema.yml) and keyed by
     lowercase column name for fast lookup.
     """
+
     # Map of lowercase column name -> rule
     _rules: dict[str, PIIRule] = field(default_factory=dict)
     # Columns that were redacted in the last call (for audit logging)
     _last_redacted: list[str] = field(default_factory=list)
 
-    def add_rule(self, column: str, rule: PIIRule) -> None:
+    def add_rule(self, column: str, rule: PIIRule | str) -> None:
         """Register a PII rule for a column name."""
+        if isinstance(rule, str):
+            # Backward compat: treat legacy "drop" as "hide"
+            if rule == "drop":
+                rule = "hide"
+            rule = PIIRule(rule)
         self._rules[column.lower()] = rule
 
     def add_rules_from_annotations(self, annotations: dict[str, Any]) -> None:
@@ -62,12 +70,16 @@ class PIIRedactor:
         }
         """
         tables = annotations.get("tables", {})
-        for table_name, table_config in tables.items():
+        for _table_name, table_config in tables.items():
             columns = table_config.get("columns", {})
             for col_name, col_config in columns.items():
                 pii_rule = col_config.get("pii")
-                if pii_rule and pii_rule in PIIRule.__members__:
-                    self._rules[col_name.lower()] = PIIRule(pii_rule)
+                if pii_rule:
+                    # Backward compat: treat legacy "drop" as "hide"
+                    if pii_rule == "drop":
+                        pii_rule = "hide"
+                    if pii_rule in PIIRule.__members__:
+                        self._rules[col_name.lower()] = PIIRule(pii_rule)
 
     def redact_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Apply PII redaction to a list of result rows.
@@ -88,11 +100,10 @@ class PIIRedactor:
                 rule = self._rules.get(col_lower)
                 if rule is None:
                     new_row[col] = val
-                elif rule == PIIRule.drop:
-                    # Drop the column entirely
+                elif rule == PIIRule.hide:
+                    new_row[col] = "*****"
                     if col_lower not in self._last_redacted:
                         self._last_redacted.append(col_lower)
-                    continue
                 elif rule == PIIRule.hash:
                     new_row[col] = _hash_value(val)
                     if col_lower not in self._last_redacted:
@@ -146,12 +157,12 @@ _PII_PATTERNS: dict[str, PIIRule] = {
     "routing_number": PIIRule.hash,
     "iban": PIIRule.hash,
     # Auth/secrets
-    "password": PIIRule.drop,
-    "password_hash": PIIRule.drop,
-    "secret": PIIRule.drop,
-    "api_key": PIIRule.drop,
-    "access_token": PIIRule.drop,
-    "refresh_token": PIIRule.drop,
+    "password": PIIRule.hide,
+    "password_hash": PIIRule.hide,
+    "secret": PIIRule.hide,
+    "api_key": PIIRule.hide,
+    "access_token": PIIRule.hide,
+    "refresh_token": PIIRule.hide,
     # Health
     "diagnosis": PIIRule.mask,
     "medical_record": PIIRule.hash,

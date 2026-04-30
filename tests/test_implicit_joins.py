@@ -6,7 +6,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "signalpilot", "gateway"))
 
-from gateway.main import _infer_implicit_joins
+from gateway.schema_utils import _infer_implicit_joins
 
 
 class TestImplicitJoinDetection:

@@ -4,8 +4,8 @@ import pytest
 
 from signalpilot.gateway.gateway.connectors.registry import get_connector, get_sqlite_connector
 from signalpilot.gateway.gateway.connectors.base import BaseConnector
-from signalpilot.gateway.gateway.connectors.postgres import PostgresConnector
-from signalpilot.gateway.gateway.connectors.duckdb import DuckDBConnector
+from signalpilot.gateway.gateway.connectors.drivers.postgres import PostgresConnector
+from signalpilot.gateway.gateway.connectors.drivers.duckdb import DuckDBConnector
 
 
 class TestConnectorRegistry:

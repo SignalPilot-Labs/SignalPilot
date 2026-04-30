@@ -25,7 +25,19 @@
 
 ---
 
-**Index** — [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
+## What SignalPilot Is
+
+**One entrypoint, three pieces of infrastructure** on the same gateway.
+
+Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code)**. Underneath it, three components do the work:
+
+1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 40 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
+2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 40 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
+3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://signalpilot.ai) for SSO and hosted history.
+
+---
+
+**Index** — [What It Is](#what-signalpilot-is) · [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
 
 ---
 
@@ -121,9 +133,9 @@ Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit loggi
 
 ---
 
-## Use With Claude Code (Plugin)
+## Use With Claude Code (Plugin) — Recommended
 
-The [`plugin/`](plugin/) directory adds SignalPilot tools + dbt skills to Claude Code.
+The [`plugin/`](plugin/) directory adds SignalPilot tools + dbt skills to Claude Code. This is the supported path.
 
 ```bash
 # Add the marketplace and install
@@ -150,6 +162,8 @@ See [`plugin/README.md`](plugin/README.md) for full details on included skills a
 ---
 
 ## Use With Any MCP Client
+
+> ⚠️ **Experimental for non-Claude clients.** The 40 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
 
 ### Claude Code / Claude Desktop
 

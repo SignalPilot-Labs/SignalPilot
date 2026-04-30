@@ -16,7 +16,7 @@
 
 ---
 
-## For Data & Platform Teams
+## For Agentic Data and Platform Teams
 
 We partner with data, analytics, and platform teams who want to put AI agents to work on real warehouse workloads — safely.
 
@@ -26,6 +26,57 @@ We partner with data, analytics, and platform teams who want to put AI agents to
 - **Enterprise support** — SSO, private deployments, SLAs, and hands-on engineering support.
 
 **Talk to us** about your data, dbt, or agent harness optimization workload: [cal.com/fahimaziz/autofyn-intro](https://cal.com/fahimaziz/autofyn-intro) · Learn more at [signalpilot.ai](https://www.signalpilot.ai/).
+
+---
+
+**Index** — [How It Works](#how-it-works) · [Try SignalPilot](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Use With Claude Code](#use-with-claude-code-plugin) · [Use With Any MCP Client](#use-with-any-mcp-client) · [Connect a Database](#connect-a-database) · [Project Structure](#project-structure) · [Community](#community)
+
+---
+
+## How It Works
+
+Five stages run on every task. The agent never writes SQL ad-hoc against your warehouse — it plans, scans, governs, builds, and reports through the SignalPilot gateway.
+
+### 01 — Describe what you need
+
+![Describe what you need](docs/images/ask.gif)
+
+- Plain-English goal in chat (e.g. *"Build `shopify__daily_shop` — orders, abandoned checkouts, fulfillment counts by day"*)
+- Parsed into a structured task — no SQL written, no warehouse touched yet
+
+### 02 — Agent scans your project
+
+![Agent scans your project](docs/images/scanning.gif)
+
+- Inspects dbt project + warehouse: sources, staging, marts, missing models
+- Flags date hazards (`current_date`, `now()`)
+- Resolves build order across the DAG — deterministic, not a guess
+
+### 03 — Every query is governed
+
+![Every query is governed](docs/images/governance.gif)
+
+- DDL (`DROP`, `CREATE`, `ALTER`) and DML (`INSERT`, `UPDATE`, `DELETE`) blocked at the parser
+- Auto-`LIMIT` injection on unbounded `SELECT`
+- Per-session budget cap kills queries that would scan over your $ threshold
+- Every query audited: timestamp, agent ID, policy reason, full SQL
+
+### 04 — DAG builds itself
+
+![DAG builds itself](docs/images/dag.gif)
+
+- `dbt parse` runs first to catch structural errors
+- Models materialized in topological order
+- Verifier agent reads dbt errors and proposes fixes (renames, missing CTEs, fan-out, date-spine guards)
+- Tests run after build and feed back into the loop
+
+### 05 — Full audit receipt
+
+![Full audit receipt](docs/images/receipt.gif)
+
+- Structured summary: duration · agent turns · governed queries · queries blocked · models built · columns validated
+- Every line traces back to a specific MCP tool call
+- One artifact for compliance, debugging, and cost review
 
 ---
 
@@ -49,7 +100,7 @@ That's it. Claude Code now has governed access to your databases.
 
 ---
 
-## What It Does
+## Architecture
 
 Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit logging by default. SignalPilot does — that's why agents on it set the SOTA on Spider 2.0-DBT.
 

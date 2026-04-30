@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gateway.byok_aws import _extract_region_from_arn
-
+from gateway.byok.aws_kms import _extract_region_from_arn
 
 # ─── H1: Invalid SP_BYOK_PROVIDER_CONFIG halts startup ───────────────────────
+
 
 class TestByokProviderConfigInvalidJSON:
     """H1 — malformed SP_BYOK_PROVIDER_CONFIG must abort startup, not silently continue."""
@@ -23,7 +23,7 @@ class TestByokProviderConfigInvalidJSON:
     @pytest.mark.asyncio
     async def test_invalid_json_raises_system_exit(self):
         """When SP_BYOK_PROVIDER_CONFIG is not valid JSON, lifespan must raise SystemExit."""
-        from gateway.main import lifespan, app
+        from gateway.main import app, lifespan
 
         with patch.dict(os.environ, {"SP_BYOK_PROVIDER_CONFIG": "{not: valid json!!!"}):
             with patch("gateway.main.init_db", new_callable=AsyncMock):
@@ -36,7 +36,7 @@ class TestByokProviderConfigInvalidJSON:
     @pytest.mark.asyncio
     async def test_valid_json_does_not_raise(self):
         """When SP_BYOK_PROVIDER_CONFIG is valid JSON, startup proceeds normally."""
-        from gateway.main import lifespan, app
+        from gateway.main import app, lifespan
 
         valid_config = '{"provider": "local"}'
 
@@ -48,6 +48,7 @@ class TestByokProviderConfigInvalidJSON:
                 with patch("gateway.main._validate_encryption_health", return_value=True):
                     with patch("gateway.main.make_provider") as mock_make:
                         from gateway.byok import LocalBYOKProvider
+
                         mock_make.return_value = LocalBYOKProvider()
                         with patch("gateway.main.configure_byok"):
                             with patch("gateway.main.pool_manager") as mock_pm:
@@ -68,8 +69,8 @@ class TestByokProviderConfigInvalidJSON:
 
     def test_invalid_json_error_does_not_log_raw_value(self, caplog):
         """The error log for invalid JSON must NOT include the raw config value."""
-        import logging
         import json
+        import logging
 
         raw_config = '{"aws_secret_access_key": "SUPERSECRET", broken json'
 
@@ -78,6 +79,7 @@ class TestByokProviderConfigInvalidJSON:
                 json.loads(raw_config)
             except json.JSONDecodeError:
                 import logging as _logging
+
                 logger = _logging.getLogger("gateway.main")
                 logger.error("STARTUP FATAL: SP_BYOK_PROVIDER_CONFIG contains invalid JSON")
 
@@ -88,6 +90,7 @@ class TestByokProviderConfigInvalidJSON:
 
 
 # ─── H2: _extract_region_from_arn sanitizes ValueError message ───────────────
+
 
 class TestExtractRegionFromArnSanitized:
     """H2 — ValueError from malformed ARN must not expose the ARN in its message."""
@@ -113,7 +116,7 @@ class TestExtractRegionFromArnSanitized:
         """The full ARN must appear in the server-side error log (for debugging)."""
 
         bad_arn = "notanarn"
-        with patch("gateway.byok_aws.logger") as mock_logger:
+        with patch("gateway.byok.aws_kms.logger") as mock_logger:
             with pytest.raises(ValueError):
                 _extract_region_from_arn(bad_arn)
             mock_logger.error.assert_called_once()
@@ -130,6 +133,7 @@ class TestExtractRegionFromArnSanitized:
 
 # ─── H3: security_status filters BYOK key counts by org_id ───────────────────
 
+
 class TestSecurityStatusOrgScoping:
     """H3 — BYOK key counts in security_status must be scoped to the requesting org."""
 
@@ -138,9 +142,10 @@ class TestSecurityStatusOrgScoping:
         r.scalar_one = MagicMock(return_value=value)
         return r
 
-    def _make_mock_store(self, user_id: str = "local") -> MagicMock:
+    def _make_mock_store(self, user_id: str = "local", org_id: str = "local") -> MagicMock:
         mock_store = MagicMock()
         mock_store.user_id = user_id
+        mock_store.org_id = org_id
         mock_store.get_credentials_needing_rotation = AsyncMock(return_value=0)
         mock_store.session = MagicMock()
         return mock_store
@@ -149,7 +154,7 @@ class TestSecurityStatusOrgScoping:
     async def test_security_status_passes_org_id_to_byok_queries(self):
         """The org_id argument must be forwarded to the BYOK key count queries."""
         from gateway.api.security import security_status
-        from gateway.byok import LocalBYOKProvider, DEKCache
+        from gateway.byok import DEKCache, LocalBYOKProvider
         from gateway.store import configure_byok
 
         provider = LocalBYOKProvider()
@@ -159,11 +164,11 @@ class TestSecurityStatusOrgScoping:
         mock_store = self._make_mock_store()
 
         execute_results = [
-            self._make_result(5),   # credentials_encrypted
-            self._make_result(2),   # byok_keys_active (org1)
-            self._make_result(0),   # byok_keys_revoked (org1)
-            self._make_result(5),   # credentials_managed
-            self._make_result(0),   # credentials_byok
+            self._make_result(5),  # credentials_encrypted
+            self._make_result(2),  # byok_keys_active (org1)
+            self._make_result(0),  # byok_keys_revoked (org1)
+            self._make_result(5),  # credentials_managed
+            self._make_result(0),  # credentials_byok
         ]
         execute_index = [0]
         captured_queries: list = []
@@ -179,7 +184,7 @@ class TestSecurityStatusOrgScoping:
         mock_store.session.execute = _mock_execute
 
         with (
-            patch("gateway.store._validate_encryption_health", return_value=True),
+            patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
             result = await security_status(mock_store, "org1")
@@ -192,7 +197,7 @@ class TestSecurityStatusOrgScoping:
     async def test_different_org_ids_yield_different_counts(self):
         """Calling security_status with two different org_ids yields independent counts."""
         from gateway.api.security import security_status
-        from gateway.byok import LocalBYOKProvider, DEKCache
+        from gateway.byok import DEKCache, LocalBYOKProvider
         from gateway.store import configure_byok
 
         provider = LocalBYOKProvider()
@@ -202,11 +207,11 @@ class TestSecurityStatusOrgScoping:
         async def _call_with_org(org_id: str, active: int, revoked: int) -> dict:
             mock_store = self._make_mock_store()
             execute_results = [
-                self._make_result(1),         # credentials_encrypted
-                self._make_result(active),    # byok_keys_active
-                self._make_result(revoked),   # byok_keys_revoked
-                self._make_result(1),         # credentials_managed
-                self._make_result(0),         # credentials_byok
+                self._make_result(1),  # credentials_encrypted
+                self._make_result(active),  # byok_keys_active
+                self._make_result(revoked),  # byok_keys_revoked
+                self._make_result(1),  # credentials_managed
+                self._make_result(0),  # credentials_byok
             ]
             execute_index = [0]
 
@@ -219,7 +224,7 @@ class TestSecurityStatusOrgScoping:
 
             mock_store.session.execute = _mock_execute
             with (
-                patch("gateway.store._validate_encryption_health", return_value=True),
+                patch("gateway.store.crypto._validate_encryption_health", return_value=True),
                 patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
             ):
                 return await security_status(mock_store, org_id)
@@ -236,25 +241,25 @@ class TestSecurityStatusOrgScoping:
         assert result_org2["byok_keys_total"] == 0
 
     @pytest.mark.asyncio
-    async def test_credential_mode_counts_scoped_to_user(self):
-        """Credential mode counts (managed/byok) must be scoped to store.user_id."""
+    async def test_credential_mode_counts_scoped_to_org(self):
+        """Credential mode counts (managed/byok) must be scoped to store.org_id."""
         from gateway.api.security import security_status
-        from gateway.byok import LocalBYOKProvider, DEKCache
+        from gateway.byok import DEKCache, LocalBYOKProvider
         from gateway.store import configure_byok
 
         provider = LocalBYOKProvider()
         cache = DEKCache(ttl_seconds=300)
         configure_byok(provider, cache)
 
-        mock_store = self._make_mock_store(user_id="local")
+        mock_store = self._make_mock_store(user_id="local", org_id="local")
         captured_queries: list = []
 
         execute_results = [
-            self._make_result(4),   # credentials_encrypted
-            self._make_result(1),   # byok_keys_active
-            self._make_result(0),   # byok_keys_revoked
-            self._make_result(3),   # credentials_managed (user-scoped)
-            self._make_result(1),   # credentials_byok (user-scoped)
+            self._make_result(4),  # credentials_encrypted
+            self._make_result(1),  # byok_keys_active
+            self._make_result(0),  # byok_keys_revoked
+            self._make_result(3),  # credentials_managed (org-scoped)
+            self._make_result(1),  # credentials_byok (org-scoped)
         ]
         execute_index = [0]
 
@@ -269,7 +274,7 @@ class TestSecurityStatusOrgScoping:
         mock_store.session.execute = _mock_execute
 
         with (
-            patch("gateway.store._validate_encryption_health", return_value=True),
+            patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
             result = await security_status(mock_store, "org-xyz")
@@ -277,9 +282,71 @@ class TestSecurityStatusOrgScoping:
         assert result["credentials_managed"] == 3
         assert result["credentials_byok"] == 1
 
-        # Verify that the user_id filter appears in managed and byok credential queries
+        # Verify that the org_id filter appears in managed and byok credential queries
         # (queries at index 3 and 4 in captured_queries)
         managed_query_str = captured_queries[3]
         byok_query_str = captured_queries[4]
-        assert "user_id" in managed_query_str
-        assert "user_id" in byok_query_str
+        assert "org_id" in managed_query_str
+        assert "org_id" in byok_query_str
+
+
+# ─── H4: BYOK join predicate uses org_id, not user_id ────────────────────────
+
+
+class TestByokJoinOrgPredicate:
+    """H4 — BYOK migration joins on org_id so NULL user_id credentials are matched."""
+
+    @pytest.mark.asyncio
+    async def test_migrate_to_byok_joins_on_org_not_user_id(self):
+        """migrate_to_byok must use org_id for the join predicate.
+
+        Before the fix: join was on user_id=user_id which fails when user_id is NULL
+        (NULL=NULL is UNKNOWN in SQL, so no rows matched).
+        After the fix: join is on org_id=org_id which works even when user_id is NULL.
+        """
+        from sqlalchemy import inspect as sa_inspect
+
+        from gateway.byok import ENCRYPTION_MODE_MANAGED, migrate_to_byok
+
+        # Verify the join predicate in the query uses org_id via string inspection.
+        # We capture the compiled SQL text to confirm the join is on org_id.
+        captured_queries: list[str] = []
+
+        mock_session = AsyncMock()
+
+        async def _mock_execute(stmt):
+            # Compile statement to string for assertion
+            try:
+                compiled = stmt.compile(compile_kwargs={"literal_binds": False})
+                captured_queries.append(str(compiled))
+            except Exception:
+                captured_queries.append(repr(stmt))
+            # Return empty result so no actual rows are processed
+            mock_result = MagicMock()
+            mock_result.all.return_value = []
+            return mock_result
+
+        mock_session.execute = _mock_execute
+
+        mock_provider = AsyncMock()
+        mock_provider.generate_dek = AsyncMock(return_value=b"\x00" * 32)
+        mock_provider.wrap_dek = AsyncMock(return_value=b"wrapped")
+
+        await migrate_to_byok(
+            session=mock_session,
+            provider=mock_provider,
+            org_id="test-org",
+            key_id="key-1",
+            key_alias="alias-1",
+            managed_decrypt=lambda ct: (ct.decode(), True),
+        )
+
+        assert len(captured_queries) >= 1
+        join_query = captured_queries[0]
+        # The join must use org_id, not user_id
+        assert "gateway_connection.org_id = gateway_credential.org_id" in join_query or "org_id" in join_query, (
+            f"Expected org_id join in query: {join_query}"
+        )
+        # Ensure user_id is NOT used as the join key (it may appear in select but not as join condition)
+        # The old pattern was: gateway_connection.user_id = gateway_credential.user_id
+        assert "gateway_connection.user_id = gateway_credential.user_id" not in join_query

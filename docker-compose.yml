@@ -11,15 +11,15 @@ services:
   db:
     image: postgres:17
     environment:
-      POSTGRES_USER: signalpilot
-      POSTGRES_PASSWORD: signalpilot
-      POSTGRES_DB: signalpilot
+      POSTGRES_USER: ${POSTGRES_USER:-signalpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
+      POSTGRES_DB: ${POSTGRES_DB:-signalpilot}
     ports:
       - "5601:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U signalpilot"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-signalpilot}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -32,9 +32,10 @@ services:
     ports:
       - "3300:3300"
     environment:
-      DATABASE_URL: postgresql+asyncpg://signalpilot:signalpilot@db:5432/signalpilot
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
       SP_DATA_DIR: /data
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_DEPLOYMENT_MODE: local
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
     volumes:
@@ -80,6 +81,7 @@ services:
     pids_limit: 256
     environment:
       SP_GATEWAY_URL: http://gateway:3300
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_MAX_VMS: "10"
     volumes:
       - ${HOST_DATA_DIR:-~}:/host-data:ro

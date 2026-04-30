@@ -17,6 +17,19 @@ const clerkEnabled = IS_CLOUD_MODE;
 // Security header helper — applied in BOTH paths
 // ---------------------------------------------------------------------------
 
+/**
+ * Validate that a string is a safe URL (http: or https: protocol, no injection chars).
+ * Prevents a compromised env var from injecting arbitrary CSP directives.
+ */
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
 function applySecurityHeaders(
   response: NextResponse,
   withClerk: boolean,
@@ -25,25 +38,41 @@ function applySecurityHeaders(
   const gatewayUrl =
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
-  let connectSrc = `'self' ${gatewayUrl}`;
-  let scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'";
+  let connectSrc = "'self'";
+  if (isSafeUrl(gatewayUrl)) {
+    connectSrc += ` ${gatewayUrl}`;
+  } else {
+    console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
+  }
+  // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
+  // scripts for hydration/chunk preloading that cannot carry a nonce (the nonce
+  // is generated in middleware but Next.js renders inline scripts at build time).
+  // 'unsafe-eval' is REMOVED — this is the main XSS hardening win, blocking
+  // eval(), new Function(), setTimeout(string), etc.
+  let scriptSrc = "'self' 'unsafe-inline'";
   let imgSrc = "'self' data: blob:";
-  // Fix JetBrains Mono CSP bug: cdn.jsdelivr.net was not in font-src
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 
   let workerSrc = "'self'";
 
+  let frameSrc = "'self'";
+
   if (withClerk) {
     connectSrc +=
-      " https://*.clerk.accounts.dev https://clerk-telemetry.com";
-    scriptSrc += " https://*.clerk.accounts.dev";
+      " https://*.clerk.accounts.dev https://*.signalpilot.ai https://clerk-telemetry.com";
+    scriptSrc += " https://*.clerk.accounts.dev https://*.signalpilot.ai https://challenges.cloudflare.com";
     imgSrc += " https://img.clerk.com";
     workerSrc += " blob:";
+    frameSrc += " https://challenges.cloudflare.com";
   }
 
   const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
-  connectSrc += ` ${backendUrl}`;
+  if (isSafeUrl(backendUrl)) {
+    connectSrc += ` ${backendUrl}`;
+  } else {
+    console.warn(`CSP: NEXT_PUBLIC_BACKEND_URL is not a valid URL, omitting from connect-src: ${backendUrl}`);
+  }
 
   response.headers.set(
     "Content-Security-Policy",
@@ -55,6 +84,8 @@ function applySecurityHeaders(
       "style-src 'self' 'unsafe-inline'",
       `img-src ${imgSrc}`,
       `font-src ${fontSrc}`,
+      `frame-src ${frameSrc}`,
+      "object-src 'none'",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -95,14 +126,18 @@ if (clerkEnabled) {
   const isPublicRoute = createRouteMatcher([
     "/sign-in(.*)",
     "/sign-up(.*)",
+    "/onboarding(.*)",
     "/",
   ]);
 
   middlewareExport = clerkMiddleware(async (auth, req) => {
-    // In cloud mode, protect all non-public routes
-    if (IS_CLOUD_MODE && !isPublicRoute(req)) {
+    const { userId } = await auth();
+
+    // In cloud mode, protect non-public routes (unauthenticated users only)
+    if (IS_CLOUD_MODE && !isPublicRoute(req) && !userId) {
       await auth.protect();
     }
+
     const response = NextResponse.next();
     applySecurityHeaders(response, true, req);
     return response;

@@ -40,6 +40,31 @@ export interface SubscriptionResponse {
   stripe_subscription_id: string | null;
   current_period_end: string | null;
   max_api_keys: number;
+  pending_downgrade_to: string | null;
+  pending_downgrade_date: string | null;
+  cancel_at_period_end: boolean;
+  cancel_date: string | null;
+}
+
+export interface PlanPrice {
+  price_id: string;
+  amount: number; // cents
+  currency: string;
+  interval: "month" | "year";
+}
+
+export interface PlanInfo {
+  tier: string;
+  name: string;
+  description: string;
+  features: string[];
+  highlight_color: string;
+  prices: PlanPrice[];
+}
+
+export interface PlansResponse {
+  plans: PlanInfo[];
+  publishable_key: string;
 }
 
 export interface UsageSummaryResponse {
@@ -190,13 +215,24 @@ export interface BackendClient {
   getApiKeys(): Promise<ApiKeyResponse[]>;
   createApiKey(name: string, scopes: string[]): Promise<ApiKeyCreatedResponse>;
   deleteApiKey(keyId: string): Promise<void>;
+  getPlans(): Promise<PlansResponse>;
+  previewProration(priceId: string): Promise<{
+    amount_due: number;
+    currency: string;
+    credit: number;
+    new_charge: number;
+    immediate: boolean;
+    effective_date: string | null;
+  }>;
   getSubscription(): Promise<SubscriptionResponse>;
   createCheckoutSession(
-    planTier: string,
+    priceId: string,
     successUrl: string,
     cancelUrl: string,
-  ): Promise<{ checkout_url: string }>;
+  ): Promise<{ checkout_url: string | null; action: "checkout" | "updated" }>;
   createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
+  cancelSubscription(): Promise<{ status: string; cancel_date: string | null }>;
+  reactivateSubscription(): Promise<{ status: string }>;
   getUsageSummary(): Promise<UsageSummaryResponse>;
   getUsageDaily(days?: number): Promise<DailyUsageResponse>;
   getUsageByKey(): Promise<KeyUsageByKeyResponse>;
@@ -225,14 +261,25 @@ export function useBackendClient(): BackendClient {
         method: "DELETE",
       }),
 
+    getPlans: () =>
+      backendFetch<PlansResponse>("/api/v1/billing/plans", getToken),
+
+    previewProration: (priceId: string) =>
+      backendFetch<{ amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean; effective_date: string | null }>(
+        "/api/v1/billing/preview-proration", getToken, {
+          method: "POST",
+          body: JSON.stringify({ price_id: priceId }),
+        },
+      ),
+
     getSubscription: () =>
       backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),
 
-    createCheckoutSession: (planTier: string, successUrl: string, cancelUrl: string) =>
-      backendFetch<{ checkout_url: string }>("/api/v1/billing/checkout", getToken, {
+    createCheckoutSession: (priceId: string, successUrl: string, cancelUrl: string) =>
+      backendFetch<{ checkout_url: string | null; action: "checkout" | "updated" }>("/api/v1/billing/checkout", getToken, {
         method: "POST",
         body: JSON.stringify({
-          plan_tier: planTier,
+          price_id: priceId,
           success_url: successUrl,
           cancel_url: cancelUrl,
         }),
@@ -242,6 +289,16 @@ export function useBackendClient(): BackendClient {
       backendFetch<{ portal_url: string }>("/api/v1/billing/portal", getToken, {
         method: "POST",
         body: JSON.stringify({ return_url: returnUrl }),
+      }),
+
+    cancelSubscription: () =>
+      backendFetch<{ status: string; cancel_date: string | null }>("/api/v1/billing/cancel", getToken, {
+        method: "POST",
+      }),
+
+    reactivateSubscription: () =>
+      backendFetch<{ status: string }>("/api/v1/billing/reactivate", getToken, {
+        method: "POST",
       }),
 
     getUsageSummary: () =>

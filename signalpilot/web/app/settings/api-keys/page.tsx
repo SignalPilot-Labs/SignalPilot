@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import {
   Key,
   Plus,
@@ -10,7 +10,6 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
 import type { ApiKeyResponse, ApiKeyCreatedResponse } from "@/lib/backend-client";
 import { useSubscription } from "@/lib/subscription-context";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -22,10 +21,11 @@ import { useToast } from "@/components/ui/toast";
 import { ApiKeysSkeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ALL_SCOPES } from "@/lib/api-key-scopes";
+import { useApiKeys, invalidateApiKeys, usePlan } from "@/lib/hooks/use-gateway-data";
+import { PageLoader } from "@/components/ui/page-loader";
 import {
-  getGatewayApiKeys,
-  createGatewayApiKey,
-  deleteGatewayApiKey,
+  createApiKey,
+  deleteApiKey,
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -49,6 +49,8 @@ function NewKeyReveal({
       },
     },
   }, null, 2);
+
+  const claudeCodeCmd = `claude mcp add --transport http signalpilot ${mcpUrl} --header "Authorization: Bearer ${created.raw_key}"`;
 
   return (
     <div className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-5 animate-fade-in">
@@ -85,10 +87,21 @@ function NewKeyReveal({
         </span>
       </div>
 
+      {/* Claude Code one-liner */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">claude code — one-liner</span>
+          <CopyButton text={claudeCodeCmd} />
+        </div>
+        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] tracking-wider font-mono overflow-x-auto whitespace-pre">
+{claudeCodeCmd}
+        </pre>
+      </div>
+
       {/* MCP connection config */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">mcp connection config</span>
+          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">mcp json config</span>
           <CopyButton text={mcpConfig} />
         </div>
         <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] tracking-wider font-mono overflow-x-auto whitespace-pre">
@@ -384,13 +397,13 @@ export default function ApiKeysPage() {
 
 function ApiKeysContent() {
   const { isLoaded } = useAppAuth();
-  const client = useBackendClient();
-  const { maxApiKeys, canCreateKey } = useSubscription();
   const { toast } = useToast();
 
-  const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { data: keys = [], isLoading, error: swrError } = useApiKeys();
+  const { data: plan } = usePlan();
+  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? 999 : (plan?.limits.api_keys ?? 1);
+  const canCreateKey = (count: number) => count < maxApiKeys;
+  const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -398,49 +411,12 @@ function ApiKeysContent() {
   // Map of key_id -> total_requests, populated from real or mock data
   const [requestCounts, setRequestCounts] = useState<Map<string, number>>(new Map());
 
-  const fetchKeys = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const [keysData, byKeyRes] = await Promise.all([
-        client.getApiKeys(),
-        client.getUsageByKey().catch(() => null),
-      ]);
-      setKeys(keysData);
-
-      if (byKeyRes !== null) {
-        const counts = new Map<string, number>();
-        for (const entry of byKeyRes.keys) {
-          counts.set(entry.key_id, entry.total_requests);
-        }
-        setRequestCounts(counts);
-      } else {
-        // Fall back to mock per-key counts
-        const { generateKeyUsage } = await import("@/lib/mock-usage");
-        const counts = new Map<string, number>();
-        for (const k of keysData) {
-          counts.set(k.id, generateKeyUsage(k).totalRequests);
-        }
-        setRequestCounts(counts);
-      }
-    } catch (e) {
-      setLoadError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
-
-  useEffect(() => {
-    if (isLoaded) {
-      fetchKeys();
-    }
-  }, [isLoaded, fetchKeys]);
-
   // ---------------------------------------------------------------------------
   // Loading state
   // ---------------------------------------------------------------------------
 
-  if (!isLoaded || loading) {
-    return <ApiKeysSkeleton />;
+  if (!isLoaded || isLoading) {
+    return <PageLoader label="loading api keys" />;
   }
 
   // ---------------------------------------------------------------------------
@@ -450,25 +426,22 @@ function ApiKeysContent() {
   function handleCreated(created: ApiKeyCreatedResponse) {
     setNewlyCreated(created);
     setShowCreateForm(false);
-    // Add the new key to the list (without raw_key)
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { raw_key: _raw, ...keyData } = created;
-    setKeys((prev) => [keyData, ...prev]);
     // New key starts with 0 requests
     setRequestCounts((prev) => new Map(prev).set(created.id, 0));
+    invalidateApiKeys();
     toast("api key created", "success");
   }
 
   async function handleDelete(id: string) {
     setDeleting(true);
     try {
-      await client.deleteApiKey(id);
-      setKeys((prev) => prev.filter((k) => k.id !== id));
+      await deleteApiKey(id);
       setRequestCounts((prev) => {
         const next = new Map(prev);
         next.delete(id);
         return next;
       });
+      invalidateApiKeys();
       toast("api key deleted", "success");
     } catch (e) {
       toast("failed to delete key", "error");
@@ -499,10 +472,16 @@ function ApiKeysContent() {
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
-            <code className="text-[12px] text-[var(--color-text)]">
-              {keys.length}/{maxApiKeys}
+            <code className={`text-[12px] ${keys.length >= maxApiKeys ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
+              {keys.length}/{maxApiKeys === 999 ? "∞" : maxApiKeys}
             </code>
           </span>
+          {plan && (
+            <span className="text-[var(--color-text-dim)]">
+              plan:{" "}
+              <code className="text-[12px] text-[var(--color-text)]">{plan.tier}</code>
+            </span>
+          )}
         </div>
       </TerminalBar>
 
@@ -541,7 +520,7 @@ function ApiKeysContent() {
         {showCreateForm && (
           <div className="mb-4">
             <CreateKeyForm
-              createFn={(name, scopes) => client.createApiKey(name, scopes)}
+              createFn={(name, scopes) => createApiKey(name, scopes)}
               onCreated={handleCreated}
               onCancel={() => setShowCreateForm(false)}
             />
@@ -619,50 +598,33 @@ function ApiKeysContent() {
 
 function LocalApiKeysContent() {
   const { toast } = useToast();
-  const MAX_KEYS = 50;
 
-  const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { data: keys = [], isLoading, error: swrError } = useApiKeys();
+  const { data: plan } = usePlan();
+  const MAX_KEYS = plan?.limits.api_keys === "unlimited" ? 50 : (plan?.limits.api_keys ?? 50);
+  const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [requestCounts] = useState<Map<string, number>>(new Map());
 
-  const fetchKeys = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const keysData = await getGatewayApiKeys();
-      setKeys(keysData);
-    } catch (e) {
-      setLoadError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchKeys();
-  }, [fetchKeys]);
-
-  if (loading) {
-    return <ApiKeysSkeleton />;
+  if (isLoading) {
+    return <PageLoader label="loading api keys" />;
   }
 
   function handleCreated(created: ApiKeyCreatedResponse) {
     setNewlyCreated(created);
     setShowCreateForm(false);
-    const { raw_key: _raw, ...keyData } = created;
-    setKeys((prev) => [keyData, ...prev]);
+    invalidateApiKeys();
     toast("api key created", "success");
   }
 
   async function handleDelete(id: string) {
     setDeleting(true);
     try {
-      await deleteGatewayApiKey(id);
-      setKeys((prev) => prev.filter((k) => k.id !== id));
+      await deleteApiKey(id);
+      invalidateApiKeys();
       toast("api key deleted", "success");
     } catch {
       toast("failed to delete key", "error");
@@ -687,10 +649,16 @@ function LocalApiKeysContent() {
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
-            <code className="text-[12px] text-[var(--color-text)]">
-              {keys.length}/{MAX_KEYS}
+            <code className={`text-[12px] ${keys.length >= MAX_KEYS ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
+              {keys.length}/{MAX_KEYS === 50 && !plan ? "∞" : MAX_KEYS}
             </code>
           </span>
+          {plan && (
+            <span className="text-[var(--color-text-dim)]">
+              plan:{" "}
+              <code className="text-[12px] text-[var(--color-text)]">{plan.tier}</code>
+            </span>
+          )}
         </div>
       </TerminalBar>
 
@@ -718,7 +686,7 @@ function LocalApiKeysContent() {
         {showCreateForm && (
           <div className="mb-4">
             <CreateKeyForm
-              createFn={(name, scopes) => createGatewayApiKey(name, scopes)}
+              createFn={(name, scopes) => createApiKey(name, scopes)}
               onCreated={handleCreated}
               onCancel={() => setShowCreateForm(false)}
             />

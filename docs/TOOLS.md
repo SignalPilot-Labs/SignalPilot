@@ -1,4 +1,4 @@
-# MCP Tools (40 Tools)
+# MCP Tools (32 Tools)
 
 Full reference for all SignalPilot MCP tools, organized by category.
 
@@ -20,7 +20,7 @@ Full reference for all SignalPilot MCP tools, organized by category.
 
 | Tool | Description |
 |------|-------------|
-| `query_database` | Execute governed, read-only SQL with auto-LIMIT, DDL blocking, audit, PII redaction |
+| `query_database` | Execute governed, read-only SQL with auto-LIMIT, DDL blocking, dangerous function blocking, audit, PII redaction |
 | `validate_sql` | Syntax + semantic validation via EXPLAIN (no execution, no budget charge) |
 | `explain_query` | Execution plan with row estimates and cost warnings |
 | `estimate_query_cost` | Dry-run cost estimate before executing (BigQuery: exact bytes) |
@@ -32,42 +32,45 @@ Full reference for all SignalPilot MCP tools, organized by category.
 | `get_date_boundaries` | MIN/MAX dates across all DATE/TIMESTAMP columns |
 | `query_history` | Recent successful queries for a connection (session memory) |
 
-## dbt Project Intelligence (6 tools)
+## dbt Intelligence (3 tools)
 
 | Tool | Description |
 |------|-------------|
-| `dbt_project_map` | Full project discovery from filesystem — models, status, deps, hazards |
-| `dbt_project_validate` | Run `dbt parse` safely, surface structural errors + warnings |
 | `generate_sql_skeleton` | Generate a SQL template from YML column spec + ref tables |
 | `dbt_error_parser` | Parse raw dbt error output into structured diagnosis + fix suggestion |
-| `fix_date_spine_hazards` | Auto-fix `current_date`/`now()` in all project + package models |
-| `fix_nondeterminism_hazards` | Auto-fix window functions with ambiguous ORDER BY |
+| `analyze_grain` | Cardinality analysis: per-key distinct counts, fan-out factors |
 
-## Model Verification (4 tools)
+## Model Verification (3 tools)
 
 | Tool | Description |
 |------|-------------|
 | `check_model_schema` | Compare materialized columns vs YML-declared columns |
 | `validate_model_output` | Row count validation + fan-out detection + empty model detection |
-| `analyze_grain` | Cardinality analysis: per-key distinct counts, fan-out factors |
 | `audit_model_sources` | Upstream audit: source row counts, fan-out/over-filter ratios, NULL scan |
 
-## Compute & Infrastructure (7 tools)
+## Operational (4 tools)
 
 | Tool | Description |
 |------|-------------|
-| `execute_code` | Run Python 3.12 in isolated gVisor sandbox (~300ms boot, 1–300s timeout) |
-| `sandbox_status` | Check gVisor availability, active VM count, health |
 | `list_database_connections` | List all configured database connections |
 | `connection_health` | Latency percentiles (p50/p95/p99), error rates, status per connection |
 | `connector_capabilities` | Connector tier classification (Tier 1/2/3) and available features |
 | `check_budget` | Remaining query budget for a session |
-| `cache_status` | Query cache hit rate and statistics |
 
-## Project Management (3 tools)
+## Project Management (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `create_project` | Create/register a dbt project |
 | `list_projects` | List all dbt projects |
 | `get_project` | Get details of a specific dbt project |
+
+---
+
+### Removed Tools
+
+The following tools were removed because the gateway runs in Docker and cannot access local filesystems. Their functionality is available via standalone scripts in the [SignalPilot plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin):
+
+- `execute_code` / `sandbox_status` — sandbox disabled in cloud
+- `dbt_project_map` / `dbt_project_validate` — use `scan_project.py` and `validate_project.py` in the plugin
+- `fix_date_spine_hazards` / `fix_nondeterminism_hazards` — use the `dbt-date-spines` skill
+- `create_project` — use the web UI or API

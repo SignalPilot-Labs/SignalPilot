@@ -6,6 +6,7 @@ No database is required for these tests.
 from __future__ import annotations
 
 import time
+
 import pytest
 
 from gateway.byok import (
@@ -17,11 +18,10 @@ from gateway.byok import (
     encrypt_envelope,
 )
 
-
 # ─── LocalBYOKProvider tests ─────────────────────────────────────────────────
 
-class TestLocalBYOKProvider:
 
+class TestLocalBYOKProvider:
     @pytest.mark.asyncio
     async def test_wrap_unwrap_roundtrip(self):
         provider = LocalBYOKProvider()
@@ -66,6 +66,7 @@ class TestLocalBYOKProvider:
     async def test_generate_dek_is_fernet_key(self):
         """generate_dek() returns a Fernet-format key (44 bytes, base64url-encoded)."""
         from cryptography.fernet import Fernet
+
         provider = LocalBYOKProvider()
         dek = await provider.generate_dek()
         assert len(dek) == 44
@@ -76,6 +77,7 @@ class TestLocalBYOKProvider:
     async def test_register_key_with_explicit_key(self):
         """register_key accepts a pre-generated Fernet key."""
         from cryptography.fernet import Fernet
+
         provider = LocalBYOKProvider()
         explicit_key = Fernet.generate_key()
         provider.register_key("org1", "alias1", key=explicit_key)
@@ -95,17 +97,15 @@ class TestLocalBYOKProvider:
 
 # ─── Envelope encryption tests ───────────────────────────────────────────────
 
-class TestEnvelopeEncryption:
 
+class TestEnvelopeEncryption:
     @pytest.mark.asyncio
     async def test_encrypt_decrypt_roundtrip(self):
         provider = LocalBYOKProvider()
         provider.register_key("org1", "alias1")
         plaintext = "postgresql://user:secret@host/db"
         ciphertext, wrapped_dek = await encrypt_envelope(provider, "org1", "alias1", plaintext)
-        recovered = await decrypt_envelope(
-            provider, "org1", "alias1", wrapped_dek, ciphertext
-        )
+        recovered = await decrypt_envelope(provider, "org1", "alias1", wrapped_dek, ciphertext)
         assert recovered == plaintext
 
     @pytest.mark.asyncio
@@ -134,8 +134,13 @@ class TestEnvelopeEncryption:
         # First decrypt — populates cache
         cred_id = "cred-001"
         await decrypt_envelope(
-            provider, "org1", "alias1", wrapped_dek, ciphertext,
-            cache=cache, credential_id=cred_id,
+            provider,
+            "org1",
+            "alias1",
+            wrapped_dek,
+            ciphertext,
+            cache=cache,
+            credential_id=cred_id,
         )
 
         # Revoke key and invalidate cache
@@ -144,8 +149,13 @@ class TestEnvelopeEncryption:
 
         with pytest.raises(BYOKKeyError):
             await decrypt_envelope(
-                provider, "org1", "alias1", wrapped_dek, ciphertext,
-                cache=cache, credential_id=cred_id,
+                provider,
+                "org1",
+                "alias1",
+                wrapped_dek,
+                ciphertext,
+                cache=cache,
+                credential_id=cred_id,
             )
 
     @pytest.mark.asyncio
@@ -169,12 +179,22 @@ class TestEnvelopeEncryption:
         provider.unwrap_dek = counting_unwrap  # type: ignore[method-assign]
 
         result1 = await decrypt_envelope(
-            provider, "org1", "alias1", wrapped_dek, ciphertext,
-            cache=cache, credential_id=cred_id,
+            provider,
+            "org1",
+            "alias1",
+            wrapped_dek,
+            ciphertext,
+            cache=cache,
+            credential_id=cred_id,
         )
         result2 = await decrypt_envelope(
-            provider, "org1", "alias1", wrapped_dek, ciphertext,
-            cache=cache, credential_id=cred_id,
+            provider,
+            "org1",
+            "alias1",
+            wrapped_dek,
+            ciphertext,
+            cache=cache,
+            credential_id=cred_id,
         )
 
         assert result1 == plaintext
@@ -184,8 +204,8 @@ class TestEnvelopeEncryption:
 
 # ─── DEKCache tests ───────────────────────────────────────────────────────────
 
-class TestDEKCache:
 
+class TestDEKCache:
     def test_cache_hit(self):
         cache = DEKCache(ttl_seconds=300)
         dek = b"a" * 32
@@ -246,8 +266,8 @@ class TestDEKCache:
 
 # ─── BYOKKeyError tests ───────────────────────────────────────────────────────
 
-class TestBYOKKeyError:
 
+class TestBYOKKeyError:
     def test_attributes(self):
         err = BYOKKeyError(org_id="org1", key_alias="alias1", message="test error")
         assert err.org_id == "org1"
@@ -262,8 +282,8 @@ class TestBYOKKeyError:
 
 # ─── BYOKProvider protocol conformance ───────────────────────────────────────
 
-class TestBYOKProviderProtocol:
 
+class TestBYOKProviderProtocol:
     def test_local_provider_satisfies_protocol(self):
         provider = LocalBYOKProvider()
         assert isinstance(provider, BYOKProvider)

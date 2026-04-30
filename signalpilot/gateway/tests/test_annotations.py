@@ -3,12 +3,12 @@
 import pytest
 
 from gateway.governance.annotations import (
+    ColumnAnnotation,
     SchemaAnnotations,
     TableAnnotation,
-    ColumnAnnotation,
+    _parse_annotation_file,
     _suggest_pii_rule,
     generate_skeleton,
-    _parse_annotation_file,
 )
 
 

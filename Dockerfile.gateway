@@ -17,5 +17,12 @@ RUN pip install --no-cache-dir -e . && \
     "google-cloud-bigquery==3.20.0" \
     pyarrow
 
+# Run as non-root for defense-in-depth
+RUN groupadd -g 10001 appuser && \
+    useradd -r -u 10001 -g appuser appuser
+RUN mkdir -p /data /shared && chown -R appuser:appuser /app /data /shared
+
+USER appuser
+
 EXPOSE 3300
 CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "3300"]

@@ -1,8 +1,11 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { getConnections } from "@/lib/api";
 import type { ConnectionInfo } from "@/lib/types";
+
+const PUBLIC_PATHS = ["/sign-in", "/sign-up", "/"];
 
 const STORAGE_KEY = "sp_active_connection";
 
@@ -23,9 +26,11 @@ const ConnectionContext = createContext<ConnectionContextValue>({
 });
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [selectedConn, setSelectedConnState] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const isPublicPage = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
 
   const setSelectedConn = useCallback((name: string) => {
     setSelectedConnState(name);
@@ -51,8 +56,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   }, [selectedConn, setSelectedConn]);
 
-  // Initial load — restore from localStorage then fetch
+  // Initial load — restore from localStorage then fetch (skip on public pages)
   useEffect(() => {
+    if (isPublicPage) {
+      setLoading(false);
+      return;
+    }
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) setSelectedConnState(stored);
@@ -70,7 +79,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isPublicPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <ConnectionContext.Provider value={{ connections, selectedConn, setSelectedConn, refreshConnections, loading }}>

@@ -10,12 +10,12 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Float,
     Index,
     Integer,
-    JSON,
     LargeBinary,
     String,
     Text,
@@ -35,7 +35,8 @@ class GatewayConnection(GatewayBase):
     __tablename__ = "gateway_connections"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     db_type: Mapped[str] = mapped_column(String(20), nullable=False)
     host: Mapped[str | None] = mapped_column(String(500))
@@ -75,13 +76,15 @@ class GatewayConnection(GatewayBase):
     # PII redaction: {column_name: "hash"|"mask"|"hide", ...}
     pii_rules: Mapped[dict | None] = mapped_column(JSON)
     pii_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    # BYOK scaffolding columns (Phase 1: always NULL; Phase 2 populates on encrypt)
-    org_id: Mapped[str | None] = mapped_column(String, nullable=True)
     byok_key_alias: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Health monitor state (persisted across restarts)
+    health_last_check: Mapped[float | None] = mapped_column(Float, nullable=True)
+    health_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    health_consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_gw_conn_user_name"),
-        Index("ix_gw_conn_user_id", "user_id"),
+        UniqueConstraint("org_id", "name", name="uq_gw_conn_org_name"),
+        Index("ix_gw_conn_org_id", "org_id"),
     )
 
     def to_info_dict(self) -> dict:
@@ -156,24 +159,23 @@ class GatewayCredential(GatewayBase):
     __tablename__ = "gateway_credentials"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
     connection_string_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     extras_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     # BYOK columns (Phase 1: read path only; Phase 2 adds write path and API)
     # "managed" (existing Fernet) or "byok" (envelope encryption)
-    encryption_mode: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="managed"
-    )
+    encryption_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default="managed")
     # Wrapped (KMS-encrypted) DEK — only set for BYOK mode
     wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # FK-like reference to gateway_byok_keys.id — only set for BYOK mode
     byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "connection_name", name="uq_gw_cred_user_conn"),
-        Index("ix_gw_cred_user_id", "user_id"),
+        UniqueConstraint("org_id", "connection_name", name="uq_gw_cred_org_conn"),
+        Index("ix_gw_cred_org_id", "org_id"),
     )
 
 
@@ -181,7 +183,8 @@ class GatewaySetting(GatewayBase):
     __tablename__ = "gateway_settings"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     settings_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
 
@@ -190,7 +193,8 @@ class GatewayAuditLog(GatewayBase):
     __tablename__ = "gateway_audit_logs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     timestamp: Mapped[float] = mapped_column(Float, nullable=False)
     event_type: Mapped[str] = mapped_column(String(20), nullable=False)
     connection_name: Mapped[str | None] = mapped_column(String(100))
@@ -204,9 +208,12 @@ class GatewayAuditLog(GatewayBase):
     duration_ms: Mapped[float | None] = mapped_column(Float)
     agent_id: Mapped[str | None] = mapped_column(String)
     metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    parent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
-        Index("ix_gw_audit_user_ts", "user_id", "timestamp"),
+        Index("ix_gw_audit_org_ts", "org_id", "timestamp"),
         Index("ix_gw_audit_conn", "connection_name"),
     )
 
@@ -215,7 +222,8 @@ class GatewayProject(GatewayBase):
     __tablename__ = "gateway_projects"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
     project_dir: Mapped[str | None] = mapped_column(String(1000))
@@ -233,8 +241,8 @@ class GatewayProject(GatewayBase):
     tags: Mapped[list | None] = mapped_column(JSON)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_gw_proj_user_name"),
-        Index("ix_gw_proj_user_id", "user_id"),
+        UniqueConstraint("org_id", "name", name="uq_gw_proj_org_name"),
+        Index("ix_gw_proj_org_id", "org_id"),
     )
 
 
@@ -249,16 +257,55 @@ class GatewayOrg(GatewayBase):
     __tablename__ = "gateway_orgs"
 
     org_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    plan_tier: Mapped[str] = mapped_column(String(20), default="free", server_default="free")
     byok_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     default_byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class GatewayHealthEvent(GatewayBase):
+    """Individual health check / query event for a connection."""
+
+    __tablename__ = "gateway_health_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    timestamp: Mapped[float] = mapped_column(Float, nullable=False)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_gw_health_org_conn_ts", "org_id", "connection_name", "timestamp"),)
+
+
+class GatewaySessionBudget(GatewayBase):
+    """Per-session budget tracking, persisted across restarts."""
+
+    __tablename__ = "gateway_session_budgets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    budget_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    spent_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    query_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    last_activity: Mapped[float] = mapped_column(Float, nullable=False)
+    closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "session_id", name="uq_gw_budget_org_session"),
+        Index("ix_gw_budget_org_id", "org_id"),
+    )
 
 
 class GatewayApiKey(GatewayBase):
     __tablename__ = "gateway_api_keys"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     prefix: Mapped[str] = mapped_column(String(20), nullable=False)
     key_hash: Mapped[str] = mapped_column(String, nullable=False)
@@ -268,6 +315,6 @@ class GatewayApiKey(GatewayBase):
     expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
-        Index("ix_gw_api_keys_user", "user_id"),
+        Index("ix_gw_api_keys_org", "org_id"),
         Index("ix_gw_api_keys_hash", "key_hash"),
     )

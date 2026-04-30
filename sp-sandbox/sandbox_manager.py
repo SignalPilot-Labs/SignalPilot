@@ -15,7 +15,9 @@ Run:
 from __future__ import annotations
 
 import fnmatch
+import hmac as _hmac
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -34,9 +36,27 @@ logger = logging.getLogger("sandbox_manager")
 executor = GVisorExecutor()
 active_sessions: dict[str, str] = {}  # session_token -> vm_id
 
+SANDBOX_AUTH_TOKEN = os.environ.get("SP_SANDBOX_TOKEN", "")
+
+
+def _check_auth(request: web.Request) -> bool:
+    """Verify X-Sandbox-Auth header matches SP_SANDBOX_TOKEN."""
+    if not SANDBOX_AUTH_TOKEN:
+        # No token configured — allow all connections (dev/docker-compose mode).
+        # In production, always set SP_SANDBOX_TOKEN for defense-in-depth.
+        return True
+    provided = request.headers.get("X-Sandbox-Auth", "")
+    return _hmac.compare_digest(provided, SANDBOX_AUTH_TOKEN)
+
+
+def _auth_denied() -> web.Response:
+    return web.json_response({"error": "Unauthorized"}, status=401)
+
 
 async def health_handler(request: web.Request) -> web.Response:
     """GET /health — report sandbox manager status."""
+    if not _check_auth(request):
+        return _auth_denied()
     return web.json_response({
         "status": "healthy",
         "active_vms": len(active_sessions),
@@ -46,6 +66,8 @@ async def health_handler(request: web.Request) -> web.Response:
 
 async def list_vms_handler(request: web.Request) -> web.Response:
     """GET /vms — list active sandbox instances."""
+    if not _check_auth(request):
+        return _auth_denied()
     vms = [
         {"vm_id": vm_id, "session_token": token[:8] + "..."}
         for token, vm_id in active_sessions.items()
@@ -55,6 +77,8 @@ async def list_vms_handler(request: web.Request) -> web.Response:
 
 async def execute_handler(request: web.Request) -> web.Response:
     """POST /execute — run Python code in a gVisor sandbox."""
+    if not _check_auth(request):
+        return _auth_denied()
     try:
         body = await request.json()
     except Exception:
@@ -218,6 +242,8 @@ async def execute_handler(request: web.Request) -> web.Response:
 
 async def kill_vm_handler(request: web.Request) -> web.Response:
     """DELETE /vm/{vm_id} — terminate a sandbox instance."""
+    if not _check_auth(request):
+        return _auth_denied()
     vm_id = request.match_info["vm_id"]
 
     killed = await executor.kill(vm_id)
@@ -248,6 +274,8 @@ async def browse_files_handler(request: web.Request) -> web.Response:
         path: directory to list (default: user home)
         pattern: glob pattern (default: *.duckdb)
     """
+    if not _check_auth(request):
+        return _auth_denied()
     # Default to /host-data (mounted from host) if it exists, else home dir
     default_path = "/host-data" if Path("/host-data").exists() else str(Path.home())
     search_path = request.query.get("path", default_path)

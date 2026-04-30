@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gateway.models import ApiKeyCreate, ApiKeyRecord, VALID_API_KEY_SCOPES
-from gateway.scope_guard import require_scopes
-
+from gateway.models import VALID_API_KEY_SCOPES, ApiKeyCreate, ApiKeyRecord
+from gateway.security.scope_guard import require_scopes
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _make_request(auth: dict[str, Any] | None) -> MagicMock:
     """Build a mock FastAPI Request with request.state.auth set."""
@@ -187,7 +187,7 @@ class TestApiKeyExpiryValidation:
     @pytest.mark.asyncio
     async def test_expired_key_returns_none(self):
         """A key with expires_at in the past must return None."""
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         mock_row = MagicMock()
         mock_row.key_hash = hashlib.sha256(b"sp_testkey").hexdigest()
@@ -196,7 +196,7 @@ class TestApiKeyExpiryValidation:
         mock_row.name = "test"
         mock_row.prefix = "sp_test"
         mock_row.scopes = ["read"]
-        mock_row.created_at = datetime.now(timezone.utc).isoformat()
+        mock_row.created_at = datetime.now(UTC).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "user_abc"
 
@@ -215,7 +215,7 @@ class TestApiKeyExpiryValidation:
     @pytest.mark.asyncio
     async def test_valid_unexpired_key_returns_record(self):
         """A key with expires_at in the future must be returned."""
-        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
         mock_row = MagicMock()
         raw_key = "sp_testkey_valid"
@@ -225,9 +225,10 @@ class TestApiKeyExpiryValidation:
         mock_row.name = "test"
         mock_row.prefix = "sp_test"
         mock_row.scopes = ["read", "query"]
-        mock_row.created_at = datetime.now(timezone.utc).isoformat()
+        mock_row.created_at = datetime.now(UTC).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "user_abc"
+        mock_row.org_id = "local"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_row
@@ -254,9 +255,10 @@ class TestApiKeyExpiryValidation:
         mock_row.name = "test"
         mock_row.prefix = "sp_no_"
         mock_row.scopes = ["read"]
-        mock_row.created_at = datetime.now(timezone.utc).isoformat()
+        mock_row.created_at = datetime.now(UTC).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "user_xyz"
+        mock_row.org_id = "local"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_row
@@ -289,9 +291,10 @@ class TestUserIdPropagation:
         mock_row.name = "my-key"
         mock_row.prefix = "sp_prop"
         mock_row.scopes = ["read"]
-        mock_row.created_at = datetime.now(timezone.utc).isoformat()
+        mock_row.created_at = datetime.now(UTC).isoformat()
         mock_row.last_used_at = None
         mock_row.user_id = "real_user_456"
+        mock_row.org_id = "local"
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_row
@@ -336,13 +339,13 @@ class TestJwtErrorRedaction:
         from gateway.auth import resolve_user_id
 
         # Simulate cloud mode being active
-        with patch("gateway.auth._is_cloud_mode", return_value=True):
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
             mock_client.get_signing_key_from_jwt.side_effect = pyjwt.InvalidTokenError(
                 "signature verification failed: algorithm=RS256, kid=abc123"
             )
 
-            with patch("gateway.auth._get_jwks_client", return_value=mock_client):
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
                 request = MagicMock()
                 request.headers.get.return_value = "Bearer eyJfake.jwt.token"
                 request.cookies.get.return_value = None
@@ -369,13 +372,11 @@ class TestJwtErrorRedaction:
 
         from gateway.auth import resolve_user_id
 
-        with patch("gateway.auth._is_cloud_mode", return_value=True):
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
-            mock_client.get_signing_key_from_jwt.side_effect = pyjwt.ExpiredSignatureError(
-                "Signature has expired."
-            )
+            mock_client.get_signing_key_from_jwt.side_effect = pyjwt.ExpiredSignatureError("Signature has expired.")
 
-            with patch("gateway.auth._get_jwks_client", return_value=mock_client):
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
                 request = MagicMock()
                 request.headers.get.return_value = "Bearer eyJfake.expired.token"
                 request.cookies.get.return_value = None
@@ -401,7 +402,7 @@ class TestApiKeyCreateExpiresAt:
         assert obj.expires_at is None
 
     def test_expires_at_can_be_set(self):
-        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        future = (datetime.now(UTC) + timedelta(days=30)).isoformat()
         obj = ApiKeyCreate(name="test", scopes=["read"], expires_at=future)
         assert obj.expires_at == future
 

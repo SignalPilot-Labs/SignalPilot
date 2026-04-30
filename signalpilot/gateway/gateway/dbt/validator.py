@@ -211,7 +211,7 @@ def _build_result(
         warnings=warnings,
         orphan_patches=sorted(set(orphan_patches)),
         degradation_mode=degradation,
-        raw_stdout=stdout[-4000:],   # cap so large dumps don't balloon the result
+        raw_stdout=stdout[-4000:],  # cap so large dumps don't balloon the result
         raw_stderr=stderr[-4000:],
     )
 
@@ -242,10 +242,7 @@ def format_validation_result(result: ValidationResult) -> str:
     lines.append(f"Parse time: {result.parse_time_ms:.0f}ms")
     lines.append(f"Errors: {result.error_count}  Warnings: {result.warning_count}")
     if result.orphan_patches:
-        lines.append(
-            f"Orphan patches (yml entries with no matching .sql file): "
-            f"{len(result.orphan_patches)}"
-        )
+        lines.append(f"Orphan patches (yml entries with no matching .sql file): {len(result.orphan_patches)}")
     lines.append("")
 
     if result.errors:
@@ -265,10 +262,7 @@ def format_validation_result(result: ValidationResult) -> str:
         lines.append("")
 
     if result.warnings:
-        non_orphan_warnings = [
-            w for w in result.warnings
-            if "Did not find matching node for patch" not in w
-        ]
+        non_orphan_warnings = [w for w in result.warnings if "Did not find matching node for patch" not in w]
         if non_orphan_warnings:
             lines.append("## Other warnings")
             for w in non_orphan_warnings[:20]:
@@ -287,12 +281,12 @@ def format_validation_result(result: ValidationResult) -> str:
 
 def _next_step_hint(mode: str) -> str:
     hints = {
-        "profile_missing":   "Fix profiles.yml — dbt cannot find a valid profile.",
-        "packages_missing":  "Run `dbt deps` to install referenced packages before parsing.",
-        "parse_failed":      "Inspect the errors above — yml syntax or Jinja error.",
+        "profile_missing": "Fix profiles.yml — dbt cannot find a valid profile.",
+        "packages_missing": "Run `dbt deps` to install referenced packages before parsing.",
+        "parse_failed": "Inspect the errors above — yml syntax or Jinja error.",
         "dbt_not_installed": "Install dbt and ensure it's on PATH.",
-        "timeout":           "dbt parse exceeded the timeout — the project may be very large or stuck.",
-        "manifest_missing":  "dbt parse succeeded but produced no manifest — check target/ is writable.",
-        "project_missing":   "The project directory does not exist.",
+        "timeout": "dbt parse exceeded the timeout — the project may be very large or stuck.",
+        "manifest_missing": "dbt parse succeeded but produced no manifest — check target/ is writable.",
+        "project_missing": "The project directory does not exist.",
     }
     return hints.get(mode, "Inspect the errors above and address them.")

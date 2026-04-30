@@ -20,6 +20,20 @@ export function setClerkTokenGetter(getter: () => Promise<string | null>) {
 }
 
 // ─── Local mode: auto-fetch local API key ───────────────────────────────────
+// Migration: move from localStorage to sessionStorage (reduces XSS exposure)
+if (typeof window !== "undefined" && !IS_CLOUD_MODE) {
+  const oldKey = localStorage.getItem("sp_api_key");
+  if (oldKey) {
+    sessionStorage.setItem("sp_api_key", oldKey);
+    localStorage.removeItem("sp_api_key");
+  }
+}
+// Cloud mode cleanup: remove any stale localStorage key
+if (typeof window !== "undefined" && IS_CLOUD_MODE) {
+  localStorage.removeItem("sp_api_key");
+  sessionStorage.removeItem("sp_api_key");
+}
+
 let _localKeyPromise: Promise<string | null> | null = null;
 
 function _fetchLocalKey(): Promise<string | null> {
@@ -28,7 +42,7 @@ function _fetchLocalKey(): Promise<string | null> {
     .then((r) => r.ok ? r.json() : null)
     .then((data) => {
       if (data?.key) {
-        localStorage.setItem("sp_api_key", data.key);
+        sessionStorage.setItem("sp_api_key", data.key);
         return data.key as string;
       }
       return null;
@@ -38,7 +52,12 @@ function _fetchLocalKey(): Promise<string | null> {
 
 function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
-  const stored = localStorage.getItem("sp_api_key");
+  if (IS_CLOUD_MODE) {
+    // Cloud mode uses Clerk JWT, not localStorage keys
+    localStorage.removeItem("sp_api_key");
+    return null;
+  }
+  const stored = sessionStorage.getItem("sp_api_key");
   if (stored) return stored;
   if (!_localKeyPromise) {
     _localKeyPromise = _fetchLocalKey();
@@ -48,10 +67,12 @@ function getApiKey(): string | null {
 
 export function setApiKey(key: string | null) {
   if (key) {
-    localStorage.setItem("sp_api_key", key);
+    sessionStorage.setItem("sp_api_key", key);
   } else {
-    localStorage.removeItem("sp_api_key");
+    sessionStorage.removeItem("sp_api_key");
   }
+  // Always clean up localStorage regardless
+  localStorage.removeItem("sp_api_key");
 }
 
 // ─── Unified request function ───────────────────────────────────────────────
@@ -78,7 +99,14 @@ async function _getAuthHeader(): Promise<string | null> {
   return null;
 }
 
-async function request<T>(path: string, options?: RequestInit, _retried = false): Promise<T> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
+  const auth = await _getAuthHeader();
+  const h: Record<string, string> = {};
+  if (auth) h["Authorization"] = auth;
+  return h;
+}
+
+export async function request<T>(path: string, options?: RequestInit, _retried = false): Promise<T> {
   const authHeader = await _getAuthHeader();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -93,6 +121,7 @@ async function request<T>(path: string, options?: RequestInit, _retried = false)
   });
   // On 401/403, clear stale credentials and retry once
   if ((res.status === 401 || res.status === 403) && !_retried) {
+    sessionStorage.removeItem("sp_api_key");
     localStorage.removeItem("sp_api_key");
     _localKeyPromise = null;
     // In cloud mode, the Clerk token getter will provide a fresh token on retry
@@ -277,15 +306,15 @@ export const discoverDbtCloudProjects = (token: string, account_id: string, host
     body: JSON.stringify({ token, account_id, host }),
   });
 
-// API Keys (local mode — gateway-managed)
-export const getGatewayApiKeys = () =>
+// API Keys (org-scoped)
+export const getApiKeys = () =>
   request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null }[]>("/api/keys");
-export const createGatewayApiKey = (name: string, scopes: string[]) =>
+export const createApiKey = (name: string, scopes: string[]) =>
   request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null; raw_key: string }>("/api/keys", {
     method: "POST",
     body: JSON.stringify({ name, scopes }),
   });
-export const deleteGatewayApiKey = (keyId: string) =>
+export const deleteApiKey = (keyId: string) =>
   request<void>(`/api/keys/${keyId}`, { method: "DELETE" });
 
 // Sandboxes
@@ -341,6 +370,31 @@ export const getBudget = (session_id: string) =>
 
 // Health
 export const getHealth = () => request<Record<string, unknown>>("/health");
+
+// Plan & Usage
+export interface PlanUsage {
+  tier: string;
+  limits: {
+    connections: number | "unlimited";
+    users: number | "unlimited";
+    api_keys: number | "unlimited";
+    queries_per_day: number | "unlimited";
+    audit_retention_days: number | "unlimited";
+  };
+  usage: {
+    connections: number;
+    api_keys: number;
+    queries_today: number;
+  };
+  features: {
+    pii_redaction: boolean;
+    byok: boolean;
+    sso: boolean;
+    budget_controls: boolean;
+    audit_export: boolean;
+  };
+}
+export const getPlan = () => request<PlanUsage>("/api/plan");
 
 // Connection Health
 export const getConnectionsHealth = () =>

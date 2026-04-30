@@ -8,7 +8,9 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
 
-[🚀 Try SignalPilot](#try-signalpilot-data-agent) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro)
+**[☁️ Try SignalPilot Cloud — free](https://app.signalpilot.ai/)**
+
+[🚀 Self-host](#try-signalpilot-data-agent) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book a demo](https://cal.com/fahimaziz/autofyn-intro)
 
 </div>
 
@@ -31,9 +33,9 @@
 
 Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code)**. Underneath it, three components do the work:
 
-1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 40 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
-2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 40 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
-3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://signalpilot.ai) for SSO and hosted history.
+1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 32 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
+2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 32 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
+3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://app.signalpilot.ai) for SSO and hosted history.
 
 ---
 
@@ -89,6 +91,8 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ## Try SignalPilot Data Agent
 
+**Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
+
 ```bash
 # Start SignalPilot
 git clone https://github.com/SignalPilot-Labs/signalpilot.git
@@ -96,9 +100,12 @@ cd signalpilot
 docker compose up -d
 # Web UI available at http://localhost:3200
 
-# Add to Claude Code
-/plugin marketplace add ./plugin
-/plugin install signalpilot-dbt@signalpilot
+# Connect the MCP server to Claude Code
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+
+# (Optional) Install the plugin for skills + agents
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
 That's it. Claude Code now has governed access to your databases.
@@ -107,7 +114,7 @@ That's it. Claude Code now has governed access to your databases.
 
 ## Architecture
 
-Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit logging by default. SignalPilot does — that's why agents on it set the SOTA on Spider 2.0-DBT.
+Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, dangerous function blocking, or audit logging by default. SignalPilot does — that's why agents on it set the SOTA on Spider 2.0-DBT.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -133,18 +140,34 @@ Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit loggi
 
 ---
 
-## Use With Claude Code (Plugin) — Recommended
+## Plugin (Claude Code)
 
-The [`plugin/`](plugin/) directory adds SignalPilot tools + dbt skills to Claude Code. This is the supported path.
+The [SignalPilot plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds battle-tested dbt skills to Claude Code — the same skills that power the Spider 2.0-DBT SOTA.
 
 ```bash
-# Add the marketplace and install
-/plugin marketplace add ./plugin
-/plugin install signalpilot-dbt@signalpilot
-/reload-plugins
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
-Then add a `.mcp.json` to your project root to connect the MCP server:
+**Included skills:** `dbt-workflow` (full 5-step lifecycle), `dbt-write`, `dbt-debugging`, `dbt-date-spines`, `duckdb-sql`, `snowflake-sql`, `bigquery-sql`, `sqlite-sql`, `sql-workflow`
+
+See [`plugin/README.md`](plugin/README.md) for details.
+
+---
+
+## Use With Any MCP Client
+
+> ⚠️ **Experimental for non-Claude clients.** The 32 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
+
+### Claude Code (one-liner)
+
+```bash
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+```
+
+### Claude Desktop / Cursor / Any MCP Client
+
+Add to your MCP config (`.mcp.json`, `.cursor/mcp.json`, etc.):
 
 ```json
 {
@@ -157,62 +180,7 @@ Then add a `.mcp.json` to your project root to connect the MCP server:
 }
 ```
 
-See [`plugin/README.md`](plugin/README.md) for full details on included skills and agents.
-
----
-
-## Use With Any MCP Client
-
-> ⚠️ **Experimental for non-Claude clients.** The 40 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
-
-### Claude Code / Claude Desktop
-
-Add to `.mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "signalpilot": {
-      "type": "http",
-      "url": "http://localhost:3300/mcp",
-      "headers": {
-        "X-API-Key": "sp_your_api_key_here"
-      }
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "signalpilot": {
-      "url": "http://localhost:3300/mcp",
-      "headers": {
-        "X-API-Key": "sp_your_api_key_here"
-      }
-    }
-  }
-}
-```
-
-### Generic HTTP (Any MCP Client)
-
-```json
-{
-  "url": "http://localhost:3300/mcp",
-  "transport": "streamable-http",
-  "headers": {
-    "X-API-Key": "sp_your_api_key_here"
-  }
-}
-```
-
-Replace `sp_your_api_key_here` with your API key from **Settings → API Keys** in the web UI. In local mode without an API key configured, the `headers` field can be omitted.
+When API keys are configured, add an `Authorization: Bearer YOUR_API_KEY` header.
 
 ---
 
@@ -236,9 +204,30 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 
 ## MCP Tools
 
-40 governed tools across data exploration, query intelligence, dbt project intelligence, model verification, compute, and project management.
+32 governed tools across query execution, schema discovery, dbt intelligence, and model verification.
+
+| Category | Tools |
+|----------|-------|
+| **Query** | `query_database`, `validate_sql`, `explain_query`, `estimate_query_cost`, `debug_cte_query` |
+| **Schema** | `list_tables`, `describe_table`, `explore_table`, `explore_column`, `explore_columns`, `schema_overview`, `schema_ddl`, `schema_link`, `schema_diff`, `schema_statistics` |
+| **Relationships** | `get_relationships`, `find_join_path`, `compare_join_types` |
+| **dbt** | `dbt_error_parser`, `generate_sql_skeleton`, `check_model_schema`, `validate_model_output`, `audit_model_sources`, `analyze_grain` |
+| **Operational** | `list_database_connections`, `connection_health`, `connector_capabilities`, `get_date_boundaries`, `check_budget`, `query_history`, `list_projects`, `get_project` |
 
 See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.
+
+---
+
+## Security
+
+- **Read-only governance** — queries parsed to AST, DDL/DML blocked, 79+ dangerous functions blocked across 7 dialects
+- **Tenant isolation** — API keys, connections, and audit logs are org-scoped
+- **Encryption at rest** — Fernet (AES-128-CBC + HMAC-SHA256)
+- **Audit logging** — every query logged with PII redaction
+- **Rate limiting** — per-IP, per-key, and per-org with brute-force protection
+- **Non-root containers** — gateway runs as UID 10001
+
+See [SECURITY.md](SECURITY.md) for our vulnerability reporting policy.
 
 ---
 
@@ -249,14 +238,14 @@ SignalPilot/
 ├── signalpilot/
 │   ├── gateway/              # FastAPI backend — MCP server, REST API, governance
 │   │   └── gateway/
-│   │       ├── api/          # 13 API modules, 100+ REST endpoints
+│   │       ├── api/          # REST API modules
 │   │       ├── connectors/   # 11 database connectors + pooling + SSH tunneling
 │   │       ├── governance/   # Budget, cache, PII redaction, annotations
-│   │       ├── dbt/          # Project scanning, validation, hazard fixing
+│   │       ├── mcp/          # 32 MCP tool definitions (modular package)
+│   │       ├── engine/       # SQL validation, LIMIT injection, function denylist
+│   │       ├── dbt/          # Project scanning, validation, hazard detection
 │   │       ├── db/           # SQLAlchemy ORM models + async engine
-│   │       ├── mcp_server.py # 39 MCP tool definitions
-│   │       ├── store.py      # Encrypted credential storage (Fernet/PBKDF2)
-│   │       └── auth.py       # Clerk JWT (cloud) / local auth
+│   │       └── auth.py       # Clerk JWT (cloud) / local auth + org role enforcement
 │   └── web/                  # Next.js 16 frontend — 20 pages, Tailwind CSS
 │       ├── app/              # App router pages (dashboard, connections, query, etc.)
 │       ├── components/       # 20 UI components (sidebar, command palette, etc.)

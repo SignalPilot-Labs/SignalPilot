@@ -1,4 +1,4 @@
-"""Tests for SSRF host validation in network_validation.py.
+"""Tests for SSRF host validation in gateway.network.validation.
 
 Covers:
 - Blocked IPs: loopback, link-local (including metadata 169.254.169.254),
@@ -18,12 +18,11 @@ from unittest.mock import patch
 
 import pytest
 
-from gateway.network_validation import (
+from gateway.network import (
     TCP_DB_TYPES,
     validate_connection_host,
     validate_connection_params,
 )
-
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -36,7 +35,7 @@ def _mock_getaddrinfo(resolved_ip: str):
 def _patch_dns(resolved_ip: str):
     """Patch socket.getaddrinfo to return a specific IP."""
     return patch(
-        "gateway.network_validation.socket.getaddrinfo",
+        "gateway.network.validation.socket.getaddrinfo",
         return_value=_mock_getaddrinfo(resolved_ip),
     )
 
@@ -44,8 +43,9 @@ def _patch_dns(resolved_ip: str):
 def _patch_dns_failure():
     """Patch socket.getaddrinfo to raise a DNS failure."""
     import socket
+
     return patch(
-        "gateway.network_validation.socket.getaddrinfo",
+        "gateway.network.validation.socket.getaddrinfo",
         side_effect=socket.gaierror("Name or service not known"),
     )
 

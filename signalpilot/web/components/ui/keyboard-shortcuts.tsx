@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { TierBadge } from "@/components/branding/tier-badge";
 
 const NAV_SHORTCUTS = [
   { key: "1", label: "dashboard", path: "/dashboard" },
@@ -77,6 +78,7 @@ export function KeyboardShortcuts() {
             <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
               keyboard shortcuts
             </span>
+            <TierBadge />
           </div>
           <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono text-[var(--color-text-dim)]">
             esc

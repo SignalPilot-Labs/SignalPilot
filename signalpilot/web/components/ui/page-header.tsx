@@ -16,19 +16,18 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-8">
+      {/* Title row */}
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-light tracking-wide text-[var(--color-text)]">{title}</h1>
-            <span className="text-[12px] text-[var(--color-text-muted)] tracking-[0.15em] uppercase px-1.5 py-0.5 border border-[var(--color-border)]">
-              {subtitle}
-            </span>
+            <h1 className="text-xl font-light tracking-wide leading-none text-[var(--color-text)]">{title}</h1>
+            <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">{subtitle}</span>
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
         </div>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
       </div>
-      {/* Gradient accent line */}
+
       <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
     </div>
   );

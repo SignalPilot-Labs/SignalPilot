@@ -9,17 +9,21 @@ Default TTL: 5 minutes (configurable).
 
 Enhanced with schema fingerprinting for fast change detection and
 diff history tracking for audit/notification.
+
+Org isolation: all cache keys are prefixed with org_id resolved via require_org_id()
+so two orgs with identically named connections cannot see each other's schemas.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import Lock
 from typing import Any
+
+from ..governance.context import require_org_id
 
 
 def _normalize_schema(schema: dict[str, Any]) -> None:
@@ -72,7 +76,9 @@ def _schema_fingerprint(schema: dict[str, Any]) -> str:
         fks = table.get("foreign_keys", [])
         fk_sigs = []
         for fk in fks:
-            fk_sigs.append(f"{fk.get('column', '')}->{fk.get('references_table', '')}.{fk.get('references_column', '')}")
+            fk_sigs.append(
+                f"{fk.get('column', '')}->{fk.get('references_table', '')}.{fk.get('references_column', '')}"
+            )
         parts.append(f"{table_key}|{'|'.join(sorted(col_sigs))}|FK:{'|'.join(sorted(fk_sigs))}")
     combined = "\n".join(parts)
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
@@ -81,6 +87,7 @@ def _schema_fingerprint(schema: dict[str, Any]) -> str:
 @dataclass
 class _CachedSchema:
     """A cached schema result with expiration tracking and fingerprint."""
+
     data: dict[str, Any]
     cached_at: float
     ttl_seconds: float
@@ -94,6 +101,7 @@ class _CachedSchema:
 @dataclass
 class SchemaDiffEvent:
     """Records a schema change detected during refresh."""
+
     connection_name: str
     timestamp: float  # wall clock time.time()
     diff: dict[str, Any]
@@ -103,12 +111,14 @@ class SchemaDiffEvent:
 
 
 class SchemaCache:
-    """Thread-safe in-memory schema cache keyed by connection name.
+    """Thread-safe in-memory schema cache, org-scoped via contextvar.
+
+    All public methods resolve org_id internally via require_org_id().
+    Cache keys use the composite format "{org_id}::{connection_name}" so two
+    orgs with the same connection name cannot see each other's cached schemas.
 
     Usage:
-        cache = SchemaCache(ttl_seconds=300)
-
-        # Check cache first
+        # Set current_org_id_var before any call (Store.__init__ or explicit set).
         schema = cache.get("my-conn")
         if schema is None:
             schema = await connector.get_schema()
@@ -116,30 +126,34 @@ class SchemaCache:
 
         # Force refresh
         cache.invalidate("my-conn")
-
-    Enhanced features:
-        - Schema fingerprinting: fast structural change detection without full diff
-        - Diff history: tracks last N schema changes per connection for audit/notification
     """
 
     # Max diff events to keep per connection
     _MAX_DIFF_HISTORY = 20
 
-    def __init__(self, ttl_seconds: float = 300.0):
+    def __init__(self, ttl_seconds: float = 300.0) -> None:
         self._ttl = ttl_seconds
         self._cache: dict[str, _CachedSchema] = {}
         self._sample_cache: dict[str, _CachedSchema] = {}
         self._diff_history: dict[str, deque[SchemaDiffEvent]] = {}
         self._lock = Lock()
 
+    def _schema_key(self, org_id: str, connection_name: str) -> str:
+        return f"{org_id}::{connection_name}"
+
+    def _sample_key(self, org_id: str, connection_name: str, table: str) -> str:
+        return f"{org_id}::{connection_name}::{table}"
+
     def get(self, connection_name: str) -> dict[str, Any] | None:
         """Get cached schema for a connection. Returns None on miss or expiration."""
+        org_id = require_org_id()
+        key = self._schema_key(org_id, connection_name)
         with self._lock:
-            entry = self._cache.get(connection_name)
+            entry = self._cache.get(key)
             if entry is None:
                 return None
             if entry.is_expired:
-                del self._cache[connection_name]
+                del self._cache[key]
                 return None
             return entry.data
 
@@ -157,12 +171,16 @@ class SchemaCache:
         Returns:
             Diff dict if track_diff=True and changes were detected, else None.
         """
+        org_id = require_org_id()
+        key = self._schema_key(org_id, connection_name)
+        diff_key = self._schema_key(org_id, connection_name)
+
         # Normalize: ensure consistent baseline fields across all connector types
         _normalize_schema(schema)
         new_fp = _schema_fingerprint(schema)
         diff_result = None
         with self._lock:
-            old_entry = self._cache.get(connection_name)
+            old_entry = self._cache.get(key)
             if track_diff and old_entry is not None:
                 old_fp = old_entry.fingerprint
                 if old_fp and old_fp != new_fp:
@@ -177,10 +195,10 @@ class SchemaCache:
                             new_fingerprint=new_fp,
                             table_count=len(schema),
                         )
-                        if connection_name not in self._diff_history:
-                            self._diff_history[connection_name] = deque(maxlen=self._MAX_DIFF_HISTORY)
-                        self._diff_history[connection_name].append(event)
-            self._cache[connection_name] = _CachedSchema(
+                        if diff_key not in self._diff_history:
+                            self._diff_history[diff_key] = deque(maxlen=self._MAX_DIFF_HISTORY)
+                        self._diff_history[diff_key].append(event)
+            self._cache[key] = _CachedSchema(
                 data=schema,
                 cached_at=time.monotonic(),
                 ttl_seconds=self._ttl,
@@ -194,45 +212,74 @@ class SchemaCache:
         Returns None if no cached schema exists.
         Returns a dict with added/removed/modified tables and columns.
         """
+        org_id = require_org_id()
+        key = self._schema_key(org_id, connection_name)
         with self._lock:
-            entry = self._cache.get(connection_name)
+            entry = self._cache.get(key)
             if entry is None:
                 return None
             old_schema = entry.data
 
         return _compute_schema_diff(old_schema, new_schema)
 
-    def invalidate(self, connection_name: str | None = None) -> int:
-        """Invalidate cached schema. If connection_name is None, clear all.
+    def invalidate(self, connection_name: str | None = None, all_orgs: bool = False) -> int:
+        """Invalidate cached schema.
+
+        Args:
+            connection_name: If given, only invalidate entries for this connection.
+                             If None, invalidate all entries in scope.
+            all_orgs: If True, invalidate across all orgs (admin callers).
+                      If False (default), restrict to the current org.
 
         Returns number of entries invalidated.
         """
+        if all_orgs:
+            with self._lock:
+                if connection_name is None:
+                    count = len(self._cache)
+                    self._cache.clear()
+                    return count
+                prefix = f"::{connection_name}"
+                keys_to_remove = [k for k in self._cache if k.endswith(prefix)]
+                for k in keys_to_remove:
+                    del self._cache[k]
+                return len(keys_to_remove)
+
+        org_id = require_org_id()
         with self._lock:
-            if connection_name:
-                if connection_name in self._cache:
-                    del self._cache[connection_name]
+            if connection_name is not None:
+                key = self._schema_key(org_id, connection_name)
+                if key in self._cache:
+                    del self._cache[key]
                     return 1
                 return 0
-            count = len(self._cache)
-            self._cache.clear()
-            return count
+            # Invalidate all entries for this org
+            org_prefix = f"{org_id}::"
+            keys_to_remove = [k for k in self._cache if k.startswith(org_prefix)]
+            for k in keys_to_remove:
+                del self._cache[k]
+            return len(keys_to_remove)
 
     # ─── Sample values cache ────────────────────────────────────────────
     def get_sample_values(self, connection_name: str, table: str) -> dict[str, list] | None:
         """Get cached sample values for a table. Returns None on miss."""
+        org_id = require_org_id()
+        key = self._sample_key(org_id, connection_name, table)
         with self._lock:
-            entry = self._sample_cache.get(f"{connection_name}:{table}")
+            entry = self._sample_cache.get(key)
             if entry is None:
                 return None
             if entry.is_expired:
-                del self._sample_cache[f"{connection_name}:{table}"]
+                del self._sample_cache[key]
                 return None
             return entry.data
 
     def put_sample_values(self, connection_name: str, table: str, values: dict[str, list]) -> None:
         """Cache sample values for a table."""
+        org_id = require_org_id()
+        key = self._sample_key(org_id, connection_name, table)
         with self._lock:
-            self._sample_cache[f"{connection_name}:{table}"] = _CachedSchema(
+            self._sample_cache[key] = _CachedSchema(
                 data=values,
                 cached_at=time.monotonic(),
                 ttl_seconds=self._ttl * 2,  # Sample values expire slower
@@ -240,8 +287,10 @@ class SchemaCache:
 
     def get_fingerprint(self, connection_name: str) -> str | None:
         """Get the structural fingerprint of the cached schema. None if not cached."""
+        org_id = require_org_id()
+        key = self._schema_key(org_id, connection_name)
         with self._lock:
-            entry = self._cache.get(connection_name)
+            entry = self._cache.get(key)
             if entry is None or entry.is_expired:
                 return None
             return entry.fingerprint
@@ -252,30 +301,36 @@ class SchemaCache:
         Uses fingerprint comparison — O(n) hash, no deep diff.
         Returns True if changed or if no cached schema exists.
         """
+        org_id = require_org_id()
+        key = self._schema_key(org_id, connection_name)
         with self._lock:
-            entry = self._cache.get(connection_name)
+            entry = self._cache.get(key)
             if entry is None or not entry.fingerprint:
                 return True
             new_fp = _schema_fingerprint(new_schema)
             return entry.fingerprint != new_fp
 
     def get_diff_history(self, connection_name: str | None = None) -> list[dict[str, Any]]:
-        """Get schema change history.
+        """Get schema change history for the current org.
 
         Args:
             connection_name: If provided, get history for one connection.
-                           If None, get all recent changes across all connections.
+                           If None, get all recent changes for the current org.
 
         Returns:
             List of diff events (newest first).
         """
+        org_id = require_org_id()
         with self._lock:
-            if connection_name:
-                events = list(self._diff_history.get(connection_name, []))
+            if connection_name is not None:
+                key = self._schema_key(org_id, connection_name)
+                events = list(self._diff_history.get(key, []))
             else:
+                org_prefix = f"{org_id}::"
                 events = []
-                for conn_events in self._diff_history.values():
-                    events.extend(conn_events)
+                for diff_key, conn_events in self._diff_history.items():
+                    if diff_key.startswith(org_prefix):
+                        events.extend(conn_events)
             # Sort newest first
             events.sort(key=lambda e: e.timestamp, reverse=True)
             return [
@@ -290,8 +345,13 @@ class SchemaCache:
                 for e in events[:50]
             ]
 
-    def stats(self) -> dict[str, Any]:
-        """Return cache statistics and purge expired entries."""
+    def stats(self, all_orgs: bool = False) -> dict[str, Any]:
+        """Return cache statistics and purge expired entries.
+
+        Args:
+            all_orgs: If True, return global counts.
+                      If False (default), return counts for the current org only.
+        """
         with self._lock:
             # Lazy purge expired entries on stats() call
             expired_keys = [k for k, e in self._cache.items() if e.is_expired]
@@ -300,17 +360,27 @@ class SchemaCache:
             expired_samples = [k for k, e in self._sample_cache.items() if e.is_expired]
             for k in expired_samples:
                 del self._sample_cache[k]
-            # Build fingerprint summary
-            fingerprints = {
-                name: entry.fingerprint
-                for name, entry in self._cache.items()
-                if entry.fingerprint
-            }
+
+            if all_orgs:
+                cached_connections = len(self._cache)
+                cached_sample_tables = len(self._sample_cache)
+                fingerprints = {name: entry.fingerprint for name, entry in self._cache.items() if entry.fingerprint}
+            else:
+                org_id = require_org_id()
+                org_prefix = f"{org_id}::"
+                cached_connections = sum(1 for k in self._cache if k.startswith(org_prefix))
+                cached_sample_tables = sum(1 for k in self._sample_cache if k.startswith(org_prefix))
+                fingerprints = {
+                    name: entry.fingerprint
+                    for name, entry in self._cache.items()
+                    if name.startswith(org_prefix) and entry.fingerprint
+                }
+
             total_diff_events = sum(len(q) for q in self._diff_history.values())
             return {
-                "cached_connections": len(self._cache),
-                "total_entries": len(self._cache),
-                "cached_sample_tables": len(self._sample_cache),
+                "cached_connections": cached_connections,
+                "total_entries": cached_connections,
+                "cached_sample_tables": cached_sample_tables,
                 "purged": len(expired_keys) + len(expired_samples),
                 "ttl_seconds": self._ttl,
                 "fingerprints": fingerprints,
@@ -343,11 +413,13 @@ def _compute_schema_diff(old: dict[str, Any], new: dict[str, Any]) -> dict[str, 
             old_type = old_cols[col_name].get("type", "")
             new_type = new_cols[col_name].get("type", "")
             if old_type != new_type:
-                type_changes.append({
-                    "column": col_name,
-                    "old_type": old_type,
-                    "new_type": new_type,
-                })
+                type_changes.append(
+                    {
+                        "column": col_name,
+                        "old_type": old_type,
+                        "new_type": new_type,
+                    }
+                )
 
         if added_cols or removed_cols or type_changes:
             change: dict[str, Any] = {"table": table_key}

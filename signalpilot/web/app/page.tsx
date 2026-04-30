@@ -78,7 +78,7 @@ export default function Home() {
     isCloudMode && !isAuthenticated ? "sign in →" : "skip → dashboard";
 
   return (
-    <div className="flex items-center justify-center min-h-screen -ml-56 relative">
+    <div className="flex items-center justify-center min-h-screen relative">
       {/* Background grid pulse — centered radial */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
         <svg width="100%" height="100%" className="opacity-[0.025]">

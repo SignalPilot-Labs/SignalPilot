@@ -25,7 +25,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 # ── Constants ────────────────────────────────────────────────────────────────
 
 CONFIG_BLOCK = "{{ config(materialized='table') }}\n"
@@ -39,9 +38,7 @@ _RE_ND_WINDOW_START = re.compile(
 
 # Matches jinja ref/source patterns (same as scanner.py)
 _RE_REF = re.compile(r"""\{\{\s*ref\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\}\}""")
-_RE_SOURCE = re.compile(
-    r"""\{\{\s*source\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)\s*\}\}"""
-)
+_RE_SOURCE = re.compile(r"""\{\{\s*source\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)\s*\}\}""")
 
 # Extracts ORDER BY columns: everything after ORDER BY up to end of OVER body.
 # We apply this to the already-extracted OVER body string.
@@ -58,12 +55,12 @@ _SKIP_ORDER_BY_VALUES = frozenset({"null", "1", "true", "false"})
 class NondeterminismFix:
     """Describes a single file fix — either a new override or an in-place edit."""
 
-    original_path: str         # relative path to the hazard source
-    output_path: Path          # absolute path where the file should be written
-    content: str               # full SQL with tiebreakers applied
-    is_package: bool           # True if this is a new package override
-    fixes_applied: list[str] = field(default_factory=list)    # e.g. ["int_visits ORDER BY + encounter_id"]
-    skipped_patterns: list[str] = field(default_factory=list) # unfixable patterns
+    original_path: str  # relative path to the hazard source
+    output_path: Path  # absolute path where the file should be written
+    content: str  # full SQL with tiebreakers applied
+    is_package: bool  # True if this is a new package override
+    fixes_applied: list[str] = field(default_factory=list)  # e.g. ["int_visits ORDER BY + encounter_id"]
+    skipped_patterns: list[str] = field(default_factory=list)  # unfixable patterns
     already_overridden: bool = False  # True if override already existed — skip write
 
 
@@ -173,9 +170,8 @@ def _rewrite_over_clause(over_body: str, tiebreaker: str) -> str:
         # Append tiebreaker after existing ORDER BY columns.
         insert_pos = ob_match.end()
         return over_body[:insert_pos].rstrip() + f", {tiebreaker}" + over_body[insert_pos:]
-    else:
-        # No ORDER BY — add one before the closing (which is already stripped from body).
-        return over_body.rstrip() + f" ORDER BY {tiebreaker}"
+    # No ORDER BY — add one before the closing (which is already stripped from body).
+    return over_body.rstrip() + f" ORDER BY {tiebreaker}"
 
 
 def _apply_tiebreaker_to_sql(
@@ -258,49 +254,57 @@ def generate_nondeterminism_fixes(
             output_path = project_dir / override_rel
 
             if output_path.exists():
-                fixes.append(NondeterminismFix(
-                    original_path=source_rel,
-                    output_path=output_path,
-                    content="",
-                    is_package=True,
-                    already_overridden=True,
-                ))
+                fixes.append(
+                    NondeterminismFix(
+                        original_path=source_rel,
+                        output_path=output_path,
+                        content="",
+                        is_package=True,
+                        already_overridden=True,
+                    )
+                )
                 continue
 
             try:
                 source_sql = source_path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
-                fixes.append(NondeterminismFix(
-                    original_path=source_rel,
-                    output_path=output_path,
-                    content="",
-                    is_package=True,
-                    skipped_patterns=[f"{model_name}: cannot read source file: {e}"],
-                ))
+                fixes.append(
+                    NondeterminismFix(
+                        original_path=source_rel,
+                        output_path=output_path,
+                        content="",
+                        is_package=True,
+                        skipped_patterns=[f"{model_name}: cannot read source file: {e}"],
+                    )
+                )
                 continue
 
             # Prepend config block for package overrides.
             sql_body = CONFIG_BLOCK + source_sql
             tiebreaker = _resolve_tiebreaker(sql_body, table_columns, model_name)
             if tiebreaker is None:
-                fixes.append(NondeterminismFix(
-                    original_path=source_rel,
-                    output_path=output_path,
-                    content="",
-                    is_package=True,
-                    skipped_patterns=[f"{model_name}: no suitable tiebreaker column found (manual fix needed)"],
-                ))
+                fixes.append(
+                    NondeterminismFix(
+                        original_path=source_rel,
+                        output_path=output_path,
+                        content="",
+                        is_package=True,
+                        skipped_patterns=[f"{model_name}: no suitable tiebreaker column found (manual fix needed)"],
+                    )
+                )
                 continue
 
             fixed_sql, applied, skipped = _apply_tiebreaker_to_sql(sql_body, tiebreaker, model_name)
-            fixes.append(NondeterminismFix(
-                original_path=source_rel,
-                output_path=output_path,
-                content=fixed_sql,
-                is_package=True,
-                fixes_applied=applied,
-                skipped_patterns=skipped,
-            ))
+            fixes.append(
+                NondeterminismFix(
+                    original_path=source_rel,
+                    output_path=output_path,
+                    content=fixed_sql,
+                    is_package=True,
+                    fixes_applied=applied,
+                    skipped_patterns=skipped,
+                )
+            )
 
         else:
             source_path = project_dir / source_rel
@@ -309,35 +313,41 @@ def generate_nondeterminism_fixes(
             try:
                 source_sql = source_path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
-                fixes.append(NondeterminismFix(
-                    original_path=source_rel,
-                    output_path=output_path,
-                    content="",
-                    is_package=False,
-                    skipped_patterns=[f"{model_name}: cannot read file: {e}"],
-                ))
+                fixes.append(
+                    NondeterminismFix(
+                        original_path=source_rel,
+                        output_path=output_path,
+                        content="",
+                        is_package=False,
+                        skipped_patterns=[f"{model_name}: cannot read file: {e}"],
+                    )
+                )
                 continue
 
             tiebreaker = _resolve_tiebreaker(source_sql, table_columns, model_name)
             if tiebreaker is None:
-                fixes.append(NondeterminismFix(
-                    original_path=source_rel,
-                    output_path=output_path,
-                    content="",
-                    is_package=False,
-                    skipped_patterns=[f"{model_name}: no suitable tiebreaker column found (manual fix needed)"],
-                ))
+                fixes.append(
+                    NondeterminismFix(
+                        original_path=source_rel,
+                        output_path=output_path,
+                        content="",
+                        is_package=False,
+                        skipped_patterns=[f"{model_name}: no suitable tiebreaker column found (manual fix needed)"],
+                    )
+                )
                 continue
 
             fixed_sql, applied, skipped = _apply_tiebreaker_to_sql(source_sql, tiebreaker, model_name)
-            fixes.append(NondeterminismFix(
-                original_path=source_rel,
-                output_path=output_path,
-                content=fixed_sql,
-                is_package=False,
-                fixes_applied=applied,
-                skipped_patterns=skipped,
-            ))
+            fixes.append(
+                NondeterminismFix(
+                    original_path=source_rel,
+                    output_path=output_path,
+                    content=fixed_sql,
+                    is_package=False,
+                    fixes_applied=applied,
+                    skipped_patterns=skipped,
+                )
+            )
 
     return fixes
 

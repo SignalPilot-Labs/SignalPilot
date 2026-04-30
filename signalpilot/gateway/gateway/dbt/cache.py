@@ -54,9 +54,9 @@ def fingerprint(project_dir: Path) -> str:
             continue
         for dirpath, dirnames, filenames in os.walk(root_dir):
             # Prune skip dirs in-place (same logic as scanner).
-            dirnames[:] = [d for d in dirnames if d not in (
-                "dbt_packages", "target", "logs", ".claude", "__pycache__", ".git"
-            )]
+            dirnames[:] = [
+                d for d in dirnames if d not in ("dbt_packages", "target", "logs", ".claude", "__pycache__", ".git")
+            ]
             for fname in filenames:
                 suffix = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
                 try:

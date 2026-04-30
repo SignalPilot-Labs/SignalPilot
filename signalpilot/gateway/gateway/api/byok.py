@@ -12,9 +12,10 @@ import time
 import uuid
 
 from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import DBSession, OrgID, UserID
+from ..auth import DBSession, OrgAdmin, OrgID, UserID
 from ..byok import (
     BYOKKeyError,
     decrypt_envelope,
@@ -34,10 +35,9 @@ from ..models import (
     BYOKRotateRequest,
     BYOKRotateResponse,
 )
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from ..store import _decrypt_with_migration, _encrypt
 from .deps import StoreD
-from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +61,16 @@ def _key_to_response(key: GatewayBYOKKey) -> BYOKKeyResponse:
 
 async def _upsert_org(session: AsyncSession, org_id: str) -> None:
     """Ensure a GatewayOrg row exists for org_id with byok_enabled=True."""
-    result = await session.execute(
-        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
-    )
+    result = await session.execute(select(GatewayOrg).where(GatewayOrg.org_id == org_id))
     org_row = result.scalar_one_or_none()
     if org_row is None:
-        session.add(GatewayOrg(
-            org_id=org_id,
-            byok_enabled=True,
-            created_at=time.time(),
-        ))
+        session.add(
+            GatewayOrg(
+                org_id=org_id,
+                byok_enabled=True,
+                created_at=time.time(),
+            )
+        )
     else:
         org_row.byok_enabled = True
     await session.commit()
@@ -82,6 +82,7 @@ async def create_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKKeyResponse:
     """Register a BYOK key for an org. org_id is derived from JWT, not body."""
     # Check uniqueness
@@ -115,8 +116,9 @@ async def create_byok_key(
     await db.refresh(key)
 
     # For local provider: auto-register the key material in memory
-    from ..store import _byok_provider as provider
     from ..byok import LocalBYOKProvider
+    from ..store.byok_state import _byok_provider as provider
+
     if isinstance(provider, LocalBYOKProvider):
         provider.register_key(org_id, body.key_alias)
         logger.info("Local BYOK key registered in-memory for org=%s alias=%s", org_id, body.key_alias)
@@ -129,6 +131,7 @@ async def list_byok_keys(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> list[BYOKKeyResponse]:
     """List BYOK keys for the org derived from JWT."""
     query = select(GatewayBYOKKey).where(GatewayBYOKKey.org_id == org_id)
@@ -142,10 +145,14 @@ async def get_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKKeyResponse:
     """Get a single BYOK key by ID, scoped to the org derived from JWT."""
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -160,10 +167,14 @@ async def update_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKKeyResponse:
     """Update a BYOK key's alias or status, scoped to the org derived from JWT."""
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -187,6 +198,7 @@ async def delete_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
     force: bool = False,
 ) -> Response:
     """Delete a BYOK key.
@@ -196,15 +208,16 @@ async def delete_byok_key(
     then deletes the key. This is the "revoke access" path.
     """
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
         raise HTTPException(status_code=404, detail="Key not found")
 
-    cred_result = await db.execute(
-        select(GatewayCredential).where(GatewayCredential.byok_key_id == key_id)
-    )
+    cred_result = await db.execute(select(GatewayCredential).where(GatewayCredential.byok_key_id == key_id))
     credentials_using_key = cred_result.scalars().all()
     if credentials_using_key and not force:
         count = len(credentials_using_key)
@@ -227,12 +240,14 @@ async def delete_byok_key(
         await db.commit()
         logger.warning(
             "BYOK key %s force-deleted: %d credential(s) permanently revoked",
-            key_id, len(credentials_using_key),
+            key_id,
+            len(credentials_using_key),
         )
 
     # Revoke key from local provider (deletes key material from disk)
     from ..byok import LocalBYOKProvider
-    from ..store import _byok_provider as current_provider
+    from ..store.byok_state import _byok_provider as current_provider
+
     if isinstance(current_provider, LocalBYOKProvider):
         current_provider.revoke_key(org_id, key.key_alias)
 
@@ -247,15 +262,19 @@ async def validate_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> dict:
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
 
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -265,16 +284,12 @@ async def validate_byok_key(
         ciphertext, wrapped_dek = await encrypt_envelope(
             provider, key.org_id, key.key_alias, BYOK_HEALTH_CHECK_PLAINTEXT
         )
-        recovered = await decrypt_envelope(
-            provider, key.org_id, key.key_alias, wrapped_dek, ciphertext
-        )
+        recovered = await decrypt_envelope(provider, key.org_id, key.key_alias, wrapped_dek, ciphertext)
         if recovered != BYOK_HEALTH_CHECK_PLAINTEXT:
             return {"valid": False, "error": "Round-trip produced incorrect plaintext"}
         return {"valid": True}
     except BYOKKeyError as exc:
-        logger.warning(
-            "BYOK key validation failed for key_id=%s: %s", key_id, exc
-        )
+        logger.warning("BYOK key validation failed for key_id=%s: %s", key_id, exc)
         return {"valid": False, "error": "Key validation failed"}
     except Exception:
         logger.exception("BYOK key validation failed for key_id=%s", key_id)
@@ -286,12 +301,13 @@ async def migrate_credentials_to_byok(
     body: BYOKMigrateRequest,
     store: StoreD,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKMigrateResponse:
     """Migrate org credentials from managed to BYOK encryption.
 
     org_id is derived from JWT, not the request body.
     """
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -299,6 +315,7 @@ async def migrate_credentials_to_byok(
     result = await store.session.execute(
         select(GatewayBYOKKey).where(
             GatewayBYOKKey.id == body.key_id,
+            GatewayBYOKKey.org_id == org_id,
             GatewayBYOKKey.status == "active",
         )
     )
@@ -324,19 +341,19 @@ async def migrate_credentials_to_byok(
 async def revert_credentials_to_managed(
     store: StoreD,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKMigrateResponse:
     """Revert org credentials from BYOK back to managed encryption.
 
     org_id is derived from JWT, not the request body.
     """
-    from ..store import _byok_provider as provider, _dek_cache as cache
+    from ..store.byok_state import _byok_provider as provider
+    from ..store.byok_state import _dek_cache as cache
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
 
-    org_result = await store.session.execute(
-        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
-    )
+    org_result = await store.session.execute(select(GatewayOrg).where(GatewayOrg.org_id == org_id))
     if org_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Organization not found")
 
@@ -356,12 +373,14 @@ async def rotate_byok_key_endpoint(
     body: BYOKRotateRequest,
     store: StoreD,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKRotateResponse:
     """Rotate credentials from one BYOK key to another.
 
     org_id is derived from JWT. key_id is the OLD key to rotate FROM.
     """
-    from ..store import _byok_provider as provider, _dek_cache as cache
+    from ..store.byok_state import _byok_provider as provider
+    from ..store.byok_state import _dek_cache as cache
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -370,14 +389,20 @@ async def rotate_byok_key_endpoint(
         raise HTTPException(status_code=400, detail="new_key_id must differ from key_id")
 
     old_key_result = await store.session.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     old_key = old_key_result.scalar_one_or_none()
     if old_key is None or old_key.org_id != org_id or old_key.status not in ("active", "rotating"):
         raise HTTPException(status_code=404, detail="Key not found")
 
     new_key_result = await store.session.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == body.new_key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == body.new_key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     new_key = new_key_result.scalar_one_or_none()
     if new_key is None or new_key.org_id != org_id or new_key.status != "active":
@@ -414,6 +439,7 @@ async def get_migration_status(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKMigrationStatusResponse:
     """Return migration status for org credentials.
 
@@ -423,7 +449,7 @@ async def get_migration_status(
         select(func.count(), GatewayCredential.encryption_mode)
         .join(
             GatewayConnection,
-            (GatewayConnection.user_id == GatewayCredential.user_id)
+            (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
         )
         .where(GatewayConnection.org_id == org_id)

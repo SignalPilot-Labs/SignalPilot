@@ -14,7 +14,7 @@ import {
 import { useAppAuth } from "@/lib/auth-context";
 import { useBackendClient } from "@/lib/backend-client";
 import type { UsageSummaryResponse, DailyUsagePoint, KeyUsageEntry } from "@/lib/backend-client";
-import { useSubscription } from "@/lib/subscription-context";
+import { usePlan } from "@/lib/hooks/use-gateway-data";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
 import { StatusDot } from "@/components/ui/data-viz";
@@ -174,7 +174,7 @@ function KeyUsageRow({ entry }: { entry: KeyUsageEntry }) {
       <div className="w-28 flex-shrink-0">
         {entry.last_used_at ? (
           <TimeAgo
-            timestamp={new Date(entry.last_used_at).getTime()}
+            timestamp={new Date(entry.last_used_at).getTime() / 1000}
             className="text-[12px] text-[var(--color-text-dim)] tracking-wider tabular-nums"
           />
         ) : (
@@ -217,7 +217,8 @@ function KeyUsageTableHeader() {
 
 function UsageContent() {
   const client = useBackendClient();
-  const { planTier } = useSubscription();
+  const { data: plan } = usePlan();
+  const planTier = plan?.tier ?? "free";
   const { toast } = useToast();
 
   const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);

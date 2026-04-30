@@ -12,8 +12,17 @@ export function PageTransition({ children }: { children: React.ReactNode }) {
   const [displayChildren, setDisplayChildren] = useState(children);
   const [transitioning, setTransitioning] = useState(false);
   const prevPathname = useRef(pathname);
+  const isFirstRender = useRef(true);
 
   useEffect(() => {
+    // Skip animation on first render — show content immediately
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      setDisplayChildren(children);
+      prevPathname.current = pathname;
+      return;
+    }
+
     if (pathname !== prevPathname.current) {
       setTransitioning(true);
       // Brief exit, then swap content and enter

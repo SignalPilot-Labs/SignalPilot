@@ -1,5 +1,7 @@
 """SignalPilot CLI — sp command."""
 
+import os
+
 import typer
 import uvicorn
 
@@ -56,7 +58,11 @@ def status():
     typer.echo(f"Sandbox Provider:    {settings.sandbox_provider}")
 
     try:
-        resp = httpx.get(f"{settings.sandbox_manager_url}/health", timeout=5)
+        _cli_headers: dict[str, str] = {}
+        _cli_token = os.environ.get("SP_SANDBOX_TOKEN", "")
+        if _cli_token:
+            _cli_headers["X-Sandbox-Auth"] = _cli_token
+        resp = httpx.get(f"{settings.sandbox_manager_url}/health", timeout=5, headers=_cli_headers)
         data = resp.json()
         typer.echo(f"Sandbox Health:      {data.get('status', 'unknown')}")
         typer.echo(f"Active Sandboxes:    {data.get('active_vms', 0)} / {data.get('max_vms', 10)}")

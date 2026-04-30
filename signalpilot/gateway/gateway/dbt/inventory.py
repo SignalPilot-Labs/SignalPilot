@@ -44,9 +44,7 @@ def scan_project(project_dir: Path | str) -> ProjectMap:
     )
 
     # Build index of sql records by model name for fast lookup during merge.
-    sql_by_name: dict[str, dict[str, Any]] = {
-        rec["name"]: rec for rec in raw["sql_records"]
-    }
+    sql_by_name: dict[str, dict[str, Any]] = {rec["name"]: rec for rec in raw["sql_records"]}
     sql_names_seen: set[str] = set()
 
     # Phase 1: for every yml-defined model, either pair it with its sql file

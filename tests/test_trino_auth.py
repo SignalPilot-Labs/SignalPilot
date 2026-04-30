@@ -11,7 +11,7 @@ class TestTrinoConnectionParsing:
     """Test Trino URL parsing for various formats."""
 
     def test_basic_url(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         params = c._parse_connection("trino://admin@trino.example.com:8080/hive/default")
         assert params["host"] == "trino.example.com"
@@ -21,7 +21,7 @@ class TestTrinoConnectionParsing:
         assert params["schema"] == "default"
 
     def test_https_url(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         params = c._parse_connection("trino+https://user:pass@starburst.example.com:443/galaxy")
         assert params["host"] == "starburst.example.com"
@@ -32,14 +32,14 @@ class TestTrinoConnectionParsing:
         assert params["https"] is True
 
     def test_url_with_auth_method(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         params = c._parse_connection("trino+https://admin@host:443/cat?auth_method=jwt")
         assert params["auth_method"] == "jwt"
         assert params["https"] is True
 
     def test_fallback_host_only(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         params = c._parse_connection("trino.local")
         assert params["host"] == "trino.local"
@@ -51,12 +51,12 @@ class TestTrinoAuthMethods:
     """Test Trino connector auth method configuration."""
 
     def test_default_auth_is_none(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         assert c._auth_method == "none"
 
     def test_jwt_credential_extras(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         c.set_credential_extras({
             "auth_method": "jwt",
@@ -66,7 +66,7 @@ class TestTrinoAuthMethods:
         assert c._jwt_token.startswith("eyJ")
 
     def test_certificate_credential_extras(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         c.set_credential_extras({
             "auth_method": "certificate",
@@ -78,7 +78,7 @@ class TestTrinoAuthMethods:
         assert "BEGIN PRIVATE KEY" in c._client_key
 
     def test_kerberos_credential_extras(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         c.set_credential_extras({
             "auth_method": "kerberos",
@@ -89,13 +89,13 @@ class TestTrinoAuthMethods:
         assert c._kerberos_config["delegate"] is True
 
     def test_query_timeout_from_extras(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         c.set_credential_extras({"query_timeout": 60})
         assert c._request_timeout == 60
 
     def test_password_auth_inferred_from_url(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         c = TrinoConnector()
         params = c._parse_connection("trino+https://user:mypass@host:443/cat")
         assert params["password"] == "mypass"
@@ -106,13 +106,13 @@ class TestTrinoQuoting:
     """Test Trino identifier quoting for SQL injection prevention."""
 
     def test_simple_name(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         assert TrinoConnector._quote_ident("my_table") == '"my_table"'
 
     def test_name_with_double_quote(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         assert TrinoConnector._quote_ident('my"table') == '"my""table"'
 
     def test_empty_name(self):
-        from gateway.connectors.trino import TrinoConnector
+        from gateway.connectors.drivers.trino import TrinoConnector
         assert TrinoConnector._quote_ident("") == '""'

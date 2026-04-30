@@ -13,16 +13,22 @@ Provides shared infrastructure that was previously duplicated across 11 connecto
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import os
 import tempfile
 from abc import ABC, abstractmethod
 from typing import Any
 
+# Context var for the active connection name — set by REST API deps or MCP tools
+active_connection_name_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "active_connection_name", default=None
+)
+
 
 class BaseConnector(ABC):
     """Abstract base class for all database connectors.
 
-    Subclasses MUST implement: connect(), execute(), get_schema().
+    Subclasses MUST implement: connect(), _execute_impl(), _get_schema_impl().
     Subclasses MAY override: health_check(), close(), _ping(),
         _set_connector_specific_extras(), _identifier_quote.
     """
@@ -41,12 +47,82 @@ class BaseConnector(ABC):
         """Open connection pool."""
 
     @abstractmethod
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
-        """Execute query and return rows as list of dicts."""
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Execute query and return rows as list of dicts. Subclasses implement this."""
 
     @abstractmethod
+    async def _get_schema_impl(self) -> dict[str, Any]:
+        """Return schema info: tables with columns. Subclasses implement this."""
+
     async def get_schema(self) -> dict[str, Any]:
-        """Return schema info: tables with columns."""
+        """Fetch schema. Subclasses implement _get_schema_impl with _audit_sql calls."""
+        return await self._get_schema_impl()
+
+    # ─── Audited execute (concrete — wraps _execute_impl) ────────────
+
+    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+        """Execute query with audit logging. Subclasses implement _execute_impl."""
+        import time as _time
+
+        t0 = _time.monotonic()
+        rows = await self._execute_impl(sql, params=params, timeout=timeout)
+        elapsed_ms = (_time.monotonic() - t0) * 1000
+
+        # Fire-and-forget audit
+        try:
+            await self._audit_sql(sql, len(rows) if rows else 0, elapsed_ms)
+        except Exception:
+            pass
+
+        return rows
+
+    async def _audit_sql(self, sql: str, rows_returned: int, duration_ms: float) -> None:
+        """Log SQL execution to gateway_audit_logs. Best-effort, never fails the query."""
+        try:
+            import time as _time
+            import uuid as _uuid
+
+            # Late imports to avoid circular dependencies
+            from ..db.engine import get_session_factory
+            from ..db.models import GatewayAuditLog
+            from ..governance.context import current_org_id_var
+
+            # Try to get MCP context (may not exist in non-MCP paths)
+            parent_id = None
+            user_id = None
+            try:
+                from ..mcp import mcp_audit_id_var, mcp_user_id_var
+
+                parent_id = mcp_audit_id_var.get(None)
+                user_id = mcp_user_id_var.get(None)
+            except Exception:
+                pass
+
+            org_id = current_org_id_var.get("local")
+            conn_name = getattr(self, "_audit_connection_name", None) or active_connection_name_var.get(None)
+
+            factory = get_session_factory()
+            async with factory() as session:
+                session.add(
+                    GatewayAuditLog(
+                        id=str(_uuid.uuid4()),
+                        org_id=org_id,
+                        user_id=user_id,
+                        timestamp=_time.time(),
+                        event_type="sql",
+                        connection_name=conn_name,
+                        sql_text=sql[:10000],
+                        rows_returned=rows_returned,
+                        duration_ms=duration_ms,
+                        parent_id=parent_id,
+                        blocked=False,
+                    )
+                )
+                await session.commit()
+        except Exception:
+            pass  # Never fail the actual query for audit logging
 
     # ─── Identifier quoting (SQL injection prevention) ────────────────
 
@@ -128,7 +204,7 @@ class BaseConnector(ABC):
                 asyncio.to_thread(fn),
                 timeout=effective + 5 if effective else None,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise RuntimeError(f"{label} query timed out after {effective}s")
 
     # ─── Health check (default implementation) ────────────────────────
@@ -204,16 +280,19 @@ class BaseConnector(ABC):
             self._query_timeout = extras["query_timeout"]
         self._set_connector_specific_extras(extras)
 
-    def _set_connector_specific_extras(self, extras: dict) -> None:
+    def _set_connector_specific_extras(self, extras: dict) -> None:  # noqa: B027 — optional override hook, default no-op is correct
         """Override in subclasses for connector-specific extras."""
-        pass
 
     # ─── IAM auth (shared by postgres, mysql, redshift) ───────────────
 
     @staticmethod
     def _generate_rds_iam_token(
-        region: str, host: str, port: int, username: str,
-        access_key: str | None = None, secret_key: str | None = None,
+        region: str,
+        host: str,
+        port: int,
+        username: str,
+        access_key: str | None = None,
+        secret_key: str | None = None,
     ) -> str:
         """Generate a short-lived RDS IAM auth token (valid 15 minutes)."""
         try:
@@ -227,23 +306,20 @@ class BaseConnector(ABC):
             kwargs["aws_secret_access_key"] = secret_key
 
         client = boto3.client("rds", **kwargs)
-        return client.generate_db_auth_token(
-            DBHostname=host, Port=port, DBUsername=username, Region=region
-        )
+        return client.generate_db_auth_token(DBHostname=host, Port=port, DBUsername=username, Region=region)
 
     # ─── Sample values (shared UNION ALL + fallback) ──────────────────
 
-    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
-        """Return sample distinct values for specified columns.
-
-        Default implementation: no-op. Override in subclasses.
-        """
+    async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Return sample distinct values. Override in subclasses."""
         return {}
 
+    async def get_sample_values(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
+        """Fetch sample values. Subclasses implement _get_sample_values_impl with _audit_sql calls."""
+        return await self._get_sample_values_impl(table, columns, limit)
+
     @staticmethod
-    def _build_sample_union_sql(
-        table: str, columns: list[str], limit: int = 5, quote: str = '"'
-    ) -> str:
+    def _build_sample_union_sql(table: str, columns: list[str], limit: int = 5, quote: str = '"') -> str:
         """Build a UNION ALL query to fetch sample values in one round trip.
 
         The table name is quoted using the same quote character for injection safety.
@@ -290,10 +366,10 @@ class BaseConnector(ABC):
     # ─── URL parsing helper ───────────────────────────────────────────
 
     @staticmethod
-    def _parse_url(conn_str: str, default_port: int = 5432,
-                   default_user: str = "", default_db: str = "") -> dict:
+    def _parse_url(conn_str: str, default_port: int = 5432, default_user: str = "", default_db: str = "") -> dict:
         """Parse a standard database URL into components."""
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote, urlparse
+
         parsed = urlparse(conn_str)
         return {
             "host": parsed.hostname or "localhost",

@@ -25,7 +25,7 @@ COPY executor.py /opt/signalpilot/
 COPY audit.py /opt/signalpilot/
 COPY sandbox_manager.py /opt/signalpilot/
 COPY sandbox_exec.sh /opt/signalpilot/
-RUN chmod +x /opt/signalpilot/sandbox_exec.sh
+RUN sed -i 's/\r$//' /opt/signalpilot/sandbox_exec.sh && chmod +x /opt/signalpilot/sandbox_exec.sh
 
 # Install Python deps for sandbox manager + DuckDB for local file queries
 RUN pip3 install --no-cache-dir "aiohttp==3.9.0" duckdb

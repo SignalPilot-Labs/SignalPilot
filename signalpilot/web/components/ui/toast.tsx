@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
 
 interface Toast {
   id: string;
@@ -21,7 +22,17 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
+// Left-edge color literals for paid tiers. Full literal strings required to satisfy
+// Tailwind JIT — do not assemble from brand tokens. Color semantics mirror accentText.
+const TIER_LEFT_BORDER: Record<"pro" | "team" | "enterprise", string> = {
+  // Pro: use border-active (#444) — distinct from text (#999) so it reads as deliberate accent.
+  pro:        "border-l-2 border-l-[var(--color-border-active)]",
+  team:       "border-l-2 border-l-blue-400/60",
+  enterprise: "border-l-2 border-l-[var(--color-success)]",
+};
+
 function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) => void }) {
+  const b = useTierBranding();
   const [exiting, setExiting] = useState(false);
 
   useEffect(() => {
@@ -60,14 +71,19 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
     info: "border-[var(--color-border)]",
   };
 
+  const tierLeftClass =
+    b.enabled && b.tier !== "free"
+      ? TIER_LEFT_BORDER[b.tier as "pro" | "team" | "enterprise"]
+      : "";
+
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} shadow-lg ${
+      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} ${tierLeftClass} shadow-lg ${
         exiting ? "animate-slide-out-right" : "animate-slide-in-right"
       }`}
     >
       {icons[toast.type]}
-      <span className="text-[13px] text-[var(--color-text-muted)] tracking-wide">{toast.message}</span>
+      <span className="text-[13px] leading-none tracking-wide text-[var(--color-text-muted)]">{toast.message}</span>
       <button
         onClick={() => {
           setExiting(true);

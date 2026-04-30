@@ -20,6 +20,10 @@ export interface SubscriptionState {
   status: string;
   maxApiKeys: number;
   isLoaded: boolean;
+  pendingDowngradeTo: string | null;
+  pendingDowngradeDate: string | null;
+  cancelAtPeriodEnd: boolean;
+  cancelDate: string | null;
   canCreateKey: (currentCount: number) => boolean;
   refetch: () => void;
 }
@@ -39,6 +43,10 @@ const LOCAL_MODE_SUBSCRIPTION: Omit<SubscriptionState, "canCreateKey" | "refetch
   status: "active",
   maxApiKeys: 50,
   isLoaded: true,
+  pendingDowngradeTo: null,
+  pendingDowngradeDate: null,
+  cancelAtPeriodEnd: false,
+  cancelDate: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -53,6 +61,10 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState("active");
   const [maxApiKeys, setMaxApiKeys] = useState(50);
   const [isLoaded, setIsLoaded] = useState(true);
+  const [pendingDowngradeTo, setPendingDowngradeTo] = useState<string | null>(null);
+  const [pendingDowngradeDate, setPendingDowngradeDate] = useState<string | null>(null);
+  const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(false);
+  const [cancelDate, setCancelDate] = useState<string | null>(null);
 
   const fetchSubscription = useCallback(async () => {
     if (!isAuthenticated) {
@@ -64,6 +76,10 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
       setPlanTier(data.plan_tier);
       setStatus(data.status);
       setMaxApiKeys(data.max_api_keys);
+      setPendingDowngradeTo(data.pending_downgrade_to);
+      setPendingDowngradeDate(data.pending_downgrade_date);
+      setCancelAtPeriodEnd(data.cancel_at_period_end ?? false);
+      setCancelDate(data.cancel_date ?? null);
     } catch {
       // Surface error by leaving defaults (free tier) and marking loaded
       // so the UI renders rather than spinning indefinitely
@@ -81,6 +97,10 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
     status,
     maxApiKeys,
     isLoaded,
+    pendingDowngradeTo,
+    pendingDowngradeDate,
+    cancelAtPeriodEnd,
+    cancelDate,
     canCreateKey: (currentCount: number) => currentCount < maxApiKeys,
     refetch: fetchSubscription,
   };
@@ -122,10 +142,20 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 // Hook
 // ---------------------------------------------------------------------------
 
+const FALLBACK_SUBSCRIPTION: SubscriptionState = {
+  planTier: "free",
+  status: "active",
+  maxApiKeys: 0,
+  isLoaded: false,
+  pendingDowngradeTo: null,
+  pendingDowngradeDate: null,
+  cancelAtPeriodEnd: false,
+  cancelDate: null,
+  canCreateKey: () => true,
+  refetch: () => {},
+};
+
 export function useSubscription(): SubscriptionState {
   const ctx = useContext(SubscriptionContext);
-  if (ctx === null) {
-    throw new Error("useSubscription must be called inside SubscriptionProvider");
-  }
-  return ctx;
+  return ctx ?? FALLBACK_SUBSCRIPTION;
 }

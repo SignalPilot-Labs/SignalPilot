@@ -34,9 +34,9 @@ from .types import ModelInfo, ModelStatus, ProjectMap
 
 _ICON = {
     ModelStatus.COMPLETE: "✓",
-    ModelStatus.STUB:     "⚠",
-    ModelStatus.MISSING:  "✗",
-    ModelStatus.ORPHAN:   "?",
+    ModelStatus.STUB: "⚠",
+    ModelStatus.MISSING: "✗",
+    ModelStatus.ORPHAN: "?",
 }
 
 
@@ -51,10 +51,7 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
     ]
     for hazard in project.date_hazards:
         if hazard.get("package"):
-            lines.append(
-                f"  - PACKAGE MODEL -- {hazard['override_path']}"
-                f" ({hazard['file']}, {hazard['pattern']})"
-            )
+            lines.append(f"  - PACKAGE MODEL -- {hazard['override_path']} ({hazard['file']}, {hazard['pattern']})")
         else:
             lines.append(f"  - {hazard['file']} ({hazard['pattern']}) -- edit directly")
     lines.append("")
@@ -62,9 +59,7 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
         f'>>> FIX: Call fix_date_spine_hazards(project_dir="{project.project_dir}",'
         ' connection_name="<connection>") to auto-fix ALL of these.'
     )
-    lines.append(
-        "    This will create local overrides for package models and edit project models in-place."
-    )
+    lines.append("    This will create local overrides for package models and edit project models in-place.")
     lines.append("")
     return lines
 
@@ -79,10 +74,7 @@ def _nondeterminism_lines(project: ProjectMap) -> list[str]:
     ]
     for warning in project.nondeterminism_warnings:
         if warning.get("package"):
-            lines.append(
-                f"  - PACKAGE MODEL — {warning['override_path']}"
-                f" ({warning['file']})"
-            )
+            lines.append(f"  - PACKAGE MODEL — {warning['override_path']} ({warning['file']})")
         else:
             lines.append(f"  - {warning['file']} — edit directly")
     lines.append("")
@@ -90,9 +82,7 @@ def _nondeterminism_lines(project: ProjectMap) -> list[str]:
         f'>>> FIX: Call fix_nondeterminism_hazards(project_dir="{project.project_dir}",'
         ' connection_name="<connection>") to auto-fix ALL of these.'
     )
-    lines.append(
-        "    This will append a tiebreaker column to ambiguous ORDER BY clauses."
-    )
+    lines.append("    This will append a tiebreaker column to ambiguous ORDER BY clauses.")
     lines.append("")
     return lines
 
@@ -130,7 +120,7 @@ def render_project_map(
 
     focus = (focus or "all").strip()
     if focus.startswith("model:"):
-        return render_single_model(project, focus[len("model:"):].strip())
+        return render_single_model(project, focus[len("model:") :].strip())
     if focus == "work_order":
         return render_work_order(project)
     if focus == "missing":
@@ -334,7 +324,7 @@ def _render_model_line(m: ModelInfo, include_columns: bool) -> str:
 
 
 def _count_statuses(models: list[ModelInfo]) -> dict[ModelStatus, int]:
-    out = {s: 0 for s in ModelStatus}
+    out = dict.fromkeys(ModelStatus, 0)
     for m in models:
         out[m.status] = out.get(m.status, 0) + 1
     return out

@@ -12,28 +12,38 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .correlation import RequestCorrelationMiddleware
-from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware
-from .models import ConnectionUpdate
+from .api import register_routers
+from .byok import DEKCache
+from .byok.factory import make_provider
+from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
-from .db.engine import init_db, close_db, get_session_factory
-from .byok import DEKCache
-from .byok_factory import make_provider
-from .store import Store, _validate_encryption_health, configure_byok
-from .api import register_routers
-from .api.deps import reset_sandbox_client, _sandbox_client
+from .db.engine import close_db, get_session_factory, init_db
+from .governance.context import current_org_id_var
+from .http import (
+    APIKeyAuthMiddleware,
+    RateLimitMiddleware,
+    RequestBodySizeLimitMiddleware,
+    RequestCorrelationMiddleware,
+    SecurityHeadersMiddleware,
+    enforce_principal_rate_limit,
+)
+from .models import ConnectionUpdate
+from .runtime.mode import is_cloud_mode
+from .store import Store, configure_byok
+from .store.crypto import _validate_encryption_health
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +51,9 @@ async def lifespan(app: FastAPI):
 
     # Initialize gateway DB tables
     await init_db()
+
+    # Load persisted health state into in-memory cache
+    await health_monitor.load_from_db()
 
     # Verify encryption key is functional at startup
     if not _validate_encryption_health():
@@ -59,15 +72,93 @@ async def lifespan(app: FastAPI):
     byok_provider_config: dict | None = None
     if byok_provider_config_raw:
         import json as _json
+
         try:
             byok_provider_config = _json.loads(byok_provider_config_raw)
         except _json.JSONDecodeError:
             logger.error("STARTUP FATAL: SP_BYOK_PROVIDER_CONFIG contains invalid JSON")
             raise SystemExit(1)
-    byok_provider = make_provider(byok_provider_type, byok_provider_config)
+
+    # In cloud mode, skip local BYOK provider auto-registration
     dek_cache = DEKCache(ttl_seconds=300)
-    configure_byok(byok_provider, dek_cache)
-    logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
+    if is_cloud_mode() and byok_provider_type == "local":
+        logger.info(
+            "STARTUP: Cloud mode — skipping local BYOK provider; set SP_BYOK_PROVIDER to aws_kms/gcp_kms/azure_kv"
+        )
+    else:
+        byok_provider = make_provider(byok_provider_type, byok_provider_config)
+        configure_byok(byok_provider, dek_cache)
+        logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
+
+    if is_cloud_mode():
+        logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
+
+    async def _health_flush_loop():
+        """Flush buffered health events to DB every 5 seconds."""
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await health_monitor.flush_to_db()
+            except Exception as e:
+                logger.warning("Health flush loop error: %s", e)
+
+    async def _health_cleanup_loop():
+        """Delete health events older than 7 days, every hour."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await health_monitor.cleanup_old_events()
+            except Exception as e:
+                logger.warning("Health cleanup loop error: %s", e)
+
+    async def _health_ping_loop():
+        """Ping each connection every 30s to keep health stats fresh."""
+        await asyncio.sleep(10)  # Wait for startup to settle
+        while True:
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    store = Store(session, allow_unscoped=True)
+                    connections = await store.list_connections()
+                    for conn_info in connections:
+                        token = current_org_id_var.set(conn_info.org_id)
+                        try:
+                            inner_store = Store(session, org_id=conn_info.org_id)
+                            conn_str = await inner_store.get_connection_string(conn_info.name)
+                            if not conn_str:
+                                continue
+                            extras = await inner_store.get_credential_extras(conn_info.name)
+                            start = time.monotonic()
+                            try:
+                                async with pool_manager.connection(
+                                    conn_info.db_type,
+                                    conn_str,
+                                    credential_extras=extras,
+                                    connection_name=conn_info.name,
+                                ) as connector:
+                                    ok = await connector.health_check()
+                                elapsed = (time.monotonic() - start) * 1000
+                                health_monitor.record(
+                                    conn_info.name,
+                                    elapsed,
+                                    ok,
+                                    error=None if ok else "health_check returned false",
+                                    db_type=conn_info.db_type,
+                                )
+                            except Exception as e:
+                                elapsed = (time.monotonic() - start) * 1000
+                                health_monitor.record(
+                                    conn_info.name,
+                                    elapsed,
+                                    False,
+                                    error=str(e)[:200],
+                                    db_type=conn_info.db_type,
+                                )
+                        finally:
+                            current_org_id_var.reset(token)
+            except Exception as e:
+                logger.warning("Health ping loop error: %s", e)
+            await asyncio.sleep(30)
 
     async def _pool_cleanup_loop():
         while True:
@@ -90,40 +181,61 @@ async def lifespan(app: FastAPI):
                         last_refresh = conn_info.last_schema_refresh or 0
                         if now - last_refresh < interval:
                             continue
+                        # Outer Store is allow_unscoped; construct a per-org inner Store
+                        # so get_connection_string, get_credential_extras, and update_connection
+                        # are correctly scoped and update_connection's WHERE clause matches.
+                        token = current_org_id_var.set(conn_info.org_id)
                         try:
-                            conn_str = await store.get_connection_string(conn_info.name)
+                            inner_store = Store(session, org_id=conn_info.org_id)
+                            conn_str = await inner_store.get_connection_string(conn_info.name)
                             if not conn_str:
                                 continue
-                            extras = await store.get_credential_extras(conn_info.name)
+                            extras = await inner_store.get_credential_extras(conn_info.name)
                             async with pool_manager.connection(
-                                conn_info.db_type, conn_str, credential_extras=extras,
+                                conn_info.db_type,
+                                conn_str,
+                                credential_extras=extras,
+                                connection_name=conn_info.name,
                             ) as connector:
                                 schema = await connector.get_schema()
                             diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)
-                            await store.update_connection(conn_info.name, ConnectionUpdate(
-                                last_schema_refresh=now,
-                            ))
+                            await inner_store.update_connection(
+                                conn_info.name,
+                                ConnectionUpdate(
+                                    last_schema_refresh=now,
+                                ),
+                            )
                             if diff_result and diff_result.get("has_changes"):
                                 added = len(diff_result.get("added_tables", []))
                                 removed = len(diff_result.get("removed_tables", []))
                                 modified = len(diff_result.get("modified_tables", []))
                                 logger.info(
                                     "Schema change detected for '%s': +%d/-%d tables, %d modified",
-                                    conn_info.name, added, removed, modified,
+                                    conn_info.name,
+                                    added,
+                                    removed,
+                                    modified,
                                 )
                             else:
                                 logger.info(
                                     "Scheduled schema refresh for '%s': %d tables (no structural changes)",
-                                    conn_info.name, len(schema),
+                                    conn_info.name,
+                                    len(schema),
                                 )
                         except Exception as e:
                             logger.warning(
                                 "Scheduled schema refresh failed for '%s': %s",
-                                conn_info.name, e,
+                                conn_info.name,
+                                e,
                             )
+                        finally:
+                            current_org_id_var.reset(token)
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 
+    health_flush_task = asyncio.create_task(_health_flush_loop())
+    health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
+    health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
 
@@ -138,12 +250,18 @@ async def lifespan(app: FastAPI):
     finally:
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
+        # Flush any remaining health events before shutdown
+        await health_monitor.flush_to_db()
+        health_flush_task.cancel()
+        health_cleanup_task.cancel()
+        health_ping_task.cancel()
         cleanup_task.cancel()
         refresh_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()
         from .api.deps import _sandbox_client
+
         if _sandbox_client:
             await _sandbox_client.close()
 
@@ -155,31 +273,34 @@ app = FastAPI(
     version="0.1.0",
     description="Governed MCP server for AI database access",
     lifespan=lifespan,
+    dependencies=[Depends(enforce_principal_rate_limit)],
 )
 
+
 # CORS
-_ALLOWED_ORIGINS = [
-    "http://localhost:3200",
-    "http://localhost:3000",
-    "http://127.0.0.1:3200",
-    "http://127.0.0.1:3000",
-]
-_extra_origins = os.getenv("SP_ALLOWED_ORIGINS", "")
-if _extra_origins:
-    for _origin in (o.strip() for o in _extra_origins.split(",") if o.strip()):
-        if _origin == "*":
-            logger.warning(
-                "SP_ALLOWED_ORIGINS contains '*' — wildcard origin is not allowed "
-                "with allow_credentials=True; skipping."
-            )
-            continue
-        if not (_origin.startswith("http://") or _origin.startswith("https://")):
-            logger.warning(
-                "SP_ALLOWED_ORIGINS entry %r is not a valid HTTP/HTTPS origin; skipping.",
-                _origin,
-            )
-            continue
-        _ALLOWED_ORIGINS.append(_origin)
+def _build_allowed_origins() -> list[str]:
+    raw = os.environ.get("SP_ALLOWED_ORIGINS", "")
+    if is_cloud_mode():
+        if not raw:
+            return [
+                "https://signalpilot.ai",
+                "https://www.signalpilot.ai",
+                "https://app.signalpilot.ai",
+            ]
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        validated = []
+        for origin in origins:
+            if not origin.startswith("https://"):
+                logger.warning("CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin)
+                continue
+            validated.append(origin)
+        return validated
+    if not raw:
+        return ["http://localhost:3000", "http://localhost:3200"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+_ALLOWED_ORIGINS = _build_allowed_origins()
 
 # Middleware stack (last added = outermost = runs first)
 # Execution order (outermost → innermost):
@@ -189,7 +310,7 @@ if _extra_origins:
 # APIKeyAuthMiddleware is innermost — closest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
 app.add_middleware(RequestCorrelationMiddleware)
-app.add_middleware(RateLimitMiddleware, general_rpm=120, expensive_rpm=30, auth_rpm=10)
+app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=2_097_152)
 app.add_middleware(
@@ -202,6 +323,7 @@ app.add_middleware(
 )
 
 # ─── Global Exception Handler ─────────────────────────────────────────────────
+
 
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -226,16 +348,18 @@ register_routers(app)
 # Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
 _mcp_session_manager = None
 try:
-    from .mcp_server import mcp as _mcp_instance
+    from .mcp import mcp as _mcp_instance
 
     # Override the gateway URL so the MCP tools call back to this same process
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
-    from .mcp_auth import MCPAuthMiddleware
+    from .auth.mcp_api_key import MCPAuthMiddleware
+
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
-    app.mount("/", _mcp_http_app)
-    logger.info("MCP streamable-http endpoint mounted at /mcp")
+    app.mount("/mcp", _mcp_http_app)  # New canonical path
+    app.mount("/", _mcp_http_app)  # Backward compat — remove after client migration
+    logger.info("MCP streamable-http endpoint mounted at /mcp (also / for backward compat)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -20,7 +20,8 @@ import {
   Plug,
   Plus,
 } from "lucide-react";
-import { subscribeMetrics, getAudit, getBudgets, getCacheStats, getConnectionsHealth } from "@/lib/api";
+import { subscribeMetrics } from "@/lib/api";
+import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, usePlan, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
 import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
 import { useConnection } from "@/lib/connection-context";
 import { useAppAuth } from "@/lib/auth-context";
@@ -34,9 +35,11 @@ import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { SystemDiagram } from "@/components/ui/system-diagram";
 import { SqlHighlight } from "@/components/ui/sql-highlight";
 import { TimeAgo } from "@/components/ui/time-ago";
-import { useToast } from "@/components/ui/toast";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { useOnboardingStatus } from "@/lib/onboarding";
+import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { TierWordmark } from "@/components/branding/tier-wordmark";
+import { TierBadge } from "@/components/branding/tier-badge";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -115,14 +118,10 @@ const eventTypeConfig: Record<string, { label: string; color: string }> = {
 /** Inner content for the subscription/keys/MCP grid.
  *  Receives keyCount as a prop — no internal fetch needed. */
 function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
-  const { planTier, status, maxApiKeys } = useSubscription();
-
-  const tierColorMap: Record<string, string> = {
-    free: "text-[var(--color-text-dim)] border-[var(--color-border)]",
-    pro: "text-[var(--color-success)] border-[var(--color-success)]/40",
-    team: "text-[var(--color-warning)] border-[var(--color-warning)]/40",
-  };
-  const tierClasses = tierColorMap[planTier] ?? tierColorMap.free;
+  const { status } = useSubscription();
+  const { data: plan } = usePlan();
+  const planTier = plan?.tier ?? "free";
+  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
 
   const statusLabel = status === "past_due" ? "past due" : status;
 
@@ -144,14 +143,19 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
       <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
         <div className="flex items-center gap-2 mb-3">
           <CreditCard className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+          <span className="text-[12px] leading-none text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
             subscription
           </span>
         </div>
         <div className="mb-1.5">
-          <span className={`px-2 py-0.5 text-[11px] border tracking-[0.15em] uppercase ${tierClasses}`}>
-            {planTier}
-          </span>
+          {planTier === "free" ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
+              <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
+            </span>
+          ) : (
+            <TierBadge />
+          )}
         </div>
         <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
           {statusLabel}
@@ -420,13 +424,22 @@ function CloudStatusSection() {
 /* ── Signed-in user greeting ── */
 function UserGreeting() {
   const { isCloudMode, user } = useAppAuth();
+  const b = useTierBranding();
 
   if (!isCloudMode || !user) return null;
 
   const email = user.email ?? "—";
 
+  const showTierPrefix = b.enabled && b.tier !== "free";
+
   return (
     <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
+      {showTierPrefix && (
+        <>
+          <TierWordmark variant="header" />
+          <span className="mx-2 text-[var(--color-text-dim)]">·</span>
+        </>
+      )}
       signed in as{" "}
       <span className="text-[var(--color-text-muted)]">{email}</span>
     </p>
@@ -436,14 +449,32 @@ function UserGreeting() {
 /* ── DashboardOnboardingCheck — only rendered when isCloudMode is true ── */
 function DashboardOnboardingCheck() {
   const router = useRouter();
-  const { isComplete, isLoading } = useOnboardingStatus();
+  const { activeOrgId, isAuthenticated } = useAppAuth();
+  const { isComplete, isLoading, markComplete } = useOnboardingStatus();
+  const [autoCompleting, setAutoCompleting] = useState(false);
 
-  if (isLoading || isComplete === null) {
-    return <DashboardSkeleton />;
-  }
+  useEffect(() => {
+    if (isLoading) return;
 
-  if (isComplete === false) {
-    router.push("/onboarding");
+    // Not signed in — nothing to do, auth protection handled by middleware
+    if (!isAuthenticated) return;
+
+    if (isComplete === true) return; // already done
+
+    if (activeOrgId) {
+      // User has an active org but onboarding flag not set.
+      // Auto-mark complete — they don't need the wizard.
+      setAutoCompleting(true);
+      markComplete()
+        .catch(() => {})
+        .finally(() => setAutoCompleting(false));
+    } else {
+      // No org — send to onboarding to create/join a team
+      router.push("/onboarding");
+    }
+  }, [isLoading, isComplete, activeOrgId, isAuthenticated, router, markComplete]);
+
+  if (isLoading || autoCompleting || (isComplete === false && !activeOrgId)) {
     return <DashboardSkeleton />;
   }
 
@@ -466,61 +497,49 @@ export default function DashboardGate() {
 }
 
 function DashboardContent() {
-  const { toast } = useToast();
+  const { isCloudMode } = useAppAuth();
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-  const [recentAudit, setRecentAudit] = useState<AuditEntry[]>([]);
-  const [budgetData, setBudgetData] = useState<{
-    sessions: Record<string, unknown>[];
-    total_spent_usd: number;
-  } | null>(null);
   const { connections } = useConnection();
-  const [auditStats, setAuditStats] = useState({
-    queries: 0,
-    executions: 0,
-    blocks: 0,
-    total: 0,
-  });
-  const [cacheStats, setCacheStats] = useState<{
-    entries: number;
-    max_entries: number;
-    hits: number;
-    misses: number;
-    hit_rate: number;
-  } | null>(null);
-  const [connHealth, setConnHealth] = useState<Record<string, ConnectionHealthStats>>({});
 
+  // SWR data hooks
+  const { data: auditData } = useAudit({ limit: 50 });
+  const { data: budgetData } = useBudgets();
+  const { data: cacheStats } = useCacheStats();
+  const { data: healthData } = useConnectionsHealth();
+
+  // Derive audit entries + stats from SWR data
+  const recentAudit: AuditEntry[] = auditData?.entries ?? [];
+  const auditStats = useMemo(() => {
+    const stats = { queries: 0, executions: 0, blocks: 0, total: recentAudit.length };
+    for (const e of recentAudit) {
+      if (e.event_type === "query") stats.queries++;
+      else if (e.event_type === "execute") stats.executions++;
+      if (e.blocked) stats.blocks++;
+    }
+    return stats;
+  }, [recentAudit]);
+
+  // Derive connection health map from SWR data
+  const connHealth = useMemo(() => {
+    const map: Record<string, ConnectionHealthStats> = {};
+    if (healthData?.connections) {
+      for (const h of healthData.connections) {
+        map[h.connection_name] = h;
+      }
+    }
+    return map;
+  }, [healthData]);
+
+  // Prefetch common data on mount for faster navigation to other pages
+  useEffect(() => { prefetchCommonData(); }, []);
+
+  // SSE metrics subscription — live stream, not a REST fetch
   useEffect(() => {
     const unsub = subscribeMetrics((data) => {
       setMetrics(data);
     });
-
-    getAudit({ limit: 50 })
-      .then((res) => {
-        setRecentAudit(res.entries);
-        const stats = { queries: 0, executions: 0, blocks: 0, total: res.entries.length };
-        for (const e of res.entries) {
-          if (e.event_type === "query") stats.queries++;
-          else if (e.event_type === "execute") stats.executions++;
-          if (e.blocked) stats.blocks++;
-        }
-        setAuditStats(stats);
-      })
-      .catch((e) => toast(String(e), "error"));
-
-    getBudgets().then(setBudgetData).catch((e) => toast(String(e), "error"));
-    getCacheStats().then(setCacheStats).catch((e) => toast(String(e), "error"));
-    getConnectionsHealth()
-      .then((res) => {
-        const map: Record<string, ConnectionHealthStats> = {};
-        for (const h of res.connections) {
-          map[h.connection_name] = h;
-        }
-        setConnHealth(map);
-      })
-      .catch((e) => toast(String(e), "error"));
-
     return unsub;
-  }, [toast]);
+  }, []);
 
   const latencyValues = recentAudit
     .filter(e => e.duration_ms != null)
@@ -548,19 +567,23 @@ function DashboardContent() {
         }
       >
         <div className="flex items-center gap-8 text-xs">
-          <div className="flex items-center gap-2">
-            <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
-            <code className="text-[12px] text-[var(--color-text)]">
-              {metrics?.sandbox_manager || "—"}
-            </code>
-            <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
-          </div>
-          <div className="flex items-center gap-2">
-            <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[var(--color-text-dim)]">sandbox:</span>
-            <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
-          </div>
+          {!isCloudMode && (
+            <div className="flex items-center gap-2">
+              <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
+              <code className="text-[12px] text-[var(--color-text)]">
+                {metrics?.sandbox_manager || "—"}
+              </code>
+              <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
+            </div>
+          )}
+          {!isCloudMode && (
+            <div className="flex items-center gap-2">
+              <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
+              <span className="text-[var(--color-text-dim)]">sandbox:</span>
+              <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
+            </div>
+          )}
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
@@ -577,18 +600,22 @@ function DashboardContent() {
       </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in">
-        <MetricCard
-          label="active sandboxes"
-          value={metrics?.active_sandboxes ?? "—"}
-          subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
-          icon={Terminal}
-        />
-        <MetricCard
-          label="sandbox instances"
-          value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
-          icon={Cpu}
-        />
+      <div className={`grid ${isCloudMode ? "grid-cols-2" : "grid-cols-4"} gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in`}>
+        {!isCloudMode && (
+          <MetricCard
+            label="active sandboxes"
+            value={metrics?.active_sandboxes ?? "—"}
+            subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
+            icon={Terminal}
+          />
+        )}
+        {!isCloudMode && (
+          <MetricCard
+            label="sandbox instances"
+            value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
+            icon={Cpu}
+          />
+        )}
         <MetricCard
           label="connections"
           value={connections.length}
@@ -697,7 +724,7 @@ function DashboardContent() {
       <div className="mb-8">
         <SystemDiagram
           connections={connections.length}
-          activeSandboxes={metrics?.active_sandboxes ?? 0}
+          activeSandboxes={isCloudMode ? 0 : (metrics?.active_sandboxes ?? 0)}
           governanceActive={true}
         />
       </div>

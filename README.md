@@ -33,8 +33,8 @@
 
 Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code)**. Underneath it, three components do the work:
 
-1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 25 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
-2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 25 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
+1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 32 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
+2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 32 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
 3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://app.signalpilot.ai) for SSO and hosted history.
 
 ---
@@ -157,7 +157,7 @@ See [`plugin/README.md`](plugin/README.md) for details.
 
 ## Use With Any MCP Client
 
-> ⚠️ **Experimental for non-Claude clients.** The 25 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
+> ⚠️ **Experimental for non-Claude clients.** The 32 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
 
 ### Claude Code (one-liner)
 
@@ -204,7 +204,7 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 
 ## MCP Tools
 
-25 governed tools across query execution, schema discovery, dbt intelligence, and model verification.
+32 governed tools across query execution, schema discovery, dbt intelligence, and model verification.
 
 | Category | Tools |
 |----------|-------|
@@ -241,7 +241,7 @@ SignalPilot/
 │   │       ├── api/          # REST API modules
 │   │       ├── connectors/   # 11 database connectors + pooling + SSH tunneling
 │   │       ├── governance/   # Budget, cache, PII redaction, annotations
-│   │       ├── mcp/          # 25 MCP tool definitions (modular package)
+│   │       ├── mcp/          # 32 MCP tool definitions (modular package)
 │   │       ├── engine/       # SQL validation, LIMIT injection, function denylist
 │   │       ├── dbt/          # Project scanning, validation, hazard detection
 │   │       ├── db/           # SQLAlchemy ORM models + async engine

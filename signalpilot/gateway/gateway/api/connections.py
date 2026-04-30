@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..auth import UserID, OrgID
+from ..auth import OrgAdmin, UserID, OrgID
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
@@ -385,7 +385,7 @@ async def get_connections(store: StoreD):
 
 
 @router.post("/connections", status_code=201, dependencies=[RequireScope("write")])
-async def add_connection(conn: ConnectionCreate, store: StoreD):
+async def add_connection(conn: ConnectionCreate, store: StoreD, _role: OrgAdmin):
     # Enforce connection limit based on org's plan tier
     from ..governance.plan_limits import get_org_limits, check_connection_limit
     plan = await get_org_limits(store.org_id)
@@ -577,14 +577,14 @@ async def get_connection_detail(name: str, store: StoreD):
 
 
 @router.delete("/connections/{name}", status_code=204, dependencies=[RequireScope("write")])
-async def remove_connection(name: str, store: StoreD):
+async def remove_connection(name: str, store: StoreD, _role: OrgAdmin):
     if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
 
 
 @router.put("/connections/{name}", dependencies=[RequireScope("write")])
-async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD):
+async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _role: OrgAdmin):
     """Update an existing connection. Only provided fields are changed."""
     existing = await store.get_connection(name)
     if not existing:

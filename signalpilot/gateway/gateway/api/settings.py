@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from ..auth import OrgAdmin
 from ..models import GatewaySettings
 from ..scope_guard import RequireScope
 from .deps import StoreD, reset_sandbox_client
@@ -33,7 +34,7 @@ async def get_settings(store: StoreD) -> GatewaySettings:
 
 
 @router.put("/settings", dependencies=[RequireScope("admin")])
-async def update_settings(settings: GatewaySettings, store: StoreD) -> GatewaySettings:
+async def update_settings(settings: GatewaySettings, store: StoreD, _role: OrgAdmin) -> GatewaySettings:
     # Prevent mask round-trip: if the client sends back the redacted mask
     # (from a GET-modify-PUT cycle), preserve the existing stored value.
     existing = await store.load_settings()

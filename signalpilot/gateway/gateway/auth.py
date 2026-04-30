@@ -217,6 +217,47 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
     return org_id
 
 
+async def resolve_org_role(request: Request, _user_id: UserID) -> str:
+    """Extract org role from JWT claims. Returns 'admin' or 'basic_member'.
+
+    - MCP / API key auth: treat as admin (key holder has full access).
+    - Local mode: always admin.
+    - Cloud JWT: reads 'org_role' claim or Clerk prod short claim 'o.rol'.
+    """
+    claims = getattr(request.state, "_jwt_claims", {})
+
+    # Clerk dev uses "org_role" directly; Clerk prod uses short claim "o" with "rol"
+    role = claims.get("org_role")
+    if not role:
+        o_claim = claims.get("o")
+        if isinstance(o_claim, dict):
+            role = o_claim.get("rol")
+
+    # MCP / API key auth — treat as admin (key holder has full access)
+    auth = getattr(request.state, "auth", None)
+    if auth and auth.get("auth_method") in ("api_key", "local_key", "local_nokey"):
+        return "admin"
+
+    # Local mode — always admin
+    if not is_cloud_mode():
+        return "admin"
+
+    return role or "basic_member"
+
+
+OrgRole = Annotated[str, Depends(resolve_org_role)]
+
+
+async def require_org_admin(role: OrgRole) -> str:
+    """Require org:admin role. Raises 403 for non-admin members."""
+    if role not in ("admin", "org:admin"):
+        raise HTTPException(status_code=403, detail="Organization admin role required")
+    return role
+
+
+OrgAdmin = Annotated[str, Depends(require_org_admin)]
+
+
 # FastAPI dependency aliases
 UserID = Annotated[str, Depends(resolve_user_id)]
 OrgID = Annotated[str, Depends(resolve_org_id)]

@@ -12,7 +12,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .correlation import RequestCorrelationMiddleware
 from .deployment import is_cloud_mode
-from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware
+from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware, enforce_principal_rate_limit
 from .models import ConnectionUpdate
 from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
@@ -248,6 +248,7 @@ app = FastAPI(
     version="0.1.0",
     description="Governed MCP server for AI database access",
     lifespan=lifespan,
+    dependencies=[Depends(enforce_principal_rate_limit)],
 )
 
 # CORS

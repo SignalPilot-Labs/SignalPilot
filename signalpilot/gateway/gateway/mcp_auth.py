@@ -287,6 +287,14 @@ class MCPAuthMiddleware:
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))
                 mcp_user_agent_var.set(_extract_user_agent(scope))
+
+                # Per-key / per-org rate limit (MCP traffic bypasses FastAPI middleware)
+                from .middleware import check_principal_rate_limit
+                rate_error = check_principal_rate_limit(matched.id, key_org_id)
+                if rate_error:
+                    await _send_429(send, rate_error)
+                    return
+
                 await self._app(scope, receive, send)
         except (SQLAlchemyError, ValueError) as e:
             logger.error("MCP auth: DB error in local validation: %s", e)

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Response
 
-from ..auth import OrgID, UserID
+from ..auth import OrgAdmin, OrgID, UserID
 from ..models import ApiKeyCreate, ApiKeyCreatedResponse, ApiKeyResponse
 from ..scope_guard import RequireScope
 from .deps import StoreD
@@ -20,7 +20,7 @@ async def list_keys(store: StoreD) -> list[ApiKeyResponse]:
 
 
 @router.post("/keys", dependencies=[RequireScope("admin")])
-async def create_key(body: ApiKeyCreate, store: StoreD) -> ApiKeyCreatedResponse:
+async def create_key(body: ApiKeyCreate, store: StoreD, _role: OrgAdmin) -> ApiKeyCreatedResponse:
     # Enforce API key limit based on org's plan tier
     from ..governance.plan_limits import get_org_limits, check_api_key_limit
     plan = await get_org_limits(store.org_id)
@@ -37,7 +37,7 @@ async def create_key(body: ApiKeyCreate, store: StoreD) -> ApiKeyCreatedResponse
 
 
 @router.delete("/keys/{key_id}", dependencies=[RequireScope("admin")])
-async def delete_key(key_id: str, store: StoreD):
+async def delete_key(key_id: str, store: StoreD, _role: OrgAdmin):
     if not await store.delete_api_key(key_id):
         raise HTTPException(status_code=404, detail="API key not found")
     return Response(status_code=204)

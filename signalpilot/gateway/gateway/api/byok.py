@@ -14,7 +14,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import DBSession, OrgID, UserID
+from ..auth import DBSession, OrgAdmin, OrgID, UserID
 from ..byok import (
     BYOKKeyError,
     decrypt_envelope,
@@ -82,6 +82,7 @@ async def create_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKKeyResponse:
     """Register a BYOK key for an org. org_id is derived from JWT, not body."""
     # Check uniqueness
@@ -129,6 +130,7 @@ async def list_byok_keys(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> list[BYOKKeyResponse]:
     """List BYOK keys for the org derived from JWT."""
     query = select(GatewayBYOKKey).where(GatewayBYOKKey.org_id == org_id)
@@ -142,6 +144,7 @@ async def get_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKKeyResponse:
     """Get a single BYOK key by ID, scoped to the org derived from JWT."""
     result = await db.execute(
@@ -163,6 +166,7 @@ async def update_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKKeyResponse:
     """Update a BYOK key's alias or status, scoped to the org derived from JWT."""
     result = await db.execute(
@@ -193,6 +197,7 @@ async def delete_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
     force: bool = False,
 ) -> Response:
     """Delete a BYOK key.
@@ -256,6 +261,7 @@ async def validate_byok_key(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> dict:
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
     from ..store import _byok_provider as provider
@@ -298,6 +304,7 @@ async def migrate_credentials_to_byok(
     body: BYOKMigrateRequest,
     store: StoreD,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKMigrateResponse:
     """Migrate org credentials from managed to BYOK encryption.
 
@@ -337,6 +344,7 @@ async def migrate_credentials_to_byok(
 async def revert_credentials_to_managed(
     store: StoreD,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKMigrateResponse:
     """Revert org credentials from BYOK back to managed encryption.
 
@@ -369,6 +377,7 @@ async def rotate_byok_key_endpoint(
     body: BYOKRotateRequest,
     store: StoreD,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKRotateResponse:
     """Rotate credentials from one BYOK key to another.
 
@@ -433,6 +442,7 @@ async def get_migration_status(
     db: DBSession,
     _user_id: UserID,
     org_id: OrgID,
+    _role: OrgAdmin,
 ) -> BYOKMigrationStatusResponse:
     """Return migration status for org credentials.
 

@@ -8,7 +8,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, or_, select
 
-from ..auth import OrgID
+from ..auth import OrgAdmin, OrgID
 from ..db.models import GatewayBYOKKey, GatewayCredential
 from ..store import CURRENT_KEY_VERSION, _validate_encryption_health
 from .deps import StoreD
@@ -34,7 +34,7 @@ def _require_admin(store: StoreD) -> None:
 
 
 @router.get("/security/status")
-async def security_status(store: StoreD, org_id: OrgID):
+async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
     """Return encryption health and credential storage statistics.
 
     Admin-only: accessible only to user IDs listed in SP_ADMIN_USER_IDS

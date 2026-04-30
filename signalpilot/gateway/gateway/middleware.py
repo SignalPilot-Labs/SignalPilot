@@ -12,7 +12,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -240,13 +240,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.general_rpm = general_rpm
         self.expensive_rpm = expensive_rpm
         self.auth_rpm = auth_rpm
-        self.per_key_rpm: int = int(os.environ.get("SP_PER_KEY_RPM", "1000"))
-        self.per_org_rpm: int = int(os.environ.get("SP_PER_ORG_RPM", "5000"))
         self._general_hits: dict[str, list[float]] = defaultdict(list)
         self._expensive_hits: dict[str, list[float]] = defaultdict(list)
         self._auth_hits: dict[str, list[float]] = defaultdict(list)
-        self._key_hits: dict[str, list[float]] = defaultdict(list)
-        self._org_hits: dict[str, list[float]] = defaultdict(list)
 
     def _is_auth(self, request: Request) -> bool:
         return request.url.path in self.AUTH_PATHS and request.method == "POST"
@@ -272,7 +268,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _cleanup_stale_ips(self) -> None:
         now = time.monotonic()
         window = now - 120
-        for store_dict in (self._general_hits, self._expensive_hits, self._auth_hits, self._key_hits, self._org_hits):
+        for store_dict in (self._general_hits, self._expensive_hits, self._auth_hits):
             stale_ips = [ip for ip, hits in store_dict.items() if not hits or hits[-1] < window]
             for ip in stale_ips:
                 del store_dict[ip]
@@ -289,7 +285,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        total_tracked = len(self._general_hits) + len(self._expensive_hits) + len(self._auth_hits) + len(self._key_hits) + len(self._org_hits)
+        total_tracked = len(self._general_hits) + len(self._expensive_hits) + len(self._auth_hits)
         if total_tracked > 100:
             self._cleanup_stale_ips()
 
@@ -324,29 +320,47 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": "60"},
             )
 
-        # Tier 4: per-key and per-org rate limits (checked after auth is resolved)
-        auth = getattr(request.state, "auth", None) or {}
-        key_id = auth.get("key_id")
-        org_id = auth.get("org_id")
-
-        if key_id:
-            if not self._check_rate(self._key_hits[str(key_id)], self.per_key_rpm):
-                return Response(
-                    content='{"detail":"Per-key rate limit exceeded."}',
-                    status_code=429,
-                    media_type="application/json",
-                    headers={"Retry-After": "60"},
-                )
-        if org_id and org_id != "local":
-            if not self._check_rate(self._org_hits[str(org_id)], self.per_org_rpm):
-                return Response(
-                    content='{"detail":"Per-org rate limit exceeded."}',
-                    status_code=429,
-                    media_type="application/json",
-                    headers={"Retry-After": "60"},
-                )
-
         return await call_next(request)
+
+
+# ─── Per-key / per-org rate limiting (runs AFTER auth resolves) ────────────
+
+_key_hits: dict[str, list[float]] = defaultdict(list)
+_org_hits: dict[str, list[float]] = defaultdict(list)
+_PER_KEY_RPM = int(os.environ.get("SP_PER_KEY_RPM", "1000"))
+_PER_ORG_RPM = int(os.environ.get("SP_PER_ORG_RPM", "5000"))
+
+
+def check_principal_rate_limit(key_id: str | None, org_id: str | None) -> str | None:
+    """Check per-key and per-org rate limits. Returns error message or None."""
+    now = time.monotonic()
+    cutoff = now - 60.0
+
+    if key_id:
+        hits = _key_hits[key_id]
+        _key_hits[key_id] = [t for t in hits if t > cutoff]
+        if len(_key_hits[key_id]) >= _PER_KEY_RPM:
+            return "Per-key rate limit exceeded"
+        _key_hits[key_id].append(now)
+
+    if org_id and org_id != "local":
+        hits = _org_hits[org_id]
+        _org_hits[org_id] = [t for t in hits if t > cutoff]
+        if len(_org_hits[org_id]) >= _PER_ORG_RPM:
+            return "Per-org rate limit exceeded"
+        _org_hits[org_id].append(now)
+
+    return None
+
+
+async def enforce_principal_rate_limit(request: Request) -> None:
+    """FastAPI dependency — runs after auth middleware has set request.state.auth."""
+    auth = getattr(request.state, "auth", None) or {}
+    key_id = auth.get("key_id")
+    org_id = auth.get("org_id")
+    error = check_principal_rate_limit(key_id, org_id)
+    if error:
+        raise HTTPException(status_code=429, detail=error)
 
 
 _CSP_DEFAULT_POLICY = (

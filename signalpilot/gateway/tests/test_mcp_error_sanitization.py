@@ -9,7 +9,7 @@ Verifies:
 
 from __future__ import annotations
 
-from gateway.mcp_errors import (
+from gateway.errors.mcp import (
     _SENSITIVE_PATTERNS,
     sanitize_mcp_error,
     sanitize_proxy_response,

@@ -51,7 +51,7 @@ def main():
     if transport == "streamable-http":
         import uvicorn
 
-        from gateway.mcp_auth import MCPAuthMiddleware
+        from gateway.auth.mcp_api_key import MCPAuthMiddleware
 
         port = int(_entry_os.environ.get("SP_MCP_PORT", "8000"))
         starlette_app = mcp.streamable_http_app()

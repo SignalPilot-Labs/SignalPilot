@@ -3,7 +3,7 @@
 Resolves every request to a user_id and org_id:
 - Cloud mode (CLERK_PUBLISHABLE_KEY set): Clerk JWT → real user ID and org_id
 - Local mode: user_id = "local", org_id = "local" (constants)
-- MCP requests: API key validation (handled by mcp_auth.py, sets scope state)
+- MCP requests: API key validation (handled by auth/mcp_api_key.py, sets scope state)
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import jwt
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .config import get_auth_settings
-from .db.engine import get_db
-from .runtime.mode import is_cloud_mode
+from ..config import get_auth_settings
+from ..db.engine import get_db
+from ..runtime.mode import is_cloud_mode
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
     Also sets current_org_id_var so governance singletons (health monitor, budget,
     caches) can read the org scope without requiring Store instantiation.
     """
-    from .governance.context import current_org_id_var
+    from ..governance.context import current_org_id_var
 
     claims = getattr(request.state, "_jwt_claims", None)
     if claims is None:

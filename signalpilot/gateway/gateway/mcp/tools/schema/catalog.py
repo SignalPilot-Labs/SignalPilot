@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session, mcp_org_id_var
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _validate_connection_name
-from gateway.mcp_errors import sanitize_mcp_error
 
 
 @audited_tool(mcp)

@@ -199,9 +199,9 @@ class MCPAuthMiddleware:
         # (API keys are now org-scoped and managed by the gateway, not the backend)
         from sqlalchemy.exc import SQLAlchemyError
 
-        from .db.engine import get_session_factory
-        from .mcp_server import mcp_org_id_var, mcp_user_id_var
-        from .store import Store
+        from ..db.engine import get_session_factory
+        from ..mcp_server import mcp_org_id_var, mcp_user_id_var
+        from ..store import Store
 
         try:
             factory = get_session_factory()
@@ -212,7 +212,7 @@ class MCPAuthMiddleware:
                 has_user_keys = len(keys) > 0
 
                 if not has_user_keys:
-                    from .runtime.mode import is_cloud_mode
+                    from ..runtime.mode import is_cloud_mode
 
                     if is_cloud_mode():
                         await _send_401(
@@ -230,7 +230,7 @@ class MCPAuthMiddleware:
                     # Set user_id and org_id to "local" so MCP tools can access the store
                     mcp_user_id_var.set("local")
                     mcp_org_id_var.set("local")
-                    from .mcp_server import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                    from ..mcp_server import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                     mcp_raw_key_var.set(None)
                     mcp_client_ip_var.set(_extract_client_ip(scope))
@@ -261,7 +261,7 @@ class MCPAuthMiddleware:
                     scope["state"] = {}
                 # In cloud mode, reject keys that lack a real org_id — falling
                 # back to "local" would grant access to the shared namespace.
-                from .runtime.mode import is_cloud_mode
+                from ..runtime.mode import is_cloud_mode
 
                 if is_cloud_mode() and (not matched.org_id or matched.org_id == "local"):
                     logger.warning(
@@ -281,14 +281,14 @@ class MCPAuthMiddleware:
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
-                from .mcp_server import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                from ..mcp_server import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))
                 mcp_user_agent_var.set(_extract_user_agent(scope))
 
                 # Per-key / per-org rate limit (MCP traffic bypasses FastAPI middleware)
-                from .middleware import check_principal_rate_limit
+                from ..middleware import check_principal_rate_limit
 
                 rate_error = check_principal_rate_limit(matched.id, key_org_id)
                 if rate_error:

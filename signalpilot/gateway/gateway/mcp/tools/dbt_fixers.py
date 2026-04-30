@@ -8,13 +8,13 @@ from gateway.dbt.nondeterminism_fixer import (
     build_table_columns_from_schema,
     generate_nondeterminism_fixes,
 )
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _is_cloud, _store_session
 from gateway.mcp.helpers import _extract_replacement_snippet, _fetch_date_boundaries, _find_hazard_table_date
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _validate_connection_name
-from gateway.mcp_errors import sanitize_mcp_error
 
 if not _is_cloud:
 

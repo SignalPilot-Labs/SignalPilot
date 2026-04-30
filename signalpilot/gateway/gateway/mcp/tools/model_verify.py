@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import re
 
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session
 from gateway.mcp.helpers import _get_column_names
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _MODEL_NAME_RE, _quote_table, _validate_connection_name, _validate_sql
-from gateway.mcp_errors import sanitize_mcp_error
 
 
 @audited_tool(mcp)

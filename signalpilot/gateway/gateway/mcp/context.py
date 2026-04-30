@@ -41,7 +41,7 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
     if not org_id:
         raise RuntimeError(
             "MCP _store_session invoked with no org_id — mcp_org_id_var was not set by MCPAuthMiddleware. "
-            "Check mcp_auth.py local/cloud branches both call mcp_org_id_var.set(...)."
+            "Check auth/mcp_api_key.py local/cloud branches both call mcp_org_id_var.set(...)."
         )
     token = current_org_id_var.set(org_id)
     try:

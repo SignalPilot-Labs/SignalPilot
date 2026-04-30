@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _is_cloud, _store_session
 from gateway.mcp.server import mcp
-from gateway.mcp_errors import sanitize_mcp_error
 
 if not _is_cloud:
 

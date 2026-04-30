@@ -8,12 +8,12 @@ import uuid
 
 import httpx
 
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _is_cloud, _store_session, mcp_org_id_var
 from gateway.mcp.helpers import _get_sandbox_url
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _MAX_CODE_LENGTH
-from gateway.mcp_errors import sanitize_mcp_error
 from gateway.models import AuditEntry
 from gateway.store import list_sandboxes
 

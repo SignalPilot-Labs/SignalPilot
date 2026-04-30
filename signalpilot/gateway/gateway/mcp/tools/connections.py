@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import httpx
 
+from gateway.errors.mcp import sanitize_proxy_response
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers, _store_session, mcp_org_id_var
 from gateway.mcp.helpers import _format_health_stats
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE
-from gateway.mcp_errors import sanitize_proxy_response
 
 
 @audited_tool(mcp)

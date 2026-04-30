@@ -339,13 +339,13 @@ class TestJwtErrorRedaction:
         from gateway.auth import resolve_user_id
 
         # Simulate cloud mode being active
-        with patch("gateway.auth.is_cloud_mode", return_value=True):
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
             mock_client.get_signing_key_from_jwt.side_effect = pyjwt.InvalidTokenError(
                 "signature verification failed: algorithm=RS256, kid=abc123"
             )
 
-            with patch("gateway.auth._get_jwks_client", return_value=mock_client):
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
                 request = MagicMock()
                 request.headers.get.return_value = "Bearer eyJfake.jwt.token"
                 request.cookies.get.return_value = None
@@ -372,11 +372,11 @@ class TestJwtErrorRedaction:
 
         from gateway.auth import resolve_user_id
 
-        with patch("gateway.auth.is_cloud_mode", return_value=True):
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
             mock_client.get_signing_key_from_jwt.side_effect = pyjwt.ExpiredSignatureError("Signature has expired.")
 
-            with patch("gateway.auth._get_jwks_client", return_value=mock_client):
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
                 request = MagicMock()
                 request.headers.get.return_value = "Bearer eyJfake.expired.token"
                 request.cookies.get.return_value = None

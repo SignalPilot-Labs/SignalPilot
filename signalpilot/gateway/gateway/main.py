@@ -353,7 +353,7 @@ try:
     # Override the gateway URL so the MCP tools call back to this same process
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
-    from .mcp_auth import MCPAuthMiddleware
+    from .auth.mcp_api_key import MCPAuthMiddleware
 
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager

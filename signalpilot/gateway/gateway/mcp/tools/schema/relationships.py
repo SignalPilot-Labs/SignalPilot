@@ -6,11 +6,11 @@ import json
 
 import httpx
 
+from gateway.errors.mcp import sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE
-from gateway.mcp_errors import sanitize_proxy_response
 
 
 @audited_tool(mcp)

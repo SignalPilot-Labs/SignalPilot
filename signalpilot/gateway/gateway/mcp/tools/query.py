@@ -9,11 +9,11 @@ import httpx
 from gateway.engine import inject_limit
 from gateway.engine import validate_sql as engine_validate_sql
 from gateway.errors import query_error_hint
+from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers, _store_session
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE, _validate_connection_name, _validate_sql
-from gateway.mcp_errors import sanitize_mcp_error, sanitize_proxy_response
 
 
 @audited_tool(mcp)

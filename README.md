@@ -41,31 +41,42 @@ Five stages run on every task. The agent never writes SQL ad-hoc against your wa
 
 ![Describe what you need](docs/images/ask.gif)
 
-You give the agent a goal in plain English (e.g. *"Build `shopify__daily_shop` — orders, abandoned checkouts, and fulfillment counts by day"*). SignalPilot doesn't try to one-shot SQL from this prompt; it parses your intent into a structured task and hands it to the planning loop. No model is touched, no warehouse is queried, until the plan is grounded in your actual schema.
+- Plain-English goal in chat (e.g. *"Build `shopify__daily_shop` — orders, abandoned checkouts, fulfillment counts by day"*)
+- Parsed into a structured task — no SQL written, no warehouse touched yet
 
 ### 02 — Agent scans your project
 
 ![Agent scans your project](docs/images/scanning.gif)
 
-Before writing a single model, SignalPilot inspects your dbt project filesystem and warehouse: which sources exist (`raw_orders`, `raw_products`…), which staging models are present, which marts are missing, which models contain *date hazards* (`current_date`, `now()` non-deterministic refs), and what the build order has to be. The output is a deterministic plan — `34 source tables detected · 14 intermediate models present · 2 models missing · 1 date hazard · build order resolved (12 nodes)` — not a guess.
+- Inspects dbt project + warehouse: sources, staging, marts, missing models
+- Flags date hazards (`current_date`, `now()`)
+- Resolves build order across the DAG — deterministic, not a guess
 
 ### 03 — Every query is governed
 
 ![Every query is governed](docs/images/governance.gif)
 
-Every SQL the agent runs goes through the gateway. The parser blocks DDL (`DROP`, `CREATE`, `ALTER`) and DML (`INSERT`, `UPDATE`, `DELETE`) before they reach your warehouse. Unbounded `SELECT *` gets an automatic `LIMIT` injection. Per-session **budget caps** prevent runaway BigQuery/Snowflake scans (e.g. blocks anything that would scan more than $5 of bytes). Every blocked, allowed, or modified query is **audited** with timestamp, agent ID, policy reason, and full SQL — so you can prove what the agent did, even after the fact.
+- DDL (`DROP`, `CREATE`, `ALTER`) and DML (`INSERT`, `UPDATE`, `DELETE`) blocked at the parser
+- Auto-`LIMIT` injection on unbounded `SELECT`
+- Per-session budget cap kills queries that would scan over your $ threshold
+- Every query audited: timestamp, agent ID, policy reason, full SQL
 
 ### 04 — DAG builds itself
 
 ![DAG builds itself](docs/images/dag.gif)
 
-SignalPilot runs `dbt parse` to surface structural errors, then materializes models in topological order. When a model fails (missing column, type mismatch, ambiguous join), the **verifier agent** reads the dbt error, identifies the offending model, and proposes a fix — most commonly a column rename, a missing CTE, a fan-out caused by a wrong join key, or a date-spine guard. Tests run after build and feed back into the loop. You see every quick-fix as it happens, not as a wall of compiled SQL at the end.
+- `dbt parse` runs first to catch structural errors
+- Models materialized in topological order
+- Verifier agent reads dbt errors and proposes fixes (renames, missing CTEs, fan-out, date-spine guards)
+- Tests run after build and feed back into the loop
 
 ### 05 — Full audit receipt
 
 ![Full audit receipt](docs/images/receipt.gif)
 
-At the end of a run, SignalPilot produces a structured receipt: total **duration**, **agent turns**, **governed queries** executed, **queries blocked**, **models built**, **columns validated**. This is your audit trail for compliance reviews, your debug trail when something looks off, and your dollar tracker for cost reviews — every line ties back to the specific MCP tool call that produced it.
+- Structured summary: duration · agent turns · governed queries · queries blocked · models built · columns validated
+- Every line traces back to a specific MCP tool call
+- One artifact for compliance, debugging, and cost review
 
 ---
 

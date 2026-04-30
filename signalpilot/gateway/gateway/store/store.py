@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
-import secrets
 import shutil
 import time
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import delete, literal, select
@@ -18,12 +15,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gateway.store._constants as _constants
+import gateway.store.api_keys as api_keys
 import gateway.store.byok_state as byok_state
 import gateway.store.dbt_templates as dbt_templates
 import gateway.store.paths as paths
 from gateway.byok import decrypt_envelope, encrypt_fields_envelope
 from gateway.db.models import (
-    GatewayApiKey,
     GatewayAuditLog,
     GatewayConnection,
     GatewayCredential,
@@ -868,135 +865,29 @@ class Store:
         )
         return result.scalar_one_or_none()
 
-    # ─── API Keys ────────────────────────────────────────────────────────
-
+    # ─── API Keys ───────────────────────────────────────────────────────
     async def list_api_keys(self) -> list[ApiKeyRecord]:
-        if self._allow_unscoped:
-            result = await self.session.execute(select(GatewayApiKey))
-        else:
-            oid = self._require_org_id()
-            result = await self.session.execute(select(GatewayApiKey).where(GatewayApiKey.org_id == oid))
-        return [
-            ApiKeyRecord(
-                id=r.id,
-                name=r.name,
-                prefix=r.prefix,
-                key_hash=r.key_hash,
-                scopes=r.scopes,
-                created_at=r.created_at,
-                last_used_at=r.last_used_at,
-                expires_at=r.expires_at,
-                user_id=r.user_id,
-                org_id=r.org_id,
-            )
-            for r in result.scalars()
-        ]
+        return await api_keys.list_api_keys(self.session, org_id=self.org_id, allow_unscoped=self._allow_unscoped)
 
     async def create_api_key(
         self, name: str, scopes: list[str], expires_at: str | None = None
     ) -> tuple[ApiKeyRecord, str]:
         oid = self._require_org_id()
-        # In cloud mode, refuse to mint keys without a real org_id.
-        if is_cloud_mode() and (not oid or oid == "local"):
-            raise ValueError(
-                "Cannot create API key in cloud mode without a valid org_id. "
-                "org_id must not be None, empty, or 'local'."
-            )
-        raw_key = "sp_" + secrets.token_hex(16)
-        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        key_id = str(uuid.uuid4())
-        now = datetime.now(UTC).isoformat()
-
-        db_key = GatewayApiKey(
-            id=key_id,
+        return await api_keys.create_api_key(
+            self.session,
             org_id=oid,
             user_id=self.user_id,
             name=name,
-            prefix=raw_key[:11],
-            key_hash=key_hash,
             scopes=scopes,
-            created_at=now,
             expires_at=expires_at,
         )
-        self.session.add(db_key)
-        await self.session.commit()
-
-        record = ApiKeyRecord(
-            id=key_id,
-            name=name,
-            prefix=raw_key[:11],
-            key_hash=key_hash,
-            scopes=scopes,
-            created_at=now,
-            last_used_at=None,
-            expires_at=expires_at,
-            user_id=self.user_id,
-            org_id=oid,
-        )
-        return record, raw_key
 
     async def delete_api_key(self, key_id: str) -> bool:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewayApiKey).where(GatewayApiKey.org_id == oid, GatewayApiKey.id == key_id)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return False
-        await self.session.delete(row)
-        await self.session.commit()
-        return True
+        return await api_keys.delete_api_key(self.session, org_id=oid, key_id=key_id)
 
     async def validate_stored_api_key(self, raw_key: str) -> ApiKeyRecord | None:
-        """Validate an API key by its raw token and return the matching record.
-
-        TRUST BOUNDARY NOTE: This function searches cross-tenant by design.
-        The key hash is the sole lookup mechanism — there is no org_id filter
-        because the caller does not yet know which org the key belongs to.
-        The ``org_id`` on the matched key becomes the authoritative tenant
-        context for the rest of the request.  In cloud mode we reject keys
-        whose org_id is missing or set to "local" to prevent accidental
-        cross-tenant access to shared namespaces.
-        """
-        import hmac as _hmac
-
-        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        # Search all keys (not org-scoped — validation doesn't know org yet)
-        result = await self.session.execute(select(GatewayApiKey).where(GatewayApiKey.key_hash == key_hash))
-        row = result.scalar_one_or_none()
-        if not row:
-            return None
-        if not _hmac.compare_digest(row.key_hash, key_hash):
-            return None
-        # In cloud mode, reject keys with missing or "local" org_id to prevent
-        # a compromised/buggy key from granting access to the shared namespace.
-        if is_cloud_mode() and (not row.org_id or row.org_id == "local"):
-            logger.warning("Rejecting API key %s with invalid org_id in cloud mode", row.id)
-            return None
-        # Check expiry before allowing access
-        if row.expires_at is not None:
-            try:
-                expiry = datetime.fromisoformat(row.expires_at)
-                if expiry.tzinfo is None:
-                    expiry = expiry.replace(tzinfo=UTC)
-                if expiry <= datetime.now(UTC):
-                    return None
-            except (ValueError, TypeError):
-                return None  # Corrupt expiry data → treat as expired (fail closed)
-        row.last_used_at = datetime.now(UTC).isoformat()
-        await self.session.commit()
-        return ApiKeyRecord(
-            id=row.id,
-            name=row.name,
-            prefix=row.prefix,
-            key_hash=row.key_hash,
-            scopes=row.scopes,
-            created_at=row.created_at,
-            last_used_at=row.last_used_at,
-            expires_at=row.expires_at,
-            user_id=row.user_id,
-            org_id=row.org_id,
-        )
+        return await api_keys.validate_stored_api_key(self.session, raw_key)
 
     # ─── Key Rotation ────────────────────────────────────────────────────
 

@@ -13,6 +13,7 @@ const sidebars: SidebarsConfig = {
         'setup/install',
         'setup/cloud',
         'setup/configuration',
+        'workflows/claude-md-recipes',
       ],
     },
     {
@@ -21,6 +22,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'connect-database',
+        'setup/ssh-tunneling',
         'mcp/connect-claude-code',
         'mcp/connect-other-clients',
         'mcp/multiple-mcps',
@@ -48,7 +50,6 @@ const sidebars: SidebarsConfig = {
         'workflows/dbt-build',
         'workflows/sql-exploration',
         'workflows/custom-workflow',
-        'workflows/claude-md-recipes',
       ],
     },
     {

@@ -1,0 +1,145 @@
+---
+sidebar_position: 5
+sidebar_label: "SSH Tunneling"
+---
+
+# SSH Tunneling
+
+## The problem
+
+Your database is on a private network. Maybe it's behind a VPN, on Tailscale, inside a corporate firewall, or running on a machine that doesn't have a public IP address. SignalPilot's gateway (whether local Docker or cloud) can't reach it directly.
+
+## The solution
+
+SSH tunneling uses a "jump box" — a machine that **can** see both sides. The gateway connects to the jump box over SSH, and the jump box forwards traffic to your database.
+
+```
+SignalPilot Gateway                Jump box                  Your database
+(can reach the internet)  --SSH-->  (has access to both)  -->  (private network)
+```
+
+You already do this conceptually every time you VPN into a network to access something. SSH tunneling just automates it at the connection level.
+
+## What you need
+
+1. **A machine that can reach your database** — this is your "jump box" or "bastion host." It needs:
+   - An SSH server running (most Linux machines have this by default)
+   - Network access to your database (e.g. it's on the same Tailscale network, VPC, or LAN)
+
+2. **A way for SignalPilot to reach that machine** — either:
+   - The machine has a public IP address, or
+   - You expose it via Tailscale Funnel, ngrok, or similar
+
+3. **SSH credentials** — a username and either a password or SSH key for the jump box
+
+## Example: Tailscale
+
+You have a PostgreSQL database running on a machine with Tailscale IP `100.64.1.50`. The gateway can't reach Tailscale IPs directly.
+
+**Option A: Use another Tailscale machine as the jump box**
+
+If you have any machine on your Tailscale network that also has a public IP (like a cloud VM), use it:
+
+```json
+{
+  "name": "my-staging-db",
+  "db_type": "postgres",
+  "host": "100.64.1.50",
+  "port": 5432,
+  "database": "myapp",
+  "username": "readonly",
+  "password": "db-password-here",
+  "ssh_tunnel": {
+    "enabled": true,
+    "host": "203.0.113.10",
+    "port": 22,
+    "username": "ubuntu",
+    "auth_method": "key",
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+  }
+}
+```
+
+What happens: Gateway SSHs into `203.0.113.10` (public IP), then connects to `100.64.1.50:5432` through it (Tailscale IP, reachable from the jump box).
+
+**Option B: Expose a Tailscale machine with Funnel**
+
+If none of your Tailscale machines have a public IP, you can use [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) to temporarily expose SSH on one of them:
+
+```bash
+# On any machine in your Tailscale network
+tailscale funnel --bg 22
+```
+
+This gives you a public hostname like `your-machine.tail1234.ts.net`. Use that as the SSH tunnel host.
+
+**Option C: Install Tailscale on the gateway host**
+
+If you're self-hosting (not using SignalPilot Cloud), the simplest option is to install Tailscale directly on the machine running the gateway. Then the gateway can reach Tailscale IPs directly — no tunnel needed. This doesn't work for cloud/multi-tenant deployments since you can't install every user's VPN on a shared server.
+
+## Example: AWS VPC
+
+Your database is in a private subnet (`10.0.2.x`). You have a bastion host in the public subnet.
+
+```json
+{
+  "name": "prod-analytics",
+  "db_type": "postgres",
+  "host": "10.0.2.45",
+  "port": 5432,
+  "database": "analytics",
+  "username": "readonly",
+  "password": "...",
+  "ssh_tunnel": {
+    "enabled": true,
+    "host": "bastion.example.com",
+    "port": 22,
+    "username": "ec2-user",
+    "auth_method": "key",
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+  }
+}
+```
+
+## SSH tunnel fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `enabled` | Yes | Set to `true` to activate the tunnel |
+| `host` | Yes | Hostname or IP of the jump box (must be reachable from the gateway) |
+| `port` | No | SSH port on the jump box (default: `22`) |
+| `username` | Yes | SSH username on the jump box |
+| `auth_method` | No | `password`, `key`, or `agent` (default: `password`) |
+| `password` | If password auth | SSH password |
+| `private_key` | If key auth | PEM-encoded private key (RSA, Ed25519, or ECDSA) |
+| `private_key_passphrase` | No | Passphrase for encrypted private keys |
+
+## How to get your SSH private key
+
+If you normally SSH into your jump box with `ssh -i mykey.pem user@host`, the contents of `mykey.pem` is what goes in the `private_key` field.
+
+```bash
+# Copy the key contents (paste into the private_key field)
+cat ~/.ssh/mykey.pem
+```
+
+The key starts with `-----BEGIN OPENSSH PRIVATE KEY-----` or `-----BEGIN RSA PRIVATE KEY-----`.
+
+## Troubleshooting
+
+**"sshtunnel not installed"** — The gateway Docker image needs the `sshtunnel` Python package. If you're building from source, run `pip install sshtunnel paramiko`.
+
+**Connection timeout** — The jump box isn't reachable from the gateway. Check that:
+- The jump box has a public IP or is otherwise reachable
+- Port 22 (or your custom SSH port) is open in the firewall / security group
+- The SSH username and key/password are correct
+
+**"Permission denied (publickey)"** — The private key doesn't match what's in `~/.ssh/authorized_keys` on the jump box. Make sure you're using the correct key.
+
+**Database connection refused after tunnel opens** — The tunnel itself works, but the database isn't reachable from the jump box. SSH into the jump box manually and try connecting to the database from there to confirm it works.
+
+## When you don't need a tunnel
+
+- **Cloud warehouses** (Snowflake, Databricks, BigQuery) — these have public endpoints by default
+- **Self-hosted gateway on the same network** — if the gateway container can already reach the database, just connect directly
+- **Tailscale on the gateway host** — if you install Tailscale on the machine running Docker, all containers can reach Tailscale IPs

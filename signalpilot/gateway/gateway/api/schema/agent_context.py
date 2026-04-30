@@ -326,7 +326,7 @@ async def get_agent_context(
         # Semantic join hints from model (curated by user)
         for sj in semantic_joins:
             sj_from = sj.get("from", "")
-            if sj_from.startswith(f"{key}.") or sj_from.startswith(f"{table_name}."):
+            if sj_from.startswith((f"{key}.", f"{table_name}.")):
                 join_type = sj.get("type", "")
                 join_desc = sj.get("description", "")
                 hint = f"  -- join hint: {sj_from} -> {sj.get('to', '')}"

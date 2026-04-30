@@ -47,7 +47,7 @@ async def _auto_schema_refresh(name: str, db_type: str, store):
                     stats = col.get("stats", {})
                     dc = stats.get("distinct_count", 0) if stats else 0
                     if (dc and dc <= 50) or (
-                        ct in _str_types and (cn in _cat_names or cn.endswith("_type") or cn.endswith("_status"))
+                        ct in _str_types and (cn in _cat_names or cn.endswith(("_type", "_status")))
                     ):
                         sample_cols.append(col["name"])
                 if sample_cols:

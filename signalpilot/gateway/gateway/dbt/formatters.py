@@ -324,7 +324,7 @@ def _render_model_line(m: ModelInfo, include_columns: bool) -> str:
 
 
 def _count_statuses(models: list[ModelInfo]) -> dict[ModelStatus, int]:
-    out = {s: 0 for s in ModelStatus}
+    out = dict.fromkeys(ModelStatus, 0)
     for m in models:
         out[m.status] = out.get(m.status, 0) + 1
     return out

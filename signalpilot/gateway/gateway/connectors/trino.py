@@ -157,7 +157,7 @@ class TrinoConnector(BaseConnector):
 
     def _parse_connection(self, conn_str: str) -> dict:
         """Parse trino://user@host:port/catalog/schema?param=value."""
-        if conn_str.startswith("trino://") or conn_str.startswith("trino+https://"):
+        if conn_str.startswith(("trino://", "trino+https://")):
             from urllib.parse import parse_qs, unquote, urlparse
 
             # Handle trino+https:// scheme for SSL without password

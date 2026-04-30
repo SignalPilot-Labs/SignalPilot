@@ -130,7 +130,7 @@ async def diagnose_connection(name: str, store: StoreD):
     t0 = time.monotonic()
     try:
         ips = await asyncio.to_thread(socket.getaddrinfo, host, port, socket.AF_INET)
-        resolved_ips = list(set(i[4][0] for i in ips))
+        resolved_ips = list({i[4][0] for i in ips})
         diagnostics.append(
             {
                 "check": "dns",

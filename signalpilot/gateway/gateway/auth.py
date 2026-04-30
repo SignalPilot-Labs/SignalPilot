@@ -128,11 +128,11 @@ async def resolve_user_id(request: Request) -> str:
 
     try:
         signing_key = client.get_signing_key_from_jwt(token)
-        decode_kwargs: dict = dict(
-            algorithms=["RS256"],
-            issuer=_expected_issuer,
-            leeway=datetime.timedelta(seconds=JWT_LEEWAY_SECONDS),
-        )
+        decode_kwargs: dict = {
+            "algorithms": ["RS256"],
+            "issuer": _expected_issuer,
+            "leeway": datetime.timedelta(seconds=JWT_LEEWAY_SECONDS),
+        }
         options: dict = {"require": ["exp", "iat", "sub"]}
         if EXPECTED_AUDIENCE:
             decode_kwargs["audience"] = EXPECTED_AUDIENCE

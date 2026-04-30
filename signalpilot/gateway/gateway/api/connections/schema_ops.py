@@ -130,11 +130,7 @@ async def warmup_all_schemas(store: StoreD):
                             low_card_cols.append(col_name)
                         elif not stats and col_type in _string_types:
                             col_lower = col_name.lower()
-                            if (
-                                col_lower in _categorical_patterns
-                                or col_lower.endswith("_type")
-                                or col_lower.endswith("_status")
-                            ):
+                            if col_lower in _categorical_patterns or col_lower.endswith(("_type", "_status")):
                                 low_card_cols.append(col_name)
                     if low_card_cols:
                         try:

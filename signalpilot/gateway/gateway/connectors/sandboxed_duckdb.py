@@ -227,4 +227,3 @@ class SandboxedDuckDBConnector(BaseConnector):
 
     async def close(self) -> None:
         """Nothing to close — each query is a fresh sandbox execution."""
-        pass

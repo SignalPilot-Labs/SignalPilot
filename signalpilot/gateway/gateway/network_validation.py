@@ -246,7 +246,7 @@ def resolve_and_validate(host: str, port: int, db_type: str) -> list[str]:
     if not addrs:
         raise ValueError(f"DNS resolution returned no addresses for host {host!r}. Refusing connection.")
 
-    ips = list(set(addr[4][0] for addr in addrs))
+    ips = list({addr[4][0] for addr in addrs})
 
     # Validate every resolved IP against the SSRF denylist.
     for ip_str in ips:

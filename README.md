@@ -85,27 +85,24 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ## Try SignalPilot Data Agent
 
-**Step 1 — Add the MCP server** (connects Claude Code to your databases):
+**Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
 
 ```bash
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-```
-
-**Step 2 — Install the plugin** (adds dbt skills, SQL workflows, verifier agent):
-
-```bash
-claude plugin marketplace add https://github.com/SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
-
-**Self-hosting the gateway?** Start it with Docker:
-
-```bash
+# Start SignalPilot
 git clone https://github.com/SignalPilot-Labs/signalpilot.git
 cd signalpilot
 docker compose up -d
-# Web UI at http://localhost:3200 · MCP at http://localhost:3300/mcp
+# Web UI available at http://localhost:3200
+
+# Connect the MCP server to Claude Code
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+
+# (Optional) Install the plugin for skills + agents
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
+
+That's it. Claude Code now has governed access to your databases.
 
 ---
 
@@ -142,7 +139,7 @@ Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, dangerous func
 The [SignalPilot plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds battle-tested dbt skills to Claude Code — the same skills that power the Spider 2.0-DBT SOTA.
 
 ```bash
-claude plugin marketplace add ./plugin
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
 claude plugin install signalpilot-dbt@signalpilot
 ```
 

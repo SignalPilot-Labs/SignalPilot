@@ -38,9 +38,12 @@ cd signalpilot
 docker compose up -d
 # Web UI available at http://localhost:3200
 
-# Add to Claude Code
-/plugin marketplace add ./plugin
-/plugin install signalpilot-dbt@signalpilot
+# Connect the MCP server to Claude Code
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+
+# (Optional) Install the plugin for skills + agents
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
 That's it. Claude Code now has governed access to your databases.
@@ -81,29 +84,25 @@ That's it. Claude Code now has governed access to your databases.
 
 ## Use With Claude Code (Plugin)
 
-The [`plugin/`](plugin/) directory is a Claude Code plugin that adds all SignalPilot tools + battle-tested dbt skills to your normal Claude Code session.
+### Step 1: Connect the MCP server
 
 ```bash
-# Add the marketplace and install
-/plugin marketplace add ./plugin
-/plugin install signalpilot-dbt@signalpilot
-/reload-plugins
+# Cloud (signalpilot.ai)
+claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
+  --header "Authorization: Bearer sp_YOUR_API_KEY"
+
+# Local / self-hosted
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
 ```
 
-Then add a `.mcp.json` to your project root to connect the MCP server:
+### Step 2: Install the plugin (optional — adds skills + agents)
 
-```json
-{
-  "mcpServers": {
-    "signalpilot": {
-      "type": "http",
-      "url": "http://localhost:3300/mcp"
-    }
-  }
-}
+```bash
+claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
-See [`plugin/README.md`](plugin/README.md) for full details on included skills and agents.
+Step 1 gives you all 30+ MCP tools. Step 2 adds 10 dbt/SQL skills and a verification agent on top. See [`plugin/README.md`](plugin/README.md) for details.
 
 ---
 
@@ -111,7 +110,14 @@ See [`plugin/README.md`](plugin/README.md) for full details on included skills a
 
 SignalPilot exposes a standard MCP server via streamable-http transport.
 
-### Claude Code / Claude Desktop
+### Claude Code (one-liner)
+
+```bash
+claude mcp add --transport http signalpilot http://localhost:3300/mcp \
+  --header "Authorization: Bearer sp_your_api_key_here"
+```
+
+### Claude Code / Claude Desktop (JSON config)
 
 Add to `.mcp.json` in your project root:
 

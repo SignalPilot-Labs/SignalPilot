@@ -324,7 +324,7 @@ async def test_connection(name: str, store: StoreD):
                     if vrows:
                         import re as _re_ver
 
-                        raw = str(list(vrows[0].values())[0]).split("\n")[0]
+                        raw = str(next(iter(vrows[0].values()))).split("\n")[0]
                         ver_match = _re_ver.match(r"([\w\s]+?\d+[\d.]+)", raw)
                         db_version = ver_match.group(1).strip() if ver_match else raw[:60]
             except Exception:

@@ -242,7 +242,7 @@ class CostEstimator:
         try:
             explain_sql = f"EXPLAIN {sql}"
             rows = await connector.execute(explain_sql)
-            plan_text = "\n".join(str(list(r.values())[0]) for r in rows) if rows else ""
+            plan_text = "\n".join(str(next(iter(r.values()))) for r in rows) if rows else ""
 
             # Parse rows estimate from EXPLAIN text
             estimated_rows = 0
@@ -294,7 +294,7 @@ class CostEstimator:
                     explain_sql = f"EXPLAIN PLAN {sql}"
                     rows = await connector.execute(explain_sql)
                     if rows:
-                        plan_text = "\n".join(str(list(r.values())[0]) for r in rows if r)
+                        plan_text = "\n".join(str(next(iter(r.values()))) for r in rows if r)
                         import re
 
                         for line in plan_text.split("\n"):
@@ -362,7 +362,7 @@ class CostEstimator:
             plan_text = ""
             if rows:
                 first_row = rows[0]
-                plan_text = str(list(first_row.values())[0]) if first_row else ""
+                plan_text = str(next(iter(first_row.values()))) if first_row else ""
 
             return CostEstimate(
                 estimated_rows=0,
@@ -427,7 +427,7 @@ class CostEstimator:
         try:
             explain_sql = f"EXPLAIN {sql}"
             rows = await connector.execute(explain_sql)
-            plan_text = "\n".join(str(list(r.values())[0]) for r in rows) if rows else ""
+            plan_text = "\n".join(str(next(iter(r.values()))) for r in rows) if rows else ""
 
             estimated_rows = 0
             if plan_text:

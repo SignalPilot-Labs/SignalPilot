@@ -66,6 +66,8 @@ select = [
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
     "PIE",    # flake8-pie
+    "RUF005", # collection-literal-concatenation (prefer unpacking)
+    "RUF015", # unnecessary-iterable-allocation-for-first-element (prefer next(iter(...)))
     "RUF100", # unused-noqa (rest of RUF family deferred — see r12)
     "UP",     # pyupgrade
     "W",      # pycodestyle warnings

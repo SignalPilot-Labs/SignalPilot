@@ -208,13 +208,8 @@ async def get_join_paths(
             if to_t in path_tables:
                 continue
 
-            new_tables = path_tables + [to_t]
-            new_joins = path_joins + [
-                {
-                    "from": f"{from_t}.{from_col}",
-                    "to": f"{to_t}.{to_col}",
-                }
-            ]
+            new_tables = [*path_tables, to_t]
+            new_joins = [*path_joins, {"from": f"{from_t}.{from_col}", "to": f"{to_t}.{to_col}"}]
 
             if to_t == dst:
                 paths.append(

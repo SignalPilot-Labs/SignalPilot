@@ -110,7 +110,7 @@ def _extract_cycles(
         if node in on_stack:
             # Found a cycle: slice from node's first appearance to the top of the stack.
             start = stack.index(node)
-            cycle = stack[start:] + [node]
+            cycle = [*stack[start:], node]
             if cycle not in cycles:
                 cycles.append(cycle)
             return

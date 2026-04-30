@@ -8,7 +8,6 @@ import re
 _CONN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9_.]{1,256}$")
 _MAX_SQL_LENGTH = 100_000
-_MAX_CODE_LENGTH = 1_000_000
 
 
 def _quote_table(name: str) -> str:

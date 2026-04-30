@@ -28,10 +28,10 @@ else:
 mcp = FastMCP(
     "SignalPilot",
     instructions=(
-        "You have access to SignalPilot, a governed sandbox for AI database access. "
-        "Use execute_code to run Python in an isolated gVisor sandbox (~300ms). "
+        "You have access to SignalPilot, a governed platform for AI database access. "
         "Use query_database for read-only SQL with automatic governance (LIMIT injection, "
-        "DDL/DML blocking, audit logging). Use list_connections to see available databases."
+        "DDL/DML blocking, dangerous function blocking, audit logging). "
+        "Use list_connections to see available databases."
     ),
     transport_security=_transport_security,
 )

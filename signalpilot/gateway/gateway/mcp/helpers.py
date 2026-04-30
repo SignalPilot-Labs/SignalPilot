@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from gateway.mcp.context import _store_session
 from gateway.mcp.validation import _quote_table
@@ -26,24 +25,6 @@ async def _get_column_names(connector, db_type: str, table_name: str, connection
     )
     rows = await connector.execute(sql)
     return [r.get("column_name", "") for r in rows if r.get("column_name")]
-
-
-async def _get_sandbox_url() -> str:
-    async with _store_session() as store:
-        settings = await store.load_settings()
-    return settings.sandbox_manager_url
-
-
-def _extract_replacement_snippet(content: str, replacement_date: str) -> str:
-    """Return a short context snippet showing where the replacement appears."""
-    needle = f"'{replacement_date}'::date"
-    idx = content.find(needle)
-    if idx == -1:
-        return ""
-    start = max(0, idx - 30)
-    end = min(len(content), idx + len(needle) + 30)
-    snippet = content[start:end].replace("\n", " ").strip()
-    return f"...{snippet}..."
 
 
 def _format_health_stats(stats: dict) -> str:
@@ -201,68 +182,3 @@ async def _fetch_date_boundaries(connection_name: str) -> _DateBoundaryResult:
     )
 
 
-async def _find_hazard_table_date(
-    connection_name: str,
-    project_path: Path,
-    boundaries: _DateBoundaryResult,
-) -> tuple[str, str] | None:
-    """Look for pre-existing hazard model tables in the DB and return their max date.
-
-    When the source DB contains gold-generated tables (e.g. a pre-existing
-    ``shopify__calendar`` or ``int_quickbooks__general_ledger_date_spine``),
-    their max date reflects the original gold generation date — the correct
-    replacement for ``current_date`` in the model SQL.
-
-    Returns (date_string, source_description) or None.
-    """
-    from gateway.dbt.inventory import scan_project as _scan_project
-
-    project = _scan_project(project_path)
-    if not project.date_hazards:
-        return None
-
-    async with _store_session() as store:
-        conn_info = await store.get_connection(connection_name)
-        if not conn_info:
-            return None
-        conn_str = await store.get_connection_string(connection_name)
-        if not conn_str:
-            return None
-
-    # Collect model names from hazards (the tables we want to check).
-    model_names = [h.get("model_name", "") for h in project.date_hazards if h.get("model_name")]
-    if not model_names:
-        return None
-
-    # Also check tables whose name contains '__' (dbt derived pattern) from boundaries.
-    derived_max: dict[str, tuple[str, int]] = {}  # table -> (max_date, row_count)
-    if boundaries.table_col_results:
-        for tbl_name, col_results in boundaries.table_col_results.items():
-            short_name = tbl_name.split(".")[-1] if "." in tbl_name else tbl_name
-            for _, (_, max_val) in col_results.items():
-                if max_val and "__" in short_name:
-                    row_count = boundaries.table_row_count.get(tbl_name, 0)
-                    if max_val > derived_max.get(short_name, ("", 0))[0]:
-                        derived_max[short_name] = (max_val, row_count)
-
-    # Priority 1: check if any hazard model name exists as a table with date data.
-    # Take the MAX across all date columns (e.g. date_year=2024-01-01 vs
-    # period_first_day=2024-09-01 — we want the latter).
-    for model_name in model_names:
-        for tbl_name, col_results in (boundaries.table_col_results or {}).items():
-            short_name = tbl_name.split(".")[-1] if "." in tbl_name else tbl_name
-            if short_name == model_name:
-                best = max(
-                    (mv for _, (_, mv) in col_results.items() if mv),
-                    default=None,
-                )
-                if best:
-                    return best, f"{best} (from pre-existing table {short_name})"
-
-    # Priority 2: use the max date from the largest derived table (name contains '__').
-    if derived_max:
-        best_table = max(derived_max, key=lambda k: derived_max[k][1])
-        max_date, row_count = derived_max[best_table]
-        return max_date, f"{max_date} (from largest derived table {best_table}, {row_count:,} rows)"
-
-    return None

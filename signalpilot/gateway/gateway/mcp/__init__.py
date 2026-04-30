@@ -10,8 +10,6 @@ from __future__ import annotations
 # Named re-exports — must come AFTER the submodule-import block above so
 # all @audited_tool(mcp) decorators have already run.
 from gateway.db.engine import get_session_factory
-from gateway.dbt import format_validation_result as _format_validation_result
-from gateway.dbt import validate_project as _validate_project
 from gateway.mcp import (
     audit,  # noqa: F401
     context,  # noqa: F401
@@ -38,11 +36,8 @@ from gateway.mcp.tools.connections import (
     connector_capabilities,
     list_database_connections,
 )
-from gateway.mcp.tools.dbt_fixers import fix_date_spine_hazards, fix_nondeterminism_hazards
 from gateway.mcp.tools.dbt_project import (
     dbt_error_parser,
-    dbt_project_map,
-    dbt_project_validate,
     generate_sql_skeleton,
 )
 from gateway.mcp.tools.model_verify import (
@@ -52,7 +47,7 @@ from gateway.mcp.tools.model_verify import (
     compare_join_types,
     validate_model_output,
 )
-from gateway.mcp.tools.projects import create_project, get_project, list_projects
+from gateway.mcp.tools.projects import get_project, list_projects
 from gateway.mcp.tools.query import (
     check_budget,
     debug_cte_query,
@@ -62,7 +57,6 @@ from gateway.mcp.tools.query import (
     query_history,
     validate_sql,
 )
-from gateway.mcp.tools.sandbox import execute_code, sandbox_status
 from gateway.mcp.tools.schema import (
     describe_table,
     explore_column,
@@ -96,9 +90,6 @@ __all__ = [
     "_store_session",
     # Validation helper used by tests
     "_quote_table",
-    # dbt helpers patched in tests
-    "_validate_project",
-    "_format_validation_result",
     # DB helpers patched in tests (without create=True)
     "get_session_factory",
     "Store",
@@ -133,15 +124,8 @@ __all__ = [
     "validate_model_output",
     "audit_model_sources",
     "compare_join_types",
-    "dbt_project_map",
-    "dbt_project_validate",
-    "create_project",
     "list_projects",
     "get_project",
-    "fix_date_spine_hazards",
-    "fix_nondeterminism_hazards",
-    "execute_code",
-    "sandbox_status",
     # Internal context helpers
     "_gateway_url",
     "_gw_headers",

@@ -85,18 +85,26 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ## Try SignalPilot Data Agent
 
+**Step 1 — Add the MCP server** (connects Claude Code to your databases):
+
+```bash
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+```
+
+**Step 2 — Install the plugin** (adds dbt skills, SQL workflows, verifier agent):
+
+```bash
+claude plugin marketplace add https://github.com/SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
+```
+
+**Self-hosting the gateway?** Start it with Docker:
+
 ```bash
 git clone https://github.com/SignalPilot-Labs/signalpilot.git
 cd signalpilot
 docker compose up -d
 # Web UI at http://localhost:3200 · MCP at http://localhost:3300/mcp
-
-# Add MCP to Claude Code
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-
-# Install plugin for dbt skills
-claude plugin marketplace add ./plugin
-claude plugin install signalpilot-dbt@signalpilot
 ```
 
 ---

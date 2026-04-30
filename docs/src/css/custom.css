@@ -1,0 +1,176 @@
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations"),
+       url("/fonts/JetBrainsMono-Variable.woff2") format("woff2");
+}
+
+/* ── Light theme ── */
+:root {
+  --ifm-color-primary: #00ff88;
+  --ifm-color-primary-dark: #00e077;
+  --ifm-color-primary-darker: #00cc6e;
+  --ifm-color-primary-darkest: #00a85a;
+  --ifm-color-primary-light: #33ffa0;
+  --ifm-color-primary-lighter: #66ffb8;
+  --ifm-color-primary-lightest: #99ffd0;
+  --ifm-link-color: #00a85a;
+  --ifm-link-hover-color: #00cc6e;
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #f5f5f5;
+  --ifm-color-content: #050505;
+  --ifm-color-content-secondary: #555555;
+  --ifm-color-emphasis-300: #e5e5e5;
+  --ifm-color-emphasis-500: #cccccc;
+  --ifm-navbar-background-color: #fafafa;
+  --ifm-footer-background-color: #f0f0f0;
+  --ifm-code-background: #f5f5f5;
+  --ifm-pre-background: #f0f0f0;
+  --ifm-toc-border-color: #e5e5e5;
+  --ifm-table-stripe-background: #f9f9f9;
+  --ifm-hr-border-color: #e5e5e5;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 168, 90, 0.1);
+  --ifm-font-family-base: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+  --ifm-font-family-monospace: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+  --ifm-heading-font-family: "JetBrains Mono", ui-monospace, monospace;
+  --ifm-heading-font-weight: 500;
+  --ifm-font-weight-base: 400;
+  --ifm-code-font-size: 93%;
+}
+
+/* ── Dark theme (canonical) ── */
+[data-theme='dark'] {
+  --ifm-color-primary: #00ff88;
+  --ifm-color-primary-dark: #00e077;
+  --ifm-color-primary-darker: #00cc6e;
+  --ifm-color-primary-darkest: #00a85a;
+  --ifm-color-primary-light: #33ffa0;
+  --ifm-color-primary-lighter: #66ffb8;
+  --ifm-color-primary-lightest: #99ffd0;
+  --ifm-link-color: #00ff88;
+  --ifm-link-hover-color: #66ffb8;
+  --ifm-background-color: #050505;
+  --ifm-background-surface-color: #0a0a0a;
+  --ifm-color-content: #eeeeee;
+  --ifm-color-content-secondary: #999999;
+  --ifm-color-emphasis-300: #222222;
+  --ifm-color-emphasis-500: #333333;
+  --ifm-navbar-background-color: #030303;
+  --ifm-footer-background-color: #030303;
+  --ifm-code-background: #0a0a0a;
+  --ifm-pre-background: #080808;
+  --ifm-toc-border-color: #222222;
+  --ifm-table-stripe-background: #0a0a0a;
+  --ifm-hr-border-color: #222222;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 255, 136, 0.08);
+  --ifm-font-family-base: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+  --ifm-font-family-monospace: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+  --ifm-heading-font-family: "JetBrains Mono", ui-monospace, monospace;
+  --ifm-heading-font-weight: 500;
+  --ifm-font-weight-base: 400;
+  --ifm-code-font-size: 93%;
+}
+
+/* ── Navbar ── */
+.navbar {
+  border-bottom: 1px solid var(--ifm-color-emphasis-300);
+  box-shadow: none;
+}
+
+.navbar__title {
+  letter-spacing: -0.02em;
+  font-weight: 500;
+}
+
+.navbar__logo img {
+  max-height: 22px;
+  image-rendering: crisp-edges;
+}
+
+/* ── Sidebar active link ── */
+.menu__link--active {
+  box-shadow: inset 2px 0 0 var(--ifm-color-primary);
+}
+
+/* ── Buttons ── */
+.button--primary {
+  background-color: var(--ifm-color-primary);
+  color: #050505;
+  border-radius: 0;
+  font-weight: 500;
+  border-color: var(--ifm-color-primary);
+}
+
+.button--primary:hover {
+  background-color: var(--ifm-color-primary-light);
+  border-color: var(--ifm-color-primary-light);
+  color: #050505;
+}
+
+/* ── Code ── */
+code {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  padding: 1px 4px;
+  border-radius: 0;
+}
+
+.theme-code-block {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 0;
+}
+
+pre,
+.prism-code {
+  border: none;
+  border-radius: 0;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ifm-color-emphasis-300);
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ifm-color-emphasis-500);
+}
+
+/* ── Focus visible ── */
+:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+/* ── Selection ── */
+::selection {
+  background: #00ff88;
+  color: #050505;
+}
+
+/* ── Figure gallery ── */
+.markdown figure {
+  margin: 1.5rem 0;
+}
+.markdown figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0;
+  border: 1px solid var(--ifm-color-emphasis-300);
+}
+.markdown figure figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--ifm-color-content-secondary);
+}

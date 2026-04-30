@@ -10,7 +10,7 @@
 
 **[☁️ Try SignalPilot Cloud — free](https://app.signalpilot.ai/)**
 
-[🚀 Self-host](#try-signalpilot-data-agent) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book a demo](https://cal.com/fahimaziz/autofyn-intro)
+[🚀 Self-host](#try-signalpilot-data-agent) · [📖 Docs](https://SignalPilot-Labs.github.io/SignalPilot/) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book a demo](https://cal.com/fahimaziz/autofyn-intro)
 
 </div>
 
@@ -49,14 +49,14 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ### 01 — Describe what you need
 
-![Describe what you need](docs/images/ask.gif)
+![Describe what you need](docs/docs/images/ask.gif)
 
 - Plain-English goal in chat (e.g. *"Build `shopify__daily_shop` — orders, abandoned checkouts, fulfillment counts by day"*)
 - Parsed into a structured task — no SQL written, no warehouse touched yet
 
 ### 02 — Agent scans your project
 
-![Agent scans your project](docs/images/scanning.gif)
+![Agent scans your project](docs/docs/images/scanning.gif)
 
 - Inspects dbt project + warehouse: sources, staging, marts, missing models
 - Flags date hazards (`current_date`, `now()`)
@@ -64,7 +64,7 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ### 03 — Every query is governed
 
-![Every query is governed](docs/images/governance.gif)
+![Every query is governed](docs/docs/images/governance.gif)
 
 - DDL (`DROP`, `CREATE`, `ALTER`) and DML (`INSERT`, `UPDATE`, `DELETE`) blocked at the parser
 - Auto-`LIMIT` injection on unbounded `SELECT`
@@ -73,7 +73,7 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ### 04 — DAG builds itself
 
-![DAG builds itself](docs/images/dag.gif)
+![DAG builds itself](docs/docs/images/dag.gif)
 
 - `dbt parse` runs first to catch structural errors
 - Models materialized in topological order
@@ -82,7 +82,7 @@ Five stages, every task: plan → scan → govern → build → report.
 
 ### 05 — Full audit receipt
 
-![Full audit receipt](docs/images/receipt.gif)
+![Full audit receipt](docs/docs/images/receipt.gif)
 
 - Structured summary: duration · agent turns · governed queries · queries blocked · models built · columns validated
 - Every line traces back to a specific MCP tool call
@@ -214,7 +214,7 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 | **dbt** | `dbt_error_parser`, `generate_sql_skeleton`, `check_model_schema`, `validate_model_output`, `audit_model_sources`, `analyze_grain` |
 | **Operational** | `list_database_connections`, `connection_health`, `connector_capabilities`, `get_date_boundaries`, `check_budget`, `query_history`, `list_projects`, `get_project` |
 
-See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.
+See the [full tools reference](https://SignalPilot-Labs.github.io/SignalPilot/docs/reference/tools-overview) in the docs.
 
 ---
 
@@ -227,7 +227,7 @@ See [`docs/TOOLS.md`](docs/TOOLS.md) for the full reference.
 - **Rate limiting** — per-IP, per-key, and per-org with brute-force protection
 - **Non-root containers** — gateway runs as UID 10001
 
-See [SECURITY.md](SECURITY.md) for our vulnerability reporting policy.
+See [Security docs](https://SignalPilot-Labs.github.io/SignalPilot/docs/security) for our full security model and vulnerability reporting policy.
 
 ---
 

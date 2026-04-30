@@ -1,0 +1,41 @@
+---
+sidebar_position: 2
+---
+
+# Skills Overview
+
+## What a skill is
+
+A skill is a markdown knowledge file registered with Claude Code. Skills auto-load into the model's context based on task relevance — you don't prompt for them explicitly. Each skill tells Claude:
+
+- When to activate (trigger conditions)
+- What tool call sequences to follow
+- Dialect-specific gotchas and patterns
+
+Skills are Claude Code-specific. They don't run in Cursor, Codex, or other MCP clients.
+
+## How skills auto-load
+
+Claude Code scans your message and active context for skill triggers. When a match is found, the skill's markdown is prepended to the model's context window. Multiple skills can be active simultaneously (e.g. `dbt-workflow` + `duckdb-sql` for a DuckDB-backed dbt project).
+
+You can inspect which skills are currently active:
+
+```
+/skills
+```
+
+## The 9 plugin skills
+
+| Skill | One-line description |
+|-------|---------------------|
+| `dbt-workflow` | Full 5-step dbt lifecycle: output shape inference, incremental handling, what to trust in YML |
+| `dbt-write` | Writing SQL models: column naming, type preservation, JOIN defaults, materialization rules |
+| `dbt-debugging` | Debugging `dbt run`/`dbt parse` failures: YML duplicate patches, ref errors, zero-row diagnosis |
+| `dbt-date-spines` | Fixing `current_date`/`now()` hazards in date-spine models |
+| `sql-workflow` | Pre-query schema exploration, CTE-based query building, structured verification loop |
+| `duckdb-sql` | DuckDB-specific patterns: integer division, INTERVAL syntax, DATE_TRUNC gotchas |
+| `snowflake-sql` | Snowflake-specific patterns: QUALIFY, LATERAL FLATTEN, VARIANT, ILIKE |
+| `bigquery-sql` | BigQuery-specific patterns: UNNEST, STRUCT, backtick table refs, EXCEPT/REPLACE |
+| `sqlite-sql` | SQLite-specific patterns: substr/instr, string concatenation with pipe-pipe, no ILIKE, strftime() |
+
+See [Skills reference](/docs/plugin/skills-reference) for per-skill detail.

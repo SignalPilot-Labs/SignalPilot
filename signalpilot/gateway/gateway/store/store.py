@@ -16,18 +16,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import gateway.store._constants as _constants
 import gateway.store.api_keys as api_keys
+import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.dbt_templates as dbt_templates
 import gateway.store.paths as paths
 from gateway.byok import decrypt_envelope, encrypt_fields_envelope
 from gateway.db.models import (
-    GatewayAuditLog,
     GatewayConnection,
     GatewayCredential,
     GatewayProject,
     GatewaySetting,
 )
-from gateway.engine import redact_sql_literals
 from gateway.governance.context import current_org_id_var
 from gateway.models import (
     ApiKeyRecord,
@@ -721,34 +720,9 @@ class Store:
 
     # ─── Audit ───────────────────────────────────────────────────────────
 
-    async def append_audit(self, entry: AuditEntry):
+    async def append_audit(self, entry: AuditEntry) -> None:
         oid = self._require_org_id()
-        # Redact string literals from SQL to avoid storing PII (Issue #45)
-        redacted_sql = redact_sql_literals(entry.sql) if entry.sql else None
-        self.session.add(
-            GatewayAuditLog(
-                id=entry.id or str(uuid.uuid4()),
-                org_id=oid,
-                user_id=self.user_id,
-                timestamp=entry.timestamp,
-                event_type=entry.event_type,
-                connection_name=entry.connection_name,
-                sandbox_id=entry.sandbox_id,
-                sql_text=redacted_sql,
-                tables=entry.tables,
-                rows_returned=entry.rows_returned,
-                cost_usd=entry.cost_usd,
-                blocked=entry.blocked or False,
-                block_reason=entry.block_reason,
-                duration_ms=entry.duration_ms,
-                agent_id=entry.agent_id,
-                parent_id=entry.parent_id,
-                metadata_json=entry.metadata,
-                client_ip=entry.client_ip,
-                user_agent=entry.user_agent,
-            )
-        )
-        await self.session.commit()
+        await audit_log.append_audit(self.session, org_id=oid, user_id=self.user_id, entry=entry)
 
     async def read_audit(
         self,
@@ -758,48 +732,16 @@ class Store:
         event_type: str | None = None,
         return_total: bool = False,
     ) -> list[AuditEntry] | tuple[list[AuditEntry], int]:
-        from sqlalchemy import func as sa_func
-
         oid = self._require_org_id()
-        base = select(GatewayAuditLog).where(GatewayAuditLog.org_id == oid)
-        if connection_name:
-            base = base.where(GatewayAuditLog.connection_name == connection_name)
-        if event_type:
-            base = base.where(GatewayAuditLog.event_type == event_type)
-
-        total = 0
-        if return_total:
-            count_q = select(sa_func.count()).select_from(base.subquery())
-            total = (await self.session.execute(count_q)).scalar() or 0
-
-        q = base.order_by(GatewayAuditLog.timestamp.desc()).offset(offset).limit(limit)
-        result = await self.session.execute(q)
-        entries = []
-        for row in result.scalars():
-            entries.append(
-                AuditEntry(
-                    id=row.id,
-                    timestamp=row.timestamp,
-                    event_type=row.event_type,
-                    connection_name=row.connection_name,
-                    sandbox_id=row.sandbox_id,
-                    sql=row.sql_text,
-                    tables=row.tables or [],
-                    rows_returned=row.rows_returned,
-                    cost_usd=row.cost_usd,
-                    blocked=row.blocked,
-                    block_reason=row.block_reason,
-                    duration_ms=row.duration_ms,
-                    agent_id=row.agent_id,
-                    parent_id=getattr(row, "parent_id", None),
-                    metadata=row.metadata_json or {},
-                    client_ip=getattr(row, "client_ip", None),
-                    user_agent=getattr(row, "user_agent", None),
-                )
-            )
-        if return_total:
-            return entries, total
-        return entries
+        return await audit_log.read_audit(
+            self.session,
+            org_id=oid,
+            limit=limit,
+            offset=offset,
+            connection_name=connection_name,
+            event_type=event_type,
+            return_total=return_total,
+        )
 
     # ─── Schema Endorsements ─────────────────────────────────────────────
 

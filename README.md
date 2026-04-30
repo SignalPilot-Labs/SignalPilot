@@ -83,6 +83,40 @@ Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit loggi
 
 ---
 
+## How It Works
+
+### 01 — Describe what you need
+
+Tell the agent what to build in plain english.
+
+![Describe what you need](docs/images/ask.gif)
+
+### 02 — Agent scans your project
+
+Reads your schema, finds gaps, resolves build order.
+
+![Agent scans your project](docs/images/scanning.gif)
+
+### 03 — Every query is governed
+
+Get rid of unexpected deletes and expensive queries — SignalPilot blocks them.
+
+![Every query is governed](docs/images/governance.gif)
+
+### 04 — DAG builds itself
+
+Models compile, errors get auto-fixed, tests pass.
+
+![DAG builds itself](docs/images/dag.gif)
+
+### 05 — Full audit receipt
+
+Every action logged. Every dollar tracked.
+
+![Full audit receipt](docs/images/receipt.gif)
+
+---
+
 ## Use With Claude Code (Plugin)
 
 The [`plugin/`](plugin/) directory is a Claude Code plugin that adds all SignalPilot tools + battle-tested dbt skills to your normal Claude Code session.

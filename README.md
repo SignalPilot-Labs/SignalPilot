@@ -16,7 +16,7 @@
 
 ---
 
-## For Data & Platform Teams
+## For Agentic Data and Platform Teams
 
 We partner with data, analytics, and platform teams who want to put AI agents to work on real warehouse workloads — safely.
 
@@ -26,6 +26,46 @@ We partner with data, analytics, and platform teams who want to put AI agents to
 - **Enterprise support** — SSO, private deployments, SLAs, and hands-on engineering support.
 
 **Talk to us** about your data, dbt, or agent harness optimization workload: [cal.com/fahimaziz/autofyn-intro](https://cal.com/fahimaziz/autofyn-intro) · Learn more at [signalpilot.ai](https://www.signalpilot.ai/).
+
+---
+
+**Index** — [How It Works](#how-it-works) · [Try SignalPilot](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Use With Claude Code](#use-with-claude-code-plugin) · [Use With Any MCP Client](#use-with-any-mcp-client) · [Connect a Database](#connect-a-database) · [Project Structure](#project-structure) · [Community](#community)
+
+---
+
+## How It Works
+
+Five stages run on every task. The agent never writes SQL ad-hoc against your warehouse — it plans, scans, governs, builds, and reports through the SignalPilot gateway.
+
+### 01 — Describe what you need
+
+![Describe what you need](docs/images/ask.gif)
+
+You give the agent a goal in plain English (e.g. *"Build `shopify__daily_shop` — orders, abandoned checkouts, and fulfillment counts by day"*). SignalPilot doesn't try to one-shot SQL from this prompt; it parses your intent into a structured task and hands it to the planning loop. No model is touched, no warehouse is queried, until the plan is grounded in your actual schema.
+
+### 02 — Agent scans your project
+
+![Agent scans your project](docs/images/scanning.gif)
+
+Before writing a single model, SignalPilot inspects your dbt project filesystem and warehouse: which sources exist (`raw_orders`, `raw_products`…), which staging models are present, which marts are missing, which models contain *date hazards* (`current_date`, `now()` non-deterministic refs), and what the build order has to be. The output is a deterministic plan — `34 source tables detected · 14 intermediate models present · 2 models missing · 1 date hazard · build order resolved (12 nodes)` — not a guess.
+
+### 03 — Every query is governed
+
+![Every query is governed](docs/images/governance.gif)
+
+Every SQL the agent runs goes through the gateway. The parser blocks DDL (`DROP`, `CREATE`, `ALTER`) and DML (`INSERT`, `UPDATE`, `DELETE`) before they reach your warehouse. Unbounded `SELECT *` gets an automatic `LIMIT` injection. Per-session **budget caps** prevent runaway BigQuery/Snowflake scans (e.g. blocks anything that would scan more than $5 of bytes). Every blocked, allowed, or modified query is **audited** with timestamp, agent ID, policy reason, and full SQL — so you can prove what the agent did, even after the fact.
+
+### 04 — DAG builds itself
+
+![DAG builds itself](docs/images/dag.gif)
+
+SignalPilot runs `dbt parse` to surface structural errors, then materializes models in topological order. When a model fails (missing column, type mismatch, ambiguous join), the **verifier agent** reads the dbt error, identifies the offending model, and proposes a fix — most commonly a column rename, a missing CTE, a fan-out caused by a wrong join key, or a date-spine guard. Tests run after build and feed back into the loop. You see every quick-fix as it happens, not as a wall of compiled SQL at the end.
+
+### 05 — Full audit receipt
+
+![Full audit receipt](docs/images/receipt.gif)
+
+At the end of a run, SignalPilot produces a structured receipt: total **duration**, **agent turns**, **governed queries** executed, **queries blocked**, **models built**, **columns validated**. This is your audit trail for compliance reviews, your debug trail when something looks off, and your dollar tracker for cost reviews — every line ties back to the specific MCP tool call that produced it.
 
 ---
 
@@ -49,7 +89,7 @@ That's it. Claude Code now has governed access to your databases.
 
 ---
 
-## What It Does
+## Architecture
 
 Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit logging by default. SignalPilot does — that's why agents on it set the SOTA on Spider 2.0-DBT.
 
@@ -80,40 +120,6 @@ Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, or audit loggi
 **Schema Discovery** — 10+ tools for exploring databases without writing SQL: table lists, column types, sample data, join path discovery, value distributions.
 
 **dbt Intelligence** — Project mapping, parse validation, model schema checking, fan-out detection, cardinality auditing, date boundary analysis.
-
----
-
-## How It Works
-
-### 01 — Describe what you need
-
-Tell the agent what to build in plain english.
-
-![Describe what you need](docs/images/ask.gif)
-
-### 02 — Agent scans your project
-
-Reads your schema, finds gaps, resolves build order.
-
-![Agent scans your project](docs/images/scanning.gif)
-
-### 03 — Every query is governed
-
-Get rid of unexpected deletes and expensive queries — SignalPilot blocks them.
-
-![Every query is governed](docs/images/governance.gif)
-
-### 04 — DAG builds itself
-
-Models compile, errors get auto-fixed, tests pass.
-
-![DAG builds itself](docs/images/dag.gif)
-
-### 05 — Full audit receipt
-
-Every action logged. Every dollar tracked.
-
-![Full audit receipt](docs/images/receipt.gif)
 
 ---
 

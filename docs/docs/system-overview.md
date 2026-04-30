@@ -28,6 +28,16 @@ sidebar_position: 3
    └─────────┘        └──────────┘        └──────────┘
 ```
 
+## In motion
+
+| Step | What it shows |
+|------|---------------|
+| ![Ask](./images/ask.gif) | A natural-language ask flowing through Claude Code → MCP → governed query. |
+| ![Schema scan](./images/scanning.gif) | dbt project scan + schema discovery before a build. |
+| ![DAG](./images/dag.gif) | dbt DAG / model lineage as the workflow expands. |
+| ![Governance](./images/governance.gif) | Parse-time governance rejecting a DDL attempt. |
+| ![Receipt](./images/receipt.gif) | Verifier-agent receipt after a successful build. |
+
 ## Components
 
 | Component | Responsibility |

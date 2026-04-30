@@ -36,12 +36,13 @@ That's it. Claude Code now has governed access to your databases.
 
 ## Next steps
 
-| | |
-|---|---|
-| [Concepts](/docs/concepts) | Mental model: gateway, governance, MCP, skills |
-| [MCP Setup](/docs/mcp/connect-claude-code) | Verify tools loaded, troubleshoot handshake |
-| [Plugin](/docs/plugin) | Install skills and the verifier agent |
-| [Tools Reference](/docs/reference/tools-overview) | All 32 tools, grouped by category |
+**[Concepts](/docs/concepts)** — Mental model: gateway, governance, MCP, skills.
+
+**[MCP Setup](/docs/mcp/connect-claude-code)** — Verify tools loaded; troubleshoot handshake.
+
+**[Plugin](/docs/plugin)** — Install skills and the verifier agent.
+
+**[Tools Reference](/docs/reference/tools-overview)** — All 32 tools, grouped by category.
 
 ## SignalPilot Cloud
 

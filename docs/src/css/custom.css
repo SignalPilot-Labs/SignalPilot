@@ -3,7 +3,8 @@
   font-style: normal;
   font-weight: 100 800;
   font-display: swap;
-  src: url("https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@latest/fonts/variable/JetBrainsMono[wght].woff2") format("woff2");
+  src: url("/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations"),
+       url("/fonts/JetBrainsMono-Variable.woff2") format("woff2");
 }
 
 /* ── Light theme ── */

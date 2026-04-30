@@ -1,13 +1,16 @@
 import type {ReactNode} from 'react';
 import {Redirect} from '@docusaurus/router';
 import useBaseUrl from '@docusaurus/useBaseUrl';
-import Layout from '@theme/Layout';
+import Head from '@docusaurus/Head';
 
 export default function Home(): ReactNode {
   const quickstart = useBaseUrl('/docs/');
   return (
-    <Layout>
+    <>
+      <Head>
+        <meta httpEquiv="refresh" content={`0; url=${quickstart}`} />
+      </Head>
       <Redirect to={quickstart} />
-    </Layout>
+    </>
   );
 }

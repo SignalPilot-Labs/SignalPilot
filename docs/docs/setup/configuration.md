@@ -31,8 +31,8 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 | `SP_GATEWAY_CSP_POLICY` | — | Override the default `Content-Security-Policy` header. Leave unset to use the built-in policy. |
 | `SP_BACKEND_URL` | — | URL of the SignalPilot backend API (cloud deployments only). |
 | `SP_ALLOWED_ORIGINS` | — | Comma-separated list of allowed CORS origins. |
-| `SP_MCP_PORT` | — | Port the MCP server listens on. |
-| `SP_MCP_TRANSPORT` | — | MCP transport protocol (`stdio` or `sse`). |
+| `SP_MCP_PORT` | `8000` | Port the MCP server listens on (only used when `SP_MCP_TRANSPORT=streamable-http`). |
+| `SP_MCP_TRANSPORT` | `stdio` | MCP transport protocol. Valid values: `stdio`, `streamable-http`. |
 
 ## Deployment
 

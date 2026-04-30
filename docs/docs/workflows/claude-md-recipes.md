@@ -128,6 +128,24 @@ Session budget cap: $10.00 USD. Use `check_budget` to see remaining budget.
 
 ---
 
+## Philosophy — use the tools you have
+
+Loaded skills and MCP tools override "be efficient." If a skill or tool exists for a task, route to it instead of writing throwaway bash, ad-hoc Python, or freehand SQL that bypasses governance.
+
+The gateway's value is forfeited the moment Claude reaches around it. `subprocess.run("psql ...")` is a bug, not an optimization.
+
+Paste this block into any CLAUDE.md to enforce the routing discipline:
+
+```markdown
+# Tool routing
+- For database access: always go through SignalPilot MCP tools. Do not shell out to `psql`, `bq`, `snowsql`, or run `subprocess` against any database client.
+- For dbt: use the `dbt-workflow` skill and the verifier agent. Do not parse `dbt run` output by hand.
+- For schema discovery: `list_tables`, `describe_table`, `schema_overview`. Do not `cat schema.sql` and read by inspection.
+- If a skill loads automatically, follow it. Skills encode the team's vetted sequence — overriding them silently re-introduces the bugs they were written to prevent.
+```
+
+---
+
 ## Key directives to always include
 
 These directives are useful in any project:

@@ -18,6 +18,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .config import get_auth_settings
 from .db.engine import get_db
 from .deployment import is_cloud_mode
 
@@ -30,8 +31,9 @@ if is_cloud_mode() and not os.environ.get("CLERK_PUBLISHABLE_KEY"):
         "Set CLERK_PUBLISHABLE_KEY or switch to local mode."
     )
 
-EXPECTED_AUDIENCE = os.environ.get("CLERK_JWT_AUDIENCE", "")
-JWT_LEEWAY_SECONDS = int(os.environ.get("SP_JWT_LEEWAY", "30"))
+_auth_cfg = get_auth_settings()
+EXPECTED_AUDIENCE = _auth_cfg.clerk_jwt_audience
+JWT_LEEWAY_SECONDS = _auth_cfg.sp_jwt_leeway
 
 if is_cloud_mode() and not EXPECTED_AUDIENCE:
     logger.warning("CLERK_JWT_AUDIENCE not set — audience verification disabled. Set this for production security.")

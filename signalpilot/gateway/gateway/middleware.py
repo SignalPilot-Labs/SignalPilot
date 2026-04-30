@@ -16,6 +16,8 @@ from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .config import get_network_settings
+
 logger = logging.getLogger(__name__)
 
 _MAX_BODY_BYTES_DEFAULT = 2_097_152  # 2MB
@@ -341,8 +343,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 _key_hits: dict[str, list[float]] = defaultdict(list)
 _org_hits: dict[str, list[float]] = defaultdict(list)
-_PER_KEY_RPM = int(os.environ.get("SP_PER_KEY_RPM", "1000"))
-_PER_ORG_RPM = int(os.environ.get("SP_PER_ORG_RPM", "5000"))
+_net = get_network_settings()
+_PER_KEY_RPM = _net.sp_per_key_rpm
+_PER_ORG_RPM = _net.sp_per_org_rpm
 
 
 def check_principal_rate_limit(key_id: str | None, org_id: str | None) -> str | None:

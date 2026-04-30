@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, or_, select
 
 from ..auth import OrgAdmin, OrgID
+from ..config import get_governance_settings
 from ..db.models import GatewayBYOKKey, GatewayCredential
 from ..store import CURRENT_KEY_VERSION
 from ..store.crypto import _validate_encryption_health
@@ -18,9 +19,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-_ADMIN_USER_IDS: frozenset[str] = frozenset(
-    uid.strip() for uid in os.getenv("SP_ADMIN_USER_IDS", "local").split(",") if uid.strip()
-)
+_ADMIN_USER_IDS: frozenset[str] = get_governance_settings().admin_user_ids
 
 
 def _require_admin(store: StoreD) -> None:

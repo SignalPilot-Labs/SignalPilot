@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..config import get_governance_settings
+
 try:
     import yaml
 
@@ -113,7 +115,7 @@ class SchemaAnnotations:
 # TTL cache for annotations to avoid re-reading YAML on every query.
 # Keyed by (org_id, connection_name).
 _annotations_cache: dict[tuple[str, str], tuple[float, SchemaAnnotations]] = {}
-_ANNOTATIONS_TTL = float(os.getenv("SP_ANNOTATIONS_TTL", "60"))  # seconds
+_ANNOTATIONS_TTL = get_governance_settings().sp_annotations_ttl  # seconds
 
 
 def load_annotations(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from fastapi import APIRouter, Query
@@ -11,11 +10,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func as sa_func
 from sqlalchemy import select
 
+from ..config import get_governance_settings
 from ..db.models import GatewayAuditLog
 from ..scope_guard import RequireScope
 from .deps import StoreD
 
-MAX_EXPORT_ROWS = int(os.environ.get("SP_MAX_EXPORT_ROWS", "50000"))
+MAX_EXPORT_ROWS = get_governance_settings().sp_max_export_rows
 
 router = APIRouter(prefix="/api")
 

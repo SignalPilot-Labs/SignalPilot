@@ -6,9 +6,11 @@ import os as _os
 
 from mcp.server.fastmcp import FastMCP
 
+from ..config import get_mcp_settings
+
 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
 _allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
-_extra_hosts = _os.environ.get("SP_MCP_ALLOWED_HOSTS", "")
+_extra_hosts = get_mcp_settings().sp_mcp_allowed_hosts
 if _extra_hosts:
     _allowed_hosts.extend(h.strip() for h in _extra_hosts.split(",") if h.strip())
 # Include hosts with port numbers

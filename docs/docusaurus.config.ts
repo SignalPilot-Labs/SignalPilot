@@ -5,7 +5,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'SignalPilot',
   tagline: 'Governed AI agents for your data stack',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/favicon.svg',
 
   future: {
     v4: true,
@@ -19,12 +19,33 @@ const config: Config = {
   trailingSlash: false,
 
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
+  markdown: {
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
+  },
 
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  headTags: [
+    {
+      tagName: 'link',
+      attributes: {
+        rel: 'apple-touch-icon',
+        href: '/SignalPilot/img/apple-touch-icon.png',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        property: 'og:image',
+        content: '/SignalPilot/img/logo-512.png',
+      },
+    },
+  ],
 
   presets: [
     [
@@ -46,10 +67,26 @@ const config: Config = {
   themeConfig: {
     colorMode: {
       defaultMode: 'dark',
-      respectPrefersColorScheme: true,
+      disableSwitch: false,
+      respectPrefersColorScheme: false,
+    },
+    docs: {
+      sidebar: {
+        hideable: true,
+      },
+    },
+    tableOfContents: {
+      minHeadingLevel: 2,
+      maxHeadingLevel: 4,
     },
     navbar: {
       title: 'SignalPilot',
+      logo: {
+        alt: 'SignalPilot',
+        src: 'img/logo.svg',
+        width: 22,
+        height: 22,
+      },
       items: [
         {
           type: 'docSidebar',
@@ -58,12 +95,22 @@ const config: Config = {
           label: 'Docs',
         },
         {
-          href: 'https://app.signalpilot.ai',
-          label: 'Cloud',
+          to: '/docs/plugin',
           position: 'left',
+          label: 'Plugin',
         },
         {
-          href: 'https://github.com/SignalPilot-Labs/SignalPilot',
+          to: '/docs/reference/tools-overview',
+          position: 'left',
+          label: 'Tools',
+        },
+        {
+          href: 'https://app.signalpilot.ai',
+          label: 'Cloud',
+          position: 'right',
+        },
+        {
+          href: 'https://github.com/SignalPilot-Labs/signalpilot',
           label: 'GitHub',
           position: 'right',
         },
@@ -76,12 +123,37 @@ const config: Config = {
           title: 'Docs',
           items: [
             {
-              label: 'Getting Started',
-              to: '/docs/getting-started',
+              label: 'Quickstart',
+              to: '/docs/',
             },
             {
-              label: 'MCP Tools',
-              to: '/docs/tools',
+              label: 'Concepts',
+              to: '/docs/concepts',
+            },
+            {
+              label: 'MCP Setup',
+              to: '/docs/mcp/connect-claude-code',
+            },
+            {
+              label: 'Tools Reference',
+              to: '/docs/reference/tools-overview',
+            },
+          ],
+        },
+        {
+          title: 'Product',
+          items: [
+            {
+              label: 'Cloud',
+              href: 'https://app.signalpilot.ai',
+            },
+            {
+              label: 'Benchmarks',
+              href: 'https://www.signalpilot.ai/benchmark',
+            },
+            {
+              label: 'AutoFyn',
+              href: 'https://github.com/SignalPilot-Labs/AutoFyn',
             },
           ],
         },
@@ -90,24 +162,15 @@ const config: Config = {
           items: [
             {
               label: 'GitHub Discussions',
-              href: 'https://github.com/SignalPilot-Labs/SignalPilot/discussions',
+              href: 'https://github.com/SignalPilot-Labs/signalpilot/discussions',
             },
             {
               label: 'Issues',
-              href: 'https://github.com/SignalPilot-Labs/SignalPilot/issues',
-            },
-          ],
-        },
-        {
-          title: 'More',
-          items: [
-            {
-              label: 'signalpilot.ai',
-              href: 'https://www.signalpilot.ai',
+              href: 'https://github.com/SignalPilot-Labs/signalpilot/issues',
             },
             {
-              label: 'AutoFyn',
-              href: 'https://github.com/SignalPilot-Labs/AutoFyn',
+              label: 'Security',
+              href: 'mailto:security@signalpilot.ai',
             },
           ],
         },
@@ -117,7 +180,7 @@ const config: Config = {
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
-      additionalLanguages: ['bash', 'json', 'sql', 'yaml'],
+      additionalLanguages: ['bash', 'json', 'sql', 'yaml', 'python', 'toml', 'ini'],
     },
   } satisfies Preset.ThemeConfig,
 };

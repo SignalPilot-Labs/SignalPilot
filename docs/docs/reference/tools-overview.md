@@ -1,8 +1,14 @@
-# MCP Tools (32 Tools)
+---
+sidebar_position: 1
+---
 
-Full reference for all SignalPilot MCP tools, organized by category.
+# Tools Reference
+
+All 32 SignalPilot MCP tools, grouped by category. Click a category for full parameter and example documentation.
 
 ## Data Exploration (9 tools)
+
+See [Schema & Exploration tools](/docs/reference/tools-schema).
 
 | Tool | Description |
 |------|-------------|
@@ -17,6 +23,8 @@ Full reference for all SignalPilot MCP tools, organized by category.
 | `schema_diff` | Compare current schema against last cached version (DDL changes) |
 
 ## Query Intelligence (11 tools)
+
+See [Query Intelligence tools](/docs/reference/tools-query).
 
 | Tool | Description |
 |------|-------------|
@@ -34,6 +42,8 @@ Full reference for all SignalPilot MCP tools, organized by category.
 
 ## dbt Intelligence (3 tools)
 
+See [dbt tools](/docs/reference/tools-dbt).
+
 | Tool | Description |
 |------|-------------|
 | `generate_sql_skeleton` | Generate a SQL template from YML column spec + ref tables |
@@ -42,6 +52,8 @@ Full reference for all SignalPilot MCP tools, organized by category.
 
 ## Model Verification (3 tools)
 
+See [dbt tools](/docs/reference/tools-dbt).
+
 | Tool | Description |
 |------|-------------|
 | `check_model_schema` | Compare materialized columns vs YML-declared columns |
@@ -49,6 +61,8 @@ Full reference for all SignalPilot MCP tools, organized by category.
 | `audit_model_sources` | Upstream audit: source row counts, fan-out/over-filter ratios, NULL scan |
 
 ## Operational (4 tools)
+
+See [Operational tools](/docs/reference/tools-ops).
 
 | Tool | Description |
 |------|-------------|
@@ -59,6 +73,8 @@ Full reference for all SignalPilot MCP tools, organized by category.
 
 ## Project Management (2 tools)
 
+See [Operational tools](/docs/reference/tools-ops).
+
 | Tool | Description |
 |------|-------------|
 | `list_projects` | List all dbt projects |
@@ -66,9 +82,9 @@ Full reference for all SignalPilot MCP tools, organized by category.
 
 ---
 
-### Removed Tools
+## Removed tools
 
-The following tools were removed because the gateway runs in Docker and cannot access local filesystems. Their functionality is available via standalone scripts in the [SignalPilot plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin):
+The following tools were removed because the gateway runs in Docker and cannot access local filesystems. Their functionality is available via standalone scripts in the plugin:
 
 - `execute_code` / `sandbox_status` — sandbox disabled in cloud
 - `dbt_project_map` / `dbt_project_validate` — use `scan_project.py` and `validate_project.py` in the plugin

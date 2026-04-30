@@ -1,0 +1,199 @@
+---
+sidebar_position: 2
+---
+
+# Query Intelligence Tools
+
+11 tools for writing, validating, and executing SQL queries with governance.
+
+---
+
+## query_database
+
+Execute governed, read-only SQL against a registered connection.
+
+**Governance applied automatically:**
+- DDL/DML blocked at parse time
+- 79+ dangerous functions denied
+- LIMIT auto-injected if missing (default: 1000 rows)
+- INTO clause blocked
+- Multi-statement rejected
+- Full audit log written (SQL string literals PII-redacted)
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name (from `list_database_connections`) |
+| `sql` | string | Yes | SQL query to execute |
+| `limit` | integer | No | Override auto-LIMIT (cannot exceed the gateway max) |
+
+**Returns:** Array of rows, column names, row count, governance decisions applied.
+
+**Example:**
+
+```
+Use query_database with connection="my-postgres" to run:
+SELECT order_date, COUNT(*) as orders FROM orders GROUP BY 1 ORDER BY 1
+```
+
+---
+
+## validate_sql
+
+Validate SQL syntax and semantics via `EXPLAIN`. No data is read, no budget is consumed.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `sql` | string | Yes | SQL to validate |
+
+**Returns:** `valid: true/false`, error message if invalid, governance flags if blocked.
+
+**When to use:** Before any non-trivial `query_database` call. Catches syntax errors and governance violations without touching data.
+
+---
+
+## explain_query
+
+Get the execution plan for a query with row estimates and cost warnings.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `sql` | string | Yes | SQL to explain |
+
+**Returns:** Execution plan, estimated rows per step, cost warning if applicable.
+
+---
+
+## estimate_query_cost
+
+Dry-run cost estimate before executing. For BigQuery, returns exact bytes that will be billed.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `sql` | string | Yes | SQL to estimate |
+
+**Returns:** Estimated cost in USD, bytes processed (BigQuery), row estimate, recommendation if cost is high.
+
+**When to use:** Before any full-table scan on BigQuery or Snowflake.
+
+---
+
+## debug_cte_query
+
+Break a CTE query into steps and validate each CTE independently.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `sql` | string | Yes | CTE query to debug |
+
+**Returns:** Per-CTE validation result, row count, fan-out detection for each step.
+
+---
+
+## schema_link
+
+Find tables relevant to a natural-language question. Maps NL → schema.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `question` | string | Yes | Natural-language question |
+| `top_k` | integer | No | Number of tables to return (default: 5) |
+
+**Returns:** Ranked list of relevant tables with relevance scores.
+
+---
+
+## find_join_path
+
+Discover FK-based join paths between two tables. Searches up to 6 hops.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `from_table` | string | Yes | Source table |
+| `to_table` | string | Yes | Target table |
+| `max_hops` | integer | No | Maximum join hops (default: 6) |
+
+**Returns:** List of join paths with intermediate tables and join conditions.
+
+---
+
+## get_relationships
+
+Return the full ERD for a database: all FK relationships as arrows or adjacency list.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `format` | string | No | `arrows` or `adjacency` (default: `arrows`) |
+
+**Returns:** All FK relationships in the specified format.
+
+---
+
+## compare_join_types
+
+Compare row counts across INNER, LEFT, RIGHT, and FULL OUTER JOIN for a given join condition.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `left_table` | string | Yes | Left table |
+| `right_table` | string | Yes | Right table |
+| `join_on` | string | Yes | Join condition (e.g. `order_id`) |
+
+**Returns:** Row count per join type, NULL counts on each side — helps pick the right join.
+
+---
+
+## get_date_boundaries
+
+Return MIN/MAX dates across all DATE and TIMESTAMP columns in a table or database.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `table` | string | No | Specific table (omit for database-wide scan) |
+
+**Returns:** Per-column MIN/MAX date boundaries.
+
+**When to use:** Before writing date-range queries — anchor to actual data dates, not `current_date`.
+
+---
+
+## query_history
+
+Retrieve recent successful queries for a connection (session memory).
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `limit` | integer | No | Number of queries to return (default: 20) |
+
+**Returns:** Recent queries with timestamp, SQL, row count, execution time.

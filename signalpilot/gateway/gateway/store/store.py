@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import uuid
 
@@ -17,11 +16,11 @@ import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.paths as paths
 import gateway.store.projects as projects
+import gateway.store.settings as settings_mod
 from gateway.byok import decrypt_envelope, encrypt_fields_envelope
 from gateway.db.models import (
     GatewayConnection,
     GatewayCredential,
-    GatewaySetting,
 )
 from gateway.governance.context import current_org_id_var
 from gateway.models import (
@@ -91,31 +90,11 @@ class Store:
 
     async def load_settings(self) -> GatewaySettings:
         oid = self._require_org_id()
-        result = await self.session.execute(select(GatewaySetting).where(GatewaySetting.org_id == oid))
-        row = result.scalar_one_or_none()
-        data = row.settings_json if row else {}
-        # Environment variables provide defaults — user-saved settings take priority
-        if os.getenv("SP_SANDBOX_MANAGER_URL") and "sandbox_manager_url" not in data:
-            data["sandbox_manager_url"] = os.getenv("SP_SANDBOX_MANAGER_URL")
-        if os.getenv("SP_GATEWAY_URL") and "gateway_url" not in data:
-            data["gateway_url"] = os.getenv("SP_GATEWAY_URL")
-        return GatewaySettings(**data)
+        return await settings_mod.load_settings(self.session, org_id=oid)
 
     async def save_settings(self, settings: GatewaySettings):
         oid = self._require_org_id()
-        result = await self.session.execute(select(GatewaySetting).where(GatewaySetting.org_id == oid))
-        row = result.scalar_one_or_none()
-        if row:
-            row.settings_json = settings.model_dump()
-        else:
-            self.session.add(
-                GatewaySetting(
-                    org_id=oid,
-                    user_id=self.user_id,
-                    settings_json=settings.model_dump(),
-                )
-            )
-        await self.session.commit()
+        await settings_mod.save_settings(self.session, org_id=oid, user_id=self.user_id, settings=settings)
 
     # ─── Connections ─────────────────────────────────────────────────────
 
@@ -703,11 +682,4 @@ class Store:
         This is a global (non-user-scoped) query, intentionally, because it is
         called from the admin-only security_status endpoint which needs a system-wide count.
         """
-        from sqlalchemy import func as sa_func
-
-        result = await self.session.execute(
-            select(sa_func.count())
-            .select_from(GatewayCredential)
-            .where(GatewayCredential.key_version < CURRENT_KEY_VERSION)
-        )
-        return result.scalar_one()
+        return await settings_mod.get_credentials_needing_rotation(self.session)

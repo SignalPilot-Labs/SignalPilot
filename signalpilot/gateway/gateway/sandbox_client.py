@@ -27,6 +27,7 @@ class SandboxClient:
     def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 60):
         # Validate base_url to prevent SSRF via scheme injection
         from urllib.parse import urlparse
+
         parsed = urlparse(base_url)
         if parsed.scheme not in self.ALLOWED_SCHEMES:
             raise ValueError(f"Invalid sandbox manager URL scheme: {parsed.scheme!r}. Must be http or https.")

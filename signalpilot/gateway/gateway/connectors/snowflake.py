@@ -44,8 +44,8 @@ class SnowflakeConnector(BaseConnector):
 
     def _load_private_key(self, key_pem: str, passphrase: str | None = None) -> bytes:
         """Load a PEM-encoded private key and return DER bytes for Snowflake key-pair auth."""
-        from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives import serialization
 
         pwd = passphrase.encode() if passphrase else None
         private_key = serialization.load_pem_private_key(
@@ -61,18 +61,24 @@ class SnowflakeConnector(BaseConnector):
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_SNOWFLAKE:
-            raise RuntimeError(
-                "snowflake-connector-python not installed. "
-                "Run: pip install snowflake-connector-python"
-            )
+            raise RuntimeError("snowflake-connector-python not installed. Run: pip install snowflake-connector-python")
         params = self._parse_connection(connection_string)
         self._connect_params = params
 
         # Merge in credential_extras (takes precedence — they have the actual secrets)
         if self._credential_extras:
-            for key in ("account", "username", "password", "warehouse", "schema_name", "role",
-                        "private_key", "private_key_passphrase",
-                        "oauth_access_token", "auth_method"):
+            for key in (
+                "account",
+                "username",
+                "password",
+                "warehouse",
+                "schema_name",
+                "role",
+                "private_key",
+                "private_key_passphrase",
+                "oauth_access_token",
+                "auth_method",
+            ):
                 val = self._credential_extras.get(key)
                 if val:
                     # Map schema_name -> schema for snowflake-connector
@@ -147,7 +153,7 @@ class SnowflakeConnector(BaseConnector):
         - account identifier only (for use with credential_extras)
         """
         if conn_str.startswith("snowflake://"):
-            inner = conn_str[len("snowflake://"):]
+            inner = conn_str[len("snowflake://") :]
 
             # Check for pipe-delimited format (legacy)
             if "|" in inner:
@@ -163,7 +169,7 @@ class SnowflakeConnector(BaseConnector):
                 }
 
             # Standard URL format: snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
-            from urllib.parse import urlparse, unquote, parse_qs
+            from urllib.parse import parse_qs, unquote, urlparse
 
             parsed = urlparse(conn_str)
             path_parts = [p for p in (parsed.path or "").split("/") if p]
@@ -201,7 +207,9 @@ class SnowflakeConnector(BaseConnector):
             self._conn = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -223,6 +231,7 @@ class SnowflakeConnector(BaseConnector):
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
+
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -333,12 +342,14 @@ class SnowflakeConnector(BaseConnector):
             key = f"{r['FK_SCHEMA_NAME']}.{r['FK_TABLE_NAME']}"
             if key not in foreign_keys:
                 foreign_keys[key] = []
-            foreign_keys[key].append({
-                "column": r["FK_COLUMN_NAME"],
-                "references_schema": r["PK_SCHEMA_NAME"],
-                "references_table": r["PK_TABLE_NAME"],
-                "references_column": r["PK_COLUMN_NAME"],
-            })
+            foreign_keys[key].append(
+                {
+                    "column": r["FK_COLUMN_NAME"],
+                    "references_schema": r["PK_SCHEMA_NAME"],
+                    "references_table": r["PK_TABLE_NAME"],
+                    "references_column": r["PK_COLUMN_NAME"],
+                }
+            )
 
         # Build clustering key map from SHOW TABLES result
         clustering_keys: dict[str, str] = {}
@@ -370,18 +381,18 @@ class SnowflakeConnector(BaseConnector):
                 if cluster_key:
                     table_entry["clustering_key"] = cluster_key
                 schema[key] = table_entry
-            schema[key]["columns"].append({
-                "name": row["COLUMN_NAME"],
-                "type": row["DATA_TYPE"],
-                "nullable": row["IS_NULLABLE"] == "YES",
-                "primary_key": False,
-                "comment": row.get("COMMENT", ""),
-            })
+            schema[key]["columns"].append(
+                {
+                    "name": row["COLUMN_NAME"],
+                    "type": row["DATA_TYPE"],
+                    "nullable": row["IS_NULLABLE"] == "YES",
+                    "primary_key": False,
+                    "comment": row.get("COMMENT", ""),
+                }
+            )
 
         # Enrich with primary key info (already fetched in parallel)
-        pk_set = {
-            (r["TABLE_SCHEMA"], r["TABLE_NAME"], r["COLUMN_NAME"]) for r in pk_rows
-        }
+        pk_set = {(r["TABLE_SCHEMA"], r["TABLE_NAME"], r["COLUMN_NAME"]) for r in pk_rows}
         for table_data in schema.values():
             for col in table_data["columns"]:
                 if (table_data["schema"], table_data["name"], col["name"]) in pk_set:
@@ -392,6 +403,7 @@ class SnowflakeConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         try:
@@ -417,7 +429,7 @@ class SnowflakeConnector(BaseConnector):
                     safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor(snowflake.connector.DictCursor)
                     cursor.execute(
-                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                        f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
                     )
                     rows = cursor.fetchall()
                     cursor.close()

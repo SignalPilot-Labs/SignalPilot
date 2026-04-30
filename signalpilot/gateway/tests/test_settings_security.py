@@ -15,7 +15,6 @@ from gateway.main import app
 from gateway.middleware import APIKeyAuthMiddleware
 from gateway.models import GatewaySettings, SandboxProvider
 
-
 # ─── Shared auth state ────────────────────────────────────────────────────────
 
 _CURRENT_AUTH: dict[str, Any] = {

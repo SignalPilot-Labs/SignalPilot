@@ -38,29 +38,32 @@ TYPE_COMPRESSION_MAP: dict[str, str] = {
 # Includes both lower-case and mixed-case variants that appeared in the
 # original copies so callers can do a direct ``col_type in STRING_COLUMN_TYPES``
 # check without normalising case first.
-STRING_COLUMN_TYPES: frozenset[str] = frozenset({
-    # lower-case variants
-    "varchar",
-    "nvarchar",
-    "text",
-    "char",
-    "nchar",
-    "character varying",
-    "character",
-    "enum",
-    "string",
-    # mixed/upper-case variants that appeared in original sets
-    "String",
-    "VARCHAR",
-    "TEXT",
-    "CHAR",
-    "NVARCHAR",
-})
+STRING_COLUMN_TYPES: frozenset[str] = frozenset(
+    {
+        # lower-case variants
+        "varchar",
+        "nvarchar",
+        "text",
+        "char",
+        "nchar",
+        "character varying",
+        "character",
+        "enum",
+        "string",
+        # mixed/upper-case variants that appeared in original sets
+        "String",
+        "VARCHAR",
+        "TEXT",
+        "CHAR",
+        "NVARCHAR",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Helper: compress a single SQL type string
 # ---------------------------------------------------------------------------
+
 
 def compress_type(raw_type: str) -> str:
     """Return a shorter alias for *raw_type* using :data:`TYPE_COMPRESSION_MAP`.
@@ -79,6 +82,7 @@ def compress_type(raw_type: str) -> str:
 # ---------------------------------------------------------------------------
 # _compress_schema
 # ---------------------------------------------------------------------------
+
 
 def _compress_schema(
     schema: dict[str, Any],
@@ -143,23 +147,15 @@ def _compress_schema(
                 vals = table_samples[col_name][:5]
                 if vals:
                     val_str = ", ".join(repr(v) for v in vals)
-                    comment_str = f" -- values: {val_str}" + (
-                        f" | {comment}" if comment else ""
-                    )
+                    comment_str = f" -- values: {val_str}" + (f" | {comment}" if comment else "")
 
-            cols.append(
-                f"{col_name} {col_type}{nullable}{unique_hint}{comment_str}"
-            )
+            cols.append(f"{col_name} {col_type}{nullable}{unique_hint}{comment_str}")
             if col.get("primary_key"):
                 pk_cols.append(col_name)
 
         # Build compact DDL string
-        overview_kw = (
-            "CREATE VIEW" if table.get("type") == "view" else "CREATE TABLE"
-        )
-        ddl_parts = [
-            f"{overview_kw} {table.get('schema', '')}.{table['name']} ("
-        ]
+        overview_kw = "CREATE VIEW" if table.get("type") == "view" else "CREATE TABLE"
+        ddl_parts = [f"{overview_kw} {table.get('schema', '')}.{table['name']} ("]
         ddl_parts.append("  " + ", ".join(cols))
         if pk_cols:
             ddl_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
@@ -171,9 +167,7 @@ def _compress_schema(
             ref_table = fk.get("references_table", "")
             if fk.get("references_schema"):
                 ref_table = f"{fk['references_schema']}.{ref_table}"
-            fk_refs.append(
-                f"{fk['column']} -> {ref_table}.{fk.get('references_column', '')}"
-            )
+            fk_refs.append(f"{fk['column']} -> {ref_table}.{fk.get('references_column', '')}")
 
         compressed[key] = {
             "ddl": "\n".join(ddl_parts),
@@ -184,9 +178,7 @@ def _compress_schema(
         if fk_refs:
             compressed[key]["foreign_keys"] = fk_refs
         if table.get("indexes"):
-            compressed[key]["indexes"] = [
-                idx.get("name", "") for idx in table["indexes"]
-            ]
+            compressed[key]["indexes"] = [idx.get("name", "") for idx in table["indexes"]]
         if table.get("description"):
             compressed[key]["description"] = table["description"]
         # ClickHouse-specific
@@ -209,6 +201,7 @@ def _compress_schema(
 # ---------------------------------------------------------------------------
 # _deduplicate_partitioned_tables
 # ---------------------------------------------------------------------------
+
 
 def _deduplicate_partitioned_tables(
     schema: dict[str, Any],
@@ -248,9 +241,7 @@ def _deduplicate_partitioned_tables(
         match = date_suffixes.match(table_name)
         if match:
             base_name = match.group(1).rstrip("_")
-            schema_prefix = (
-                key.rsplit(".", 1)[0] + "." if "." in key else ""
-            )
+            schema_prefix = key.rsplit(".", 1)[0] + "." if "." in key else ""
             group_key = f"{schema_prefix}{base_name}"
             base_groups[group_key].append(key)
         else:
@@ -266,9 +257,7 @@ def _deduplicate_partitioned_tables(
             # column names
             col_sets: list[frozenset[str]] = []
             for m in members:
-                cols = frozenset(
-                    c["name"] for c in schema[m].get("columns", [])
-                )
+                cols = frozenset(c["name"] for c in schema[m].get("columns", []))
                 col_sets.append(cols)
 
             # Check if at least 80% share the same structure
@@ -279,17 +268,11 @@ def _deduplicate_partitioned_tables(
                     # Keep the first table as representative, aggregate
                     # row counts
                     representative = members[0]
-                    total_rows = sum(
-                        schema[m].get("row_count", 0) or 0 for m in members
-                    )
+                    total_rows = sum(schema[m].get("row_count", 0) or 0 for m in members)
                     rep_data = dict(schema[representative])
                     rep_data["row_count"] = total_rows
                     rep_data["_partition_count"] = len(members)
-                    rep_data["_partition_base"] = (
-                        group_key.split(".")[-1]
-                        if "." in group_key
-                        else group_key
-                    )
+                    rep_data["_partition_base"] = group_key.split(".")[-1] if "." in group_key else group_key
                     deduplicated[representative] = rep_data
                     partition_map[representative] = members
                     continue
@@ -308,6 +291,7 @@ def _deduplicate_partitioned_tables(
 # ---------------------------------------------------------------------------
 # _group_tables
 # ---------------------------------------------------------------------------
+
 
 def _group_tables(schema: dict[str, Any]) -> dict[str, list[str]]:
     """Group related tables by naming patterns and FK relationships.
@@ -335,9 +319,7 @@ def _group_tables(schema: dict[str, Any]) -> dict[str, list[str]]:
         for fk in table.get("foreign_keys", []):
             ref_schema = fk.get("references_schema", "")
             ref_table = fk.get("references_table", "")
-            ref_key = (
-                f"{ref_schema}.{ref_table}" if ref_schema else ref_table
-            )
+            ref_key = f"{ref_schema}.{ref_table}" if ref_schema else ref_table
             # Find the actual key that matches
             for k in schema:
                 if k == ref_key or k.endswith(f".{ref_table}"):
@@ -348,9 +330,7 @@ def _group_tables(schema: dict[str, Any]) -> dict[str, list[str]]:
     # Merge prefix groups that are FK-connected
     groups: dict[str, list[str]] = {}
     assigned: set[str] = set()
-    for prefix, members in sorted(
-        prefix_groups.items(), key=lambda x: -len(x[1])
-    ):
+    for prefix, members in sorted(prefix_groups.items(), key=lambda x: -len(x[1])):
         if len(members) >= 2:
             group_key = prefix
             group_members = set(members)
@@ -373,6 +353,7 @@ def _group_tables(schema: dict[str, Any]) -> dict[str, list[str]]:
 # _infer_implicit_joins
 # ---------------------------------------------------------------------------
 
+
 def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
     """Detect implicit join relationships via column name pattern matching.
 
@@ -394,11 +375,7 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
     for key, table in schema.items():
         tbl_name = table.get("name", "").lower()
         tbl_schema = table.get("schema", "")
-        full_name = (
-            f"{tbl_schema}.{table.get('name', '')}"
-            if tbl_schema
-            else table.get("name", "")
-        )
+        full_name = f"{tbl_schema}.{table.get('name', '')}" if tbl_schema else table.get("name", "")
         table_lookup[tbl_name] = (full_name, table)
 
         # Track PK/id columns for matching
@@ -423,9 +400,7 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
         edge_key = (
             from_schema + "." + from_table,
             from_col,
-            ref_table_data.get("schema", "")
-            + "."
-            + ref_table_data.get("name", ""),
+            ref_table_data.get("schema", "") + "." + ref_table_data.get("name", ""),
             ref_col,
         )
         if edge_key not in seen:
@@ -461,9 +436,7 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
         tbl_name = table.get("name", "").lower()
 
         # Skip if table already has explicit FKs -- don't duplicate
-        existing_fk_cols = {
-            fk["column"].lower() for fk in table.get("foreign_keys", [])
-        }
+        existing_fk_cols = {fk["column"].lower() for fk in table.get("foreign_keys", [])}
 
         for col in table.get("columns", []):
             cn = col["name"].lower()
@@ -477,13 +450,9 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
                 # Try plural forms
                 candidates = [prefix, prefix + "s", prefix + "es"]
                 if prefix.endswith("y"):
-                    candidates.append(
-                        prefix[:-1] + "ies"
-                    )  # category -> categories
+                    candidates.append(prefix[:-1] + "ies")  # category -> categories
                 elif prefix.endswith(("s", "x", "z")):
-                    candidates.append(
-                        prefix + "es"
-                    )  # address -> addresses
+                    candidates.append(prefix + "es")  # address -> addresses
 
                 for candidate in candidates:
                     if candidate in table_lookup and candidate != tbl_name:
@@ -515,12 +484,7 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
 
             # Pattern 2: column ends with Id (camelCase)
             # e.g., customerId -> customers.id
-            elif (
-                cn.endswith("id")
-                and cn != "id"
-                and len(cn) > 2
-                and cn[-3].islower()
-            ):
+            elif cn.endswith("id") and cn != "id" and len(cn) > 2 and cn[-3].islower():
                 prefix = cn[:-2].lower()  # "customer"
                 candidates = [prefix, prefix + "s", prefix + "es"]
                 if prefix.endswith("y"):
@@ -560,8 +524,7 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
                         # Only add if the other table has this as a PK or
                         # it looks like a dimension table
                         is_pk_in_other = any(
-                            rc["name"].lower() == cn and rc.get("primary_key")
-                            for rc in other_table.get("columns", [])
+                            rc["name"].lower() == cn and rc.get("primary_key") for rc in other_table.get("columns", [])
                         )
                         if is_pk_in_other:
                             _add_inferred(

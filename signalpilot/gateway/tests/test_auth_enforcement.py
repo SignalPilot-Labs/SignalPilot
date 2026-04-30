@@ -28,7 +28,6 @@ from gateway.auth import resolve_user_id
 from gateway.main import app
 from gateway.middleware import APIKeyAuthMiddleware, RateLimitMiddleware
 
-
 # ─── Shared mutable state ─────────────────────────────────────────────────────
 
 _AUTH_MODE: dict[str, str] = {"mode": "api_key"}
@@ -191,9 +190,7 @@ class TestJWTEnforcementConnectionEndpoints:
 
     def test_connection_health_history_rejects_invalid_jwt(self, client):
         _set_mode("reject_jwt")
-        response = client.get(
-            "/api/connections/myconn/health/history", headers=FAKE_BEARER_HEADERS
-        )
+        response = client.get("/api/connections/myconn/health/history", headers=FAKE_BEARER_HEADERS)
         assert response.status_code == 401
 
     def test_network_info_rejects_invalid_jwt(self, client):

@@ -19,15 +19,14 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from gateway.store import (
-    _atomic_create_file,
-    _load_or_create_salt,
-    _get_encryption_key,
-    get_local_api_key,
-    Store,
-)
 from gateway.models import ConnectionCreate, DBType, ProjectCreate
-
+from gateway.store import (
+    Store,
+    _atomic_create_file,
+    _get_encryption_key,
+    _load_or_create_salt,
+    get_local_api_key,
+)
 
 # ─── _atomic_create_file ─────────────────────────────────────────────────────
 
@@ -101,8 +100,10 @@ class TestLoadOrCreateSalt:
             written_salts.append(result)
             return result
 
-        with patch("gateway.store.DATA_DIR", tmp_path), \
-             patch("gateway.store._atomic_create_file", side_effect=capturing_atomic):
+        with (
+            patch("gateway.store.DATA_DIR", tmp_path),
+            patch("gateway.store._atomic_create_file", side_effect=capturing_atomic),
+        ):
             salt_a = _load_or_create_salt()
             # Manually simulate a second process by calling again (file now exists)
             salt_b = _load_or_create_salt()
@@ -117,9 +118,9 @@ class TestGetEncryptionKey:
     """Two simultaneous starts must return the same Fernet key."""
 
     def test_generates_and_caches_key(self, tmp_path: Path) -> None:
-        with patch("gateway.store.DATA_DIR", tmp_path), \
-             patch("gateway.store._CACHED_KEY", None):
+        with patch("gateway.store.DATA_DIR", tmp_path), patch("gateway.store._CACHED_KEY", None):
             import gateway.store as store_module
+
             old_cache = store_module._CACHED_KEY
             store_module._CACHED_KEY = None
             try:
@@ -132,18 +133,20 @@ class TestGetEncryptionKey:
     def test_key_is_stripped_from_existing_file(self, tmp_path: Path) -> None:
         """Key file with trailing newline must be stripped."""
         from cryptography.fernet import Fernet
+
         key_val = Fernet.generate_key()
         key_file = tmp_path / ".encryption_key"
         key_file.write_bytes(key_val + b"\n")
 
         import gateway.store as store_module
+
         original_cache = store_module._CACHED_KEY
         store_module._CACHED_KEY = None
         try:
-            with patch("gateway.store.DATA_DIR", tmp_path), \
-                 patch.dict("os.environ", {}, clear=False):
+            with patch("gateway.store.DATA_DIR", tmp_path), patch.dict("os.environ", {}, clear=False):
                 # Remove SP_ENCRYPTION_KEY if set
                 import os
+
                 env_backup = os.environ.pop("SP_ENCRYPTION_KEY", None)
                 try:
                     result = _get_encryption_key()
@@ -158,6 +161,7 @@ class TestGetEncryptionKey:
     def test_race_condition_returns_same_key(self, tmp_path: Path) -> None:
         """Two calls without cached key both end up with the same key bytes."""
         import gateway.store as store_module
+
         original_cache = store_module._CACHED_KEY
 
         def reset_and_call() -> bytes:
@@ -165,6 +169,7 @@ class TestGetEncryptionKey:
             return _get_encryption_key()
 
         import os
+
         env_backup = os.environ.pop("SP_ENCRYPTION_KEY", None)
         try:
             with patch("gateway.store.DATA_DIR", tmp_path):
@@ -369,9 +374,7 @@ class TestCloneConnectionRace:
         store = AsyncMock()
         store.get_connection = AsyncMock(side_effect=[existing_conn, None])
         store.get_connection_string = AsyncMock(return_value=None)
-        store.create_connection = AsyncMock(
-            side_effect=ValueError("Connection 'clone_name' already exists")
-        )
+        store.create_connection = AsyncMock(side_effect=ValueError("Connection 'clone_name' already exists"))
 
         with pytest.raises(HTTPException) as exc_info:
             await clone_connection("source_conn", store, new_name="clone_name")

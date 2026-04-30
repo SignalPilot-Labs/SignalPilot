@@ -15,7 +15,6 @@ from gateway.mcp_errors import (
     sanitize_proxy_response,
 )
 
-
 # ─── _SENSITIVE_PATTERNS drift guard ─────────────────────────────────────────
 
 
@@ -32,12 +31,10 @@ class TestSensitivePatternsSync:
         )
         for i, (mcp_pat, dep_pat) in enumerate(zip(_SENSITIVE_PATTERNS, deps_patterns)):
             assert mcp_pat.pattern == dep_pat.pattern, (
-                f"Pattern {i} mismatch: mcp_errors={mcp_pat.pattern!r}, "
-                f"api/deps={dep_pat.pattern!r}"
+                f"Pattern {i} mismatch: mcp_errors={mcp_pat.pattern!r}, api/deps={dep_pat.pattern!r}"
             )
             assert mcp_pat.flags == dep_pat.flags, (
-                f"Pattern {i} flags mismatch: mcp_errors={mcp_pat.flags}, "
-                f"api/deps={dep_pat.flags}"
+                f"Pattern {i} flags mismatch: mcp_errors={mcp_pat.flags}, api/deps={dep_pat.flags}"
             )
 
 

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import yaml
 
@@ -40,9 +40,7 @@ _SKIP_DIRS = frozenset({"dbt_packages", "target", "logs", ".claude", "__pycache_
 # Dbt Jinja uses {{ ref('x') }} with either single or double quotes.
 _RE_REF = re.compile(r"""\{\{\s*ref\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\}\}""")
 # {{ source('schema', 'table') }} — two arguments.
-_RE_SOURCE = re.compile(
-    r"""\{\{\s*source\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)\s*\}\}"""
-)
+_RE_SOURCE = re.compile(r"""\{\{\s*source\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)\s*\}\}""")
 # {{ config(materialized='table') }} — extract the materialized value.
 _RE_CONFIG_MAT = re.compile(
     r"""\{\{\s*config\s*\([^)]*materialized\s*=\s*['"]([^'"]+)['"]""",
@@ -181,9 +179,7 @@ def parse_yml_file(path: Path) -> tuple[dict | None, str | None]:
     return data, None
 
 
-def extract_models_from_yml(
-    data: dict, yml_rel_path: str, project_dir: Path
-) -> list[ModelInfo]:
+def extract_models_from_yml(data: dict, yml_rel_path: str, project_dir: Path) -> list[ModelInfo]:
     """Pull model definitions out of a parsed yml dict. Tolerates missing fields."""
     models: list[ModelInfo] = []
     raw_models = data.get("models")
@@ -490,26 +486,28 @@ def _scan_pkg_sql_file(
     stem = sql_path.stem
     override_path = f"models/{stem}.sql"
 
-    matched_patterns = list(dict.fromkeys(
-        m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)
-    ))
+    matched_patterns = list(dict.fromkeys(m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)))
     if matched_patterns:
-        date_hazards.append({
-            "file": rel,
-            "pattern": ", ".join(matched_patterns),
-            "model_name": stem,
-            "package": True,
-            "override_path": override_path,
-        })
+        date_hazards.append(
+            {
+                "file": rel,
+                "pattern": ", ".join(matched_patterns),
+                "model_name": stem,
+                "package": True,
+                "override_path": override_path,
+            }
+        )
 
     if _RE_NONDETERMINISTIC_WINDOW.search(content):
-        nd_warnings.append({
-            "file": rel,
-            "model_name": stem,
-            "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
-            "package": True,
-            "override_path": override_path,
-        })
+        nd_warnings.append(
+            {
+                "file": rel,
+                "model_name": stem,
+                "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
+                "package": True,
+                "override_path": override_path,
+            }
+        )
 
 
 # ── Top-level orchestration ──────────────────────────────────────────────────
@@ -567,35 +565,39 @@ def scan_filesystem(project_dir: Path) -> dict:
         sources_in_sql = extract_sources_from_sql(content)
         sql_mat, sql_uk = extract_config_from_sql(content)
         directory = str(Path(rel).parent).replace("\\", "/")
-        sql_records.append({
-            "name": sql_path.stem,
-            "path": rel,
-            "directory": directory,
-            "status": status,
-            "size": size,
-            "refs": refs,
-            "sources": sources_in_sql,
-            "materialization": sql_mat,
-            "unique_key": sql_uk,
-        })
+        sql_records.append(
+            {
+                "name": sql_path.stem,
+                "path": rel,
+                "directory": directory,
+                "status": status,
+                "size": size,
+                "refs": refs,
+                "sources": sources_in_sql,
+                "materialization": sql_mat,
+                "unique_key": sql_uk,
+            }
+        )
         # Only flag COMPLETE models — stubs are going to be rewritten anyway,
         # and flagging incomplete SQL wastes agent attention.
         if status == ModelStatus.COMPLETE:
-            matched_patterns = list(dict.fromkeys(
-                m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)
-            ))
+            matched_patterns = list(dict.fromkeys(m.group(0).lower() for m in _RE_DATE_HAZARD.finditer(content)))
             if matched_patterns:
-                date_hazards.append({
-                    "file": rel,
-                    "pattern": ", ".join(matched_patterns),
-                    "model_name": sql_path.stem,
-                })
+                date_hazards.append(
+                    {
+                        "file": rel,
+                        "pattern": ", ".join(matched_patterns),
+                        "model_name": sql_path.stem,
+                    }
+                )
             if _RE_NONDETERMINISTIC_WINDOW.search(content):
-                nondeterminism_warnings.append({
-                    "file": rel,
-                    "model_name": sql_path.stem,
-                    "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
-                })
+                nondeterminism_warnings.append(
+                    {
+                        "file": rel,
+                        "model_name": sql_path.stem,
+                        "pattern": "ROW_NUMBER/RANK/DENSE_RANK without verified unique ORDER BY",
+                    }
+                )
 
     # Walk dbt_packages/ for date hazards and non-determinism (read-only detection).
     # Package models are not added to sql_records — they are third-party code.

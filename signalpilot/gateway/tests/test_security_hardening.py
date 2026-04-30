@@ -15,10 +15,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers for raw ASGI testing
 # ---------------------------------------------------------------------------
+
 
 def _make_scope(
     method: str = "POST",
@@ -58,6 +58,7 @@ async def _collect_sent(scope, receive, send_fn) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # TestRequestBodySizeLimit
 # ---------------------------------------------------------------------------
+
 
 class TestRequestBodySizeLimit:
     """Tests for RequestBodySizeLimitMiddleware."""
@@ -197,11 +198,13 @@ class TestRequestBodySizeLimit:
 # TestLocalDbPathValidation
 # ---------------------------------------------------------------------------
 
+
 class TestLocalDbPathValidation:
     """Tests for _validate_local_db_path in store.py."""
 
     def _validate(self, path: str) -> str:
         from gateway.store import _validate_local_db_path
+
         return _validate_local_db_path(path)
 
     def test_memory_is_allowed(self):
@@ -215,12 +218,14 @@ class TestLocalDbPathValidation:
 
     def test_path_within_data_dir_is_allowed(self):
         from gateway.store import DATA_DIR
+
         valid_path = str(DATA_DIR / "test.duckdb")
         assert self._validate(valid_path) == valid_path
 
     def test_relative_path_resolves_within_data_dir(self):
         """A relative path that resolves inside DATA_DIR should be allowed."""
         from gateway.store import DATA_DIR
+
         # Build a path that resolves within DATA_DIR
         relative = str(DATA_DIR / "subdir" / ".." / "test.duckdb")
         assert self._validate(relative) == relative
@@ -258,6 +263,7 @@ class TestLocalDbPathValidation:
 # TestConnectionStringBypass
 # ---------------------------------------------------------------------------
 
+
 class TestConnectionStringBypass:
     """Verify that direct connection_string does not bypass path validation."""
 
@@ -292,6 +298,7 @@ class TestConnectionStringBypass:
     def test_store_chokepoint_rejects_dangerous_connection_string(self):
         """store._validate_local_db_path should be called at the raw_cred chokepoint."""
         from gateway.store import _validate_local_db_path
+
         with pytest.raises(ValueError, match="Database path not allowed"):
             _validate_local_db_path("/etc/passwd")
 
@@ -328,11 +335,13 @@ class TestConnectionStringBypass:
 # TestProfilesYmlPermissions
 # ---------------------------------------------------------------------------
 
+
 class TestProfilesYmlPermissions:
     """Tests for profiles.yml generation — content sanity and no passwords."""
 
     def _make_store(self):
         from gateway.store import Store
+
         session = MagicMock()
         store = Store.__new__(Store)
         store.session = session
@@ -341,6 +350,7 @@ class TestProfilesYmlPermissions:
 
     def _make_connection(self, db_type: str, **kwargs) -> Any:
         from gateway.models import ConnectionInfo
+
         return ConnectionInfo(
             id="test-id",
             name="test-conn",
@@ -359,6 +369,7 @@ class TestProfilesYmlPermissions:
     def test_postgres_profiles_yml_is_valid_yaml(self):
         """Generated postgres profiles.yml should be parseable YAML."""
         import yaml
+
         store = self._make_store()
         conn = self._make_connection("postgres", host="db.example.com", username="admin", database="prod")
         result = store._generate_profiles_yml("my_project", conn)
@@ -367,6 +378,7 @@ class TestProfilesYmlPermissions:
 
     def test_duckdb_profiles_yml_is_valid_yaml(self):
         import yaml
+
         store = self._make_store()
         conn = self._make_connection("duckdb", database=":memory:")
         result = store._generate_profiles_yml("duck_project", conn)
@@ -399,16 +411,18 @@ class TestProfilesYmlPermissions:
 # TestSecurityHeadersMiddleware
 # ---------------------------------------------------------------------------
 
+
 class TestSecurityHeadersMiddleware:
     """Tests for SecurityHeadersMiddleware header injection."""
 
     def _run_middleware(self, headers: dict[str, str] | None = None) -> dict[str, str]:
         """Run SecurityHeadersMiddleware and return response headers as a dict."""
-        from starlette.testclient import TestClient
         from starlette.applications import Starlette
         from starlette.requests import Request
         from starlette.responses import PlainTextResponse
         from starlette.routing import Route
+        from starlette.testclient import TestClient
+
         from gateway.middleware import SecurityHeadersMiddleware
 
         async def homepage(request: Request) -> PlainTextResponse:
@@ -481,6 +495,7 @@ class TestSecurityHeadersMiddleware:
     def test_csp_custom_override(self):
         """SP_GATEWAY_CSP_POLICY env var replaces the default policy entirely."""
         import os
+
         custom_policy = "default-src 'none'; script-src 'self' cdn.example.com"
         with MagicMock():
             original = os.environ.get("SP_GATEWAY_CSP_POLICY")
@@ -499,6 +514,7 @@ class TestSecurityHeadersMiddleware:
 # TestCorsOriginValidation
 # ---------------------------------------------------------------------------
 
+
 class TestCorsOriginValidation:
     """Tests for SP_ALLOWED_ORIGINS validation in main.py."""
 
@@ -512,6 +528,7 @@ class TestCorsOriginValidation:
         ]
         result = list(hardcoded)
         import logging
+
         logger = logging.getLogger("gateway.main")
         for origin in (o.strip() for o in extra_origins.split(",") if o.strip()):
             if origin == "*":
@@ -573,6 +590,7 @@ class TestCorsOriginValidation:
 # TestAuthRateLimiting
 # ---------------------------------------------------------------------------
 
+
 class TestAuthRateLimiting:
     """Tests for the third rate-limit tier targeting POST /api/keys."""
 
@@ -582,12 +600,13 @@ class TestAuthRateLimiting:
         The inner Starlette app accepts every method on every path so tests can
         issue arbitrary method/path combinations without 405 responses.
         """
-        from gateway.middleware import RateLimitMiddleware
         from starlette.applications import Starlette
+        from starlette.requests import Request as StarletteRequest
         from starlette.responses import PlainTextResponse
         from starlette.routing import Route
-        from starlette.requests import Request as StarletteRequest
         from starlette.testclient import TestClient
+
+        from gateway.middleware import RateLimitMiddleware
 
         async def catch_all(request: StarletteRequest) -> PlainTextResponse:
             return PlainTextResponse("ok")
@@ -607,10 +626,7 @@ class TestAuthRateLimiting:
         """POST /api/keys returns 429 after auth_rpm requests from same IP."""
         client = self._make_test_app(auth_rpm=3, general_rpm=120)
 
-        statuses = [
-            client.post("/api/keys", headers={"X-Forwarded-For": "10.0.0.1"}).status_code
-            for _ in range(5)
-        ]
+        statuses = [client.post("/api/keys", headers={"X-Forwarded-For": "10.0.0.1"}).status_code for _ in range(5)]
         # First 3 should succeed (200), then 429
         assert statuses[:3] == [200, 200, 200], f"Expected first 3 to be 200, got {statuses[:3]}"
         assert statuses[3] == 429, f"Expected 4th request to be 429, got {statuses[3]}"
@@ -620,10 +636,7 @@ class TestAuthRateLimiting:
         """GET /health is not blocked by the auth rate limit."""
         client = self._make_test_app(auth_rpm=3, general_rpm=120)
 
-        statuses = [
-            client.get("/health", headers={"X-Forwarded-For": "10.0.0.2"}).status_code
-            for _ in range(10)
-        ]
+        statuses = [client.get("/health", headers={"X-Forwarded-For": "10.0.0.2"}).status_code for _ in range(10)]
         assert all(s == 200 for s in statuses), f"Expected all 200, got {statuses}"
 
     def test_auth_429_does_not_increment_general_bucket(self):
@@ -654,18 +667,21 @@ class TestAuthRateLimiting:
 # TestSseResourceLimits
 # ---------------------------------------------------------------------------
 
+
 class TestSseResourceLimits:
     """Tests for SSE /api/metrics connection cap and timeout."""
 
     def _reset_semaphore(self, value: int) -> None:
         """Replace the module-level semaphore with a fresh one for test isolation."""
         import gateway.api.metrics as metrics_mod
+
         metrics_mod._sse_semaphore = asyncio.Semaphore(value)
 
     def test_exceeding_max_connections_returns_429(self):
         """When all SSE permits are taken, the endpoint must return 429."""
-        import gateway.api.metrics as metrics_mod
         from unittest.mock import AsyncMock
+
+        import gateway.api.metrics as metrics_mod
 
         # Replace semaphore with a fully-exhausted one (capacity 0 remaining).
         metrics_mod._sse_semaphore = asyncio.Semaphore(0)
@@ -678,6 +694,7 @@ class TestSseResourceLimits:
                 # locked() returns True when counter == 0.
                 assert metrics_mod._sse_semaphore.locked()
                 from fastapi import HTTPException
+
                 try:
                     # Simulate what the handler does
                     if metrics_mod._sse_semaphore.locked():
@@ -699,8 +716,9 @@ class TestSseResourceLimits:
 
     def test_stream_ends_after_max_duration(self):
         """Generator must stop yielding after SSE_MAX_DURATION_SECONDS."""
-        import gateway.api.metrics as metrics_mod
         import time
+
+        import gateway.api.metrics as metrics_mod
 
         original_duration = metrics_mod.SSE_MAX_DURATION_SECONDS
         metrics_mod.SSE_MAX_DURATION_SECONDS = 0  # Expires immediately
@@ -731,8 +749,9 @@ class TestSseResourceLimits:
 
     def test_semaphore_released_after_stream_ends(self):
         """Semaphore must be released when the generator completes normally."""
-        import gateway.api.metrics as metrics_mod
         import time
+
+        import gateway.api.metrics as metrics_mod
 
         metrics_mod._sse_semaphore = asyncio.Semaphore(1)
         original_duration = metrics_mod.SSE_MAX_DURATION_SECONDS

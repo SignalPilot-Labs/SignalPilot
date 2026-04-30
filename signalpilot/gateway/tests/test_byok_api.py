@@ -21,10 +21,10 @@ from gateway.byok import (
     migrate_to_byok,
     revert_to_managed,
 )
-from gateway.store import _encrypt, _decrypt_with_migration
-
+from gateway.store import _decrypt_with_migration, _encrypt
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _make_credential(
     connection_name: str = "test-conn",
@@ -63,8 +63,8 @@ def _make_connection(
 
 # ─── encrypt_fields_envelope tests ───────────────────────────────────────────
 
-class TestEncryptFieldsEnvelope:
 
+class TestEncryptFieldsEnvelope:
     @pytest.mark.asyncio
     async def test_single_dek_for_multiple_fields(self):
         """One wrapped_dek must decrypt both ciphertexts."""
@@ -72,18 +72,12 @@ class TestEncryptFieldsEnvelope:
         provider.register_key("org1", "alias1")
 
         fields = ["postgresql://user:pass@host/db", '{"key": "value"}']
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias1", fields
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias1", fields)
 
         assert len(ciphertexts) == 2
         # Both ciphertexts must decrypt with the same wrapped_dek
-        recovered_cs = await decrypt_envelope(
-            provider, "org1", "alias1", wrapped_dek, ciphertexts[0]
-        )
-        recovered_extras = await decrypt_envelope(
-            provider, "org1", "alias1", wrapped_dek, ciphertexts[1]
-        )
+        recovered_cs = await decrypt_envelope(provider, "org1", "alias1", wrapped_dek, ciphertexts[0])
+        recovered_extras = await decrypt_envelope(provider, "org1", "alias1", wrapped_dek, ciphertexts[1])
 
         assert recovered_cs == fields[0]
         assert recovered_extras == fields[1]
@@ -93,9 +87,7 @@ class TestEncryptFieldsEnvelope:
         provider = LocalBYOKProvider()
         provider.register_key("org1", "key1")
         fields = ["a", "b", "c"]
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "key1", fields
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "key1", fields)
         assert len(ciphertexts) == 3
         assert isinstance(wrapped_dek, bytes)
 
@@ -113,8 +105,8 @@ class TestEncryptFieldsEnvelope:
 
 # ─── migrate_to_byok tests ────────────────────────────────────────────────────
 
-class TestMigrateToByok:
 
+class TestMigrateToByok:
     def _make_session(self, rows: list[tuple]) -> AsyncMock:
         """Build a minimal AsyncMock session that returns rows from execute()."""
         session = AsyncMock()
@@ -159,9 +151,7 @@ class TestMigrateToByok:
         assert cred.byok_key_id == "key-id-1"
         assert cred.wrapped_dek is not None
         # Verify ciphertext is now BYOK-encrypted (decryptable with provider)
-        recovered = await decrypt_envelope(
-            provider, "org1", "alias1", cred.wrapped_dek, cred.connection_string_enc
-        )
+        recovered = await decrypt_envelope(provider, "org1", "alias1", cred.wrapped_dek, cred.connection_string_enc)
         assert recovered == conn_string
 
     @pytest.mark.asyncio
@@ -257,8 +247,8 @@ class TestMigrateToByok:
 
 # ─── revert_to_managed tests ─────────────────────────────────────────────────
 
-class TestRevertToManaged:
 
+class TestRevertToManaged:
     def _make_session(self, rows: list[tuple]) -> AsyncMock:
         session = AsyncMock()
         mock_result = MagicMock()
@@ -279,9 +269,7 @@ class TestRevertToManaged:
 
         # Set up a BYOK-encrypted credential
         fields = [conn_string, extras]
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias1", fields
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias1", fields)
 
         cred = _make_credential(
             encryption_mode="byok",
@@ -323,9 +311,7 @@ class TestRevertToManaged:
 
         conn_string = "mysql://host/db"
         fields = [conn_string, "{}"]
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias1", fields
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias1", fields)
 
         cred = _make_credential(
             encryption_mode="byok",
@@ -400,8 +386,8 @@ class TestRevertToManaged:
 
 # ─── Migrate + Revert roundtrip ───────────────────────────────────────────────
 
-class TestMigrateRevertRoundtrip:
 
+class TestMigrateRevertRoundtrip:
     @pytest.mark.asyncio
     async def test_migrate_then_revert_recovers_plaintext(self):
         """Full roundtrip: managed → BYOK → managed preserves data."""
@@ -474,11 +460,12 @@ class TestMigrateRevertRoundtrip:
 
 # ─── GatewayOrg model tests ───────────────────────────────────────────────────
 
-class TestGatewayOrgModel:
 
+class TestGatewayOrgModel:
     def test_gateway_org_fields(self):
         """GatewayOrg has the expected columns."""
         from gateway.db.models import GatewayOrg
+
         cols = {c.name for c in GatewayOrg.__table__.columns}
         assert "org_id" in cols
         assert "byok_enabled" in cols
@@ -491,17 +478,19 @@ class TestGatewayOrgModel:
     def test_gateway_org_primary_key(self):
         """org_id is the primary key."""
         from gateway.db.models import GatewayOrg
+
         pk_cols = [c.name for c in GatewayOrg.__table__.primary_key.columns]
         assert pk_cols == ["org_id"]
 
 
 # ─── ConnectionCreate BYOK fields ────────────────────────────────────────────
 
-class TestConnectionCreateBYOKFields:
 
+class TestConnectionCreateBYOKFields:
     def test_connection_create_accepts_org_id_and_byok_key_alias(self):
         """ConnectionCreate accepts org_id and byok_key_alias fields."""
         from gateway.models import ConnectionCreate, DBType
+
         conn = ConnectionCreate(
             name="myconn",
             db_type=DBType.duckdb,
@@ -514,14 +503,17 @@ class TestConnectionCreateBYOKFields:
     def test_connection_create_byok_fields_optional(self):
         """org_id and byok_key_alias default to None."""
         from gateway.models import ConnectionCreate, DBType
+
         conn = ConnectionCreate(name="myconn", db_type=DBType.duckdb)
         assert conn.org_id is None
         assert conn.byok_key_alias is None
 
     def test_byok_key_alias_pattern_validation(self):
         """byok_key_alias must match [a-zA-Z0-9_-]+."""
-        from gateway.models import ConnectionCreate, DBType
         import pydantic
+
+        from gateway.models import ConnectionCreate, DBType
+
         with pytest.raises(pydantic.ValidationError):
             ConnectionCreate(
                 name="myconn",
@@ -532,10 +524,11 @@ class TestConnectionCreateBYOKFields:
 
 # ─── Pydantic BYOK models ─────────────────────────────────────────────────────
 
-class TestBYOKPydanticModels:
 
+class TestBYOKPydanticModels:
     def test_byok_key_create_valid(self):
         from gateway.models import BYOKKeyCreate
+
         # org_id is no longer user-supplied in BYOKKeyCreate (derived from JWT)
         obj = BYOKKeyCreate(
             key_alias="my-key",
@@ -545,24 +538,30 @@ class TestBYOKPydanticModels:
         assert obj.provider_config is None
 
     def test_byok_key_create_invalid_provider_type(self):
-        from gateway.models import BYOKKeyCreate
         import pydantic
+
+        from gateway.models import BYOKKeyCreate
+
         with pytest.raises(pydantic.ValidationError):
             BYOKKeyCreate(org_id="org1", key_alias="k", provider_type="unknown")
 
     def test_byok_key_update_status_revoked(self):
         from gateway.models import BYOKKeyUpdate
+
         obj = BYOKKeyUpdate(status="revoked")
         assert obj.status == "revoked"
 
     def test_byok_key_update_invalid_status(self):
-        from gateway.models import BYOKKeyUpdate
         import pydantic
+
+        from gateway.models import BYOKKeyUpdate
+
         with pytest.raises(pydantic.ValidationError):
             BYOKKeyUpdate(status="deleted")
 
     def test_byok_migrate_response(self):
         from gateway.models import BYOKMigrateResponse
+
         resp = BYOKMigrateResponse(migrated=5, failed=1, errors=["err"])
         assert resp.migrated == 5
         assert resp.failed == 1

@@ -7,18 +7,18 @@ import logging
 import socket
 import time
 from typing import Any
-from urllib.parse import quote_plus, urlparse, unquote, parse_qs
+from urllib.parse import quote_plus, unquote, urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..auth import OrgAdmin, UserID, OrgID
+from ..auth import OrgAdmin, OrgID, UserID
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..models import ConnectionCreate, ConnectionUpdate
-from ..network_validation import validate_connection_params, resolve_and_validate, validate_cloud_warehouse_params
+from ..network_validation import resolve_and_validate, validate_cloud_warehouse_params, validate_connection_params
 from ..scope_guard import RequireScope, require_scopes
 from ..store import (
     CredentialEncryptionError,
@@ -36,9 +36,11 @@ router = APIRouter(prefix="/api")
 # Helper: validate connection params
 # ---------------------------------------------------------------------------
 
+
 def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
     """Validate connection parameters before persisting. Returns list of error messages."""
     from ..deployment import is_cloud_mode
+
     errors: list[str] = []
 
     # Cloud mode: reject file-based local database connections
@@ -137,6 +139,7 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
 # Helper: auto schema refresh
 # ---------------------------------------------------------------------------
 
+
 async def _auto_schema_refresh(name: str, db_type: str, store):
     """Background task: fetch schema for newly created connections."""
     await asyncio.sleep(2)
@@ -145,13 +148,27 @@ async def _auto_schema_refresh(name: str, db_type: str, store):
         if not conn_str:
             return
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             schema = await connector.get_schema()
             schema_cache.put(name, schema)
             logger.info("Auto-refreshed schema for new connection '%s': %d tables", name, len(schema))
 
-            _cat_names = {"status", "state", "type", "category", "region", "country",
-                          "city", "role", "department", "channel", "source", "currency"}
+            _cat_names = {
+                "status",
+                "state",
+                "type",
+                "category",
+                "region",
+                "country",
+                "city",
+                "role",
+                "department",
+                "channel",
+                "source",
+                "currency",
+            }
             _str_types = {"varchar", "nvarchar", "text", "char", "character varying", "string"}
             for table_key, table_data in list(schema.items())[:20]:
                 sample_cols = []
@@ -160,7 +177,9 @@ async def _auto_schema_refresh(name: str, db_type: str, store):
                     ct = col.get("type", "").lower().split("(")[0]
                     stats = col.get("stats", {})
                     dc = stats.get("distinct_count", 0) if stats else 0
-                    if (dc and dc <= 50) or (ct in _str_types and (cn in _cat_names or cn.endswith("_type") or cn.endswith("_status"))):
+                    if (dc and dc <= 50) or (
+                        ct in _str_types and (cn in _cat_names or cn.endswith("_type") or cn.endswith("_status"))
+                    ):
                         sample_cols.append(col["name"])
                 if sample_cols:
                     try:
@@ -177,11 +196,25 @@ async def _auto_schema_refresh(name: str, db_type: str, store):
 # Helper: connection error hints
 # ---------------------------------------------------------------------------
 
+
 def _connection_error_hint(db_type: str, error_msg: str) -> str:
     """Generate actionable error hints based on DB type and error message."""
     err_lower = error_msg.lower()
 
-    if any(kw in err_lower for kw in ("connection refused", "timed out", "unreachable", "no route", "name or service not known", "getaddrinfo", "name resolution", "errno -2", "errno 111")):
+    if any(
+        kw in err_lower
+        for kw in (
+            "connection refused",
+            "timed out",
+            "unreachable",
+            "no route",
+            "name or service not known",
+            "getaddrinfo",
+            "name resolution",
+            "errno -2",
+            "errno 111",
+        )
+    ):
         hints = {
             "postgres": "Check: 1) PostgreSQL is running 2) Port 5432 is open 3) pg_hba.conf allows your IP 4) VPN/SSH tunnel is active if remote",
             "mysql": "Check: 1) MySQL is running 2) Port 3306 is open 3) bind-address includes your IP 4) skip-networking is disabled",
@@ -239,137 +272,259 @@ def _connection_error_hint(db_type: str, error_msg: str) -> str:
 
 _CONNECTOR_TIERS = {
     "postgres": {
-        "tier": 1, "label": "Tier 1 — Full Support",
+        "tier": 1,
+        "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": True,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": True, "parallel_schema": True,
-            "table_sizes": True, "iam_auth": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": True,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": True,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": True,
+            "parallel_schema": True,
+            "table_sizes": True,
+            "iam_auth": True,
         },
     },
     "mysql": {
-        "tier": 1, "label": "Tier 1 — Full Support",
+        "tier": 1,
+        "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "table_sizes": True, "iam_auth": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": True,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "table_sizes": True,
+            "iam_auth": True,
         },
     },
     "snowflake": {
-        "tier": 1, "label": "Tier 1 — Full Support",
+        "tier": 1,
+        "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": True,
-            "key_pair_auth": True, "oauth_auth": True, "warehouse_config": True,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": True,
+            "key_pair_auth": True,
+            "oauth_auth": True,
+            "warehouse_config": True,
             "table_sizes": True,
         },
     },
     "bigquery": {
-        "tier": 1, "label": "Tier 1 — Full Support",
+        "tier": 1,
+        "label": "Tier 1 — Full Support",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": False, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": False, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "partitioning_info": True, "clustering_info": True,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": False,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": False,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "partitioning_info": True,
+            "clustering_info": True,
             "service_account_auth": True,
         },
     },
     "redshift": {
-        "tier": 2, "label": "Tier 2 — Stable",
+        "tier": 2,
+        "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": True,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": True,
-            "dist_sort_keys": True, "iam_auth": True, "table_sizes": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": True,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": True,
+            "dist_sort_keys": True,
+            "iam_auth": True,
+            "table_sizes": True,
         },
     },
     "clickhouse": {
-        "tier": 2, "label": "Tier 2 — Stable",
+        "tier": 2,
+        "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": False, "indexes": False, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "engine_info": True, "sorting_key_info": True,
-            "native_and_http": True, "table_sizes": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": False,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "engine_info": True,
+            "sorting_key_info": True,
+            "native_and_http": True,
+            "table_sizes": True,
         },
     },
     "databricks": {
-        "tier": 2, "label": "Tier 2 — Stable",
+        "tier": 2,
+        "label": "Tier 2 — Stable",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": False,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "unity_catalog": True, "pat_auth": True, "table_sizes": True,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": False,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "unity_catalog": True,
+            "pat_auth": True,
+            "table_sizes": True,
         },
     },
     "mssql": {
-        "tier": 2, "label": "Tier 2 — Stable",
+        "tier": 2,
+        "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": True, "schema_introspection": True,
-            "foreign_keys": True, "indexes": True, "row_counts": True,
-            "column_stats": True, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
-            "table_sizes": True, "azure_ad_auth": True,
+            "ssl": True,
+            "ssh_tunnel": True,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": True,
+            "row_counts": True,
+            "column_stats": True,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
+            "table_sizes": True,
+            "azure_ad_auth": True,
         },
     },
     "trino": {
-        "tier": 2, "label": "Tier 2 — Stable",
+        "tier": 2,
+        "label": "Tier 2 — Stable",
         "features": {
-            "ssl": True, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": True,
-            "connection_pooling": False, "parallel_schema": False,
+            "ssl": True,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": True,
+            "connection_pooling": False,
+            "parallel_schema": False,
             "federated_query": True,
         },
     },
     "duckdb": {
-        "tier": 3, "label": "Tier 3 — Basic",
+        "tier": 3,
+        "label": "Tier 3 — Basic",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": True,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
-            "connection_pooling": False, "parallel_schema": False,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": True,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": False,
+            "connection_pooling": False,
+            "parallel_schema": False,
             "motherduck": True,
         },
     },
     "sqlite": {
-        "tier": 3, "label": "Tier 3 — Basic",
+        "tier": 3,
+        "label": "Tier 3 — Basic",
         "features": {
-            "ssl": False, "ssh_tunnel": False, "schema_introspection": True,
-            "foreign_keys": True, "indexes": False, "row_counts": True,
-            "column_stats": False, "primary_keys": True, "comments": False,
-            "sample_values": True, "read_only_transactions": False,
-            "query_timeout": True, "cost_estimation": False,
-            "connection_pooling": False, "parallel_schema": False,
+            "ssl": False,
+            "ssh_tunnel": False,
+            "schema_introspection": True,
+            "foreign_keys": True,
+            "indexes": False,
+            "row_counts": True,
+            "column_stats": False,
+            "primary_keys": True,
+            "comments": False,
+            "sample_values": True,
+            "read_only_transactions": False,
+            "query_timeout": True,
+            "cost_estimation": False,
+            "connection_pooling": False,
+            "parallel_schema": False,
         },
     },
 }
@@ -379,6 +534,7 @@ _CONNECTOR_TIERS = {
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.get("/connections", dependencies=[RequireScope("read")])
 async def get_connections(store: StoreD):
     return await store.list_connections()
@@ -387,7 +543,8 @@ async def get_connections(store: StoreD):
 @router.post("/connections", status_code=201, dependencies=[RequireScope("write")])
 async def add_connection(conn: ConnectionCreate, store: StoreD, _role: OrgAdmin):
     # Enforce connection limit based on org's plan tier
-    from ..governance.plan_limits import get_org_limits, check_connection_limit
+    from ..governance.plan_limits import check_connection_limit, get_org_limits
+
     plan = await get_org_limits(store.org_id)
     current_connections = await store.list_connections()
     check_connection_limit(len(current_connections), plan)
@@ -500,12 +657,28 @@ async def export_connections(
             "description": conn_dict.get("description", ""),
             "tags": conn_dict.get("tags", []),
         }
-        for field in ("host", "port", "database", "username", "account", "warehouse",
-                       "schema_name", "role", "project", "dataset", "http_path", "catalog",
-                       "location", "maximum_bytes_billed",
-                       "schema_filter_include", "schema_filter_exclude",
-                       "schema_refresh_interval", "connection_timeout", "query_timeout",
-                       "keepalive_interval"):
+        for field in (
+            "host",
+            "port",
+            "database",
+            "username",
+            "account",
+            "warehouse",
+            "schema_name",
+            "role",
+            "project",
+            "dataset",
+            "http_path",
+            "catalog",
+            "location",
+            "maximum_bytes_billed",
+            "schema_filter_include",
+            "schema_filter_exclude",
+            "schema_refresh_interval",
+            "connection_timeout",
+            "query_timeout",
+            "keepalive_interval",
+        ):
             val = conn_dict.get(field)
             if val is not None:
                 entry[field] = val
@@ -562,7 +735,7 @@ async def import_connections(manifest: dict, store: StoreD):
                 continue
             await store.create_connection(conn)
             results["imported"] += 1
-        except Exception as e:
+        except Exception:
             results["errors"].append({"name": name, "error": "Failed to import connection"})
 
     return results
@@ -596,8 +769,11 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
         merged = ConnectionCreate(
             name=name,
             db_type=merged_db_type,
-            **{k: v for k, v in {**existing.model_dump(), **update_data}.items()
-               if k not in ("id", "created_at", "last_used", "status", "name", "db_type")},
+            **{
+                k: v
+                for k, v in {**existing.model_dump(), **update_data}.items()
+                if k not in ("id", "created_at", "last_used", "status", "name", "db_type")
+            },
         )
         errors = _validate_connection_params(merged)
         if errors:
@@ -638,8 +814,20 @@ async def clone_connection(name: str, store: StoreD, new_name: str = Query(..., 
         "db_type": existing.db_type,
         "description": clone_desc,
     }
-    for field in ("host", "port", "database", "username", "account", "warehouse",
-                   "schema_name", "role", "project", "dataset", "http_path", "catalog"):
+    for field in (
+        "host",
+        "port",
+        "database",
+        "username",
+        "account",
+        "warehouse",
+        "schema_name",
+        "role",
+        "project",
+        "dataset",
+        "http_path",
+        "catalog",
+    ):
         val = getattr(existing, field, None)
         if val is not None:
             create_data[field] = val
@@ -671,7 +859,9 @@ async def refresh_connection_schema(name: str, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e)))
@@ -692,7 +882,6 @@ async def refresh_connection_schema(name: str, store: StoreD):
 @router.post("/connections/schema/warmup", dependencies=[RequireScope("write")])
 async def warmup_all_schemas(store: StoreD):
     """Parallel schema warmup for all connections."""
-    from ..models import ConnectionInfo  # noqa: F811 — local import for type hint in inner func
 
     connections = await store.list_connections()
     if not connections:
@@ -710,19 +899,51 @@ async def warmup_all_schemas(store: StoreD):
             return {"name": name, "status": "skipped", "error": "no credentials"}
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+            async with pool_manager.connection(
+                info.db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
                 schema = await connector.get_schema()
                 schema_cache.put(name, schema)
 
                 _categorical_patterns = {
-                    "status", "state", "type", "category", "region", "country",
-                    "city", "gender", "role", "department", "dept", "tier",
-                    "priority", "severity", "channel", "source", "currency",
-                    "payment_method", "payment_type", "order_status", "plan",
-                    "segment", "class", "grade", "level", "phase",
+                    "status",
+                    "state",
+                    "type",
+                    "category",
+                    "region",
+                    "country",
+                    "city",
+                    "gender",
+                    "role",
+                    "department",
+                    "dept",
+                    "tier",
+                    "priority",
+                    "severity",
+                    "channel",
+                    "source",
+                    "currency",
+                    "payment_method",
+                    "payment_type",
+                    "order_status",
+                    "plan",
+                    "segment",
+                    "class",
+                    "grade",
+                    "level",
+                    "phase",
                 }
-                _string_types = {"varchar", "nvarchar", "text", "char", "nchar",
-                                 "character varying", "enum", "string", "String"}
+                _string_types = {
+                    "varchar",
+                    "nvarchar",
+                    "text",
+                    "char",
+                    "nchar",
+                    "character varying",
+                    "enum",
+                    "string",
+                    "String",
+                }
                 sample_count = 0
                 for table_key, table_data in list(schema.items())[:30]:
                     if schema_cache.get_sample_values(name, table_key) is not None:
@@ -740,13 +961,15 @@ async def warmup_all_schemas(store: StoreD):
                             low_card_cols.append(col_name)
                         elif not stats and col_type in _string_types:
                             col_lower = col_name.lower()
-                            if col_lower in _categorical_patterns or col_lower.endswith("_type") or col_lower.endswith("_status"):
+                            if (
+                                col_lower in _categorical_patterns
+                                or col_lower.endswith("_type")
+                                or col_lower.endswith("_status")
+                            ):
                                 low_card_cols.append(col_name)
                     if low_card_cols:
                         try:
-                            samples = await connector.get_sample_values(
-                                table_key, low_card_cols[:10], limit=5
-                            )
+                            samples = await connector.get_sample_values(table_key, low_card_cols[:10], limit=5)
                             if samples:
                                 schema_cache.put_sample_values(name, table_key, samples)
                                 sample_count += len(samples)
@@ -755,8 +978,7 @@ async def warmup_all_schemas(store: StoreD):
 
             now = time.time()
             await store.update_connection(name, ConnectionUpdate(last_schema_refresh=now))
-            return {"name": name, "status": "ok", "table_count": len(schema),
-                    "sample_columns": sample_count}
+            return {"name": name, "status": "ok", "table_count": len(schema), "sample_columns": sample_count}
         except Exception as e:
             return {"name": name, "status": "error", "error": sanitize_db_error(str(e))[:200]}
 
@@ -785,6 +1007,7 @@ async def parse_url_endpoint(_: UserID, request: Request):
         raise HTTPException(status_code=422, detail="URL must be at most 4096 characters")
 
     from ..url_parser import parse_connection_url
+
     result = parse_connection_url(url, db_type=body.get("db_type", ""))
     if not result:
         raise HTTPException(status_code=400, detail="Could not parse URL")
@@ -827,13 +1050,27 @@ async def test_credentials(_: UserID, request: Request):
         }
 
     extras = _extract_credential_extras(conn)
-    for field_name in ("auth_method", "oauth_access_token", "impersonate_service_account",
-                       "private_key", "private_key_passphrase",
-                       "oauth_client_id", "oauth_client_secret",
-                       "jwt_token", "client_cert", "client_key", "kerberos_config",
-                       "aws_region", "aws_access_key_id", "aws_secret_access_key",
-                       "cluster_id", "workgroup",
-                       "azure_tenant_id", "azure_client_id", "azure_client_secret"):
+    for field_name in (
+        "auth_method",
+        "oauth_access_token",
+        "impersonate_service_account",
+        "private_key",
+        "private_key_passphrase",
+        "oauth_client_id",
+        "oauth_client_secret",
+        "jwt_token",
+        "client_cert",
+        "client_key",
+        "kerberos_config",
+        "aws_region",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "cluster_id",
+        "workgroup",
+        "azure_tenant_id",
+        "azure_client_id",
+        "azure_client_secret",
+    ):
         val = body.get(field_name)
         if val and field_name not in extras:
             extras[field_name] = val
@@ -849,11 +1086,14 @@ async def test_credentials(_: UserID, request: Request):
     t1 = time.monotonic()
     is_embedded = db_type in ("duckdb", "sqlite", "bigquery")
     if is_embedded:
-        phases.append({
-            "phase": "network", "status": "skipped",
-            "message": f"{db_type} does not require network connectivity check",
-            "duration_ms": 0,
-        })
+        phases.append(
+            {
+                "phase": "network",
+                "status": "skipped",
+                "message": f"{db_type} does not require network connectivity check",
+                "duration_ms": 0,
+            }
+        )
     else:
         try:
             parsed = urlparse(conn_str if "://" in conn_str else f"dummy://{conn_str}")
@@ -878,53 +1118,72 @@ async def test_credentials(_: UserID, request: Request):
             try:
                 sock.connect((connect_ip, int(port)))
                 sock.close()
-                phases.append({
-                    "phase": "network", "status": "ok",
-                    "message": f"TCP connection to {host}:{port} succeeded",
-                    "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-                })
-            except (socket.timeout, socket.error, OSError) as e:
-                phases.append({
-                    "phase": "network", "status": "error",
-                    "message": f"Cannot reach {host}:{port} — {str(e)[:100]}",
-                    "hint": _connection_error_hint(db_type, str(e)),
-                    "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-                })
+                phases.append(
+                    {
+                        "phase": "network",
+                        "status": "ok",
+                        "message": f"TCP connection to {host}:{port} succeeded",
+                        "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+                    }
+                )
+            except (TimeoutError, OSError) as e:
+                phases.append(
+                    {
+                        "phase": "network",
+                        "status": "error",
+                        "message": f"Cannot reach {host}:{port} — {str(e)[:100]}",
+                        "hint": _connection_error_hint(db_type, str(e)),
+                        "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+                    }
+                )
                 return {
-                    "status": "error", "message": f"Network unreachable: {host}:{port}",
-                    "phases": phases, "total_duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                    "status": "error",
+                    "message": f"Network unreachable: {host}:{port}",
+                    "phases": phases,
+                    "total_duration_ms": round((time.monotonic() - t0) * 1000, 1),
                 }
         except Exception:
-            phases.append({
-                "phase": "network", "status": "warning",
-                "message": "Could not verify network connectivity",
-                "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-            })
+            phases.append(
+                {
+                    "phase": "network",
+                    "status": "warning",
+                    "message": "Could not verify network connectivity",
+                    "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+                }
+            )
 
     # Phase 2: Database connection / file access
     t2 = time.monotonic()
     phase2_label = "file_access" if is_embedded else "authentication"
     try:
-        async with pool_manager.connection(db_type, conn_str, credential_extras=extras, connection_name=conn.name) as connector:
+        async with pool_manager.connection(
+            db_type, conn_str, credential_extras=extras, connection_name=conn.name
+        ) as connector:
             ok = await connector.health_check()
             if ok:
                 msg = "File found and readable" if is_embedded else "Authenticated and connected successfully"
-                phases.append({
-                    "phase": phase2_label, "status": "ok",
-                    "message": msg,
-                    "duration_ms": round((time.monotonic() - t2) * 1000, 1),
-                })
+                phases.append(
+                    {
+                        "phase": phase2_label,
+                        "status": "ok",
+                        "message": msg,
+                        "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+                    }
+                )
 
                 # Phase 3: Schema access
                 t3 = time.monotonic()
                 try:
                     schema = await connector.get_schema()
                     table_count = len(schema) if schema else 0
-                    phases.append({
-                        "phase": "schema_access", "status": "ok",
-                        "message": f"Schema access verified — {table_count} tables found",
-                        "duration_ms": round((time.monotonic() - t3) * 1000, 1),
-                    })
+                    phases.append(
+                        {
+                            "phase": "schema_access",
+                            "status": "ok",
+                            "message": f"Schema access verified — {table_count} tables found",
+                            "duration_ms": round((time.monotonic() - t3) * 1000, 1),
+                        }
+                    )
                 except Exception as e:
                     schema_hints = {
                         "postgres": "Grant SELECT on information_schema.tables and information_schema.columns to this user",
@@ -936,28 +1195,43 @@ async def test_credentials(_: UserID, request: Request):
                         "databricks": "Grant USE CATALOG, USE SCHEMA, and SELECT on tables to this user/principal",
                         "redshift": "Grant SELECT on SVV_TABLE_INFO and pg_table_def to this user",
                     }
-                    phases.append({
-                        "phase": "schema_access", "status": "warning",
-                        "message": f"Connected but schema access limited: {sanitize_db_error(str(e))}",
-                        "hint": schema_hints.get(db_type, "Check SELECT permissions on information_schema or system tables"),
-                        "duration_ms": round((time.monotonic() - t3) * 1000, 1),
-                    })
+                    phases.append(
+                        {
+                            "phase": "schema_access",
+                            "status": "warning",
+                            "message": f"Connected but schema access limited: {sanitize_db_error(str(e))}",
+                            "hint": schema_hints.get(
+                                db_type, "Check SELECT permissions on information_schema or system tables"
+                            ),
+                            "duration_ms": round((time.monotonic() - t3) * 1000, 1),
+                        }
+                    )
             else:
-                fail_msg = "File not found or not readable" if is_embedded else "Connection established but health check failed"
-                phases.append({
-                    "phase": phase2_label, "status": "error",
-                    "message": fail_msg,
-                    "duration_ms": round((time.monotonic() - t2) * 1000, 1),
-                })
+                fail_msg = (
+                    "File not found or not readable"
+                    if is_embedded
+                    else "Connection established but health check failed"
+                )
+                phases.append(
+                    {
+                        "phase": phase2_label,
+                        "status": "error",
+                        "message": fail_msg,
+                        "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+                    }
+                )
     except Exception as e:
         err_msg = sanitize_db_error(str(e))
         fail_prefix = "File access failed" if is_embedded else "Authentication failed"
-        phases.append({
-            "phase": phase2_label, "status": "error",
-            "message": f"{fail_prefix}: {err_msg}",
-            "hint": _connection_error_hint(db_type, str(e)),
-            "duration_ms": round((time.monotonic() - t2) * 1000, 1),
-        })
+        phases.append(
+            {
+                "phase": phase2_label,
+                "status": "error",
+                "message": f"{fail_prefix}: {err_msg}",
+                "hint": _connection_error_hint(db_type, str(e)),
+                "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+            }
+        )
 
     all_ok = all(p["status"] in ("ok", "skipped") for p in phases)
     return {
@@ -990,16 +1264,16 @@ async def validate_connection_url(_: UserID, body: dict):
             if db_type == "clickhouse":
                 for prefix in ("clickhouse+https://", "clickhouse+http://", "clickhouses://", "clickhouse://"):
                     if normalized.startswith(prefix):
-                        normalized = "http://" + normalized[len(prefix):]
+                        normalized = "http://" + normalized[len(prefix) :]
                         break
             elif db_type == "redshift" and normalized.startswith("redshift://"):
-                normalized = "postgresql://" + normalized[len("redshift://"):]
+                normalized = "postgresql://" + normalized[len("redshift://") :]
             elif db_type == "mysql" and normalized.startswith("mysql+pymysql://"):
-                normalized = "http://" + normalized[len("mysql+pymysql://"):]
+                normalized = "http://" + normalized[len("mysql+pymysql://") :]
             elif db_type == "mssql":
                 for prefix in ("mssql://", "mssql+pymssql://", "sqlserver://"):
                     if normalized.startswith(prefix):
-                        normalized = "http://" + normalized[len(prefix):]
+                        normalized = "http://" + normalized[len(prefix) :]
                         break
 
             parsed = urlparse(normalized)
@@ -1021,9 +1295,9 @@ async def validate_connection_url(_: UserID, body: dict):
         elif db_type == "trino":
             normalized = url
             if normalized.startswith("trino://"):
-                normalized = "http://" + normalized[len("trino://"):]
+                normalized = "http://" + normalized[len("trino://") :]
             elif normalized.startswith("trino+https://"):
-                normalized = "http://" + normalized[len("trino+https://"):]
+                normalized = "http://" + normalized[len("trino+https://") :]
             parsed = urlparse(normalized)
             path_parts = [p for p in (parsed.path or "").split("/") if p]
             parsed_info["host"] = parsed.hostname or ""
@@ -1189,7 +1463,11 @@ async def test_connection(name: str, store: StoreD):
 
     conn_str = await store.get_connection_string(name)
     if not conn_str:
-        return {"status": "error", "phase": "credentials", "message": "No credentials stored (restart gateway to reload)"}
+        return {
+            "status": "error",
+            "phase": "credentials",
+            "message": "No credentials stored (restart gateway to reload)",
+        }
 
     extras = await store.get_credential_extras(name)
     phases: list[dict] = []
@@ -1202,21 +1480,27 @@ async def test_connection(name: str, store: StoreD):
     )
     if has_tunnel:
         try:
-            from ..connectors.ssh_tunnel import SSHTunnel
             from ..connectors.pool_manager import _extract_host_port
+
             ssh_config = extras["ssh_tunnel"]
             remote_host, remote_port = _extract_host_port(conn_str, info.db_type)
-            phases.append({
-                "phase": "ssh_tunnel", "status": "ok",
-                "message": f"SSH tunnel config valid: {ssh_config.get('username')}@{ssh_config.get('host')}:{ssh_config.get('port', 22)}",
-                "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-            })
+            phases.append(
+                {
+                    "phase": "ssh_tunnel",
+                    "status": "ok",
+                    "message": f"SSH tunnel config valid: {ssh_config.get('username')}@{ssh_config.get('host')}:{ssh_config.get('port', 22)}",
+                    "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                }
+            )
         except Exception as e:
-            phases.append({
-                "phase": "ssh_tunnel", "status": "error",
-                "message": sanitize_db_error(str(e)),
-                "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-            })
+            phases.append(
+                {
+                    "phase": "ssh_tunnel",
+                    "status": "error",
+                    "message": sanitize_db_error(str(e)),
+                    "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                }
+            )
             return {"status": "error", "phases": phases, "message": f"SSH tunnel failed: {sanitize_db_error(str(e))}"}
 
     t1 = time.monotonic()
@@ -1244,6 +1528,7 @@ async def test_connection(name: str, store: StoreD):
                     vrows = await connector.execute(vq)
                     if vrows:
                         import re as _re_ver
+
                         raw = str(list(vrows[0].values())[0]).split("\n")[0]
                         ver_match = _re_ver.match(r"([\w\s]+?\d+[\d.]+)", raw)
                         db_version = ver_match.group(1).strip() if ver_match else raw[:60]
@@ -1257,7 +1542,14 @@ async def test_connection(name: str, store: StoreD):
                     msg += f" ({db_version})"
                 phases.append({"phase": "database", "status": "ok", "message": msg, "duration_ms": phase2_duration})
             else:
-                phases.append({"phase": "database", "status": "error", "message": "Health check failed after connection", "duration_ms": phase2_duration})
+                phases.append(
+                    {
+                        "phase": "database",
+                        "status": "error",
+                        "message": "Health check failed after connection",
+                        "duration_ms": phase2_duration,
+                    }
+                )
                 return {"status": "error", "phases": phases, "message": "Health check failed"}
 
             t2 = time.monotonic()
@@ -1267,33 +1559,45 @@ async def test_connection(name: str, store: StoreD):
                 phase3_duration = round((time.monotonic() - t2) * 1000, 1)
                 if table_count > 0:
                     sample_tables = list(schema.keys())[:5]
-                    phases.append({
-                        "phase": "schema_access", "status": "ok",
-                        "message": f"Schema readable: {table_count} tables found",
-                        "sample_tables": sample_tables,
-                        "duration_ms": phase3_duration,
-                    })
+                    phases.append(
+                        {
+                            "phase": "schema_access",
+                            "status": "ok",
+                            "message": f"Schema readable: {table_count} tables found",
+                            "sample_tables": sample_tables,
+                            "duration_ms": phase3_duration,
+                        }
+                    )
                     schema_cache.put(name, schema)
                 else:
-                    phases.append({
-                        "phase": "schema_access", "status": "warning",
-                        "message": "Connected but no tables found — check permissions or database contents",
-                        "duration_ms": phase3_duration,
-                    })
+                    phases.append(
+                        {
+                            "phase": "schema_access",
+                            "status": "warning",
+                            "message": "Connected but no tables found — check permissions or database contents",
+                            "duration_ms": phase3_duration,
+                        }
+                    )
             except Exception as e:
-                phases.append({
-                    "phase": "schema_access", "status": "warning",
-                    "message": f"Schema access limited: {sanitize_db_error(str(e))}",
-                    "duration_ms": round((time.monotonic() - t2) * 1000, 1),
-                })
+                phases.append(
+                    {
+                        "phase": "schema_access",
+                        "status": "warning",
+                        "message": f"Schema access limited: {sanitize_db_error(str(e))}",
+                        "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+                    }
+                )
         finally:
             await pool_manager.release(info.db_type, conn_str)
     except Exception as e:
-        phases.append({
-            "phase": "database", "status": "error",
-            "message": sanitize_db_error(str(e), db_type=info.db_type),
-            "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-        })
+        phases.append(
+            {
+                "phase": "database",
+                "status": "error",
+                "message": sanitize_db_error(str(e), db_type=info.db_type),
+                "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+            }
+        )
         return {"status": "error", "phases": phases, "message": sanitize_db_error(str(e), db_type=info.db_type)}
 
     total_ms = round((time.monotonic() - t0) * 1000, 1)
@@ -1308,7 +1612,9 @@ async def test_connection(name: str, store: StoreD):
     return {
         "status": overall_status,
         "phases": phases,
-        "message": "All connection tests passed" if overall_status == "healthy" else "Connection works but with warnings",
+        "message": "All connection tests passed"
+        if overall_status == "healthy"
+        else "Connection works but with warnings",
         "total_duration_ms": total_ms,
     }
 
@@ -1362,6 +1668,7 @@ async def network_info(_: UserID):
 
     try:
         import urllib.request
+
         public_ip = urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode().strip()
         result["public_ip"] = public_ip
     except Exception:
@@ -1404,32 +1711,45 @@ async def diagnose_connection(name: str, store: StoreD):
             connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
             try:
                 ok = await connector.health_check()
-                diagnostics.append({
-                    "check": "local_access",
-                    "status": "ok" if ok else "error",
-                    "message": "Local database accessible" if ok else "Health check failed",
-                    "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-                })
+                diagnostics.append(
+                    {
+                        "check": "local_access",
+                        "status": "ok" if ok else "error",
+                        "message": "Local database accessible" if ok else "Health check failed",
+                        "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                    }
+                )
             finally:
                 await pool_manager.release(info.db_type, conn_str)
         except Exception as e:
-            diagnostics.append({
-                "check": "local_access", "status": "error",
-                "message": f"Cannot access database: {sanitize_db_error(str(e), db_type=info.db_type)}",
-                "hint": "Check the file path exists and is readable",
-                "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-            })
+            diagnostics.append(
+                {
+                    "check": "local_access",
+                    "status": "error",
+                    "message": f"Cannot access database: {sanitize_db_error(str(e), db_type=info.db_type)}",
+                    "hint": "Check the file path exists and is readable",
+                    "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                }
+            )
         return {"host": "localhost", "port": 0, "diagnostics": diagnostics}
 
     host, port = "", 0
     try:
-        normalized = _re.sub(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://', 'http://', conn_str)
+        normalized = _re.sub(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", "http://", conn_str)
         parsed = urlparse(normalized)
         host = parsed.hostname or ""
         _default_ports = {
-            "postgres": 5432, "mysql": 3306, "mssql": 1433, "redshift": 5439,
-            "snowflake": 443, "bigquery": 443, "clickhouse": 9000,
-            "databricks": 443, "trino": 8080, "duckdb": 0, "sqlite": 0,
+            "postgres": 5432,
+            "mysql": 3306,
+            "mssql": 1433,
+            "redshift": 5439,
+            "snowflake": 443,
+            "bigquery": 443,
+            "clickhouse": 9000,
+            "databricks": 443,
+            "trino": 8080,
+            "duckdb": 0,
+            "sqlite": 0,
         }
         port = parsed.port or _default_ports.get(info.db_type, 0)
     except Exception:
@@ -1445,18 +1765,24 @@ async def diagnose_connection(name: str, store: StoreD):
     try:
         ips = await asyncio.to_thread(socket.getaddrinfo, host, port, socket.AF_INET)
         resolved_ips = list(set(i[4][0] for i in ips))
-        diagnostics.append({
-            "check": "dns", "status": "ok",
-            "message": f"Resolved {host} -> {', '.join(resolved_ips)}",
-            "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-        })
+        diagnostics.append(
+            {
+                "check": "dns",
+                "status": "ok",
+                "message": f"Resolved {host} -> {', '.join(resolved_ips)}",
+                "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+            }
+        )
     except socket.gaierror as e:
-        diagnostics.append({
-            "check": "dns", "status": "error",
-            "message": f"DNS resolution failed for {host}: {str(e)[:100]}",
-            "hint": "Check the hostname spelling and ensure DNS is configured correctly",
-            "duration_ms": round((time.monotonic() - t0) * 1000, 1),
-        })
+        diagnostics.append(
+            {
+                "check": "dns",
+                "status": "error",
+                "message": f"DNS resolution failed for {host}: {str(e)[:100]}",
+                "hint": "Check the hostname spelling and ensure DNS is configured correctly",
+                "duration_ms": round((time.monotonic() - t0) * 1000, 1),
+            }
+        )
         return {"host": host, "port": port, "diagnostics": diagnostics}
 
     # 2. TCP connectivity
@@ -1466,29 +1792,40 @@ async def diagnose_connection(name: str, store: StoreD):
         sock.settimeout(5)
         await asyncio.to_thread(sock.connect, (host, port))
         sock.close()
-        diagnostics.append({
-            "check": "tcp", "status": "ok",
-            "message": f"TCP connection to {host}:{port} succeeded",
-            "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-        })
-    except (socket.timeout, ConnectionRefusedError, OSError) as e:
-        diagnostics.append({
-            "check": "tcp", "status": "error",
-            "message": f"TCP connection to {host}:{port} failed: {str(e)[:100]}",
-            "hint": "Check firewall rules, security groups, and ensure the database is running and accepting connections on this port",
-            "duration_ms": round((time.monotonic() - t1) * 1000, 1),
-        })
+        diagnostics.append(
+            {
+                "check": "tcp",
+                "status": "ok",
+                "message": f"TCP connection to {host}:{port} succeeded",
+                "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+            }
+        )
+    except (TimeoutError, ConnectionRefusedError, OSError) as e:
+        diagnostics.append(
+            {
+                "check": "tcp",
+                "status": "error",
+                "message": f"TCP connection to {host}:{port} failed: {str(e)[:100]}",
+                "hint": "Check firewall rules, security groups, and ensure the database is running and accepting connections on this port",
+                "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+            }
+        )
         return {"host": host, "port": port, "diagnostics": diagnostics}
 
     # 3. TLS handshake
     ssl_db_types = {"postgres", "mysql", "redshift", "snowflake", "bigquery", "databricks", "clickhouse", "mssql"}
     extras = await store.get_credential_extras(name)
-    ssl_enabled = extras.get("ssl_config", {}).get("enabled", False) or info.db_type in ("snowflake", "bigquery", "databricks")
+    ssl_enabled = extras.get("ssl_config", {}).get("enabled", False) or info.db_type in (
+        "snowflake",
+        "bigquery",
+        "databricks",
+    )
 
     if info.db_type in ssl_db_types and ssl_enabled:
         t2 = time.monotonic()
         try:
             import ssl
+
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
@@ -1498,18 +1835,24 @@ async def diagnose_connection(name: str, store: StoreD):
             cert = tls_sock.getpeercert(binary_form=False) or {}
             tls_version = tls_sock.version()
             tls_sock.close()
-            diagnostics.append({
-                "check": "tls", "status": "ok",
-                "message": f"TLS handshake succeeded ({tls_version})",
-                "duration_ms": round((time.monotonic() - t2) * 1000, 1),
-            })
+            diagnostics.append(
+                {
+                    "check": "tls",
+                    "status": "ok",
+                    "message": f"TLS handshake succeeded ({tls_version})",
+                    "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+                }
+            )
         except Exception as e:
-            diagnostics.append({
-                "check": "tls", "status": "warning",
-                "message": f"TLS handshake issue: {str(e)[:100]}",
-                "hint": "The database may not support TLS on this port, or certificates may be misconfigured",
-                "duration_ms": round((time.monotonic() - t2) * 1000, 1),
-            })
+            diagnostics.append(
+                {
+                    "check": "tls",
+                    "status": "warning",
+                    "message": f"TLS handshake issue: {str(e)[:100]}",
+                    "hint": "The database may not support TLS on this port, or certificates may be misconfigured",
+                    "duration_ms": round((time.monotonic() - t2) * 1000, 1),
+                }
+            )
 
     # 4. Database-level auth test
     t3 = time.monotonic()
@@ -1517,21 +1860,28 @@ async def diagnose_connection(name: str, store: StoreD):
         connector = await pool_manager.acquire(info.db_type, conn_str, credential_extras=extras)
         try:
             ok = await connector.health_check()
-            diagnostics.append({
-                "check": "auth",
-                "status": "ok" if ok else "error",
-                "message": "Authentication and basic query succeeded" if ok else "Auth succeeded but health check failed",
-                "duration_ms": round((time.monotonic() - t3) * 1000, 1),
-            })
+            diagnostics.append(
+                {
+                    "check": "auth",
+                    "status": "ok" if ok else "error",
+                    "message": "Authentication and basic query succeeded"
+                    if ok
+                    else "Auth succeeded but health check failed",
+                    "duration_ms": round((time.monotonic() - t3) * 1000, 1),
+                }
+            )
         finally:
             await pool_manager.release(info.db_type, conn_str)
     except Exception as e:
-        diagnostics.append({
-            "check": "auth", "status": "error",
-            "message": f"Authentication failed: {sanitize_db_error(str(e), db_type=info.db_type)}",
-            "hint": "Verify username, password, and that the user has permission to connect",
-            "duration_ms": round((time.monotonic() - t3) * 1000, 1),
-        })
+        diagnostics.append(
+            {
+                "check": "auth",
+                "status": "error",
+                "message": f"Authentication failed: {sanitize_db_error(str(e), db_type=info.db_type)}",
+                "hint": "Verify username, password, and that the user has permission to connect",
+                "duration_ms": round((time.monotonic() - t3) * 1000, 1),
+            }
+        )
 
     return {"host": host, "port": port, "diagnostics": diagnostics}
 
@@ -1546,23 +1896,31 @@ async def get_connector_capabilities(_: UserID, db_type: str | None = None):
         feature_count = sum(1 for v in info["features"].values() if v)
         total_features = len(info["features"])
         return {
-            "db_type": db_type, **info,
+            "db_type": db_type,
+            **info,
             "feature_score": round(feature_count / total_features * 100),
-            "feature_count": feature_count, "total_features": total_features,
+            "feature_count": feature_count,
+            "total_features": total_features,
         }
 
     tiers: dict[int, list] = {1: [], 2: [], 3: []}
     for dt, info in _CONNECTOR_TIERS.items():
         feature_count = sum(1 for v in info["features"].values() if v)
         total_features = len(info["features"])
-        tiers[info["tier"]].append({
-            "db_type": dt, **info,
-            "feature_score": round(feature_count / total_features * 100),
-            "feature_count": feature_count, "total_features": total_features,
-        })
+        tiers[info["tier"]].append(
+            {
+                "db_type": dt,
+                **info,
+                "feature_score": round(feature_count / total_features * 100),
+                "feature_count": feature_count,
+                "total_features": total_features,
+            }
+        )
 
     return {
-        "tier_1": tiers[1], "tier_2": tiers[2], "tier_3": tiers[3],
+        "tier_1": tiers[1],
+        "tier_2": tiers[2],
+        "tier_3": tiers[3],
         "total_connectors": len(_CONNECTOR_TIERS),
     }
 

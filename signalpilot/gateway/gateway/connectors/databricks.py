@@ -39,7 +39,7 @@ class DatabricksConnector(BaseConnector):
 
     @property
     def _identifier_quote(self) -> str:
-        return '`'
+        return "`"
 
     def set_credential_extras(self, extras: dict) -> None:
         """Store structured credential data for connection."""
@@ -54,15 +54,19 @@ class DatabricksConnector(BaseConnector):
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_DATABRICKS:
-            raise RuntimeError(
-                "databricks-sql-connector not installed. "
-                "Run: pip install databricks-sql-connector"
-            )
+            raise RuntimeError("databricks-sql-connector not installed. Run: pip install databricks-sql-connector")
         params = self._parse_connection(connection_string)
         # Merge credential_extras (takes precedence)
         if self._credential_extras:
-            for key in ("http_path", "access_token", "catalog", "schema_name",
-                        "auth_method", "oauth_client_id", "oauth_client_secret"):
+            for key in (
+                "http_path",
+                "access_token",
+                "catalog",
+                "schema_name",
+                "auth_method",
+                "oauth_client_id",
+                "oauth_client_secret",
+            ):
                 val = self._credential_extras.get(key)
                 if val:
                     target = "schema" if key == "schema_name" else key
@@ -93,6 +97,7 @@ class DatabricksConnector(BaseConnector):
                 )
             try:
                 from databricks.sdk.core import oauth_service_principal
+
                 credentials_provider = oauth_service_principal(
                     host=f"https://{params['host']}",
                     client_id=client_id,
@@ -103,6 +108,7 @@ class DatabricksConnector(BaseConnector):
                 # Fallback: try using databricks-sdk's Config
                 try:
                     from databricks.sdk.core import Config
+
                     config = Config(
                         host=f"https://{params['host']}",
                         client_id=client_id,
@@ -110,23 +116,18 @@ class DatabricksConnector(BaseConnector):
                     )
                     connect_args["credentials_provider"] = config.authenticate
                 except ImportError:
-                    raise RuntimeError(
-                        "OAuth M2M requires databricks-sdk. "
-                        "Run: pip install databricks-sdk"
-                    )
+                    raise RuntimeError("OAuth M2M requires databricks-sdk. Run: pip install databricks-sdk")
             logger.info("Databricks: using OAuth M2M (service principal) auth")
         elif auth_method == "oauth_u2m":
             # OAuth User-to-Machine — browser-based, for interactive use
             try:
                 from databricks.sdk.core import Config
+
                 config = Config(host=f"https://{params['host']}", auth_type="external-browser")
                 connect_args["credentials_provider"] = config.authenticate
                 logger.info("Databricks: using OAuth U2M (browser) auth")
             except ImportError:
-                raise RuntimeError(
-                    "OAuth U2M requires databricks-sdk. "
-                    "Run: pip install databricks-sdk"
-                )
+                raise RuntimeError("OAuth U2M requires databricks-sdk. Run: pip install databricks-sdk")
         else:
             # PAT (Personal Access Token) — default
             if not params.get("access_token"):
@@ -159,7 +160,7 @@ class DatabricksConnector(BaseConnector):
         - host only (use with credential_extras)
         """
         if conn_str.startswith("databricks://"):
-            inner = conn_str[len("databricks://"):]
+            inner = conn_str[len("databricks://") :]
 
             # Pipe-delimited format (legacy)
             if "|" in inner:
@@ -173,7 +174,8 @@ class DatabricksConnector(BaseConnector):
                 }
 
             # URL format: databricks://token@host/http_path?catalog=CAT&schema=SCH
-            from urllib.parse import urlparse, unquote, parse_qs
+            from urllib.parse import parse_qs, unquote, urlparse
+
             parsed = urlparse(conn_str)
             query = parse_qs(parsed.query or "")
             return {
@@ -202,7 +204,9 @@ class DatabricksConnector(BaseConnector):
             self._conn = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -231,6 +235,7 @@ class DatabricksConnector(BaseConnector):
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
+
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -270,13 +275,15 @@ class DatabricksConnector(BaseConnector):
                         "foreign_keys": [],
                         "row_count": 0,
                     }
-                schema[key]["columns"].append({
-                    "name": row[2],
-                    "type": row[3] or "string",
-                    "nullable": row[4] == "YES" if row[4] else True,
-                    "primary_key": False,
-                    "comment": row[7] or "" if len(row) > 7 else "",
-                })
+                schema[key]["columns"].append(
+                    {
+                        "name": row[2],
+                        "type": row[3] or "string",
+                        "nullable": row[4] == "YES" if row[4] else True,
+                        "primary_key": False,
+                        "comment": row[7] or "" if len(row) > 7 else "",
+                    }
+                )
             cursor.close()
 
             # Try to get table-level metadata (type, row counts)
@@ -331,6 +338,7 @@ class DatabricksConnector(BaseConnector):
                 pk_cursor.close()
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).debug("PK query not supported: %s", e)
 
             # Foreign keys via referential_constraints (Unity Catalog)
@@ -363,22 +371,22 @@ class DatabricksConnector(BaseConnector):
                     if key in schema:
                         if "foreign_keys" not in schema[key]:
                             schema[key]["foreign_keys"] = []
-                        schema[key]["foreign_keys"].append({
-                            "column": row[2],
-                            "references_schema": row[3],
-                            "references_table": row[4],
-                            "references_column": row[5],
-                        })
+                        schema[key]["foreign_keys"].append(
+                            {
+                                "column": row[2],
+                                "references_schema": row[3],
+                                "references_table": row[4],
+                                "references_column": row[5],
+                            }
+                        )
                 fk_cursor.close()
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).debug("FK query not supported: %s", e)
 
             # Row counts via DESCRIBE DETAIL (Delta tables — batch up to 50 tables)
-            tables_to_detail = [
-                (k, v) for k, v in schema.items()
-                if v.get("type") != "view"
-            ][:50]
+            tables_to_detail = [(k, v) for k, v in schema.items() if v.get("type") != "view"][:50]
             for key, table_data in tables_to_detail:
                 try:
                     rc_cursor = self._conn.cursor()
@@ -403,9 +411,8 @@ class DatabricksConnector(BaseConnector):
             return schema
         except Exception as e:
             import logging
-            logging.getLogger(__name__).info(
-                "information_schema not available, falling back to SHOW/DESCRIBE: %s", e
-            )
+
+            logging.getLogger(__name__).info("information_schema not available, falling back to SHOW/DESCRIBE: %s", e)
 
         # Fallback: SHOW TABLES + DESCRIBE TABLE (legacy Hive metastore)
         try:
@@ -446,13 +453,15 @@ class DatabricksConnector(BaseConnector):
                         comment = cr[2] if len(cr) > 2 else ""
                         if col_name.startswith("#") or col_name == "":
                             continue
-                        columns.append({
-                            "name": col_name,
-                            "type": col_type,
-                            "nullable": True,
-                            "primary_key": False,
-                            "comment": comment or "",
-                        })
+                        columns.append(
+                            {
+                                "name": col_name,
+                                "type": col_type,
+                                "nullable": True,
+                                "primary_key": False,
+                                "comment": comment or "",
+                            }
+                        )
                     schema[key] = {
                         "schema": schema_name,
                         "name": table_name,
@@ -468,10 +477,11 @@ class DatabricksConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         try:
-            sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            sql = self._build_sample_union_sql(table, columns, limit, quote="`")
             cursor = self._conn.cursor()
             t0 = _time.monotonic()
             cursor.execute(sql)
@@ -487,7 +497,9 @@ class DatabricksConnector(BaseConnector):
                 try:
                     cursor = self._conn.cursor()
                     safe_col = self._quote_identifier(col)
-                    _col_sql = f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
+                    _col_sql = (
+                        f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
+                    )
                     t0 = _time.monotonic()
                     cursor.execute(_col_sql)
                     rows = cursor.fetchall()

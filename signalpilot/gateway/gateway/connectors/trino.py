@@ -116,9 +116,7 @@ class TrinoConnector(BaseConnector):
             cert_path = self._write_ssl_temp_file(cert_pem, chmod=0o600)
             key_path = self._write_ssl_temp_file(key_pem, chmod=0o600) if key_pem else None
             connect_kwargs["http_scheme"] = "https"
-            connect_kwargs["auth"] = trino_lib.auth.CertificateAuthentication(
-                cert_path, key_path
-            )
+            connect_kwargs["auth"] = trino_lib.auth.CertificateAuthentication(cert_path, key_path)
 
         elif auth_method == "kerberos":
             krb_config = self._kerberos_config or {}
@@ -137,9 +135,7 @@ class TrinoConnector(BaseConnector):
 
         elif has_password:
             connect_kwargs["http_scheme"] = "https"
-            connect_kwargs["auth"] = trino_lib.auth.BasicAuthentication(
-                params["username"], params["password"]
-            )
+            connect_kwargs["auth"] = trino_lib.auth.BasicAuthentication(params["username"], params["password"])
 
         # Request timeout for all queries — from URL param or credential extras
         if params.get("request_timeout"):
@@ -155,20 +151,19 @@ class TrinoConnector(BaseConnector):
                 raise RuntimeError(f"Authentication failed: {e}") from e
             elif "connection refused" in err_str or "connect" in err_str:
                 raise RuntimeError(
-                    f"Connection failed: cannot connect to Trino at "
-                    f"{params.get('host', '')}:{params.get('port', 8080)}"
+                    f"Connection failed: cannot connect to Trino at {params.get('host', '')}:{params.get('port', 8080)}"
                 ) from e
             raise RuntimeError(f"Trino connection error: {e}") from e
 
     def _parse_connection(self, conn_str: str) -> dict:
         """Parse trino://user@host:port/catalog/schema?param=value."""
         if conn_str.startswith("trino://") or conn_str.startswith("trino+https://"):
-            from urllib.parse import urlparse, unquote, parse_qs
+            from urllib.parse import parse_qs, unquote, urlparse
 
             # Handle trino+https:// scheme for SSL without password
             use_https = conn_str.startswith("trino+https://")
             if use_https:
-                conn_str = "trino://" + conn_str[len("trino+https://"):]
+                conn_str = "trino://" + conn_str[len("trino+https://") :]
 
             parsed = urlparse(conn_str)
             path_parts = [p for p in (parsed.path or "").split("/") if p]
@@ -210,7 +205,9 @@ class TrinoConnector(BaseConnector):
             self._conn = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -244,6 +241,7 @@ class TrinoConnector(BaseConnector):
     async def _get_schema_impl(self) -> dict[str, Any]:
         """Fetch schema using information_schema (fast batch) with SHOW COLUMNS fallback."""
         import time as _time
+
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -261,8 +259,7 @@ class TrinoConnector(BaseConnector):
                 cursor.execute(_show_catalogs_sql)
                 _catalog_rows = cursor.fetchall()
                 await self._audit_sql(_show_catalogs_sql.strip(), len(_catalog_rows), (_time.monotonic() - t0) * 1000)
-                catalogs = [row[0] for row in _catalog_rows
-                           if row[0] not in ("system",)]
+                catalogs = [row[0] for row in _catalog_rows if row[0] not in ("system",)]
             except Exception:
                 catalogs = []
 
@@ -292,6 +289,7 @@ class TrinoConnector(BaseConnector):
         (sql_text, row_count, elapsed_ms) tuples for the caller to await _audit_sql on.
         """
         import time as _time
+
         cursor = self._conn.cursor()
         qcat = self._quote_ident(catalog)
         audits: list[tuple[str, int, float]] = []
@@ -394,12 +392,14 @@ class TrinoConnector(BaseConnector):
                 key = f"{catalog}.{r[0]}.{r[1]}"
                 if key not in foreign_keys:
                     foreign_keys[key] = []
-                foreign_keys[key].append({
-                    "column": r[2],
-                    "references_schema": r[3],
-                    "references_table": r[4],
-                    "references_column": r[5],
-                })
+                foreign_keys[key].append(
+                    {
+                        "column": r[2],
+                        "references_schema": r[3],
+                        "references_table": r[4],
+                        "references_column": r[5],
+                    }
+                )
         except Exception:
             pass  # Not all Trino connectors expose constraints
 
@@ -419,14 +419,16 @@ class TrinoConnector(BaseConnector):
                     "foreign_keys": foreign_keys.get(key, []),
                     "row_count": 0,
                 }
-            schema[key]["columns"].append({
-                "name": col_name,
-                "type": data_type,
-                "nullable": nullable == "YES",
-                "primary_key": pk_key in pk_set,
-                "default": default,
-                "comment": col_comment or "",
-            })
+            schema[key]["columns"].append(
+                {
+                    "name": col_name,
+                    "type": data_type,
+                    "nullable": nullable == "YES",
+                    "primary_key": pk_key in pk_set,
+                    "default": default,
+                    "comment": col_comment or "",
+                }
+            )
 
         # Fetch row counts via SHOW STATS (best-effort, capped at 50 tables)
         tables_to_stat = list(schema.keys())[:50]
@@ -457,6 +459,7 @@ class TrinoConnector(BaseConnector):
         (sql_text, row_count, elapsed_ms) tuples for the caller to await _audit_sql on.
         """
         import time as _time
+
         cursor = self._conn.cursor()
         schema: dict[str, Any] = {}
         qcat = self._quote_ident(catalog)
@@ -468,8 +471,7 @@ class TrinoConnector(BaseConnector):
             cursor.execute(_show_schemas_sql)
             _schema_rows = cursor.fetchall()
             audits.append((_show_schemas_sql.strip(), len(_schema_rows), (_time.monotonic() - t0) * 1000))
-            schemas = [row[0] for row in _schema_rows
-                      if row[0] not in ("information_schema",)]
+            schemas = [row[0] for row in _schema_rows if row[0] not in ("information_schema",)]
         except Exception:
             return schema, audits
 
@@ -496,13 +498,15 @@ class TrinoConnector(BaseConnector):
                     audits.append((_show_cols_sql.strip(), len(_col_rows), (_time.monotonic() - t0) * 1000))
                     columns = []
                     for row in _col_rows:
-                        columns.append({
-                            "name": row[0],
-                            "type": row[1],
-                            "nullable": True,
-                            "primary_key": False,
-                            "comment": row[3] if len(row) > 3 and row[3] else "",
-                        })
+                        columns.append(
+                            {
+                                "name": row[0],
+                                "type": row[1],
+                                "nullable": True,
+                                "primary_key": False,
+                                "comment": row[3] if len(row) > 3 and row[3] else "",
+                            }
+                        )
                     schema[key] = {
                         "schema": f"{catalog}.{schema_name}",
                         "name": table_name,
@@ -516,6 +520,7 @@ class TrinoConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         try:
@@ -534,7 +539,9 @@ class TrinoConnector(BaseConnector):
                 try:
                     safe_col = self._quote_identifier(col)
                     cursor = self._conn.cursor()
-                    _col_sql = f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                    _col_sql = (
+                        f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
+                    )
                     t0 = _time.monotonic()
                     cursor.execute(_col_sql)
                     rows = cursor.fetchall()

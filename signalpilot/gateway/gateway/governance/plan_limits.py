@@ -18,7 +18,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from fastapi import HTTPException
 
@@ -28,20 +27,21 @@ _is_cloud = os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 
 # ── Tier definitions ─────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class PlanLimits:
     tier: str
-    connections: int          # max DB connections (0 = unlimited)
-    users: int                # max org members (0 = unlimited)
-    api_keys: int             # max API keys (0 = unlimited)
-    queries_per_day: int      # max governed queries per day (0 = unlimited)
-    audit_retention_days: int # audit log retention (0 = unlimited)
-    pii_redaction: bool       # full PII redaction (detect is always free)
-    byok: bool                # BYOK encryption
-    sso: bool                 # SSO (SAML/OIDC)
-    budget_controls: bool     # per-session budget caps
-    audit_export: bool        # CSV/JSON audit export
-    schema_tools: bool        # advanced schema explorer MCP tools
+    connections: int  # max DB connections (0 = unlimited)
+    users: int  # max org members (0 = unlimited)
+    api_keys: int  # max API keys (0 = unlimited)
+    queries_per_day: int  # max governed queries per day (0 = unlimited)
+    audit_retention_days: int  # audit log retention (0 = unlimited)
+    pii_redaction: bool  # full PII redaction (detect is always free)
+    byok: bool  # BYOK encryption
+    sso: bool  # SSO (SAML/OIDC)
+    budget_controls: bool  # per-session budget caps
+    audit_export: bool  # CSV/JSON audit export
+    schema_tools: bool  # advanced schema explorer MCP tools
 
 
 PLAN_TIERS: dict[str, PlanLimits] = {
@@ -128,6 +128,7 @@ def get_limits(tier: str) -> PlanLimits:
 
 # ── Org tier resolution ──────────────────────────────────────────────────────
 
+
 async def get_org_tier(org_id: str) -> str:
     """Look up the org's plan tier from the DB.
 
@@ -137,9 +138,11 @@ async def get_org_tier(org_id: str) -> str:
     (needed for BYOK and other gateway-specific settings).
     """
     import time
+
+    from sqlalchemy import select, text
+
     from ..db.engine import get_session_factory
     from ..db.models import GatewayOrg
-    from sqlalchemy import select, text
 
     # Local mode: always unlimited, no plan enforcement
     if not _is_cloud:
@@ -152,18 +155,18 @@ async def get_org_tier(org_id: str) -> str:
         factory = get_session_factory()
         async with factory() as session:
             # Ensure gateway_orgs row exists (needed for BYOK etc.)
-            gw_result = await session.execute(
-                select(GatewayOrg.plan_tier).where(GatewayOrg.org_id == org_id)
-            )
+            gw_result = await session.execute(select(GatewayOrg.plan_tier).where(GatewayOrg.org_id == org_id))
             gw_tier = gw_result.scalar_one_or_none()
 
             if gw_tier is None:
-                session.add(GatewayOrg(
-                    org_id=org_id,
-                    plan_tier=DEFAULT_TIER,
-                    byok_enabled=False,
-                    created_at=time.time(),
-                ))
+                session.add(
+                    GatewayOrg(
+                        org_id=org_id,
+                        plan_tier=DEFAULT_TIER,
+                        byok_enabled=False,
+                        created_at=time.time(),
+                    )
+                )
                 await session.commit()
                 logger.info("Auto-created gateway_orgs row for %s", org_id)
 
@@ -193,6 +196,7 @@ async def get_org_limits(org_id: str) -> PlanLimits:
 
 
 # ── In-memory daily query counter ────────────────────────────────────────────
+
 
 class DailyQueryCounter:
     """Tracks daily query counts per org in memory.
@@ -237,6 +241,7 @@ daily_query_counter = DailyQueryCounter()
 
 # ── Enforcement helpers ──────────────────────────────────────────────────────
 
+
 def check_query_limit(org_id: str, limits: PlanLimits) -> None:
     """Check if the org has exceeded its daily query limit. Raises 429 if so."""
     if limits.queries_per_day <= 0:
@@ -246,7 +251,7 @@ def check_query_limit(org_id: str, limits: PlanLimits) -> None:
         raise HTTPException(
             status_code=429,
             detail=f"Daily query limit reached ({limits.queries_per_day} queries/day on {limits.tier} plan). "
-                   f"Upgrade to Pro for unlimited queries.",
+            f"Upgrade to Pro for unlimited queries.",
         )
 
 
@@ -263,7 +268,7 @@ def check_connection_limit(current_count: int, limits: PlanLimits) -> None:
         raise HTTPException(
             status_code=403,
             detail=f"Connection limit reached ({limits.connections} on {limits.tier} plan). "
-                   f"Upgrade to {'Pro' if limits.tier == 'free' else 'Team'} for more connections.",
+            f"Upgrade to {'Pro' if limits.tier == 'free' else 'Team'} for more connections.",
         )
 
 
@@ -275,7 +280,7 @@ def check_api_key_limit(current_count: int, limits: PlanLimits) -> None:
         raise HTTPException(
             status_code=403,
             detail=f"API key limit reached ({limits.api_keys} on {limits.tier} plan). "
-                   f"Upgrade to Pro for unlimited API keys.",
+            f"Upgrade to Pro for unlimited API keys.",
         )
 
 
@@ -295,5 +300,5 @@ def check_feature(feature_name: str, limits: PlanLimits) -> None:
         raise HTTPException(
             status_code=403,
             detail=f"{feature_name} is not available on the {limits.tier} plan. "
-                   f"Upgrade to {'Pro' if limits.tier == 'free' else 'Team'} to access this feature.",
+            f"Upgrade to {'Pro' if limits.tier == 'free' else 'Team'} to access this feature.",
         )

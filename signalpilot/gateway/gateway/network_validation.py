@@ -25,21 +25,23 @@ logger = logging.getLogger(__name__)
 # These ranges have no stdlib property (unlike loopback/link-local/private), so explicit
 # network-range checks are required.
 ALWAYS_BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("100.64.0.0/10"),   # CGNAT / Shared Address Space (RFC 6598)
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / Shared Address Space (RFC 6598)
     ipaddress.ip_network("192.88.99.0/24"),  # Deprecated 6to4 relay anycast (RFC 7526)
 )
 
 # TCP-based db_types that require SSRF validation.
 # Cloud services (snowflake, bigquery, databricks) use HTTPS to external
 # cloud endpoints. Embedded databases (duckdb, sqlite) use file paths.
-TCP_DB_TYPES: frozenset[str] = frozenset({
-    "postgres",
-    "mysql",
-    "mssql",
-    "redshift",
-    "clickhouse",
-    "trino",
-})
+TCP_DB_TYPES: frozenset[str] = frozenset(
+    {
+        "postgres",
+        "mysql",
+        "mssql",
+        "redshift",
+        "clickhouse",
+        "trino",
+    }
+)
 
 # DNS resolution timeout in seconds.
 DNS_TIMEOUT_SECONDS: int = 5
@@ -53,16 +55,16 @@ _dns_timeout_lock = threading.Lock()
 # Cloud warehouse parameter format validators (Issue #25)
 # ---------------------------------------------------------------------------
 # Snowflake accounts: alphanumeric, dots (org-account format), hyphens, underscores.
-_SNOWFLAKE_ACCOUNT_RE = re.compile(r'^[a-zA-Z0-9._-]{1,255}$')
+_SNOWFLAKE_ACCOUNT_RE = re.compile(r"^[a-zA-Z0-9._-]{1,255}$")
 
 # Databricks hosts: must end with a known Databricks domain.
 _DATABRICKS_HOST_RE = re.compile(
-    r'^[a-zA-Z0-9.-]+'
-    r'\.(cloud\.databricks\.com|azuredatabricks\.net|gcp\.databricks\.com|databricksapps\.com)$'
+    r"^[a-zA-Z0-9.-]+"
+    r"\.(cloud\.databricks\.com|azuredatabricks\.net|gcp\.databricks\.com|databricksapps\.com)$"
 )
 
 # BigQuery project IDs: lowercase letters, digits, hyphens; 6-30 chars.
-_BIGQUERY_PROJECT_RE = re.compile(r'^[a-z][a-z0-9-]{4,28}[a-z0-9]$')
+_BIGQUERY_PROJECT_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 
 
 def validate_cloud_warehouse_params(
@@ -84,9 +86,7 @@ def validate_cloud_warehouse_params(
     if db_type == "snowflake":
         val = account or host or ""
         if val and not _SNOWFLAKE_ACCOUNT_RE.match(val):
-            raise ValueError(
-                "Invalid Snowflake account identifier: contains disallowed characters"
-            )
+            raise ValueError("Invalid Snowflake account identifier: contains disallowed characters")
     elif db_type == "databricks":
         val = host or ""
         if val and not _DATABRICKS_HOST_RE.match(val):
@@ -156,17 +156,11 @@ def _check_ip_address(ip_str: str, allow_private: bool) -> None:
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
         mapped = addr.ipv4_mapped
         if _is_blocked_address(mapped, allow_private):
-            raise ValueError(
-                f"Connection refused: resolved address {ip_str!r} maps to blocked "
-                f"IPv4 address {mapped!s}"
-            )
+            raise ValueError(f"Connection refused: resolved address {ip_str!r} maps to blocked IPv4 address {mapped!s}")
         return
 
     if _is_blocked_address(addr, allow_private):
-        raise ValueError(
-            f"Connection refused: resolved address {ip_str!r} is a blocked "
-            f"internal/private address"
-        )
+        raise ValueError(f"Connection refused: resolved address {ip_str!r} is a blocked internal/private address")
 
 
 def validate_connection_host(host: str) -> None:
@@ -203,16 +197,10 @@ def validate_connection_host(host: str) -> None:
             "Refusing connection — DNS failure is treated as rejection."
         ) from exc
     except OSError as exc:
-        raise ValueError(
-            f"Network error resolving host {host!r}: {exc}. "
-            "Refusing connection."
-        ) from exc
+        raise ValueError(f"Network error resolving host {host!r}: {exc}. Refusing connection.") from exc
 
     if not results:
-        raise ValueError(
-            f"DNS resolution returned no addresses for host {host!r}. "
-            "Refusing connection."
-        )
+        raise ValueError(f"DNS resolution returned no addresses for host {host!r}. Refusing connection.")
 
     # Check ALL resolved addresses to prevent DNS rebinding.
     # sockaddr is always (ip_str, port, ...) — position 0 is always str.
@@ -253,16 +241,10 @@ def resolve_and_validate(host: str, port: int, db_type: str) -> list[str]:
             "Refusing connection — DNS failure is treated as rejection."
         ) from exc
     except OSError as exc:
-        raise ValueError(
-            f"Network error resolving host {host!r}: {exc}. "
-            "Refusing connection."
-        ) from exc
+        raise ValueError(f"Network error resolving host {host!r}: {exc}. Refusing connection.") from exc
 
     if not addrs:
-        raise ValueError(
-            f"DNS resolution returned no addresses for host {host!r}. "
-            "Refusing connection."
-        )
+        raise ValueError(f"DNS resolution returned no addresses for host {host!r}. Refusing connection.")
 
     ips = list(set(addr[4][0] for addr in addrs))
 
@@ -298,8 +280,8 @@ def validate_connection_params(
             validate_cloud_warehouse_params(
                 db_type,
                 host=host,
-                account=host,       # Snowflake passes account via host param
-                project_id=host,    # BigQuery passes project via host param
+                account=host,  # Snowflake passes account via host param
+                project_id=host,  # BigQuery passes project via host param
             )
         return
 
@@ -310,11 +292,7 @@ def validate_connection_params(
     target_host: str | None = None
 
     if connection_string:
-        parsed = urlparse(
-            connection_string
-            if "://" in connection_string
-            else f"dummy://{connection_string}"
-        )
+        parsed = urlparse(connection_string if "://" in connection_string else f"dummy://{connection_string}")
         target_host = parsed.hostname or host
     else:
         target_host = host

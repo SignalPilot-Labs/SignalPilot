@@ -17,8 +17,8 @@ from fastapi.testclient import TestClient
 
 from gateway.main import app
 
-
 # ─── Fixtures ────────────────────────────────────────────────────────────────
+
 
 def _make_byok_key_row(
     key_id: str,
@@ -102,8 +102,8 @@ def _override_org_id(org_id: str):
 
 # ─── V1: list endpoint is scoped to JWT org ───────────────────────────────────
 
-class TestListBYOKKeysOrgScoping:
 
+class TestListBYOKKeysOrgScoping:
     def test_list_scopes_to_jwt_org(self, admin_client):
         """GET /api/byok/keys returns only the JWT org's keys."""
         key = _make_byok_key_row("key-1", "org1")
@@ -126,8 +126,8 @@ class TestListBYOKKeysOrgScoping:
 
 # ─── V2: get/update/delete/validate enforce ownership via JWT org ─────────────
 
-class TestGetBYOKKeyOrgScoping:
 
+class TestGetBYOKKeyOrgScoping:
     def test_get_returns_404_for_wrong_org(self, admin_client):
         """Key exists but belongs to org2 — JWT org1 caller gets 404."""
         key = _make_byok_key_row("key-1", "org2")
@@ -147,19 +147,15 @@ class TestGetBYOKKeyOrgScoping:
 
 
 class TestUpdateBYOKKeyOrgScoping:
-
     def test_update_returns_404_for_wrong_org(self, admin_client):
         key = _make_byok_key_row("key-1", "org2")
         session = _make_db_session(scalar_return=key)
         _override_db(session)
-        resp = admin_client.put(
-            "/api/byok/keys/key-1", json={"status": "revoked"}
-        )
+        resp = admin_client.put("/api/byok/keys/key-1", json={"status": "revoked"})
         assert resp.status_code == 404
 
 
 class TestDeleteBYOKKeyOrgScoping:
-
     def test_delete_returns_404_for_wrong_org(self, admin_client):
         key = _make_byok_key_row("key-1", "org2")
         session = _make_db_session(scalar_return=key)
@@ -188,8 +184,8 @@ class TestDeleteBYOKKeyOrgScoping:
 
 # ─── Cross-tenant blocked test ────────────────────────────────────────────────
 
-class TestCrossTenantBlocked:
 
+class TestCrossTenantBlocked:
     def test_cross_tenant_get_blocked(self, admin_client):
         """JWT says org1, key belongs to org2 — GET returns 404."""
         key = _make_byok_key_row("key-x", "org2")
@@ -232,11 +228,12 @@ class TestCrossTenantBlocked:
 
 # ─── V3: migrate verifies key belongs to org ─────────────────────────────────
 
-class TestMigrateOrgOwnership:
 
+class TestMigrateOrgOwnership:
     def test_migrate_returns_404_when_key_belongs_to_different_org(self, admin_client):
         """Migrate request for org1 using a key owned by org2 gets 404."""
         from unittest.mock import patch
+
         from gateway.api.deps import get_store
         from gateway.auth import resolve_org_id
         from gateway.byok import LocalBYOKProvider
@@ -273,8 +270,8 @@ class TestMigrateOrgOwnership:
 
 # ─── V4: provider_config redacted in responses ───────────────────────────────
 
-class TestProviderConfigRedacted:
 
+class TestProviderConfigRedacted:
     def test_list_response_omits_provider_config(self, admin_client):
         """provider_config must be None/absent in list responses."""
         key = _make_byok_key_row("key-1", "org1", provider_config={"arn": "secret-arn"})
@@ -298,11 +295,12 @@ class TestProviderConfigRedacted:
 
 # ─── H1: validate endpoint returns generic error for BYOKKeyError ─────────────
 
-class TestValidateH1ErrorRedaction:
 
+class TestValidateH1ErrorRedaction:
     def test_validate_returns_generic_error_not_internal_details(self, admin_client):
         """Validate endpoint must not expose internal BYOKKeyError details (H1)."""
         from unittest.mock import patch
+
         from gateway.byok import BYOKKeyError
 
         key = _make_byok_key_row("key-1", "org1")
@@ -329,11 +327,12 @@ class TestValidateH1ErrorRedaction:
 
 # ─── H2: migrate/revert errors use credential IDs not connection names ────────
 
-class TestMigrateH2ErrorRedaction:
 
+class TestMigrateH2ErrorRedaction:
     def test_migrate_error_uses_credential_id_not_connection_name(self, admin_client):
         """Error messages in migrate response must use credential IDs, not connection names (H2)."""
         from unittest.mock import patch
+
         from gateway.api.deps import get_store
         from gateway.auth import resolve_org_id
         from gateway.byok import LocalBYOKProvider

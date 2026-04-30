@@ -12,12 +12,14 @@ from .base import BaseConnector
 
 try:
     from clickhouse_driver import Client as CHClient
+
     HAS_CLICKHOUSE_NATIVE = True
 except ImportError:
     HAS_CLICKHOUSE_NATIVE = False
 
 try:
     import clickhouse_connect
+
     HAS_CLICKHOUSE_HTTP = True
 except ImportError:
     HAS_CLICKHOUSE_HTTP = False
@@ -35,7 +37,7 @@ class ClickHouseConnector(BaseConnector):
 
     @property
     def _identifier_quote(self) -> str:
-        return '`'
+        return "`"
 
     def set_credential_extras(self, extras: dict) -> None:
         """Extract SSL config and timeout settings from credential extras."""
@@ -43,10 +45,7 @@ class ClickHouseConnector(BaseConnector):
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_CLICKHOUSE:
-            raise RuntimeError(
-                "clickhouse-driver not installed. "
-                "Run: pip install clickhouse-driver"
-            )
+            raise RuntimeError("clickhouse-driver not installed. Run: pip install clickhouse-driver")
         params = self._parse_connection_string(connection_string)
         self._database = params.get("database", "default")
 
@@ -169,7 +168,7 @@ class ClickHouseConnector(BaseConnector):
         - clickhouse+http://user:pass@host:8123/db (HTTP protocol)
         - clickhouse+https://user:pass@host:8443/db (HTTPS protocol)
         """
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote, urlparse
 
         secure = False
         use_http = False
@@ -178,13 +177,13 @@ class ClickHouseConnector(BaseConnector):
         if s.startswith("clickhouse+https://"):
             secure = True
             use_http = True
-            s = "clickhouse://" + s[len("clickhouse+https://"):]
+            s = "clickhouse://" + s[len("clickhouse+https://") :]
         elif s.startswith("clickhouse+http://"):
             use_http = True
-            s = "clickhouse://" + s[len("clickhouse+http://"):]
+            s = "clickhouse://" + s[len("clickhouse+http://") :]
         elif s.startswith("clickhouses://"):
             secure = True
-            s = "clickhouse://" + s[len("clickhouses://"):]
+            s = "clickhouse://" + s[len("clickhouses://") :]
         elif not s.startswith("clickhouse://"):
             s = "clickhouse://" + s
 
@@ -235,7 +234,9 @@ class ClickHouseConnector(BaseConnector):
             self._http_client = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._client is None and self._http_client is None:
             raise RuntimeError("Not connected")
 
@@ -397,10 +398,11 @@ class ClickHouseConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if (self._client is None and self._http_client is None) or not columns:
             return {}
         try:
-            sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            sql = self._build_sample_union_sql(table, columns, limit, quote="`")
             t0 = _time.monotonic()
             data = self._raw_execute(sql)
             if isinstance(data, tuple) and len(data) == 2:
@@ -416,7 +418,7 @@ class ClickHouseConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     data = self._raw_execute(
-                        f'SELECT DISTINCT {self._quote_identifier(col)} FROM {safe_table} WHERE {self._quote_identifier(col)} IS NOT NULL LIMIT {limit}'
+                        f"SELECT DISTINCT {self._quote_identifier(col)} FROM {safe_table} WHERE {self._quote_identifier(col)} IS NOT NULL LIMIT {limit}"
                     )
                     if isinstance(data, tuple) and len(data) == 2:
                         rows = data[0]

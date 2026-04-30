@@ -5,21 +5,21 @@ import logging
 from fastapi import FastAPI
 
 from ..deployment import is_cloud_mode
-from .health import router as health_router
-from .settings import router as settings_router
-from .connections import router as connections_router
-from .schema import router as schema_router
-from .sandboxes import router as sandboxes_router
-from .query import router as query_router
 from .audit import router as audit_router
 from .budget import router as budget_router
+from .byok import router as byok_router
 from .cache import router as cache_router
+from .connections import router as connections_router
+from .files import router as files_router
+from .health import router as health_router
+from .keys import router as keys_router
 from .metrics import router as metrics_router
 from .projects import router as projects_router
-from .keys import router as keys_router
-from .files import router as files_router
+from .query import router as query_router
+from .sandboxes import router as sandboxes_router
+from .schema import router as schema_router
 from .security import router as security_router
-from .byok import router as byok_router
+from .settings import router as settings_router
 
 logger = logging.getLogger(__name__)
 

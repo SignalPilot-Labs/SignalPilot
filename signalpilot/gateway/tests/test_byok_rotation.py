@@ -19,8 +19,8 @@ from gateway.byok import (
     rotate_byok_key,
 )
 
-
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _make_credential(
     connection_name: str = "test-conn",
@@ -83,8 +83,8 @@ def _make_byok_key(
 
 # ─── TestRotateByokKey ────────────────────────────────────────────────────────
 
-class TestRotateByokKey:
 
+class TestRotateByokKey:
     @pytest.mark.asyncio
     async def test_rotate_single_credential(self):
         """Single BYOK credential is re-wrapped from old key to new key."""
@@ -94,9 +94,7 @@ class TestRotateByokKey:
 
         conn_string = "postgresql://user:pass@host/db"
         fields = [conn_string, "{}"]
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias-old", fields
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias-old", fields)
 
         cred = _make_credential(
             encryption_mode="byok",
@@ -126,9 +124,7 @@ class TestRotateByokKey:
         assert conn.byok_key_alias == "alias-new"
 
         # Verify the new ciphertext is decryptable with the new key
-        recovered = await decrypt_envelope(
-            provider, "org1", "alias-new", cred.wrapped_dek, cred.connection_string_enc
-        )
+        recovered = await decrypt_envelope(provider, "org1", "alias-new", cred.wrapped_dek, cred.connection_string_enc)
         assert recovered == conn_string
 
     @pytest.mark.asyncio
@@ -139,9 +135,7 @@ class TestRotateByokKey:
         provider.register_key("org1", "alias-new")
 
         async def _make_byok_cred(conn_string: str, name: str) -> tuple[MagicMock, MagicMock]:
-            ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-                provider, "org1", "alias-old", [conn_string, "{}"]
-            )
+            ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias-old", [conn_string, "{}"])
             cred = _make_credential(
                 connection_name=name,
                 encryption_mode="byok",
@@ -207,9 +201,7 @@ class TestRotateByokKey:
         provider.register_key("org1", "alias-new")
 
         conn_string = "postgresql://host/db"
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias-old", [conn_string, "{}"]
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias-old", [conn_string, "{}"])
 
         good_cred = _make_credential(
             connection_name="good-conn",
@@ -258,9 +250,7 @@ class TestRotateByokKey:
 
         conn_string = "postgresql://user:pass@host/db"
         extras = '{"port": 5432}'
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias-old", [conn_string, extras]
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias-old", [conn_string, extras])
 
         cred = _make_credential(
             encryption_mode="byok",
@@ -290,9 +280,7 @@ class TestRotateByokKey:
         recovered_cs = await decrypt_envelope(
             provider, "org1", "alias-new", cred.wrapped_dek, cred.connection_string_enc
         )
-        recovered_extras = await decrypt_envelope(
-            provider, "org1", "alias-new", cred.wrapped_dek, cred.extras_enc
-        )
+        recovered_extras = await decrypt_envelope(provider, "org1", "alias-new", cred.wrapped_dek, cred.extras_enc)
         assert recovered_cs == conn_string
         assert recovered_extras == extras
 
@@ -304,9 +292,7 @@ class TestRotateByokKey:
         provider.register_key("org1", "alias-new")
 
         conn_string = "postgresql://host/db"
-        ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-            provider, "org1", "alias-old", [conn_string, "{}"]
-        )
+        ciphertexts, wrapped_dek = await encrypt_fields_envelope(provider, "org1", "alias-old", [conn_string, "{}"])
 
         cred = _make_credential(
             encryption_mode="byok",
@@ -340,6 +326,7 @@ class TestRotateByokKey:
 
 # ─── TestRotateEndpoint ───────────────────────────────────────────────────────
 
+
 class TestRotateEndpoint:
     """API endpoint tests for POST /byok/keys/{key_id}/rotate."""
 
@@ -364,9 +351,7 @@ class TestRotateEndpoint:
         new_key = _make_byok_key(key_id="key-new", org_id="org1", key_alias="alias-new", status="active")
 
         store = self._make_store()
-        store.session.execute = AsyncMock(
-            side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)]
-        )
+        store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
         with patch("gateway.store._byok_provider", new=MagicMock()):
             with patch("gateway.store._dek_cache", new=None):
@@ -416,9 +401,7 @@ class TestRotateEndpoint:
         old_key = _make_byok_key(key_id="key-old", org_id="org1", key_alias="alias-old", status="active")
 
         store = self._make_store()
-        store.session.execute = AsyncMock(
-            side_effect=[self._make_key_result(old_key), self._make_key_result(None)]
-        )
+        store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(None)])
 
         with patch("gateway.store._byok_provider", new=MagicMock()):
             with patch("gateway.store._dek_cache", new=None):
@@ -485,9 +468,7 @@ class TestRotateEndpoint:
         new_key = _make_byok_key(key_id="key-new", org_id="org1", key_alias="alias-new", status="active")
 
         store = self._make_store()
-        store.session.execute = AsyncMock(
-            side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)]
-        )
+        store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
         with patch("gateway.store._byok_provider", new=MagicMock()):
             with patch("gateway.store._dek_cache", new=None):
@@ -511,9 +492,7 @@ class TestRotateEndpoint:
         new_key = _make_byok_key(key_id="key-new", org_id="org1", key_alias="alias-new", status="active")
 
         store = self._make_store()
-        store.session.execute = AsyncMock(
-            side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)]
-        )
+        store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
         with patch("gateway.store._byok_provider", new=MagicMock()):
             with patch("gateway.store._dek_cache", new=None):
@@ -540,9 +519,7 @@ class TestRotateEndpoint:
         new_key = _make_byok_key(key_id="key-new", org_id="org1", key_alias="alias-new", status="active")
 
         store = self._make_store()
-        store.session.execute = AsyncMock(
-            side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)]
-        )
+        store.session.execute = AsyncMock(side_effect=[self._make_key_result(old_key), self._make_key_result(new_key)])
 
         with patch("gateway.store._byok_provider", new=MagicMock()):
             with patch("gateway.store._dek_cache", new=None):
@@ -562,6 +539,7 @@ class TestRotateEndpoint:
 
 
 # ─── TestMigrationStatusEndpoint ─────────────────────────────────────────────
+
 
 class TestMigrationStatusEndpoint:
     """API endpoint tests for GET /byok/migrate/status."""

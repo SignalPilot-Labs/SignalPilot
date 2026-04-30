@@ -22,17 +22,28 @@ try:
 except ImportError:
     HAS_SQLGLOT = False
     import warnings
+
     warnings.warn(
-        "sqlglot is not installed — SQL validation is DISABLED. "
-        "Install it with: pip install sqlglot>=25.0.0",
+        "sqlglot is not installed — SQL validation is DISABLED. Install it with: pip install sqlglot>=25.0.0",
         RuntimeWarning,
         stacklevel=2,
     )
 
 # DDL/DML statement types that must be blocked
 _BLOCKED_STATEMENT_TYPES = {
-    "Create", "Drop", "Alter", "Insert", "Update", "Delete", "Truncate",
-    "Merge", "Grant", "Revoke", "Comment", "Rename", "Replace",
+    "Create",
+    "Drop",
+    "Alter",
+    "Insert",
+    "Update",
+    "Delete",
+    "Truncate",
+    "Merge",
+    "Grant",
+    "Revoke",
+    "Comment",
+    "Rename",
+    "Replace",
     "Command",  # catches COPY, VACUUM, etc.
 }
 
@@ -44,72 +55,142 @@ _BLOCKED_STATEMENT_TYPES = {
 # ---------------------------------------------------------------------------
 
 _DANGEROUS_FUNCTIONS: dict[str, frozenset[str]] = {
-    "postgres": frozenset({
-        # File-system read/write
-        "pg_read_server_files", "pg_read_binary_file", "pg_read_file",
-        "pg_ls_dir", "pg_ls_logdir", "pg_ls_waldir", "pg_ls_tmpdir",
-        "pg_ls_archive_statusdir",
-        "pg_file_write", "pg_file_rename", "pg_file_unlink",
-        # Large-object smuggling
-        "lo_import", "lo_export", "lo_from_bytea", "lo_put",
-        # dblink — remote/out-of-band connections
-        "dblink", "dblink_exec", "dblink_connect", "dblink_send_query",
-        "dblink_get_result", "dblink_get_connections",
-        # OS command execution
-        "pg_execute_server_program",
-        # Internal COPY helper
-        "copy_file_internal",
-        # Server management / DoS
-        "pg_logfile_rotate",
-        "pg_reload_conf", "pg_rotate_logfile",
-        "pg_terminate_backend", "pg_cancel_backend",
-        # Advisory locks (DoS vector)
-        "pg_advisory_lock", "pg_advisory_xact_lock",
-        # Configuration mutation
-        "set_config",
-    }),
-    "clickhouse": frozenset({
-        # Table functions that access external resources
-        "file", "url", "s3", "s3cluster", "mysql", "postgresql",
-        "remotesecure", "remote", "hdfs", "jdbc", "mongo", "redis",
-        "sqlite", "odbc", "input", "generaterandom",
-        "executable", "azureblobstorage", "deltalake", "hudi", "iceberg",
-    }),
-    "bigquery": frozenset({
-        "external_query",
-    }),
-    "snowflake": frozenset({
-        "system$execute_program", "system$stream_get",
-        "system$pipe_force_resume", "system$cancel_all_queries",
-    }),
-    "mysql": frozenset({
-        "load_file", "sys_exec", "sys_eval",
-    }),
-    "duckdb": frozenset({
-        # File-system access
-        "read_csv", "read_csv_auto", "read_parquet", "read_json", "read_json_auto",
-        "read_blob", "read_text",
-        # Network access
-        "httpfs_get", "http_get", "http_post",
-        # Cross-engine scanning
-        "postgres_scan", "sqlite_scan", "mysql_scan",
-        "iceberg_scan", "delta_scan",
-        # Extension loading
-        "load_extension", "install_extension",
-    }),
-    "sqlite": frozenset({
-        "load_extension", "readfile", "writefile",
-        "edit", "zipfile", "sqlar",
-    }),
+    "postgres": frozenset(
+        {
+            # File-system read/write
+            "pg_read_server_files",
+            "pg_read_binary_file",
+            "pg_read_file",
+            "pg_ls_dir",
+            "pg_ls_logdir",
+            "pg_ls_waldir",
+            "pg_ls_tmpdir",
+            "pg_ls_archive_statusdir",
+            "pg_file_write",
+            "pg_file_rename",
+            "pg_file_unlink",
+            # Large-object smuggling
+            "lo_import",
+            "lo_export",
+            "lo_from_bytea",
+            "lo_put",
+            # dblink — remote/out-of-band connections
+            "dblink",
+            "dblink_exec",
+            "dblink_connect",
+            "dblink_send_query",
+            "dblink_get_result",
+            "dblink_get_connections",
+            # OS command execution
+            "pg_execute_server_program",
+            # Internal COPY helper
+            "copy_file_internal",
+            # Server management / DoS
+            "pg_logfile_rotate",
+            "pg_reload_conf",
+            "pg_rotate_logfile",
+            "pg_terminate_backend",
+            "pg_cancel_backend",
+            # Advisory locks (DoS vector)
+            "pg_advisory_lock",
+            "pg_advisory_xact_lock",
+            # Configuration mutation
+            "set_config",
+        }
+    ),
+    "clickhouse": frozenset(
+        {
+            # Table functions that access external resources
+            "file",
+            "url",
+            "s3",
+            "s3cluster",
+            "mysql",
+            "postgresql",
+            "remotesecure",
+            "remote",
+            "hdfs",
+            "jdbc",
+            "mongo",
+            "redis",
+            "sqlite",
+            "odbc",
+            "input",
+            "generaterandom",
+            "executable",
+            "azureblobstorage",
+            "deltalake",
+            "hudi",
+            "iceberg",
+        }
+    ),
+    "bigquery": frozenset(
+        {
+            "external_query",
+        }
+    ),
+    "snowflake": frozenset(
+        {
+            "system$execute_program",
+            "system$stream_get",
+            "system$pipe_force_resume",
+            "system$cancel_all_queries",
+        }
+    ),
+    "mysql": frozenset(
+        {
+            "load_file",
+            "sys_exec",
+            "sys_eval",
+        }
+    ),
+    "duckdb": frozenset(
+        {
+            # File-system access
+            "read_csv",
+            "read_csv_auto",
+            "read_parquet",
+            "read_json",
+            "read_json_auto",
+            "read_blob",
+            "read_text",
+            # Network access
+            "httpfs_get",
+            "http_get",
+            "http_post",
+            # Cross-engine scanning
+            "postgres_scan",
+            "sqlite_scan",
+            "mysql_scan",
+            "iceberg_scan",
+            "delta_scan",
+            # Extension loading
+            "load_extension",
+            "install_extension",
+        }
+    ),
+    "sqlite": frozenset(
+        {
+            "load_extension",
+            "readfile",
+            "writefile",
+            "edit",
+            "zipfile",
+            "sqlar",
+        }
+    ),
 }
 
 # Functions blocked regardless of dialect
-_UNIVERSAL_BLOCKED_FUNCTIONS: frozenset[str] = frozenset({
-    "load_extension", "install_extension",
-})
+_UNIVERSAL_BLOCKED_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        "load_extension",
+        "install_extension",
+    }
+)
 
 
-def _check_dangerous_functions(parsed: "exp.Expression", dialect: str) -> str | None:
+def _check_dangerous_functions(parsed: exp.Expression, dialect: str) -> str | None:
     """Walk AST and reject queries containing dangerous functions.
 
     Returns a blocked_reason string if a dangerous function is found, or None
@@ -139,10 +220,7 @@ def _check_dangerous_functions(parsed: "exp.Expression", dialect: str) -> str | 
                     pass
             func_name_lower = func_name.lower().strip()
             if func_name_lower in all_blocked:
-                return (
-                    f"Blocked: function '{func_name}' is not permitted "
-                    f"in governed read-only mode"
-                )
+                return f"Blocked: function '{func_name}' is not permitted in governed read-only mode"
         # Check table-valued functions (e.g. FROM url(...), FROM read_csv(...))
         if isinstance(node, exp.Table):
             table_name = ""
@@ -150,20 +228,18 @@ def _check_dangerous_functions(parsed: "exp.Expression", dialect: str) -> str | 
                 table_name = node.name
             table_name_lower = (table_name or "").lower().strip()
             if table_name_lower in all_blocked:
-                return (
-                    f"Blocked: table function '{table_name}' is not permitted "
-                    f"in governed read-only mode"
-                )
+                return f"Blocked: table function '{table_name}' is not permitted in governed read-only mode"
 
     return None
 
 
-def _check_into_clause(parsed: "exp.Expression") -> str | None:
+def _check_into_clause(parsed: exp.Expression) -> str | None:
     """Reject SELECT ... INTO OUTFILE/DUMPFILE (data exfiltration in MySQL/MariaDB)."""
     for node in parsed.walk():
         if isinstance(node, exp.Into):
             return "Blocked: SELECT INTO is not permitted in governed read-only mode"
     return None
+
 
 # Statement stacking detection — strip SQL comments first, then check (HIGH-04 fix)
 _SINGLE_LINE_COMMENT = re.compile(r"--[^\n]*")
@@ -318,9 +394,7 @@ def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") ->
         parsed = sqlglot.parse_one(sql, dialect=dialect)
     except Exception as exc:
         # Fail closed: do not concatenate unvalidated SQL.
-        raise ValueError(
-            f"SQL passed validation but could not be parsed for LIMIT injection: {exc}"
-        ) from exc
+        raise ValueError(f"SQL passed validation but could not be parsed for LIMIT injection: {exc}") from exc
 
     if parsed is None:
         return sql

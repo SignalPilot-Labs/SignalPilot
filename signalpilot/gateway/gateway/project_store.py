@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .models import (
     ConnectionInfo,
@@ -122,6 +122,7 @@ _GITKEEP_DIRS = [
 
 # ─── Pure helpers ─────────────────────────────────────────────────────────────
 
+
 def _generate_dbt_project_yml(project_name: str) -> str:
     """Return dbt_project.yml content for a new project."""
     return _DBT_PROJECT_YML_TEMPLATE.format(name=project_name)
@@ -164,6 +165,7 @@ def _generate_profiles_yml(project_name: str, connection: ConnectionInfo) -> str
 
 # ─── ProjectStore ─────────────────────────────────────────────────────────────
 
+
 class ProjectStore:
     """Manages dbt project lifecycle: create, read, update, delete.
 
@@ -189,11 +191,13 @@ class ProjectStore:
     def _load(self) -> dict:
         """Load projects.json via shared infra."""
         from .store import _load_json
+
         return _load_json(self._projects_file, {})
 
     def _save(self, data: dict) -> None:
         """Write projects.json via shared infra."""
         from .store import _save_json
+
         _save_json(self._projects_file, data)
 
     def _managed_dir(self, name: str) -> Path:
@@ -294,18 +298,14 @@ class ProjectStore:
 
     # ─── Private creators ─────────────────────────────────────────────────
 
-    def _create_new(
-        self, proj: ProjectCreate, connection: ConnectionInfo, data: dict
-    ) -> ProjectInfo:
+    def _create_new(self, proj: ProjectCreate, connection: ConnectionInfo, data: dict) -> ProjectInfo:
         """Scaffold a fresh dbt project."""
         project_dir = self._managed_dir(proj.name)
         self._scaffold(project_dir, proj.name, connection)
         info = self._build_info(proj, connection, project_dir, ProjectStorage.managed)
         return self._persist(info, data)
 
-    def _create_local(
-        self, proj: ProjectCreate, connection: ConnectionInfo, data: dict
-    ) -> ProjectInfo:
+    def _create_local(self, proj: ProjectCreate, connection: ConnectionInfo, data: dict) -> ProjectInfo:
         """Link or copy an existing local dbt project."""
         local = Path(proj.local_path or "")
         if not local.exists() or not (local / "dbt_project.yml").exists():
@@ -322,9 +322,7 @@ class ProjectStore:
         info = self._build_info(proj, connection, project_dir, storage)
         return self._persist(info, data)
 
-    def _create_github(
-        self, proj: ProjectCreate, connection: ConnectionInfo, data: dict
-    ) -> ProjectInfo:
+    def _create_github(self, proj: ProjectCreate, connection: ConnectionInfo, data: dict) -> ProjectInfo:
         """Clone a GitHub repo into a managed project."""
         if not proj.git_url:
             raise ValueError("git_url is required for GitHub import")
@@ -334,14 +332,16 @@ class ProjectStore:
         self._clone_and_wire(proj.git_url, branch, project_dir, proj.name, connection)
 
         info = self._build_info(
-            proj, connection, project_dir, ProjectStorage.managed,
-            git_remote=proj.git_url, git_branch=branch,
+            proj,
+            connection,
+            project_dir,
+            ProjectStorage.managed,
+            git_remote=proj.git_url,
+            git_branch=branch,
         )
         return self._persist(info, data)
 
-    def _create_dbt_cloud(
-        self, proj: ProjectCreate, connection: ConnectionInfo, data: dict
-    ) -> ProjectInfo:
+    def _create_dbt_cloud(self, proj: ProjectCreate, connection: ConnectionInfo, data: dict) -> ProjectInfo:
         """Clone the repo backing a dbt Cloud project."""
         if not proj.git_url:
             raise ValueError("git_url is required for dbt Cloud import (discovered via API)")
@@ -351,8 +351,12 @@ class ProjectStore:
         self._clone_and_wire(proj.git_url, branch, project_dir, proj.name, connection)
 
         info = self._build_info(
-            proj, connection, project_dir, ProjectStorage.managed,
-            git_remote=proj.git_url, git_branch=branch,
+            proj,
+            connection,
+            project_dir,
+            ProjectStorage.managed,
+            git_remote=proj.git_url,
+            git_branch=branch,
             dbt_cloud_account_id=proj.dbt_cloud_account_id,
             dbt_cloud_project_id=proj.dbt_cloud_project_id,
         )
@@ -390,22 +394,23 @@ class ProjectStore:
             shutil.rmtree(project_dir)
             raise ValueError("Cloned repo does not contain dbt_project.yml")
 
-        (project_dir / "profiles.yml").write_text(
-            _generate_profiles_yml(project_name, connection)
-        )
+        (project_dir / "profiles.yml").write_text(_generate_profiles_yml(project_name, connection))
 
 
 # ─── Module-level singleton ──────────────────────────────────────────────────
 
+
 def _lazy_get_connection(name: str) -> ConnectionInfo | None:
     """Lazy import to avoid circular dependency with store.py."""
     from .store import get_connection
+
     return get_connection(name)
 
 
 def _get_paths():
     """Import paths from store to avoid circular import at module level."""
     from .store import DATA_DIR, PROJECTS_FILE
+
     return PROJECTS_FILE, DATA_DIR
 
 

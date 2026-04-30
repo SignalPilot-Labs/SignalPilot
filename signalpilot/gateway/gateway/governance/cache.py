@@ -21,6 +21,7 @@ from .context import require_org_id
 @dataclass
 class CacheEntry:
     """A cached query result."""
+
     key: str
     org_id: str
     connection_name: str
@@ -119,10 +120,7 @@ class QueryCache:
                     count = len(self._cache)
                     self._cache.clear()
                     return count
-                keys_to_remove = [
-                    k for k, v in self._cache.items()
-                    if v.connection_name == connection_name
-                ]
+                keys_to_remove = [k for k, v in self._cache.items() if v.connection_name == connection_name]
                 count = len(keys_to_remove)
                 for k in keys_to_remove:
                     del self._cache[k]
@@ -134,8 +132,7 @@ class QueryCache:
                 keys_to_remove = [k for k, v in self._cache.items() if v.org_id == org_id]
             else:
                 keys_to_remove = [
-                    k for k, v in self._cache.items()
-                    if v.org_id == org_id and v.connection_name == connection_name
+                    k for k, v in self._cache.items() if v.org_id == org_id and v.connection_name == connection_name
                 ]
             count = len(keys_to_remove)
             for k in keys_to_remove:

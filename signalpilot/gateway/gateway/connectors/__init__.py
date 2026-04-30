@@ -5,12 +5,12 @@ from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
 from .mssql import MSSQLConnector
 from .mysql import MySQLConnector
-from .trino import TrinoConnector
 from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
 from .registry import get_connector
 from .snowflake import SnowflakeConnector
 from .ssh_tunnel import SSHTunnel
+from .trino import TrinoConnector
 
 __all__ = [
     "BaseConnector",

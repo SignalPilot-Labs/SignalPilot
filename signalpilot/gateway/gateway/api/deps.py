@@ -16,18 +16,16 @@ import fnmatch
 import re
 from typing import Annotated, Any
 
-from fastapi import Depends, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, HTTPException
 
-from ..auth import UserID, OrgID, DBSession
+from ..auth import DBSession, OrgID, UserID
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
-from ..db.engine import get_db
-from ..errors import query_error_hint
 from ..sandbox_client import SandboxClient
 from ..store import Store
 
 # ─── Store dependency ────────────────────────────────────────────────────────
+
 
 async def get_store(
     org_id: OrgID,
@@ -36,6 +34,7 @@ async def get_store(
 ) -> Store:
     """FastAPI dependency: yields a Store scoped to the current org."""
     return Store(db, org_id=org_id, user_id=user_id)
+
 
 StoreD = Annotated[Store, Depends(get_store)]
 
@@ -102,6 +101,7 @@ def sanitize_db_error(error: str, db_type: str | None = None) -> str:
 
 # ─── Connection lookup ────────────────────────────────────────────────────────
 
+
 async def require_connection(store: Store, name: str):
     """Look up connection by name, raise 404 if not found."""
     info = await store.get_connection(name)
@@ -112,9 +112,8 @@ async def require_connection(store: Store, name: str):
 
 # ─── Schema fetch-or-cache ───────────────────────────────────────────────────
 
-async def get_or_fetch_schema(
-    store: Store, name: str, info=None, force_refresh: bool = False
-) -> dict[str, Any]:
+
+async def get_or_fetch_schema(store: Store, name: str, info=None, force_refresh: bool = False) -> dict[str, Any]:
     if info is None:
         info = await require_connection(store, name)
 
@@ -129,7 +128,9 @@ async def get_or_fetch_schema(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
@@ -144,14 +145,13 @@ async def apply_filters(store: Store, name: str, schema: dict[str, Any]) -> dict
     return apply_schema_filter(filtered, sf_include, sf_exclude)
 
 
-async def get_filtered_schema(
-    store: Store, name: str, info=None, force_refresh: bool = False
-) -> dict[str, Any]:
+async def get_filtered_schema(store: Store, name: str, info=None, force_refresh: bool = False) -> dict[str, Any]:
     raw = await get_or_fetch_schema(store, name, info, force_refresh)
     return await apply_filters(store, name, raw)
 
 
 # ─── Schema filtering ────────────────────────────────────────────────────────
+
 
 def apply_schema_filter(
     schema: dict[str, dict],

@@ -12,17 +12,18 @@ from .databricks import DatabricksConnector
 from .duckdb import DuckDBConnector
 from .mssql import MSSQLConnector
 from .mysql import MySQLConnector
-from .trino import TrinoConnector
 from .postgres import PostgresConnector
 from .redshift import RedshiftConnector
 from .snowflake import SnowflakeConnector
 from .sqlite import SQLiteConnector
+from .trino import TrinoConnector
 
 # Local mode: use sandboxed connectors for file-based DBs
 _is_local = os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud"
 if _is_local:
     from .sandboxed_duckdb import SandboxedDuckDBConnector
     from .sandboxed_sqlite import SandboxedSQLiteConnector
+
     _DuckDB: type[BaseConnector] = SandboxedDuckDBConnector
     _SQLite: type[BaseConnector] = SandboxedSQLiteConnector
 else:

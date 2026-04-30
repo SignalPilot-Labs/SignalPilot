@@ -28,6 +28,7 @@ _UNSUPPORTED_PROVIDERS = {PROVIDER_TYPE_GCP_KMS, PROVIDER_TYPE_AZURE_KV}
 
 # ─── Factory ──────────────────────────────────────────────────────────────────
 
+
 def make_provider(provider_type: str, provider_config: dict | None = None) -> BYOKProvider:
     """Create a BYOKProvider from a type string and optional config dict.
 
@@ -47,6 +48,7 @@ def make_provider(provider_type: str, provider_config: dict | None = None) -> BY
     """
     if provider_type == PROVIDER_TYPE_LOCAL:
         from .deployment import is_cloud_mode
+
         if is_cloud_mode():
             raise ValueError("Local BYOK provider is not available in cloud mode. Use aws_kms, gcp_kms, or azure_kv.")
         return LocalBYOKProvider()
@@ -54,18 +56,13 @@ def make_provider(provider_type: str, provider_config: dict | None = None) -> BY
     if provider_type == PROVIDER_TYPE_AWS_KMS:
         config = provider_config or {}
         if not config.get("kms_key_arn"):
-            raise ValueError(
-                "provider_config must include 'kms_key_arn' for aws_kms provider"
-            )
+            raise ValueError("provider_config must include 'kms_key_arn' for aws_kms provider")
         return AWSKMSProvider(config)
 
     if provider_type in _UNSUPPORTED_PROVIDERS:
         raise NotImplementedError(f"Provider '{provider_type}' is not yet supported")
 
-    raise ValueError(
-        f"Unknown provider_type: {provider_type!r}. "
-        f"Supported values: local, aws_kms"
-    )
+    raise ValueError(f"Unknown provider_type: {provider_type!r}. Supported values: local, aws_kms")
 
 
 def make_provider_for_key(byok_key: GatewayBYOKKey) -> BYOKProvider:

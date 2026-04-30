@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 
-from .types import ModelInfo, ModelStatus
+from .types import ModelInfo
 
 
 def compute_work_order(
@@ -36,16 +36,14 @@ def compute_work_order(
       - unresolved: dict[str, list[str]] — per-model refs that don't resolve
       - cycles: list[list[str]] — cycle member lists, empty if acyclic
     """
-    actionable = {
-        name: m for name, m in models.items() if m.status.is_actionable()
-    }
+    actionable = {name: m for name, m in models.items() if m.status.is_actionable()}
     if not actionable:
         return {"order": [], "unresolved": {}, "cycles": []}
 
     # Build the dependency graph over the full model set, so an actionable
     # model that depends on a non-actionable (complete) one still orders correctly.
-    edges_out: dict[str, set[str]] = defaultdict(set)   # name -> deps it needs
-    edges_in: dict[str, set[str]] = defaultdict(set)    # name -> dependents waiting on it
+    edges_out: dict[str, set[str]] = defaultdict(set)  # name -> deps it needs
+    edges_in: dict[str, set[str]] = defaultdict(set)  # name -> dependents waiting on it
     unresolved: dict[str, list[str]] = {}
 
     for name, m in actionable.items():

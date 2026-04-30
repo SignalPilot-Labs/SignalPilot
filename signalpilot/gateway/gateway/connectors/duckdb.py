@@ -82,7 +82,9 @@ class DuckDBConnector(BaseConnector):
                 if self._is_memory:
                     raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         import asyncio
 
         effective_timeout = timeout or self._query_timeout
@@ -107,11 +109,9 @@ class DuckDBConnector(BaseConnector):
 
         try:
             if effective_timeout:
-                return await asyncio.wait_for(
-                    asyncio.to_thread(_run), timeout=effective_timeout
-                )
+                return await asyncio.wait_for(asyncio.to_thread(_run), timeout=effective_timeout)
             return await asyncio.to_thread(_run)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise RuntimeError(f"DuckDB query timed out after {effective_timeout}s")
         except duckdb.Error as e:
             raise RuntimeError(f"DuckDB query error: {e}") from e
@@ -196,12 +196,14 @@ class DuckDBConnector(BaseConnector):
                 key = f"{row[0]}.{row[1]}"
                 if key not in foreign_keys:
                     foreign_keys[key] = []
-                foreign_keys[key].append({
-                    "column": row[2],
-                    "references_schema": row[3],
-                    "references_table": row[4],
-                    "references_column": row[5],
-                })
+                foreign_keys[key].append(
+                    {
+                        "column": row[2],
+                        "references_schema": row[3],
+                        "references_table": row[4],
+                        "references_column": row[5],
+                    }
+                )
         except Exception:
             pass
 
@@ -260,19 +262,22 @@ class DuckDBConnector(BaseConnector):
                     "description": table_comments.get(key, ""),
                 }
             col_comment_key = f"{table_schema}.{table_name}.{col_name}"
-            schema[key]["columns"].append({
-                "name": col_name,
-                "type": data_type,
-                "nullable": is_nullable == "YES",
-                "default": col_default,
-                "primary_key": f"{table_schema}.{table_name}.{col_name}" in pk_cols,
-                "comment": col_comments.get(col_comment_key, ""),
-            })
+            schema[key]["columns"].append(
+                {
+                    "name": col_name,
+                    "type": data_type,
+                    "nullable": is_nullable == "YES",
+                    "default": col_default,
+                    "primary_key": f"{table_schema}.{table_name}.{col_name}" in pk_cols,
+                    "comment": col_comments.get(col_comment_key, ""),
+                }
+            )
         return schema
 
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if not columns:
             return {}
         conn = self._open_transient() if not self._is_memory else self._conn
@@ -292,7 +297,9 @@ class DuckDBConnector(BaseConnector):
             for col in columns[:20]:
                 try:
                     safe_col = self._quote_identifier(col)
-                    fallback_sql = f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                    fallback_sql = (
+                        f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
+                    )
                     t0 = _time.monotonic()
                     r = conn.execute(fallback_sql)
                     values = [str(row[0]) for row in r.fetchall()]

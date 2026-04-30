@@ -21,6 +21,7 @@ from typing import Any
 
 try:
     import yaml
+
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -29,6 +30,7 @@ except ImportError:
 @dataclass
 class ColumnAnnotation:
     """Annotations for a single column."""
+
     description: str = ""
     business_name: str = ""
     unit: str = ""
@@ -40,6 +42,7 @@ class ColumnAnnotation:
 @dataclass
 class TableAnnotation:
     """Annotations for a single table."""
+
     description: str = ""
     owner: str = ""
     sensitivity: str = "internal"
@@ -51,6 +54,7 @@ class TableAnnotation:
 @dataclass
 class SchemaAnnotations:
     """Full set of annotations for a connection."""
+
     connection_name: str = ""
     tables: dict[str, TableAnnotation] = field(default_factory=dict)
 
@@ -151,18 +155,22 @@ def load_annotations(
         paths_to_try.extend(Path(p) for p in search_paths)
     elif org_id == "local":
         # Local mode: per-org path first, then flat fallback
-        paths_to_try.extend([
-            data_dir / "annotations" / "local" / f"{connection_name}.yml",
-            data_dir / "annotations" / "local" / f"{connection_name}.yaml",
-            data_dir / "annotations" / f"{connection_name}.yml",
-            data_dir / "annotations" / f"{connection_name}.yaml",
-        ])
+        paths_to_try.extend(
+            [
+                data_dir / "annotations" / "local" / f"{connection_name}.yml",
+                data_dir / "annotations" / "local" / f"{connection_name}.yaml",
+                data_dir / "annotations" / f"{connection_name}.yml",
+                data_dir / "annotations" / f"{connection_name}.yaml",
+            ]
+        )
     else:
         # Cloud mode: per-org path only — flat fallback disabled (fail closed)
-        paths_to_try.extend([
-            data_dir / "annotations" / org_id / f"{connection_name}.yml",
-            data_dir / "annotations" / org_id / f"{connection_name}.yaml",
-        ])
+        paths_to_try.extend(
+            [
+                data_dir / "annotations" / org_id / f"{connection_name}.yml",
+                data_dir / "annotations" / org_id / f"{connection_name}.yaml",
+            ]
+        )
 
     for path in paths_to_try:
         if path.exists():
@@ -264,8 +272,8 @@ def generate_skeleton(schema: dict[str, Any], connection_name: str) -> str:
     for key, table_info in schema.items():
         table_name = table_info.get("name", key)
         lines.append(f"  {table_name}:")
-        lines.append("    description: \"\"")
-        lines.append("    owner: \"\"")
+        lines.append('    description: ""')
+        lines.append('    owner: ""')
         lines.append("    sensitivity: internal")
         lines.append("    blocked: false")
         lines.append("    columns:")
@@ -274,7 +282,7 @@ def generate_skeleton(schema: dict[str, Any], connection_name: str) -> str:
             col_name = col.get("name", "unknown")
             col_type = col.get("type", "")
             lines.append(f"      {col_name}:")
-            lines.append(f"        description: \"\"  # {col_type}")
+            lines.append(f'        description: ""  # {col_type}')
             # Suggest PII rules for common column names
             pii_suggestion = _suggest_pii_rule(col_name)
             if pii_suggestion:

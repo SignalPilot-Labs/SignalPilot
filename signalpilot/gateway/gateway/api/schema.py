@@ -11,29 +11,28 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..connectors.pool_manager import pool_manager
-from ..scope_guard import RequireScope
 from ..connectors.schema_cache import schema_cache
 from ..schema_utils import (
-    TYPE_COMPRESSION_MAP,
     STRING_COLUMN_TYPES,
-    compress_type,
+    TYPE_COMPRESSION_MAP,
     _compress_schema,
     _deduplicate_partitioned_tables,
     _group_tables,
     _infer_implicit_joins,
+    compress_type,
 )
+from ..scope_guard import RequireScope
 from ..store import (
     DATA_DIR,
 )
 from .deps import (
     StoreD,
+    apply_schema_filter,
     get_filtered_schema,
     get_or_fetch_schema,
-    apply_filters,
+    get_schema_filters,
     require_connection,
     sanitize_db_error,
-    get_schema_filters,
-    apply_schema_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,14 +49,15 @@ _FILTER_PATTERN_MAX_LEN = 200
 # at the point of SQL construction.
 def _quote_identifier(name: str, quote_char: str) -> str:
     """Quote a single SQL identifier, escaping embedded quote characters."""
-    if quote_char == '[':
-        return '[' + name.replace(']', ']]') + ']'
+    if quote_char == "[":
+        return "[" + name.replace("]", "]]") + "]"
     return quote_char + name.replace(quote_char, quote_char + quote_char) + quote_char
 
 
 def _quote_table_name(table: str, quote_char: str) -> str:
     """Quote a possibly schema-qualified table name (e.g., 'public.users')."""
-    return '.'.join(_quote_identifier(p, quote_char) for p in table.split('.'))
+    return ".".join(_quote_identifier(p, quote_char) for p in table.split("."))
+
 
 # ---------------------------------------------------------------------------
 # Semantic model helpers (needed by agent-context endpoint)
@@ -92,12 +92,17 @@ def _load_semantic_model(name: str) -> dict:
 # GET /connections/{name}/schema
 # ───────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/connections/{name}/schema", dependencies=[RequireScope("read")])
 async def get_connection_schema(
     name: str,
     store: StoreD,
     compact: bool = Query(default=False, description="Return compressed schema optimized for LLM context windows"),
-    filter: str = Query(default="", max_length=1000, description="Filter tables by name pattern (case-insensitive substring match, comma-separated)"),
+    filter: str = Query(
+        default="",
+        max_length=1000,
+        description="Filter tables by name pattern (case-insensitive substring match, comma-separated)",
+    ),
 ):
     """Retrieve the full schema for a database connection (Feature #18: schema caching).
 
@@ -118,7 +123,9 @@ async def get_connection_schema(
     if cached is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+            async with pool_manager.connection(
+                info.db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
                 cached = await connector.get_schema()
         except Exception as e:
             raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
@@ -133,7 +140,8 @@ async def get_connection_schema(
     if filter:
         patterns = [p.strip().lower() for p in filter.split(",") if p.strip()]
         filtered = {
-            k: v for k, v in filtered.items()
+            k: v
+            for k, v in filtered.items()
             if any(pat in k.lower() or pat in v.get("name", "").lower() for pat in patterns)
         }
 
@@ -163,6 +171,7 @@ async def get_connection_schema(
 # GET /connections/{name}/schema/grouped
 # ───────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/connections/{name}/schema/grouped", dependencies=[RequireScope("read")])
 async def get_grouped_schema(
     name: str,
@@ -183,7 +192,9 @@ async def get_grouped_schema(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             cached = schema_cache.get(name)
             if cached is None:
                 cached = await connector.get_schema()
@@ -217,11 +228,16 @@ async def get_grouped_schema(
 # GET /connections/{name}/schema/samples
 # ───────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/connections/{name}/schema/samples", dependencies=[RequireScope("read")])
 async def get_schema_samples(
     name: str,
     store: StoreD,
-    tables: str = Query(default="", max_length=2000, description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')"),
+    tables: str = Query(
+        default="",
+        max_length=2000,
+        description="Comma-separated table keys to sample (e.g., 'public.users,public.orders')",
+    ),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
     """Get sample distinct values for columns — critical for Spider2.0 schema linking.
@@ -241,7 +257,9 @@ async def get_schema_samples(
     if cached is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+            async with pool_manager.connection(
+                info.db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
                 cached = await connector.get_schema()
                 schema_cache.put(name, cached)
         except Exception as e:
@@ -254,7 +272,9 @@ async def get_schema_samples(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             samples: dict[str, dict[str, list]] = {}
             for table_key in table_keys:
                 if table_key not in cached:
@@ -262,13 +282,18 @@ async def get_schema_samples(
                 table_info = cached[table_key]
                 # Only sample string-like columns (most useful for schema linking)
                 sample_cols = [
-                    col["name"] for col in table_info.get("columns", [])
+                    col["name"]
+                    for col in table_info.get("columns", [])
                     if col.get("type", "") in STRING_COLUMN_TYPES or "char" in col.get("type", "").lower()
                 ]
                 if not sample_cols:
                     continue
 
-                table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
+                table_name = (
+                    f"{table_info.get('schema', '')}.{table_info['name']}"
+                    if table_info.get("schema")
+                    else table_info["name"]
+                )
                 values = await connector.get_sample_values(table_name, sample_cols, limit=limit)
                 if values:
                     samples[table_key] = values
@@ -286,6 +311,7 @@ async def get_schema_samples(
 # ───────────────────────────────────────────────────────────────────────────
 # POST /connections/{name}/schema/explore
 # ───────────────────────────────────────────────────────────────────────────
+
 
 @router.post("/connections/{name}/schema/explore", dependencies=[RequireScope("read")])
 async def explore_column_values(
@@ -306,7 +332,9 @@ async def explore_column_values(
     Returns distinct values, value counts, and NULL statistics.
     """
     if filter_pattern and len(filter_pattern) > _FILTER_PATTERN_MAX_LEN:
-        raise HTTPException(status_code=422, detail=f"filter_pattern must be at most {_FILTER_PATTERN_MAX_LEN} characters")
+        raise HTTPException(
+            status_code=422, detail=f"filter_pattern must be at most {_FILTER_PATTERN_MAX_LEN} characters"
+        )
 
     info = await require_connection(store, name)
 
@@ -316,9 +344,9 @@ async def explore_column_values(
 
     db_type = info.db_type
     # Build exploration query with dialect-aware quoting
-    quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino", "duckdb", "sqlite") else '`'
+    quote = '"' if db_type in ("postgres", "redshift", "snowflake", "trino", "duckdb", "sqlite") else "`"
     if db_type == "mssql":
-        quote = '['
+        quote = "["
 
     q_col = _quote_identifier(column, quote)
     q_table = _quote_table_name(table, quote)
@@ -326,9 +354,15 @@ async def explore_column_values(
     # Construct safe exploration query using parameterized queries to prevent
     # SQL injection. Different connectors use different placeholder styles.
     _PARAM_PLACEHOLDER = {
-        "postgres": "$1", "redshift": "%s", "mysql": "%s", "mssql": "%s",
-        "snowflake": "%s", "clickhouse": "%s", "databricks": "%s",
-        "duckdb": "?", "sqlite": "?",
+        "postgres": "$1",
+        "redshift": "%s",
+        "mysql": "%s",
+        "mssql": "%s",
+        "snowflake": "%s",
+        "clickhouse": "%s",
+        "databricks": "%s",
+        "duckdb": "?",
+        "sqlite": "?",
         # Trino's connector doesn't pass params to cursor.execute — fall back
         # to manual escaping (backslash + quote-doubling) for safety.
     }
@@ -382,7 +416,9 @@ FROM {q_table}
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             actual_sql = explore_sql
 
             values_rows = await connector.execute(actual_sql, params=explore_params, timeout=30)
@@ -410,6 +446,7 @@ FROM {q_table}
 # GET /connections/{name}/schema/enriched
 # ───────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/connections/{name}/schema/enriched", dependencies=[RequireScope("read")])
 async def get_enriched_schema(
     name: str,
@@ -430,7 +467,9 @@ async def get_enriched_schema(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             # Get or use cached schema
             cached = schema_cache.get(name)
             if cached is None:
@@ -497,12 +536,17 @@ async def get_enriched_schema(
             for key in list(enriched.keys())[:15]:  # Cap at 15 tables
                 table_info = cached.get(key, {})
                 sample_cols = [
-                    col["name"] for col in table_info.get("columns", [])
+                    col["name"]
+                    for col in table_info.get("columns", [])
                     if col.get("type", "") in STRING_COLUMN_TYPES or "char" in col.get("type", "").lower()
                 ]
                 if not sample_cols:
                     continue
-                table_name = f"{table_info.get('schema', '')}.{table_info['name']}" if table_info.get("schema") else table_info["name"]
+                table_name = (
+                    f"{table_info.get('schema', '')}.{table_info['name']}"
+                    if table_info.get("schema")
+                    else table_info["name"]
+                )
                 try:
                     values = await connector.get_sample_values(table_name, sample_cols, limit=sample_limit)
                     if values:
@@ -524,6 +568,7 @@ async def get_enriched_schema(
 # ───────────────────────────────────────────────────────────────────────────
 # GET /connections/{name}/schema/compact
 # ───────────────────────────────────────────────────────────────────────────
+
 
 @router.get("/connections/{name}/schema/compact", dependencies=[RequireScope("read")])
 async def get_compact_schema(
@@ -555,7 +600,9 @@ async def get_compact_schema(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             cached = await connector.get_schema()
             schema_cache.put(name, cached)
 
@@ -709,6 +756,7 @@ async def get_compact_schema(
 # GET /connections/{name}/schema/ddl
 # ───────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/connections/{name}/schema/ddl", dependencies=[RequireScope("read")])
 async def get_schema_ddl(
     name: str,
@@ -740,7 +788,9 @@ async def get_schema_ddl(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             cached = await connector.get_schema()
         schema_cache.put(name, cached)
 
@@ -779,7 +829,7 @@ async def get_schema_ddl(
         for key in table_keys:
             tname = filtered[key].get("name", "")
             # Find prefix: everything before first underscore that appears in 3+ tables
-            match = re.match(r'^([a-zA-Z]+_)', tname)
+            match = re.match(r"^([a-zA-Z]+_)", tname)
             if match:
                 prefix = match.group(1)
                 if prefix not in prefix_groups:
@@ -808,9 +858,13 @@ async def get_schema_ddl(
         meta_hints = []
         if table.get("row_count"):
             rc = table["row_count"]
-            meta_hints.append(f"{rc / 1_000_000:.1f}M rows" if rc >= 1_000_000
-                             else f"{rc / 1_000:.0f}K rows" if rc >= 1000
-                             else f"{rc} rows")
+            meta_hints.append(
+                f"{rc / 1_000_000:.1f}M rows"
+                if rc >= 1_000_000
+                else f"{rc / 1_000:.0f}K rows"
+                if rc >= 1000
+                else f"{rc} rows"
+            )
         if table.get("size_mb") and table["size_mb"] >= 1:
             sm = table["size_mb"]
             meta_hints.append(f"{sm / 1024:.1f}GB" if sm >= 1024 else f"{sm:.0f}MB")
@@ -894,7 +948,7 @@ async def get_schema_ddl(
         comment_parts = []
         rc = table.get("row_count", 0)
         if rc:
-            comment_parts.append(f"{rc:,} rows" if rc < 1_000_000 else f"{rc/1_000_000:.1f}M rows")
+            comment_parts.append(f"{rc:,} rows" if rc < 1_000_000 else f"{rc / 1_000_000:.1f}M rows")
         # ClickHouse-specific: engine and sorting key (critical for query optimization)
         engine = table.get("engine", "")
         if engine:
@@ -949,15 +1003,23 @@ async def get_schema_ddl(
 # GET /connections/{name}/schema/agent-context
 # ───────────────────────────────────────────────────────────────────────────
 
+
 @router.get("/connections/{name}/schema/agent-context", dependencies=[RequireScope("read")])
 async def get_agent_context(
     name: str,
     store: StoreD,
-    question: str = Query(default="", max_length=2000, description="Optional question for schema linking — omit for full schema"),
+    question: str = Query(
+        default="", max_length=2000, description="Optional question for schema linking — omit for full schema"
+    ),
     max_tables: int = Query(default=30, ge=1, le=100, description="Max tables to include"),
     include_samples: bool = Query(default=True, description="Include cached sample values for string columns"),
-    progressive: bool = Query(default=False, description="Progressive disclosure: full DDL for top tables, compact one-liners for the rest (saves 40-60%% tokens)"),
-    full_ddl_count: int = Query(default=8, ge=1, le=50, description="Number of top-scoring tables to show full DDL for (when progressive=true)"),
+    progressive: bool = Query(
+        default=False,
+        description="Progressive disclosure: full DDL for top tables, compact one-liners for the rest (saves 40-60%% tokens)",
+    ),
+    full_ddl_count: int = Query(
+        default=8, ge=1, le=50, description="Number of top-scoring tables to show full DDL for (when progressive=true)"
+    ),
 ):
     """Single-call schema context optimized for SQL generation agents (Spider2.0 pattern).
 
@@ -985,7 +1047,9 @@ async def get_agent_context(
         if not conn_str:
             raise HTTPException(status_code=400, detail="No credentials stored")
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             cached = await connector.get_schema()
         schema_cache.put(name, cached)
 
@@ -1001,12 +1065,51 @@ async def get_agent_context(
     table_scores: dict[str, float] = {}
     if question:
         # Reuse the schema link logic inline to select top tables
-        stopwords = {"the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
-                     "her", "was", "one", "our", "out", "has", "how", "many", "much",
-                     "what", "which", "show", "find", "list", "give", "tell",
-                     "from", "with", "that", "this", "have", "will",
-                     "select", "where", "group", "having", "limit", "table", "column", "database"}
-        terms = [w for w in re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question.lower()) if len(w) >= 3 and w not in stopwords]
+        stopwords = {
+            "the",
+            "and",
+            "for",
+            "are",
+            "but",
+            "not",
+            "you",
+            "all",
+            "can",
+            "had",
+            "her",
+            "was",
+            "one",
+            "our",
+            "out",
+            "has",
+            "how",
+            "many",
+            "much",
+            "what",
+            "which",
+            "show",
+            "find",
+            "list",
+            "give",
+            "tell",
+            "from",
+            "with",
+            "that",
+            "this",
+            "have",
+            "will",
+            "select",
+            "where",
+            "group",
+            "having",
+            "limit",
+            "table",
+            "column",
+            "database",
+        }
+        terms = [
+            w for w in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question.lower()) if len(w) >= 3 and w not in stopwords
+        ]
         for key, t in filtered.items():
             score = 0.0
             tn = t.get("name", "").lower()
@@ -1055,7 +1158,7 @@ async def get_agent_context(
         table_names = {t.get("name", "").lower() for t in filtered.values()}
         relevant_glossary = {}
         # Extract question terms for matching (reuse if already parsed)
-        q_terms = [w.lower() for w in re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question)] if question else []
+        q_terms = [w.lower() for w in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question)] if question else []
         for term, col_ref in glossary.items():
             ref_lower = col_ref.lower()
             # Include if the column reference mentions a table we're showing
@@ -1181,7 +1284,11 @@ async def get_agent_context(
 
         # Explicit FKs
         for fk in table.get("foreign_keys", []):
-            ref = f"{fk.get('references_schema', '')}.{fk['references_table']}" if fk.get("references_schema") else fk["references_table"]
+            ref = (
+                f"{fk.get('references_schema', '')}.{fk['references_table']}"
+                if fk.get("references_schema")
+                else fk["references_table"]
+            )
             col_lines.append(f"  FOREIGN KEY ({fk['column']}) REFERENCES {ref}({fk['references_column']})")
 
         # Inferred FKs
@@ -1241,6 +1348,7 @@ async def get_agent_context(
 # ───────────────────────────────────────────────────────────────────────────
 # Helper: _build_join_hints
 # ───────────────────────────────────────────────────────────────────────────
+
 
 def _build_join_hints(linked_keys: set[str], filtered: dict[str, Any]) -> list[str]:
     """Build FK-based and inferred join hints between linked tables."""
@@ -1320,7 +1428,11 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
         "limit_syntax": "LIMIT n OFFSET m",
         "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('month', col), EXTRACT(YEAR FROM col), DATEDIFF('day', a, b)",
         "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
-        "tips": ["Identifiers are case-insensitive unless double-quoted", "Use FLATTEN() for semi-structured data", "QUALIFY for window function filtering"],
+        "tips": [
+            "Identifiers are case-insensitive unless double-quoted",
+            "Use FLATTEN() for semi-structured data",
+            "QUALIFY for window function filtering",
+        ],
     },
     "bigquery": {
         "dialect": "BigQuery Standard SQL",
@@ -1329,7 +1441,11 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
         "limit_syntax": "LIMIT n OFFSET m",
         "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC(col, MONTH), EXTRACT(YEAR FROM col)",
         "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
-        "tips": ["Use backticks for project.dataset.table references", "Use UNNEST() for repeated fields", "QUALIFY for window filtering"],
+        "tips": [
+            "Use backticks for project.dataset.table references",
+            "Use UNNEST() for repeated fields",
+            "QUALIFY for window filtering",
+        ],
     },
     "clickhouse": {
         "dialect": "ClickHouse SQL",
@@ -1338,7 +1454,11 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
         "limit_syntax": "LIMIT n OFFSET m",
         "date_functions": "now(), today(), toStartOfMonth(col), toYear(col), dateDiff('day', a, b)",
         "string_functions": "concat(a, b), lower(), upper(), length(), substring()",
-        "tips": ["Functions are case-sensitive and camelCase", "Use -If suffix for conditional aggregation (e.g., countIf, sumIf)", "Array functions: arrayJoin, groupArray"],
+        "tips": [
+            "Functions are case-sensitive and camelCase",
+            "Use -If suffix for conditional aggregation (e.g., countIf, sumIf)",
+            "Array functions: arrayJoin, groupArray",
+        ],
     },
     "trino": {
         "dialect": "Trino SQL (ANSI-based)",
@@ -1347,7 +1467,11 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
         "limit_syntax": "LIMIT n OFFSET m",
         "date_functions": "CURRENT_TIMESTAMP, CURRENT_DATE, DATE_TRUNC('month', col), EXTRACT(YEAR FROM col)",
         "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTR()",
-        "tips": ["Use catalog.schema.table for cross-catalog queries", "UNNEST() for arrays", "Supports ANSI SQL window functions"],
+        "tips": [
+            "Use catalog.schema.table for cross-catalog queries",
+            "UNNEST() for arrays",
+            "Supports ANSI SQL window functions",
+        ],
     },
     "databricks": {
         "dialect": "Databricks SQL (Spark SQL-based)",
@@ -1356,7 +1480,11 @@ _DIALECT_HINTS: dict[str, dict[str, Any]] = {
         "limit_syntax": "LIMIT n",
         "date_functions": "CURRENT_TIMESTAMP(), CURRENT_DATE(), DATE_TRUNC('MONTH', col), EXTRACT(YEAR FROM col)",
         "string_functions": "CONCAT(a, b), LOWER(), UPPER(), LENGTH(), SUBSTRING()",
-        "tips": ["Use backticks for identifiers", "Supports QUALIFY for window filtering", "Use catalog.schema.table for Unity Catalog"],
+        "tips": [
+            "Use backticks for identifiers",
+            "Supports QUALIFY for window filtering",
+            "Use catalog.schema.table for Unity Catalog",
+        ],
     },
     "duckdb": {
         "dialect": "DuckDB SQL (PostgreSQL-compatible)",
@@ -1375,9 +1503,15 @@ async def schema_link(
     name: str,
     store: StoreD,
     question: str = Query(..., max_length=2000, description="Natural language question to link schema for"),
-    format: str = Query(default="ddl", pattern="^(ddl|compact|json|condensed)$", description="Output format: ddl (full), condensed (pruned columns), compact (one-line), json"),
+    format: str = Query(
+        default="ddl",
+        pattern="^(ddl|compact|json|condensed)$",
+        description="Output format: ddl (full), condensed (pruned columns), compact (one-line), json",
+    ),
     max_tables: int = Query(default=20, ge=1, le=100, description="Max tables in linked schema"),
-    prune_columns: bool = Query(default=False, description="Drop columns with 0 relevance from low-scoring tables (reduces token count 30-60%%)"),
+    prune_columns: bool = Query(
+        default=False, description="Drop columns with 0 relevance from low-scoring tables (reduces token count 30-60%%)"
+    ),
 ):
     """Smart schema linking — find tables and columns relevant to a natural language question.
 
@@ -1403,15 +1537,82 @@ async def schema_link(
     # Step 1: Tokenize question into search terms
     # Extract meaningful words (3+ chars, not common SQL/English stopwords)
     stopwords = {
-        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
-        "her", "was", "one", "our", "out", "has", "how", "man", "new", "now",
-        "old", "see", "way", "who", "did", "get", "has", "him", "his", "let",
-        "say", "she", "too", "use", "what", "which", "show", "find", "list",
-        "give", "tell", "many", "much", "each", "every", "from", "with", "that",
-        "this", "have", "will", "your", "they", "been", "more", "when", "make",
-        "like", "very", "just", "than", "them", "some", "would", "could",
-        "select", "where", "group", "having", "limit",
-        "result", "table", "column", "database", "query", "display", "retrieve",
+        "the",
+        "and",
+        "for",
+        "are",
+        "but",
+        "not",
+        "you",
+        "all",
+        "can",
+        "had",
+        "her",
+        "was",
+        "one",
+        "our",
+        "out",
+        "has",
+        "how",
+        "man",
+        "new",
+        "now",
+        "old",
+        "see",
+        "way",
+        "who",
+        "did",
+        "get",
+        "him",
+        "his",
+        "let",
+        "say",
+        "she",
+        "too",
+        "use",
+        "what",
+        "which",
+        "show",
+        "find",
+        "list",
+        "give",
+        "tell",
+        "many",
+        "much",
+        "each",
+        "every",
+        "from",
+        "with",
+        "that",
+        "this",
+        "have",
+        "will",
+        "your",
+        "they",
+        "been",
+        "more",
+        "when",
+        "make",
+        "like",
+        "very",
+        "just",
+        "than",
+        "them",
+        "some",
+        "would",
+        "could",
+        "select",
+        "where",
+        "group",
+        "having",
+        "limit",
+        "result",
+        "table",
+        "column",
+        "database",
+        "query",
+        "display",
+        "retrieve",
     }
     # Semantic synonyms for common business/analytical terms that map to column names
     # This improves recall when the question uses different words than the schema
@@ -1463,11 +1664,15 @@ async def schema_link(
         "order": ["purchase", "transaction", "booking", "request"],
     }
     question_lower = question.lower()
-    terms = [w for w in _re_link.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question_lower) if len(w) >= 3 and w not in stopwords]
+    terms = [
+        w for w in _re_link.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question_lower) if len(w) >= 3 and w not in stopwords
+    ]
 
     # N-gram extraction: combine adjacent terms into compound matches
     # "order items" should match "order_items" table, "customer address" → "customer_address"
-    raw_terms = [w for w in _re_link.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', question_lower) if len(w) >= 2 and w not in stopwords]
+    raw_terms = [
+        w for w in _re_link.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question_lower) if len(w) >= 2 and w not in stopwords
+    ]
     ngram_terms: list[str] = []
     for i in range(len(raw_terms) - 1):
         bigram = f"{raw_terms[i]}_{raw_terms[i + 1]}"
@@ -1558,12 +1763,56 @@ async def schema_link(
     # Question-type detection: boost relevant column types
     # Aggregation questions → boost numeric columns
     # Time questions → boost date/timestamp columns
-    _agg_keywords = {"average", "avg", "sum", "total", "count", "max", "maximum", "min", "minimum",
-                     "mean", "median", "aggregate", "top", "bottom", "highest", "lowest", "most", "least"}
-    _time_keywords = {"when", "date", "year", "month", "week", "day", "quarter", "recent",
-                      "latest", "oldest", "between", "before", "after", "during", "period"}
-    _numeric_types = {"int", "integer", "bigint", "smallint", "float", "double", "decimal",
-                      "numeric", "real", "number", "money"}
+    _agg_keywords = {
+        "average",
+        "avg",
+        "sum",
+        "total",
+        "count",
+        "max",
+        "maximum",
+        "min",
+        "minimum",
+        "mean",
+        "median",
+        "aggregate",
+        "top",
+        "bottom",
+        "highest",
+        "lowest",
+        "most",
+        "least",
+    }
+    _time_keywords = {
+        "when",
+        "date",
+        "year",
+        "month",
+        "week",
+        "day",
+        "quarter",
+        "recent",
+        "latest",
+        "oldest",
+        "between",
+        "before",
+        "after",
+        "during",
+        "period",
+    }
+    _numeric_types = {
+        "int",
+        "integer",
+        "bigint",
+        "smallint",
+        "float",
+        "double",
+        "decimal",
+        "numeric",
+        "real",
+        "number",
+        "money",
+    }
     _time_types = {"date", "datetime", "timestamp", "timestamptz", "time"}
 
     question_words = set(question_lower.split())
@@ -1631,15 +1880,15 @@ async def schema_link(
         # Question-type boosting: prefer tables with relevant column types
         if is_aggregation and score > 0:
             numeric_cols = sum(
-                1 for c in table_data.get("columns", [])
-                if c.get("type", "").lower().split("(")[0] in _numeric_types
+                1 for c in table_data.get("columns", []) if c.get("type", "").lower().split("(")[0] in _numeric_types
             )
             if numeric_cols > 0:
                 score += min(numeric_cols * 0.5, 3.0)
 
         if is_temporal and score > 0:
             time_cols = sum(
-                1 for c in table_data.get("columns", [])
+                1
+                for c in table_data.get("columns", [])
                 if c.get("type", "").lower().split("(")[0] in _time_types
                 or any(kw in c.get("name", "").lower() for kw in ("date", "time", "created", "updated"))
             )
@@ -1728,10 +1977,12 @@ async def schema_link(
 
     # If no matches found, fall back to first N tables sorted by FK relevance
     if not linked_keys:
+
         def _fb_relevance(key: str) -> tuple:
             t = filtered[key]
             return (-len(t.get("foreign_keys", [])), -(t.get("row_count", 0) or 0), key)
-        linked_keys = set(sorted(filtered.keys(), key=_fb_relevance)[:min(max_tables, 10)])
+
+        linked_keys = set(sorted(filtered.keys(), key=_fb_relevance)[: min(max_tables, 10)])
 
     # Build response
     linked_schema = {k: filtered[k] for k in sorted(linked_keys) if k in filtered}
@@ -1820,7 +2071,9 @@ async def schema_link(
             if pk_cols:
                 col_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
             for fk in t.get("foreign_keys", []):
-                col_parts.append(f"  FOREIGN KEY ({fk['column']}) REFERENCES {fk.get('references_table', '')}({fk.get('references_column', '')})")
+                col_parts.append(
+                    f"  FOREIGN KEY ({fk['column']}) REFERENCES {fk.get('references_table', '')}({fk.get('references_column', '')})"
+                )
             pruned_note = ""
             if len(kept_cols) < len(all_cols):
                 pruned_note = f" -- {len(all_cols) - len(kept_cols)} columns pruned"
@@ -1966,12 +2219,14 @@ async def schema_link(
         if pk_cols:
             col_parts.append(f"  PRIMARY KEY ({', '.join(pk_cols)})")
         for fk in t.get("foreign_keys", []):
-            col_parts.append(f"  FOREIGN KEY ({fk['column']}) REFERENCES {fk.get('references_table', '')}({fk.get('references_column', '')})")
+            col_parts.append(
+                f"  FOREIGN KEY ({fk['column']}) REFERENCES {fk.get('references_table', '')}({fk.get('references_column', '')})"
+            )
         rc = t.get("row_count", 0)
         # Build metadata comment
         meta_parts = []
         if rc:
-            meta_parts.append(f"{rc:,} rows" if rc < 1_000_000 else f"{rc/1_000_000:.1f}M rows")
+            meta_parts.append(f"{rc:,} rows" if rc < 1_000_000 else f"{rc / 1_000_000:.1f}M rows")
         engine = t.get("engine", "")
         if engine:
             meta_parts.append(f"ENGINE={engine}")
@@ -2000,8 +2255,20 @@ async def schema_link(
     # Proactively fetch sample values for linked tables that lack them (background)
     # Next schema_link call will include inline samples in DDL annotations
     missing_samples = []
-    string_types = {"character varying", "varchar", "text", "char", "character", "enum",
-                   "String", "VARCHAR", "TEXT", "CHAR", "NVARCHAR", "string"}
+    string_types = {
+        "character varying",
+        "varchar",
+        "text",
+        "char",
+        "character",
+        "enum",
+        "String",
+        "VARCHAR",
+        "TEXT",
+        "CHAR",
+        "NVARCHAR",
+        "string",
+    }
     for key in linked_keys:
         if key not in filtered:
             continue
@@ -2009,7 +2276,8 @@ async def schema_link(
             continue  # Already cached
         t = filtered[key]
         sample_cols = [
-            c["name"] for c in t.get("columns", [])
+            c["name"]
+            for c in t.get("columns", [])
             if c.get("type", "") in string_types or "char" in c.get("type", "").lower()
         ]
         if sample_cols:
@@ -2020,7 +2288,9 @@ async def schema_link(
             conn_str = await store.get_connection_string(name)
             if conn_str:
                 extras = await store.get_credential_extras(name)
-                async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+                async with pool_manager.connection(
+                    info.db_type, conn_str, credential_extras=extras, connection_name=name
+                ) as connector:
                     for key, t, sample_cols in missing_samples[:5]:  # Cap at 5 tables
                         table_name = f"{t.get('schema', '')}.{t['name']}" if t.get("schema") else t["name"]
                         try:
@@ -2173,28 +2443,63 @@ async def refine_schema(
         for match in _re_refine.finditer(pattern, sql_clean, _re_refine.IGNORECASE):
             groups = [g for g in match.groups() if g]
             for g in groups:
-                referenced_tables.add(g.lower().strip('`"\'[]'))
+                referenced_tables.add(g.lower().strip("`\"'[]"))
 
     col_patterns = [
         r'(?:SELECT|WHERE|AND|OR|ON|BY|HAVING|SET)\s+(?:`|"|\'|\[)?(\w+)(?:`|"|\'|\])?',
-        r'(\w+)\s*(?:=|<|>|!=|<>|LIKE|IN|BETWEEN|IS)',
+        r"(\w+)\s*(?:=|<|>|!=|<>|LIKE|IN|BETWEEN|IS)",
     ]
     sql_keywords = {
-        'select', 'from', 'where', 'and', 'or', 'not', 'null',
-        'true', 'false', 'case', 'when', 'then', 'else', 'end',
-        'as', 'in', 'is', 'on', 'by', 'having', 'set', 'all',
-        'distinct', 'count', 'sum', 'avg', 'min', 'max', 'like',
-        'between', 'exists', 'any', 'group', 'order', 'limit',
-        'offset', 'union', 'except', 'intersect', 'asc', 'desc',
+        "select",
+        "from",
+        "where",
+        "and",
+        "or",
+        "not",
+        "null",
+        "true",
+        "false",
+        "case",
+        "when",
+        "then",
+        "else",
+        "end",
+        "as",
+        "in",
+        "is",
+        "on",
+        "by",
+        "having",
+        "set",
+        "all",
+        "distinct",
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "like",
+        "between",
+        "exists",
+        "any",
+        "group",
+        "order",
+        "limit",
+        "offset",
+        "union",
+        "except",
+        "intersect",
+        "asc",
+        "desc",
     }
     for pattern in col_patterns:
         for match in _re_refine.finditer(pattern, sql_clean, _re_refine.IGNORECASE):
-            col = match.group(1).lower().strip('`"\'[]')
+            col = match.group(1).lower().strip("`\"'[]")
             if col not in sql_keywords:
                 referenced_columns.add(col)
 
     # Also extract dotted references like t.column_name
-    for match in _re_refine.finditer(r'(\w+)\.(\w+)', sql_clean):
+    for match in _re_refine.finditer(r"(\w+)\.(\w+)", sql_clean):
         alias_or_table = match.group(1).lower()
         col = match.group(2).lower()
         referenced_tables.add(alias_or_table)
@@ -2341,11 +2646,13 @@ async def explore_table(
     for key, tbl in cached.items():
         for fk in tbl.get("foreign_keys", []):
             if fk.get("references_table") == table_data.get("name"):
-                result["referenced_by"].append({
-                    "table": key,
-                    "column": fk["column"],
-                    "references_column": fk["references_column"],
-                })
+                result["referenced_by"].append(
+                    {
+                        "table": key,
+                        "column": fk["column"],
+                        "references_column": fk["references_column"],
+                    }
+                )
 
     # Build enriched column list
     string_cols = []
@@ -2384,7 +2691,9 @@ async def explore_table(
                 conn_str = await store.get_connection_string(name)
                 if conn_str:
                     extras = await store.get_credential_extras(name)
-                    async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+                    async with pool_manager.connection(
+                        info.db_type, conn_str, credential_extras=extras, connection_name=name
+                    ) as connector:
                         samples = await connector.get_sample_values(table, string_cols[:10], limit=sample_limit)
                     if samples:
                         schema_cache.put_sample_values(name, table, samples)
@@ -2428,9 +2737,16 @@ async def get_schema_overview(name: str, store: StoreD):
             "fks": len(fks),
         }
         for meta_key in (
-            "engine", "sorting_key", "diststyle", "sortkey",
-            "clustering_key", "partitioning", "clustering_fields",
-            "size_bytes", "size_mb", "total_bytes",
+            "engine",
+            "sorting_key",
+            "diststyle",
+            "sortkey",
+            "clustering_key",
+            "partitioning",
+            "clustering_fields",
+            "size_bytes",
+            "size_mb",
+            "total_bytes",
         ):
             val = table.get(meta_key)
             if val:
@@ -2455,20 +2771,16 @@ async def get_schema_overview(name: str, store: StoreD):
         "avg_columns_per_table": round(total_columns / total_tables, 1) if total_tables else 0,
         "largest_tables": largest_tables[:10],
         "estimated_schema_tokens": total_columns * 8 + total_tables * 20,
-        "recommendation": (
-            "compact" if total_columns > 200
-            else "full" if total_columns < 50
-            else "enriched"
-        ),
+        "recommendation": ("compact" if total_columns > 200 else "full" if total_columns < 50 else "enriched"),
         "inferred_joins": len(inferred_joins),
         "spider2_hints": {
             "needs_compression": total_columns > 500,
-            "has_partitioned_tables": any(
-                "_20" in (t.get("name", "") or "") for t in filtered.values()
-            ),
+            "has_partitioned_tables": any("_20" in (t.get("name", "") or "") for t in filtered.values()),
             "join_complexity": (
-                "high" if (total_fks + len(inferred_joins)) > 15
-                else "medium" if (total_fks + len(inferred_joins)) > 5
+                "high"
+                if (total_fks + len(inferred_joins)) > 15
+                else "medium"
+                if (total_fks + len(inferred_joins)) > 5
                 else "low"
             ),
             "has_implicit_joins": len(inferred_joins) > 0,
@@ -2487,7 +2799,9 @@ async def get_schema_diff(name: str, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             new_schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
@@ -2562,7 +2876,9 @@ async def get_all_schema_changes():
 async def get_filtered_schema_endpoint(
     name: str,
     store: StoreD,
-    schema_prefix: str = Query(default="", description="Filter by schema/database prefix (e.g., 'public', 'analytics')"),
+    schema_prefix: str = Query(
+        default="", description="Filter by schema/database prefix (e.g., 'public', 'analytics')"
+    ),
     table_prefix: str = Query(default="", description="Filter by table name prefix"),
     include_columns: bool = Query(default=True, description="Include column details"),
     max_tables: int = Query(default=100, ge=1, le=1000, description="Maximum tables to return"),
@@ -2628,14 +2944,16 @@ async def get_schema_relationships(
         tbl_name = table.get("name", "")
         for fk in table.get("foreign_keys", []):
             ref_schema = fk.get("references_schema", tbl_schema)
-            relationships.append({
-                "from_schema": tbl_schema,
-                "from_table": tbl_name,
-                "from_column": fk["column"],
-                "to_schema": ref_schema,
-                "to_table": fk["references_table"],
-                "to_column": fk["references_column"],
-            })
+            relationships.append(
+                {
+                    "from_schema": tbl_schema,
+                    "from_table": tbl_name,
+                    "from_column": fk["column"],
+                    "to_schema": ref_schema,
+                    "to_table": fk["references_table"],
+                    "to_column": fk["references_column"],
+                }
+            )
     explicit_count = len(relationships)
 
     # Add implicit/inferred joins
@@ -2643,14 +2961,15 @@ async def get_schema_relationships(
     if include_implicit:
         inferred = _infer_implicit_joins(filtered)
         explicit_set = {
-            (r["from_table"].lower(), r["from_column"].lower(),
-             r["to_table"].lower(), r["to_column"].lower())
+            (r["from_table"].lower(), r["from_column"].lower(), r["to_table"].lower(), r["to_column"].lower())
             for r in relationships
         }
         for inf in inferred:
             edge = (
-                inf["from_table"].lower(), inf["from_column"].lower(),
-                inf["to_table"].lower(), inf["to_column"].lower(),
+                inf["from_table"].lower(),
+                inf["from_column"].lower(),
+                inf["to_table"].lower(),
+                inf["to_column"].lower(),
             )
             if edge not in explicit_set:
                 relationships.append(inf)
@@ -2748,8 +3067,7 @@ async def get_join_paths(
 
     def resolve_table(name_input: str) -> str | None:
         if name_input in edges or name_input in {
-            k for t in filtered.values()
-            for k in [f"{t.get('schema', '')}.{t.get('name', '')}"]
+            k for t in filtered.values() for k in [f"{t.get('schema', '')}.{t.get('name', '')}"]
         }:
             return name_input
         for key, table in filtered.items():
@@ -2788,22 +3106,24 @@ async def get_join_paths(
                 continue
 
             new_tables = path_tables + [to_t]
-            new_joins = path_joins + [{
-                "from": f"{from_t}.{from_col}",
-                "to": f"{to_t}.{to_col}",
-            }]
+            new_joins = path_joins + [
+                {
+                    "from": f"{from_t}.{from_col}",
+                    "to": f"{to_t}.{to_col}",
+                }
+            ]
 
             if to_t == dst:
-                paths.append({
-                    "hops": len(new_joins),
-                    "tables": new_tables,
-                    "joins": new_joins,
-                    "sql_hint": " JOIN ".join(
-                        f"{t}" for t in new_tables
-                    ) + " ON " + " AND ".join(
-                        f"{j['from']} = {j['to']}" for j in new_joins
-                    ),
-                })
+                paths.append(
+                    {
+                        "hops": len(new_joins),
+                        "tables": new_tables,
+                        "joins": new_joins,
+                        "sql_hint": " JOIN ".join(f"{t}" for t in new_tables)
+                        + " ON "
+                        + " AND ".join(f"{j['from']} = {j['to']}" for j in new_joins),
+                    }
+                )
             else:
                 queue.append((to_t, new_tables, new_joins))
 
@@ -2823,7 +3143,9 @@ async def get_cached_sample_values(
     name: str,
     store: StoreD,
     table: str = Query(..., description="Full table name (e.g., 'public.customers')"),
-    columns: str = Query(default="", max_length=2000, description="Comma-separated column names. Empty = auto-select string/enum columns"),
+    columns: str = Query(
+        default="", max_length=2000, description="Comma-separated column names. Empty = auto-select string/enum columns"
+    ),
     limit: int = Query(default=5, ge=1, le=20, description="Max distinct values per column"),
 ):
     """Get cached sample values for schema linking optimization."""
@@ -2845,7 +3167,9 @@ async def get_cached_sample_values(
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             col_list: list[str] = []
             if columns:
                 col_list = [c.strip() for c in columns.split(",") if c.strip()]
@@ -2887,7 +3211,12 @@ async def get_cached_sample_values(
 async def search_schema(
     name: str,
     store: StoreD,
-    q: str = Query(..., min_length=1, max_length=500, description="Search query -- matches table names, column names, column comments"),
+    q: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Search query -- matches table names, column names, column comments",
+    ),
     include_samples: bool = Query(default=False, description="Include sample values for matched columns"),
     limit: int = Query(default=20, ge=1, le=100, description="Max tables to return"),
 ):
@@ -3007,14 +3336,14 @@ async def search_schema(
     if include_samples and results:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+            async with pool_manager.connection(
+                info.db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
                 for key, table in results.items():
                     matched_cols = table.get("_matched_columns", [])
                     if matched_cols and hasattr(connector, "get_sample_values"):
                         full_name = (
-                            f"{table.get('schema', '')}.{table['name']}"
-                            if table.get("schema")
-                            else table["name"]
+                            f"{table.get('schema', '')}.{table['name']}" if table.get("schema") else table["name"]
                         )
                         try:
                             samples = await connector.get_sample_values(full_name, matched_cols[:5], limit=3)
@@ -3162,8 +3491,7 @@ async def generate_semantic_model(name: str, store: StoreD):
                 "type": "many_to_one",
             }
             existing = any(
-                j.get("from") == join_entry["from"] and j.get("to") == join_entry["to"]
-                for j in model.get("joins", [])
+                j.get("from") == join_entry["from"] and j.get("to") == join_entry["to"] for j in model.get("joins", [])
             )
             if not existing:
                 model["joins"].append(join_entry)
@@ -3301,10 +3629,32 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
 
     db_type = info.db_type
     numeric_types = {
-        "integer", "int", "bigint", "smallint", "numeric", "decimal",
-        "float", "double", "real", "number", "int4", "int8", "int2",
-        "float4", "float8", "Float32", "Float64", "UInt32", "UInt64",
-        "Int32", "Int64", "INTEGER", "BIGINT", "FLOAT64", "NUMERIC", "DECIMAL",
+        "integer",
+        "int",
+        "bigint",
+        "smallint",
+        "numeric",
+        "decimal",
+        "float",
+        "double",
+        "real",
+        "number",
+        "int4",
+        "int8",
+        "int2",
+        "float4",
+        "float8",
+        "Float32",
+        "Float64",
+        "UInt32",
+        "UInt64",
+        "Int32",
+        "Int64",
+        "INTEGER",
+        "BIGINT",
+        "FLOAT64",
+        "NUMERIC",
+        "DECIMAL",
     }
 
     conn_str = await store.get_connection_string(name)
@@ -3326,7 +3676,8 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
         numeric_stats: dict[str, dict] = {}
         if include_stats:
             num_cols = [
-                c for c in explore_cols
+                c
+                for c in explore_cols
                 if c.get("type", "").lower().rstrip("()0123456789, ").split("(")[0] in numeric_types
             ]
             if num_cols:
@@ -3334,12 +3685,14 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
                 for c in num_cols[:15]:
                     cn = c["name"]
                     q = (
-                        '"' if db_type in ("postgres", "redshift", "snowflake", "duckdb", "sqlite", "trino")
-                        else '`' if db_type in ("mysql", "clickhouse", "databricks")
-                        else '['
+                        '"'
+                        if db_type in ("postgres", "redshift", "snowflake", "duckdb", "sqlite", "trino")
+                        else "`"
+                        if db_type in ("mysql", "clickhouse", "databricks")
+                        else "["
                     )
-                    if q == '[':
-                        qo, qc = '[', ']'
+                    if q == "[":
+                        qo, qc = "[", "]"
                     else:
                         qo = qc = q
                     safe = cn.replace(qc, qc + qc)

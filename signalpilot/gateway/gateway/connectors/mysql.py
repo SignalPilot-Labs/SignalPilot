@@ -38,7 +38,7 @@ class MySQLConnector(BaseConnector):
 
     @property
     def _identifier_quote(self) -> str:
-        return '`'
+        return "`"
 
     # ─── Credential extras ────────────────────────────────────────────
 
@@ -125,22 +125,28 @@ class MySQLConnector(BaseConnector):
         except pymysql.err.OperationalError as e:
             code = e.args[0] if e.args else 0
             if code == 1045:
-                raise RuntimeError(f"Authentication failed: Access denied for user '{connect_kwargs.get('user', '')}'") from e
+                raise RuntimeError(
+                    f"Authentication failed: Access denied for user '{connect_kwargs.get('user', '')}'"
+                ) from e
             elif code == 2003:
-                raise RuntimeError(f"Connection failed: Can't connect to MySQL server on '{connect_kwargs.get('host', '')}:{connect_kwargs.get('port', 3306)}'") from e
+                raise RuntimeError(
+                    f"Connection failed: Can't connect to MySQL server on '{connect_kwargs.get('host', '')}:{connect_kwargs.get('port', 3306)}'"
+                ) from e
             elif code == 1049:
-                raise RuntimeError(f"Database not found: Unknown database '{connect_kwargs.get('database', '')}'") from e
+                raise RuntimeError(
+                    f"Database not found: Unknown database '{connect_kwargs.get('database', '')}'"
+                ) from e
             raise RuntimeError(f"MySQL connection error: {e}") from e
 
     def _parse_connection_string(self, conn_str: str) -> dict:
         """Parse mysql+pymysql://user:pass@host:port/db or mysql://... format."""
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote, urlparse
 
         # Normalize scheme
         s = conn_str
         for prefix in ("mysql+pymysql://", "mysql://", "mariadb://"):
             if s.startswith(prefix):
-                s = "mysql://" + s[len(prefix):]
+                s = "mysql://" + s[len(prefix) :]
                 break
 
         parsed = urlparse(s)
@@ -154,7 +160,9 @@ class MySQLConnector(BaseConnector):
 
     # ─── Execute ──────────────────────────────────────────────────────
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -179,6 +187,7 @@ class MySQLConnector(BaseConnector):
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
+
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -271,11 +280,13 @@ class MySQLConnector(BaseConnector):
             key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}"
             if key not in indexes:
                 indexes[key] = []
-            indexes[key].append({
-                "name": r["INDEX_NAME"],
-                "columns": r["columns"],
-                "unique": not r["NON_UNIQUE"],
-            })
+            indexes[key].append(
+                {
+                    "name": r["INDEX_NAME"],
+                    "columns": r["columns"],
+                    "unique": not r["NON_UNIQUE"],
+                }
+            )
 
         # Build FK map
         foreign_keys: dict[str, list[dict]] = {}
@@ -283,12 +294,14 @@ class MySQLConnector(BaseConnector):
             key = f"{r['TABLE_SCHEMA']}.{r['TABLE_NAME']}"
             if key not in foreign_keys:
                 foreign_keys[key] = []
-            foreign_keys[key].append({
-                "column": r["COLUMN_NAME"],
-                "references_schema": r["REFERENCED_TABLE_SCHEMA"],
-                "references_table": r["REFERENCED_TABLE_NAME"],
-                "references_column": r["REFERENCED_COLUMN_NAME"],
-            })
+            foreign_keys[key].append(
+                {
+                    "column": r["COLUMN_NAME"],
+                    "references_schema": r["REFERENCED_TABLE_SCHEMA"],
+                    "references_table": r["REFERENCED_TABLE_NAME"],
+                    "references_column": r["REFERENCED_COLUMN_NAME"],
+                }
+            )
 
         schema: dict[str, Any] = {}
         for row in rows:
@@ -328,11 +341,12 @@ class MySQLConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         self._ensure_connected()
         try:
-            sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            sql = self._build_sample_union_sql(table, columns, limit, quote="`")
             t0 = _time.monotonic()
             with self._conn.cursor() as cursor:
                 cursor.execute(sql)

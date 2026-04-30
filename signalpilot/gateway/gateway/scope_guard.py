@@ -76,6 +76,7 @@ def RequireScope(*scopes: str) -> Any:
         async def my_endpoint(_: None = RequireScope("admin")):
             ...
     """
+
     async def _check(request: Request, _user_id: str = Depends(_resolve_user_id)) -> None:
         require_scopes(request, *scopes)
 

@@ -16,7 +16,7 @@ class SQLiteConnector(BaseConnector):
 
     @property
     def _identifier_quote(self) -> str:
-        return '['
+        return "["
 
     async def connect(self, connection_string: str) -> None:
         # connection_string is the file path (or :memory:)
@@ -52,18 +52,23 @@ class SQLiteConnector(BaseConnector):
             self._conn = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
         # SQLite timeout via progress handler — cancels after N seconds
         if timeout:
             import time
+
             start = time.monotonic()
+
             def _timeout_handler():
                 if time.monotonic() - start > timeout:
                     return 1  # Non-zero cancels the operation
                 return 0
+
             self._conn.set_progress_handler(_timeout_handler, 1000)
 
         try:
@@ -81,9 +86,12 @@ class SQLiteConnector(BaseConnector):
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
+
         if self._conn is None:
             raise RuntimeError("Not connected")
-        _master_sql = "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
+        _master_sql = (
+            "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
+        )
         t0 = _time.monotonic()
         cursor = self._conn.execute(_master_sql)
         table_rows = cursor.fetchall()
@@ -95,7 +103,9 @@ class SQLiteConnector(BaseConnector):
         row_counts: dict[str, int] = {}
         if tables:
             # Build a UNION ALL query for all table counts at once
-            count_parts = [f"SELECT '{t.replace(chr(39), chr(39)+chr(39))}' AS t, COUNT(*) AS c FROM [{t}]" for t in tables]
+            count_parts = [
+                f"SELECT '{t.replace(chr(39), chr(39) + chr(39))}' AS t, COUNT(*) AS c FROM [{t}]" for t in tables
+            ]
             try:
                 count_sql = " UNION ALL ".join(count_parts)
                 t0 = _time.monotonic()
@@ -112,25 +122,29 @@ class SQLiteConnector(BaseConnector):
             cursor = self._conn.execute(f"PRAGMA table_info([{table}])")
             columns = []
             for row in cursor.fetchall():
-                columns.append({
-                    "name": row[1],
-                    "type": row[2],
-                    "nullable": not row[3],
-                    "primary_key": bool(row[5]),
-                    "default": row[4],
-                    "comment": "",
-                })
+                columns.append(
+                    {
+                        "name": row[1],
+                        "type": row[2],
+                        "nullable": not row[3],
+                        "primary_key": bool(row[5]),
+                        "default": row[4],
+                        "comment": "",
+                    }
+                )
 
             # Foreign keys — critical for Spider2.0-Lite join path discovery
             foreign_keys = []
             try:
                 cursor = self._conn.execute(f"PRAGMA foreign_key_list([{table}])")
                 for fk_row in cursor.fetchall():
-                    foreign_keys.append({
-                        "column": fk_row[3],  # from column
-                        "references_table": fk_row[2],  # table
-                        "references_column": fk_row[4],  # to column
-                    })
+                    foreign_keys.append(
+                        {
+                            "column": fk_row[3],  # from column
+                            "references_table": fk_row[2],  # table
+                            "references_column": fk_row[4],  # to column
+                        }
+                    )
             except Exception:
                 pass
 
@@ -147,6 +161,7 @@ class SQLiteConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         try:
@@ -164,7 +179,7 @@ class SQLiteConnector(BaseConnector):
                 try:
                     safe_col = self._quote_identifier(col)
                     cursor = self._conn.execute(
-                        f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                        f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
                     )
                     values = [str(row[0]) for row in cursor.fetchall()]
                     if values:

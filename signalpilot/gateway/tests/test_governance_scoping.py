@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
+from gateway.connectors.schema_cache import SchemaCache
 from gateway.governance.budget import BudgetLedger
 from gateway.governance.cache import QueryCache
 from gateway.governance.context import current_org_id_var, require_org_id
-from gateway.connectors.schema_cache import SchemaCache
 
 
 class TestBudgetOrgIsolation:
@@ -190,7 +190,8 @@ class TestAnnotationsOrgIsolation:
     def test_annotations_cache_keyed_by_org(self, tmp_path: Path):
         """load_annotations returns independent results for different orgs."""
         import os
-        from gateway.governance.annotations import load_annotations, _annotations_cache
+
+        from gateway.governance.annotations import _annotations_cache, load_annotations
 
         # Clear the global annotations cache so prior tests don't interfere
         _annotations_cache.clear()
@@ -198,9 +199,7 @@ class TestAnnotationsOrgIsolation:
         # Write a YAML file only for org-a
         org_a_dir = tmp_path / "annotations" / "org-a"
         org_a_dir.mkdir(parents=True)
-        (org_a_dir / "myconn.yml").write_text(
-            "tables:\n  users:\n    description: Org A users\n    blocked: false\n"
-        )
+        (org_a_dir / "myconn.yml").write_text("tables:\n  users:\n    description: Org A users\n    blocked: false\n")
 
         old_data_dir = os.environ.get("SP_DATA_DIR")
         os.environ["SP_DATA_DIR"] = str(tmp_path)
@@ -222,7 +221,8 @@ class TestAnnotationsOrgIsolation:
     def test_cloud_mode_flat_fallback_disabled(self, tmp_path: Path):
         """Cloud-mode org_id must not fall back to flat-path files."""
         import os
-        from gateway.governance.annotations import load_annotations, _annotations_cache
+
+        from gateway.governance.annotations import _annotations_cache, load_annotations
 
         _annotations_cache.clear()
 
@@ -254,6 +254,7 @@ class TestRequireOrgIdFails:
         """Calling require_org_id() without setting the var raises RuntimeError."""
         # Use a fresh context to avoid the autouse fixture's value
         import contextvars
+
         ctx = contextvars.copy_context()
 
         def _check():
@@ -266,6 +267,7 @@ class TestRequireOrgIdFails:
     def test_query_cache_raises_when_unset(self):
         """QueryCache.get raises when no org context is set."""
         import contextvars
+
         ctx = contextvars.copy_context()
         cache = QueryCache()
 
@@ -286,6 +288,7 @@ class TestContextVarPropagation:
         async def _run():
             token = current_org_id_var.set("org-parent")
             try:
+
                 async def child():
                     return current_org_id_var.get()
 

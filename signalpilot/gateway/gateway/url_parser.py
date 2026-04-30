@@ -58,7 +58,7 @@ def parse_connection_url(url: str, db_type: str = "") -> dict[str, Any]:
     normalized = url
     if "://" in normalized:
         scheme_part = normalized.split("://")[0]
-        normalized = "http://" + normalized[len(scheme_part) + 3:]
+        normalized = "http://" + normalized[len(scheme_part) + 3 :]
 
     try:
         parsed = urlparse(normalized)

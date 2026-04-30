@@ -15,14 +15,16 @@ from typing import Any
 
 class PIIRule(str, Enum):
     """Redaction strategy for PII columns."""
-    hash = "hash"       # SHA-256 hash of the value
-    mask = "mask"       # Partial masking (e.g., j***@email.com)
-    hide = "hide"       # Replace value with ***** (column still visible)
+
+    hash = "hash"  # SHA-256 hash of the value
+    mask = "mask"  # Partial masking (e.g., j***@email.com)
+    hide = "hide"  # Replace value with ***** (column still visible)
 
 
 @dataclass
 class PIIColumnConfig:
     """Configuration for a single PII column."""
+
     table: str
     column: str
     rule: PIIRule
@@ -36,6 +38,7 @@ class PIIRedactor:
     Rules are loaded from schema annotations (schema.yml) and keyed by
     lowercase column name for fast lookup.
     """
+
     # Map of lowercase column name -> rule
     _rules: dict[str, PIIRule] = field(default_factory=dict)
     # Columns that were redacted in the last call (for audit logging)

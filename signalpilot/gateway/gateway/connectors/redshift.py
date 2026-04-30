@@ -33,7 +33,7 @@ class RedshiftConnector(BaseConnector):
         self._iam_access_key: str = ""
         self._iam_secret_key: str = ""
         self._iam_cluster_id: str = ""  # For provisioned Redshift
-        self._iam_workgroup: str = ""   # For Redshift Serverless
+        self._iam_workgroup: str = ""  # For Redshift Serverless
 
     def _set_connector_specific_extras(self, extras: dict) -> None:
         """Handle Redshift-specific IAM config and timeout mapping."""
@@ -92,27 +92,31 @@ class RedshiftConnector(BaseConnector):
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PSYCOPG2:
-            raise RuntimeError(
-                "psycopg2 not installed. Run: pip install psycopg2-binary"
-            )
+            raise RuntimeError("psycopg2 not installed. Run: pip install psycopg2-binary")
         # Normalize redshift:// to postgresql:// for psycopg2
         dsn = connection_string
         if dsn.startswith("redshift://"):
-            dsn = "postgresql://" + dsn[len("redshift://"):]
+            dsn = "postgresql://" + dsn[len("redshift://") :]
 
         # IAM auth: replace password with temporary credentials
         if self._iam_auth:
-            from urllib.parse import urlparse, urlunparse, quote
+            from urllib.parse import quote, urlparse, urlunparse
+
             parsed = urlparse(dsn)
             host = parsed.hostname or "localhost"
             db_user = parsed.username or "admin"
             db_name = (parsed.path or "/dev").lstrip("/") or "dev"
             iam_user, iam_pass = self._generate_iam_credentials(db_user, db_name, host)
-            dsn = urlunparse((
-                parsed.scheme,
-                f"{quote(iam_user)}:{quote(iam_pass)}@{parsed.hostname}:{parsed.port or 5439}",
-                parsed.path, parsed.params, parsed.query, parsed.fragment,
-            ))
+            dsn = urlunparse(
+                (
+                    parsed.scheme,
+                    f"{quote(iam_user)}:{quote(iam_pass)}@{parsed.hostname}:{parsed.port or 5439}",
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
             # IAM auth requires SSL
             if not self._ssl_config:
                 self._ssl_config = {"enabled": True, "mode": "require"}
@@ -167,7 +171,9 @@ class RedshiftConnector(BaseConnector):
             self._conn = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -320,12 +326,14 @@ class RedshiftConnector(BaseConnector):
             key = f"{r['table_schema']}.{r['table_name']}"
             if key not in foreign_keys:
                 foreign_keys[key] = []
-            foreign_keys[key].append({
-                "column": r["column_name"],
-                "references_schema": r["foreign_table_schema"],
-                "references_table": r["foreign_table_name"],
-                "references_column": r["foreign_column_name"],
-            })
+            foreign_keys[key].append(
+                {
+                    "column": r["column_name"],
+                    "references_schema": r["foreign_table_schema"],
+                    "references_table": r["foreign_table_name"],
+                    "references_column": r["foreign_column_name"],
+                }
+            )
 
         # Build table info map (from SVV_TABLE_INFO — authoritative for diststyle/sortkeys/rows)
         table_info: dict[str, dict] = {}
@@ -427,14 +435,17 @@ class RedshiftConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote='"')
+
             def _run():
                 with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                     cursor.execute(sql)
                     return cursor.fetchall()
+
             t0 = _time.monotonic()
             rows = await self._run_in_thread(_run, label="Redshift")
             await self._audit_sql(sql.strip(), len(rows), (_time.monotonic() - t0) * 1000)
@@ -448,7 +459,7 @@ class RedshiftConnector(BaseConnector):
                     safe_col = self._quote_identifier(col)
                     with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                         cursor.execute(
-                            f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                            f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
                         )
                         rows = cursor.fetchall()
                         values = [str(r[col]) for r in rows if r.get(col) is not None]

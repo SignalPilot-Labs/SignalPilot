@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gateway.engine import validate_sql
-from gateway.main import app, _global_exception_handler
+from gateway.main import _global_exception_handler, app
 
 
 @pytest.fixture
@@ -118,10 +118,8 @@ class TestSQLParseErrorSanitization:
         if not result.ok and result.blocked_reason and result.blocked_reason.startswith("SQL parse error"):
             # The message after "SQL parse error: " must be at most 100 chars
             prefix = "SQL parse error: "
-            error_part = result.blocked_reason[len(prefix):]
-            assert len(error_part) <= 100, (
-                f"Error detail exceeds 100 chars: {len(error_part)} chars"
-            )
+            error_part = result.blocked_reason[len(prefix) :]
+            assert len(error_part) <= 100, f"Error detail exceeds 100 chars: {len(error_part)} chars"
         else:
             pytest.skip("sqlglot did not raise a parse error on crafted input")
 

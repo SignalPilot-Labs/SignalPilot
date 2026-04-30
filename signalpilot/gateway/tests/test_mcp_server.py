@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gateway.governance.context import current_org_id_var
-from gateway.mcp_server import mcp_org_id_var, mcp_user_id_var, _store_session
+from gateway.mcp_server import _store_session, mcp_org_id_var, mcp_user_id_var
 
 
 class TestStoreSessionOrgAssert:
@@ -45,8 +45,8 @@ class TestStoreSessionOrgAssert:
         mock_factory = MagicMock(return_value=mock_session_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store") as mock_store_cls:
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store") as mock_store_cls:
                     mock_store_instance = MagicMock()
                     mock_store_instance.org_id = "local"
                     mock_store_cls.return_value = mock_store_instance
@@ -74,10 +74,10 @@ class TestCheckBudgetOrgScoping:
         mock_factory = MagicMock(return_value=mock_session_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store") as mock_store_cls:
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store") as mock_store_cls:
                     mock_store_cls.return_value = MagicMock(org_id="local")
-                    with patch("gateway.mcp_server.budget_ledger") as mock_ledger:
+                    with patch("gateway.governance.budget.budget_ledger") as mock_ledger:
                         mock_ledger.get_session = AsyncMock(return_value=None)
                         result = await check_budget("default")
             assert "No budget tracking" in result
@@ -103,8 +103,8 @@ class TestCacheStatusOrgScoping:
         mock_factory = MagicMock(return_value=mock_session_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store") as mock_store_cls:
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store") as mock_store_cls:
                     mock_store_cls.return_value = MagicMock(org_id="local")
                     result = await cache_status()
             assert "Query Cache Status" in result
@@ -126,9 +126,7 @@ class TestFixNondeterminismHazardsOrgScoping:
         (tmp_path / "dbt_project.yml").write_text("name: test_proj\nversion: '1.0'\n")
         models_dir = tmp_path / "models"
         models_dir.mkdir()
-        (models_dir / "my_model.sql").write_text(
-            "SELECT ROW_NUMBER() OVER (ORDER BY created_at) as rn FROM orders"
-        )
+        (models_dir / "my_model.sql").write_text("SELECT ROW_NUMBER() OVER (ORDER BY created_at) as rn FROM orders")
 
         token_org = mcp_org_id_var.set("org-X")
         token_user = mcp_user_id_var.set("user-X")
@@ -166,9 +164,9 @@ class TestFixNondeterminismHazardsOrgScoping:
         mock_pool_manager.connection = MagicMock(return_value=mock_pool_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store", return_value=mock_store):
-                    with patch("gateway.mcp_server.schema_cache", mock_schema_cache, create=True):
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store", return_value=mock_store):
+                    with patch("gateway.connectors.schema_cache.schema_cache", mock_schema_cache):
                         with patch("gateway.connectors.pool_manager.pool_manager", mock_pool_manager):
                             await fix_nondeterminism_hazards(str(tmp_path), "test_conn")
         finally:
@@ -217,8 +215,8 @@ class TestMCPProjectToolsOrgScoping:
         mock_store.create_project = AsyncMock(side_effect=fake_create_project)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store", return_value=mock_store):
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store", return_value=mock_store):
                     result = await create_project("proj1", "conn1")
         finally:
             mcp_org_id_var.reset(token_org)
@@ -259,8 +257,8 @@ class TestMCPProjectToolsOrgScoping:
         mock_store.list_projects = AsyncMock(return_value=[org_a_proj])
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store", return_value=mock_store):
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store", return_value=mock_store):
                     result = await list_projects()
         finally:
             mcp_org_id_var.reset(token_org)

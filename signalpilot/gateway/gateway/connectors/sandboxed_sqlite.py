@@ -134,7 +134,7 @@ class SandboxedSQLiteConnector(BaseConnector):
 
     @property
     def _identifier_quote(self) -> str:
-        return '['
+        return "["
 
     async def connect(self, connection_string: str) -> None:
         """Store the host path. Actual connection happens per-query in the sandbox."""
@@ -143,10 +143,13 @@ class SandboxedSQLiteConnector(BaseConnector):
         if self._sandbox_client is None:
             try:
                 from ..api.deps import get_sandbox_client
+
                 self._sandbox_client = get_sandbox_client()
             except Exception:
-                from ..sandbox_client import SandboxClient
                 import os
+
+                from ..sandbox_client import SandboxClient
+
                 url = os.environ.get("SP_SANDBOX_MANAGER_URL", "http://localhost:8180")
                 self._sandbox_client = SandboxClient(base_url=url)
                 logger.info("SandboxedSQLite: created fallback sandbox client at %s", url)
@@ -176,7 +179,9 @@ class SandboxedSQLiteConnector(BaseConnector):
         except json.JSONDecodeError:
             raise RuntimeError(f"Invalid JSON from sandbox: {result.output[:200]}")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         """Execute a query via sandbox and return rows."""
         code = _build_query_code(sql)
         data = await self._run_sandboxed(code, timeout=timeout or self._query_timeout)
@@ -185,6 +190,7 @@ class SandboxedSQLiteConnector(BaseConnector):
     async def _get_schema_impl(self) -> dict[str, Any]:
         """Get schema via sandbox introspection."""
         import time as _time
+
         code = _build_schema_code()
         t0 = _time.monotonic()
         result = await self._run_sandboxed(code, timeout=30)
@@ -205,7 +211,9 @@ class SandboxedSQLiteConnector(BaseConnector):
                 f"conn.execute('SELECT 1'); conn.close(); print('ok')"
             )
             result = await self._sandbox_client.execute_code_with_mounts(
-                code=code, file_mounts=self._get_mounts(), timeout=10,
+                code=code,
+                file_mounts=self._get_mounts(),
+                timeout=10,
             )
             if not result.success:
                 logger.warning("SandboxedSQLite health_check failed: %s", result.error)

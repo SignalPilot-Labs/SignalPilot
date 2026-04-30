@@ -68,16 +68,19 @@ class TestSettingsEndpoint:
     def test_update_settings_requires_auth(self):
         """PUT /settings requires authentication — unauthenticated requests return 401."""
         unauthenticated = TestClient(app)
-        response = unauthenticated.put("/api/settings", json={
-            "sandbox_manager_url": "http://localhost:8180",
-            "sandbox_provider": "local",
-            "default_row_limit": 5000,
-            "default_budget_usd": 10.0,
-            "default_timeout_seconds": 30,
-            "max_concurrent_sandboxes": 10,
-            "blocked_tables": [],
-            "gateway_url": "http://localhost:3300",
-        })
+        response = unauthenticated.put(
+            "/api/settings",
+            json={
+                "sandbox_manager_url": "http://localhost:8180",
+                "sandbox_provider": "local",
+                "default_row_limit": 5000,
+                "default_budget_usd": 10.0,
+                "default_timeout_seconds": 30,
+                "max_concurrent_sandboxes": 10,
+                "blocked_tables": [],
+                "gateway_url": "http://localhost:3300",
+            },
+        )
         assert response.status_code == 401
 
 

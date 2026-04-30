@@ -14,17 +14,16 @@ def _validate_string_list(v: list[str], max_item_len: int, field_name: str) -> l
     """Validate that each item in a string list does not exceed max_item_len."""
     for item in v:
         if len(item) > max_item_len:
-            raise ValueError(
-                f"Each item in {field_name} must be at most {max_item_len} characters"
-            )
+            raise ValueError(f"Each item in {field_name} must be at most {max_item_len} characters")
     return v
 
 
 # ─── Settings ────────────────────────────────────────────────────────────────
 
+
 class SandboxProvider(str, Enum):
-    local = "local"       # local sandbox_manager at socket/http
-    remote = "remote"     # BYOS -- remote sandbox manager HTTP endpoint
+    local = "local"  # local sandbox_manager at socket/http
+    remote = "remote"  # BYOS -- remote sandbox manager HTTP endpoint
 
 
 class GatewaySettings(BaseModel):
@@ -67,9 +66,7 @@ class ApiKeyCreate(BaseModel):
     def validate_scopes(cls, v: list[str]) -> list[str]:
         invalid = [s for s in v if s not in VALID_API_KEY_SCOPES]
         if invalid:
-            raise ValueError(
-                f"Invalid scope(s): {invalid}. Valid scopes are: {sorted(VALID_API_KEY_SCOPES)}"
-            )
+            raise ValueError(f"Invalid scope(s): {invalid}. Valid scopes are: {sorted(VALID_API_KEY_SCOPES)}")
         return v
 
     @field_validator("expires_at")
@@ -78,6 +75,7 @@ class ApiKeyCreate(BaseModel):
         if v is None:
             return v
         from datetime import datetime
+
         try:
             parsed = datetime.fromisoformat(v)
         except (ValueError, TypeError):
@@ -89,12 +87,13 @@ class ApiKeyCreate(BaseModel):
 
 class ApiKeyRecord(BaseModel):
     """Persisted API key record (hash stored, never the raw key)."""
+
     id: str
     name: str
-    prefix: str          # e.g. "sp_a1b2" — first 7 chars for display
-    key_hash: str        # SHA-256 hex digest of the full raw key
+    prefix: str  # e.g. "sp_a1b2" — first 7 chars for display
+    key_hash: str  # SHA-256 hex digest of the full raw key
     scopes: list[str]
-    created_at: str      # ISO 8601
+    created_at: str  # ISO 8601
     last_used_at: str | None = None
     expires_at: str | None = None
     user_id: str = "local"
@@ -103,6 +102,7 @@ class ApiKeyRecord(BaseModel):
 
 class ApiKeyResponse(BaseModel):
     """Returned to clients — never includes hash."""
+
     id: str
     name: str
     prefix: str
@@ -114,10 +114,12 @@ class ApiKeyResponse(BaseModel):
 
 class ApiKeyCreatedResponse(ApiKeyResponse):
     """Returned only on creation — includes the raw key once."""
+
     raw_key: str
 
 
 # ─── Connections ─────────────────────────────────────────────────────────────
+
 
 class DBType(str, Enum):
     postgres = "postgres"
@@ -135,6 +137,7 @@ class DBType(str, Enum):
 
 class SSHTunnelConfig(BaseModel):
     """SSH tunnel configuration for connecting through bastion hosts."""
+
     enabled: bool = False
     host: str | None = Field(default=None, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
@@ -150,6 +153,7 @@ class SSHTunnelConfig(BaseModel):
 
 class SSLConfig(BaseModel):
     """SSL/TLS configuration for database connections."""
+
     enabled: bool = False
     mode: Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] = "require"
     ca_cert: str | None = Field(default=None, max_length=32768)  # PEM-encoded CA certificate
@@ -184,9 +188,10 @@ class ConnectionCreate(BaseModel):
     credentials_json: str | None = Field(default=None, max_length=65536)  # service account JSON
     location: str | None = Field(default=None, max_length=64)  # BQ location: US, EU, us-east1, etc.
     maximum_bytes_billed: int | None = Field(
-        default=None, ge=0,
+        default=None,
+        ge=0,
         description="BigQuery safety limit: query fails if estimated scan exceeds this (bytes). "
-                    "Recommended: 10GB = 10737418240 for dev, 100GB for prod.",
+        "Recommended: 10GB = 10737418240 for dev, 100GB for prod.",
     )
     # ─── Databricks-specific ────────────────────────────────────────
     http_path: str | None = Field(default=None, max_length=512)  # SQL endpoint path
@@ -232,33 +237,41 @@ class ConnectionCreate(BaseModel):
     @classmethod
     def validate_schema_filters(cls, v: list[str]) -> list[str]:
         return _validate_string_list(v, 256, "schema_filter")
+
     # ─── Scheduled schema refresh (HEX pattern) ───────────────────
     schema_refresh_interval: int | None = Field(
-        default=None, ge=60, le=86400,
+        default=None,
+        ge=60,
+        le=86400,
         description="Auto-refresh schema every N seconds (60-86400). None = disabled.",
     )
     # ─── Timeout configuration ──────────────────────────────────────
     connection_timeout: int | None = Field(
-        default=None, ge=1, le=300,
+        default=None,
+        ge=1,
+        le=300,
         description="Connection timeout in seconds (1-300). Default varies by connector.",
     )
     query_timeout: int | None = Field(
-        default=None, ge=1, le=3600,
+        default=None,
+        ge=1,
+        le=3600,
         description="Query timeout in seconds (1-3600). Default: 120.",
     )
     keepalive_interval: int | None = Field(
-        default=None, ge=0, le=600,
+        default=None,
+        ge=0,
+        le=600,
         description="Keepalive ping interval in seconds. 0 = disabled.",
     )
     # ─── BYOK ───────────────────────────────────────────────────────────
     org_id: str | None = Field(default=None, max_length=100)
-    byok_key_alias: str | None = Field(
-        default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$"
-    )
+    byok_key_alias: str | None = Field(default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class ConnectionUpdate(BaseModel):
     """Partial update for an existing connection. Only provided fields are changed."""
+
     db_type: DBType | None = None
     host: str | None = Field(default=None, max_length=255)
     port: int | None = Field(default=None, ge=1, le=65535)
@@ -301,6 +314,7 @@ class ConnectionUpdate(BaseModel):
         if v is None:
             return v
         return _validate_string_list(v, 256, "schema_filter")
+
     schema_refresh_interval: int | None = Field(default=None, ge=60, le=86400)
     last_schema_refresh: float | None = None  # internal — set by scheduler
     connection_timeout: int | None = Field(default=None, ge=1, le=300)
@@ -358,6 +372,7 @@ class ConnectionInfo(BaseModel):
 
 class ProjectSource(str, Enum):
     """How the dbt project was created or imported."""
+
     new = "new"
     local = "local"
     github = "github"
@@ -366,12 +381,14 @@ class ProjectSource(str, Enum):
 
 class ProjectStorage(str, Enum):
     """Whether the project files are managed by SignalPilot or externally linked."""
+
     managed = "managed"
     linked = "linked"
 
 
 class ProjectStatus(str, Enum):
     """Lifecycle status of a dbt project."""
+
     active = "active"
     error = "error"
     archived = "archived"
@@ -379,6 +396,7 @@ class ProjectStatus(str, Enum):
 
 class ProjectCreate(BaseModel):
     """Payload for creating a new dbt project."""
+
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     connection_name: str = Field(..., min_length=1, max_length=64)
     source: ProjectSource = ProjectSource.new
@@ -403,6 +421,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     """Partial update for an existing dbt project."""
+
     connection_name: str | None = Field(default=None, max_length=64)
     description: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = Field(default=None, max_length=50)
@@ -422,6 +441,7 @@ class ProjectUpdate(BaseModel):
 
 class ProjectInfo(BaseModel):
     """Persisted metadata for a dbt project."""
+
     id: str
     name: str
     connection_name: str
@@ -443,6 +463,7 @@ class ProjectInfo(BaseModel):
 
 
 # ─── Sandboxes ────────────────────────────────────────────────────────────────
+
 
 class SandboxCreate(BaseModel):
     connection_name: str | None = Field(default=None, max_length=64)
@@ -482,6 +503,7 @@ class ExecuteResult(BaseModel):
 
 # ─── Audit ───────────────────────────────────────────────────────────────────
 
+
 class AuditEntry(BaseModel):
     id: str
     timestamp: float
@@ -503,6 +525,7 @@ class AuditEntry(BaseModel):
 
 
 # ─── BYOK API models ─────────────────────────────────────────────────────────
+
 
 class BYOKKeyCreate(BaseModel):
     key_alias: str = Field(..., min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
@@ -565,9 +588,7 @@ def _check_dict_depth(obj: Any, current_depth: int, max_depth: int) -> None:
     nested inputs.
     """
     if current_depth > max_depth:
-        raise ValueError(
-            f"arguments nesting depth exceeds maximum of {max_depth} levels"
-        )
+        raise ValueError(f"arguments nesting depth exceeds maximum of {max_depth} levels")
     if isinstance(obj, dict):
         for value in obj.values():
             _check_dict_depth(value, current_depth + 1, max_depth)
@@ -578,6 +599,7 @@ def _check_dict_depth(obj: Any, current_depth: int, max_depth: int) -> None:
 
 # ─── MCP ─────────────────────────────────────────────────────────────────────
 
+
 class MCPToolCall(BaseModel):
     tool: str = Field(..., max_length=128)
     arguments: dict[str, Any] = {}
@@ -587,9 +609,6 @@ class MCPToolCall(BaseModel):
     def _validate_arguments(self) -> MCPToolCall:
         serialized = json.dumps(self.arguments)
         if len(serialized) > _MCP_ARGUMENTS_MAX_SIZE_BYTES:
-            raise ValueError(
-                f"arguments serialized size exceeds maximum of "
-                f"{_MCP_ARGUMENTS_MAX_SIZE_BYTES} bytes"
-            )
+            raise ValueError(f"arguments serialized size exceeds maximum of {_MCP_ARGUMENTS_MAX_SIZE_BYTES} bytes")
         _check_dict_depth(self.arguments, current_depth=0, max_depth=_MCP_ARGUMENTS_MAX_DEPTH)
         return self

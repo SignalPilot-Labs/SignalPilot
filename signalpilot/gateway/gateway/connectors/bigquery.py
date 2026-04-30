@@ -40,16 +40,13 @@ class BigQueryConnector(BaseConnector):
 
     @property
     def _identifier_quote(self) -> str:
-        return '`'
+        return "`"
 
     # ─── Connect ──────────────────────────────────────────────────────
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_BIGQUERY:
-            raise RuntimeError(
-                "google-cloud-bigquery not installed. "
-                "Run: pip install google-cloud-bigquery"
-            )
+            raise RuntimeError("google-cloud-bigquery not installed. Run: pip install google-cloud-bigquery")
         # connection_string is the project ID
         self._project = connection_string
         # Credentials are set via set_credentials() / set_credential_extras() before connect
@@ -67,8 +64,14 @@ class BigQueryConnector(BaseConnector):
 
     # ─── Credentials ──────────────────────────────────────────────────
 
-    def set_credentials(self, credentials_json: str, project: str = "", dataset: str = "",
-                        location: str = "", maximum_bytes_billed: int | None = None):
+    def set_credentials(
+        self,
+        credentials_json: str,
+        project: str = "",
+        dataset: str = "",
+        location: str = "",
+        maximum_bytes_billed: int | None = None,
+    ):
         """Set credentials from a service account JSON string."""
         if not HAS_BIGQUERY:
             raise RuntimeError("google-cloud-bigquery not installed")
@@ -106,6 +109,7 @@ class BigQueryConnector(BaseConnector):
         """
         try:
             from google.auth import impersonated_credentials
+
             target_scopes = ["https://www.googleapis.com/auth/bigquery"]
             return impersonated_credentials.Credentials(
                 source_credentials=source_creds,
@@ -121,6 +125,7 @@ class BigQueryConnector(BaseConnector):
             raise RuntimeError("google-cloud-bigquery not installed")
         try:
             from google.oauth2.credentials import Credentials as OAuthCredentials
+
             creds = OAuthCredentials(token=self._oauth_token)
             self._client = bigquery.Client(
                 project=self._project,
@@ -178,7 +183,9 @@ class BigQueryConnector(BaseConnector):
 
     # ─── Execute (CRITICAL: non-blocking) ─────────────────────────────
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._client is None:
             raise RuntimeError("Not connected")
 
@@ -204,9 +211,7 @@ class BigQueryConnector(BaseConnector):
                 "total_bytes_processed": query_job.total_bytes_processed,
                 "total_bytes_billed": query_job.total_bytes_billed,
                 "cache_hit": query_job.cache_hit,
-                "estimated_cost_usd": round(
-                    (query_job.total_bytes_billed or 0) / (1024**4) * 6.25, 6
-                ),
+                "estimated_cost_usd": round((query_job.total_bytes_billed or 0) / (1024**4) * 6.25, 6),
                 "slot_millis": getattr(query_job, "slot_millis", None),
                 "job_id": query_job.job_id,
             }
@@ -250,8 +255,7 @@ class BigQueryConnector(BaseConnector):
                 "estimated_cost_usd": round(total_bytes / (1024**4) * 6.25, 6),
                 "human_readable": self._format_bytes(total_bytes),
                 "would_exceed_limit": (
-                    self._maximum_bytes_billed is not None
-                    and total_bytes > self._maximum_bytes_billed
+                    self._maximum_bytes_billed is not None and total_bytes > self._maximum_bytes_billed
                 ),
             }
         except Exception as e:
@@ -275,8 +279,6 @@ class BigQueryConnector(BaseConnector):
         if self._client is None:
             raise RuntimeError("Not connected")
 
-        from concurrent.futures import ThreadPoolExecutor
-
         schema: dict[str, Any] = {}
 
         def _list_datasets():
@@ -295,9 +297,7 @@ class BigQueryConnector(BaseConnector):
             return schema
 
         # Step 2: List tables in all datasets concurrently
-        table_lists = await asyncio.gather(
-            *(asyncio.to_thread(_list_tables, ds.dataset_id) for ds in datasets)
-        )
+        table_lists = await asyncio.gather(*(asyncio.to_thread(_list_tables, ds.dataset_id) for ds in datasets))
 
         # Step 3: Fetch full table metadata concurrently (batched for large schemas)
         all_table_refs = []
@@ -309,9 +309,7 @@ class BigQueryConnector(BaseConnector):
         batch_size = 20
         for i in range(0, len(all_table_refs), batch_size):
             batch = all_table_refs[i : i + batch_size]
-            tables = await asyncio.gather(
-                *(asyncio.to_thread(_get_table, ref) for _, ref in batch)
-            )
+            tables = await asyncio.gather(*(asyncio.to_thread(_get_table, ref) for _, ref in batch))
             for (dataset_id, _), table in zip(batch, tables):
                 key = f"{dataset_id}.{table.table_id}"
 
@@ -320,14 +318,16 @@ class BigQueryConnector(BaseConnector):
                     cols = []
                     for field in fields:
                         full_name = f"{prefix}.{field.name}" if prefix else field.name
-                        cols.append({
-                            "name": full_name,
-                            "type": field.field_type,
-                            "nullable": field.mode != "REQUIRED",
-                            "primary_key": False,
-                            "comment": field.description or "",
-                            "mode": field.mode,
-                        })
+                        cols.append(
+                            {
+                                "name": full_name,
+                                "type": field.field_type,
+                                "nullable": field.mode != "REQUIRED",
+                                "primary_key": False,
+                                "comment": field.description or "",
+                                "mode": field.mode,
+                            }
+                        )
                         # Recursively flatten nested RECORD fields
                         if field.field_type == "RECORD" and field.fields:
                             cols.extend(_flatten_fields(field.fields, full_name))
@@ -368,10 +368,11 @@ class BigQueryConnector(BaseConnector):
         Critical for BigQuery where each query job has ~500ms overhead.
         """
         import time as _time
+
         if self._client is None or not columns:
             return {}
         try:
-            sql = self._build_sample_union_sql(table, columns, limit, quote='`')
+            sql = self._build_sample_union_sql(table, columns, limit, quote="`")
 
             def _run():
                 job = self._client.query(sql, timeout=30)
@@ -386,9 +387,11 @@ class BigQueryConnector(BaseConnector):
             result: dict[str, list] = {}
             for col in columns[:20]:
                 try:
-                    safe_col = col.replace('`', '``')
+                    safe_col = col.replace("`", "``")
                     safe_table = self._quote_table(table)
-                    query = f"SELECT DISTINCT `{safe_col}` FROM {safe_table} WHERE `{safe_col}` IS NOT NULL LIMIT {limit}"
+                    query = (
+                        f"SELECT DISTINCT `{safe_col}` FROM {safe_table} WHERE `{safe_col}` IS NOT NULL LIMIT {limit}"
+                    )
 
                     def _run_col(q=query, c=col):
                         job = self._client.query(q, timeout=10)
@@ -410,9 +413,11 @@ class BigQueryConnector(BaseConnector):
         if self._client is None:
             return False
         try:
+
             def _ping():
                 job = self._client.query("SELECT 1", timeout=10)
                 list(job.result(timeout=10))
+
             await asyncio.to_thread(_ping)
             return True
         except Exception:

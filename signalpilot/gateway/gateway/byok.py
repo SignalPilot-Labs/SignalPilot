@@ -21,7 +21,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Protocol, runtime_checkable
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
@@ -40,6 +41,7 @@ ENCRYPTION_MODE_BYOK = "byok"
 
 # ─── Exception ───────────────────────────────────────────────────────────────
 
+
 class BYOKKeyError(Exception):
     """Raised when a key cannot be unwrapped (revoked, deleted, or wrong alias)."""
 
@@ -51,6 +53,7 @@ class BYOKKeyError(Exception):
 
 
 # ─── Protocol ────────────────────────────────────────────────────────────────
+
 
 @runtime_checkable
 class BYOKProvider(Protocol):
@@ -79,6 +82,7 @@ class BYOKProvider(Protocol):
 
 # ─── LocalBYOKProvider ───────────────────────────────────────────────────────
 
+
 class LocalBYOKProvider:
     """Fernet-based BYOK provider for local development.
 
@@ -90,6 +94,7 @@ class LocalBYOKProvider:
     def __init__(self, data_dir: str | None = None) -> None:
         import os
         from pathlib import Path
+
         self._data_dir = Path(data_dir or os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
         self._key_dir = self._data_dir / "byok_keys"
         self._key_dir.mkdir(parents=True, exist_ok=True)
@@ -162,6 +167,7 @@ class LocalBYOKProvider:
 
 # ─── DEKCache ─────────────────────────────────────────────────────────────────
 
+
 class DEKCache:
     """Thread-safe TTL cache for plaintext DEKs.
 
@@ -217,6 +223,7 @@ class DEKCache:
 
 
 # ─── Envelope encryption ──────────────────────────────────────────────────────
+
 
 async def encrypt_envelope(
     provider: BYOKProvider,
@@ -317,11 +324,13 @@ async def migrate_to_byok(
         (migrated_count, failed_count, error_messages)
     """
     result = await session.execute(
-        select(GatewayCredential, GatewayConnection).join(
+        select(GatewayCredential, GatewayConnection)
+        .join(
             GatewayConnection,
             (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
-        ).where(
+        )
+        .where(
             GatewayConnection.org_id == org_id,
             GatewayCredential.encryption_mode == ENCRYPTION_MODE_MANAGED,
         )
@@ -387,11 +396,13 @@ async def rotate_byok_key(
         (rotated_count, failed_count, error_messages)
     """
     result = await session.execute(
-        select(GatewayCredential, GatewayConnection).join(
+        select(GatewayCredential, GatewayConnection)
+        .join(
             GatewayConnection,
             (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
-        ).where(
+        )
+        .where(
             GatewayConnection.org_id == org_id,
             GatewayCredential.byok_key_id == old_key_id,
             GatewayCredential.encryption_mode == ENCRYPTION_MODE_BYOK,
@@ -477,11 +488,13 @@ async def revert_to_managed(
         (reverted_count, failed_count, error_messages)
     """
     result = await session.execute(
-        select(GatewayCredential, GatewayConnection).join(
+        select(GatewayCredential, GatewayConnection)
+        .join(
             GatewayConnection,
             (GatewayConnection.org_id == GatewayCredential.org_id)
             & (GatewayConnection.name == GatewayCredential.connection_name),
-        ).where(
+        )
+        .where(
             GatewayConnection.org_id == org_id,
             GatewayCredential.encryption_mode == ENCRYPTION_MODE_BYOK,
         )

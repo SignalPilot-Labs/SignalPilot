@@ -13,7 +13,9 @@ def query_error_hint(error: str, db_type: str) -> str | None:
     if "column" in err_lower and ("not found" in err_lower or "does not exist" in err_lower or "unknown" in err_lower):
         return "Column name may be misspelled or from the wrong table. Check the schema for exact column names."
 
-    if ("table" in err_lower or "relation" in err_lower) and ("not found" in err_lower or "does not exist" in err_lower or "doesn't exist" in err_lower):
+    if ("table" in err_lower or "relation" in err_lower) and (
+        "not found" in err_lower or "does not exist" in err_lower or "doesn't exist" in err_lower
+    ):
         return "Table may not exist or needs a schema prefix (e.g., schema.table_name)."
 
     if "ambiguous" in err_lower:
@@ -64,7 +66,9 @@ def query_error_hint(error: str, db_type: str) -> str | None:
         return "Cannot use aggregate function in WHERE clause. Move the condition to HAVING."
 
     # Date/time function mismatches across dialects
-    if "date" in err_lower and ("function" in err_lower or "not recognized" in err_lower or "does not exist" in err_lower):
+    if "date" in err_lower and (
+        "function" in err_lower or "not recognized" in err_lower or "does not exist" in err_lower
+    ):
         dialect_hints = {
             "bigquery": "BigQuery uses DATE(), TIMESTAMP(), EXTRACT(), DATE_DIFF(), FORMAT_TIMESTAMP().",
             "snowflake": "Snowflake uses DATEADD(), DATEDIFF(), TO_DATE(), DATE_TRUNC().",
@@ -108,7 +112,9 @@ def query_error_hint(error: str, db_type: str) -> str | None:
         return "Snowflake identifiers are uppercase by default. Use double-quotes for case-sensitive names or convert to uppercase."
 
     # EXCEPT/INTERSECT column count mismatch
-    if ("except" in err_lower or "intersect" in err_lower or "union" in err_lower) and ("column" in err_lower or "number" in err_lower):
+    if ("except" in err_lower or "intersect" in err_lower or "union" in err_lower) and (
+        "column" in err_lower or "number" in err_lower
+    ):
         return "UNION/EXCEPT/INTERSECT requires the same number and types of columns in all SELECT statements."
 
     # MEDIAN/PERCENTILE differences

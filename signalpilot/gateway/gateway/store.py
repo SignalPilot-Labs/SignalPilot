@@ -16,7 +16,7 @@ import secrets
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote as url_quote
 
@@ -25,8 +25,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .byok import BYOKProvider, DEKCache, decrypt_envelope, encrypt_fields_envelope
-from .deployment import is_cloud_mode
-from .governance.context import current_org_id_var
 from .db.models import (
     GatewayApiKey,
     GatewayAuditLog,
@@ -37,10 +35,12 @@ from .db.models import (
     GatewayProject,
     GatewaySetting,
 )
+from .deployment import is_cloud_mode
 from .engine import redact_sql_literals
+from .governance.context import current_org_id_var
 from .models import (
-    AuditEntry,
     ApiKeyRecord,
+    AuditEntry,
     ConnectionCreate,
     ConnectionInfo,
     ConnectionUpdate,
@@ -129,9 +129,7 @@ async def _resolve_byok_key(
         return result.scalar_one_or_none()
 
     # No alias: look up the org's default key
-    org_result = await session.execute(
-        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
-    )
+    org_result = await session.execute(select(GatewayOrg).where(GatewayOrg.org_id == org_id))
     org_row = org_result.scalar_one_or_none()
     if org_row is None or not org_row.default_byok_key_id:
         return None
@@ -146,6 +144,7 @@ async def _resolve_byok_key(
 
 
 # ─── Atomic file helper ──────────────────────────────────────────────────────
+
 
 def _atomic_create_file(path: Path, content: bytes, mode: int = 0o600) -> bytes:
     """Atomically create a file with content.
@@ -165,6 +164,7 @@ def _atomic_create_file(path: Path, content: bytes, mode: int = 0o600) -> bytes:
 
 
 # ─── Encryption ──────────────────────────────────────────────────────────────
+
 
 def _load_or_create_salt() -> bytes:
     """Load or create the persistent PBKDF2 salt stored at SP_DATA_DIR/.encryption_salt.
@@ -208,9 +208,7 @@ def _derive_key_legacy_cloud_salt(passphrase: str) -> bytes:
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-    deterministic_salt = hashlib.sha256(
-        b"signalpilot-cloud-salt:" + passphrase.encode()
-    ).digest()[:16]
+    deterministic_salt = hashlib.sha256(b"signalpilot-cloud-salt:" + passphrase.encode()).digest()[:16]
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=PBKDF2_KEY_LENGTH,
@@ -227,6 +225,7 @@ def _get_encryption_key() -> bytes:
         return _CACHED_KEY
 
     from cryptography.fernet import Fernet
+
     from .deployment import is_cloud_mode
 
     key_str = os.getenv("SP_ENCRYPTION_KEY")
@@ -244,11 +243,12 @@ def _get_encryption_key() -> bytes:
                         "SP_ENCRYPTION_SALT is required in cloud mode when "
                         "SP_ENCRYPTION_KEY is a passphrase (not a raw Fernet key). "
                         "Generate one with: python -c "
-                        "\"import os,base64; print(base64.b64encode(os.urandom(16)).decode())\""
+                        '"import os,base64; print(base64.b64encode(os.urandom(16)).decode())"'
                     )
                 salt = base64.b64decode(salt_b64)
                 from cryptography.hazmat.primitives import hashes
                 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
                 kdf = PBKDF2HMAC(
                     algorithm=hashes.SHA256(),
                     length=PBKDF2_KEY_LENGTH,
@@ -274,12 +274,14 @@ def _get_encryption_key() -> bytes:
 
 def _encrypt(data: str) -> bytes:
     from cryptography.fernet import Fernet
+
     f = Fernet(_get_encryption_key())
     return f.encrypt(data.encode())
 
 
 def _decrypt(encrypted: bytes) -> str:
     from cryptography.fernet import Fernet
+
     f = Fernet(_get_encryption_key())
     return f.decrypt(encrypted).decode()
 
@@ -363,6 +365,7 @@ def _validate_encryption_health() -> bool:
 
 # ─── Local DB path validation ────────────────────────────────────────────────
 
+
 def _validate_local_db_path(path: str) -> str:
     """Validate that a DuckDB/SQLite path is within DATA_DIR.
 
@@ -391,12 +394,11 @@ def _validate_local_db_path(path: str) -> str:
         resolved.relative_to(allowed_base)
         return path
     except ValueError:
-        raise ValueError(
-            f"Database path not allowed: must be within the data directory ({DATA_DIR})"
-        )
+        raise ValueError(f"Database path not allowed: must be within the data directory ({DATA_DIR})")
 
 
 # ─── Connection string builder (pure function) ──────────────────────────────
+
 
 def _build_connection_string(conn: ConnectionCreate) -> str:
     if conn.db_type == DBType.postgres:
@@ -405,7 +407,9 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         host = conn.host or "localhost"
         port = conn.port or 5432
         db = conn.database or "postgres"
-        ssl_mode = conn.ssl_config.mode if conn.ssl_config and conn.ssl_config.enabled else ("require" if conn.ssl else "")
+        ssl_mode = (
+            conn.ssl_config.mode if conn.ssl_config and conn.ssl_config.enabled else ("require" if conn.ssl else "")
+        )
         ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
         return f"postgresql://{user}{pw}@{host}:{port}/{db}{ssl_param}"
     elif conn.db_type == DBType.mysql:
@@ -609,7 +613,13 @@ _PROFILES_PLACEHOLDER = """\
 """
 
 _SCAFFOLD_DIRS = [
-    "models/staging", "models/marts", "analyses", "tests", "seeds", "macros", "snapshots",
+    "models/staging",
+    "models/marts",
+    "analyses",
+    "tests",
+    "seeds",
+    "macros",
+    "snapshots",
 ]
 
 
@@ -643,8 +653,10 @@ def delete_sandbox(sandbox_id: str, org_id: str) -> bool:
 
 # ─── Local API Key (file-based, only for local mode) ────────────────────────
 
+
 def get_local_api_key() -> str | None:
     from .deployment import is_cloud_mode
+
     if is_cloud_mode():
         return None
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -663,6 +675,7 @@ def get_local_api_key() -> str | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Store class — all DB-backed operations scoped by user_id
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class Store:
     """Database-backed store scoped by org_id.
@@ -695,8 +708,7 @@ class Store:
             return self.org_id
         if is_cloud_mode() and not self._allow_unscoped:
             raise ValueError(
-                "org_id is required in cloud mode but was not set. "
-                "Ensure resolve_org_id ran before constructing Store."
+                "org_id is required in cloud mode but was not set. Ensure resolve_org_id ran before constructing Store."
             )
         return "local"
 
@@ -704,9 +716,7 @@ class Store:
 
     async def load_settings(self) -> GatewaySettings:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewaySetting).where(GatewaySetting.org_id == oid)
-        )
+        result = await self.session.execute(select(GatewaySetting).where(GatewaySetting.org_id == oid))
         row = result.scalar_one_or_none()
         data = row.settings_json if row else {}
         # Environment variables provide defaults — user-saved settings take priority
@@ -718,18 +728,18 @@ class Store:
 
     async def save_settings(self, settings: GatewaySettings):
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewaySetting).where(GatewaySetting.org_id == oid)
-        )
+        result = await self.session.execute(select(GatewaySetting).where(GatewaySetting.org_id == oid))
         row = result.scalar_one_or_none()
         if row:
             row.settings_json = settings.model_dump()
         else:
-            self.session.add(GatewaySetting(
-                org_id=oid,
-                user_id=self.user_id,
-                settings_json=settings.model_dump(),
-            ))
+            self.session.add(
+                GatewaySetting(
+                    org_id=oid,
+                    user_id=self.user_id,
+                    settings_json=settings.model_dump(),
+                )
+            )
         await self.session.commit()
 
     # ─── Connections ─────────────────────────────────────────────────────
@@ -745,16 +755,12 @@ class Store:
         )
 
     async def list_connections(self) -> list[ConnectionInfo]:
-        result = await self.session.execute(
-            select(GatewayConnection).where(self._conn_filter())
-        )
+        result = await self.session.execute(select(GatewayConnection).where(self._conn_filter()))
         return [ConnectionInfo(**row.to_info_dict()) for row in result.scalars()]
 
     async def get_connection(self, name: str) -> ConnectionInfo | None:
         result = await self.session.execute(
-            select(GatewayConnection).where(
-                self._conn_filter(), GatewayConnection.name == name
-            )
+            select(GatewayConnection).where(self._conn_filter(), GatewayConnection.name == name)
         )
         row = result.scalar_one_or_none()
         return ConnectionInfo(**row.to_info_dict()) if row else None
@@ -772,24 +778,44 @@ class Store:
         # for display and editing.
         if conn.connection_string and not conn.host:
             from .url_parser import parse_connection_url
+
             try:
-                db_type_str = conn.db_type.value if hasattr(conn.db_type, 'value') else conn.db_type
+                db_type_str = conn.db_type.value if hasattr(conn.db_type, "value") else conn.db_type
                 parsed = parse_connection_url(conn.connection_string, db_type=db_type_str)
-                conn = conn.model_copy(update={
-                    k: v for k, v in parsed.items()
-                    if k in ("host", "port", "database", "username", "ssl", "account",
-                             "warehouse", "schema_name", "role", "catalog", "http_path")
-                    and v  # only backfill non-empty values
-                })
+                conn = conn.model_copy(
+                    update={
+                        k: v
+                        for k, v in parsed.items()
+                        if k
+                        in (
+                            "host",
+                            "port",
+                            "database",
+                            "username",
+                            "ssl",
+                            "account",
+                            "warehouse",
+                            "schema_name",
+                            "role",
+                            "catalog",
+                            "http_path",
+                        )
+                        and v  # only backfill non-empty values
+                    }
+                )
             except Exception:
                 pass  # URL parsing failed — keep original fields
 
         # Strip sensitive fields from SSH/SSL for metadata storage
         ssh_tunnel_safe = None
         if conn.ssh_tunnel and conn.ssh_tunnel.enabled:
-            ssh_tunnel_safe = conn.ssh_tunnel.model_copy(update={
-                "password": None, "private_key": None, "private_key_passphrase": None,
-            }).model_dump()
+            ssh_tunnel_safe = conn.ssh_tunnel.model_copy(
+                update={
+                    "password": None,
+                    "private_key": None,
+                    "private_key_passphrase": None,
+                }
+            ).model_dump()
 
         ssl_config_safe = None
         if conn.ssl_config and conn.ssl_config.enabled:
@@ -801,7 +827,7 @@ class Store:
             org_id=oid,
             user_id=uid,
             name=conn.name,
-            db_type=conn.db_type.value if hasattr(conn.db_type, 'value') else conn.db_type,
+            db_type=conn.db_type.value if hasattr(conn.db_type, "value") else conn.db_type,
             host=conn.host,
             port=conn.port,
             database=conn.database,
@@ -846,9 +872,7 @@ class Store:
         # BYOK encrypt path: use envelope encryption when org has BYOK configured
         byok_key = None
         if oid and _byok_provider is not None:
-            byok_key = await _resolve_byok_key(
-                self.session, oid, conn.byok_key_alias
-            )
+            byok_key = await _resolve_byok_key(self.session, oid, conn.byok_key_alias)
 
         if byok_key is not None and _byok_provider is not None:
             ciphertexts, wrapped_dek = await encrypt_fields_envelope(
@@ -893,9 +917,7 @@ class Store:
     async def delete_connection(self, name: str) -> bool:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayConnection).where(
-                GatewayConnection.org_id == oid, GatewayConnection.name == name
-            )
+            select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
         )
         row = result.scalar_one_or_none()
         if not row:
@@ -913,17 +935,22 @@ class Store:
     async def update_connection(self, name: str, update_data: ConnectionUpdate) -> ConnectionInfo | None:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayConnection).where(
-                GatewayConnection.org_id == oid, GatewayConnection.name == name
-            )
+            select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
         )
         row = result.scalar_one_or_none()
         if not row:
             return None
 
         update_fields = update_data.model_dump(exclude_none=True)
-        credential_fields = {"password", "connection_string", "credentials_json",
-                             "access_token", "private_key", "private_key_passphrase", "motherduck_token"}
+        credential_fields = {
+            "password",
+            "connection_string",
+            "credentials_json",
+            "access_token",
+            "private_key",
+            "private_key_passphrase",
+            "motherduck_token",
+        }
 
         # Update metadata fields
         for key, value in update_fields.items():
@@ -931,9 +958,13 @@ class Store:
                 continue
             if key == "ssh_tunnel" and value:
                 ssh_config = SSHTunnelConfig(**value) if isinstance(value, dict) else value
-                value = ssh_config.model_copy(update={
-                    "password": None, "private_key": None, "private_key_passphrase": None,
-                }).model_dump()
+                value = ssh_config.model_copy(
+                    update={
+                        "password": None,
+                        "private_key": None,
+                        "private_key_passphrase": None,
+                    }
+                ).model_dump()
             if key == "ssl_config" and value:
                 if isinstance(value, dict):
                     value = SSLConfig(**value).model_dump()
@@ -941,15 +972,39 @@ class Store:
                 setattr(row, key, value)
 
         # Rebuild credentials if needed
-        needs_cred_rebuild = any(k in update_fields for k in (
-            "host", "port", "database", "username", "password", "connection_string",
-            "account", "warehouse", "schema_name", "role", "project",
-            "credentials_json", "http_path", "access_token", "catalog", "ssl", "ssl_config",
-        ))
+        needs_cred_rebuild = any(
+            k in update_fields
+            for k in (
+                "host",
+                "port",
+                "database",
+                "username",
+                "password",
+                "connection_string",
+                "account",
+                "warehouse",
+                "schema_name",
+                "role",
+                "project",
+                "credentials_json",
+                "http_path",
+                "access_token",
+                "catalog",
+                "ssl",
+                "ssl_config",
+            )
+        )
         if needs_cred_rebuild:
             merged = {**row.to_info_dict(), **update_fields, "name": name}
-            for rm_key in ("id", "created_at", "last_used", "status", "last_schema_refresh",
-                           "endorsements", "location"):
+            for rm_key in (
+                "id",
+                "created_at",
+                "last_used",
+                "status",
+                "last_schema_refresh",
+                "endorsements",
+                "location",
+            ):
                 merged.pop(rm_key, None)
             try:
                 create_obj = ConnectionCreate(**merged)
@@ -994,12 +1049,8 @@ class Store:
                         cred_row.extras_enc = _encrypt(json.dumps(extras))
                         cred_row.key_version = CURRENT_KEY_VERSION
             except Exception as e:
-                logger.error(
-                    "Credential encryption failed for connection %s: %s", name, e
-                )
-                raise CredentialEncryptionError(
-                    f"Failed to encrypt credentials for connection '{name}'"
-                ) from e
+                logger.error("Credential encryption failed for connection %s: %s", name, e)
+                raise CredentialEncryptionError(f"Failed to encrypt credentials for connection '{name}'") from e
 
         await self.session.commit()
         await self.session.refresh(row)
@@ -1008,12 +1059,14 @@ class Store:
     async def get_connection_string(self, name: str) -> str | None:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayCredential, GatewayConnection).join(
+            select(GatewayCredential, GatewayConnection)
+            .join(
                 GatewayConnection,
                 (GatewayConnection.org_id == GatewayCredential.org_id)
                 & (GatewayConnection.name == GatewayCredential.connection_name),
                 isouter=True,
-            ).where(
+            )
+            .where(
                 GatewayCredential.org_id == oid,
                 GatewayCredential.connection_name == name,
             )
@@ -1027,15 +1080,11 @@ class Store:
             if _byok_provider is None:
                 raise CredentialEncryptionError("BYOK provider not configured")
             if cred_row.wrapped_dek is None:
-                raise CredentialEncryptionError(
-                    "Credential is in BYOK mode but has no wrapped DEK"
-                )
+                raise CredentialEncryptionError("Credential is in BYOK mode but has no wrapped DEK")
             org_id = conn_row.org_id if conn_row else None
             key_alias = conn_row.byok_key_alias if conn_row else None
             if not org_id or not key_alias:
-                raise CredentialEncryptionError(
-                    "Connection is missing BYOK configuration for decryption"
-                )
+                raise CredentialEncryptionError("Connection is missing BYOK configuration for decryption")
             return await decrypt_envelope(
                 provider=_byok_provider,
                 org_id=org_id,
@@ -1065,12 +1114,14 @@ class Store:
     async def get_credential_extras(self, name: str) -> dict:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayCredential, GatewayConnection).join(
+            select(GatewayCredential, GatewayConnection)
+            .join(
                 GatewayConnection,
                 (GatewayConnection.org_id == GatewayCredential.org_id)
                 & (GatewayConnection.name == GatewayCredential.connection_name),
                 isouter=True,
-            ).where(
+            )
+            .where(
                 GatewayCredential.org_id == oid,
                 GatewayCredential.connection_name == name,
             )
@@ -1086,15 +1137,11 @@ class Store:
             if _byok_provider is None:
                 raise CredentialEncryptionError("BYOK provider not configured")
             if cred_row.wrapped_dek is None:
-                raise CredentialEncryptionError(
-                    "Credential is in BYOK mode but has no wrapped DEK"
-                )
+                raise CredentialEncryptionError("Credential is in BYOK mode but has no wrapped DEK")
             org_id = conn_row.org_id if conn_row else None
             key_alias = conn_row.byok_key_alias if conn_row else None
             if not org_id or not key_alias:
-                raise CredentialEncryptionError(
-                    "Connection is missing BYOK configuration for decryption"
-                )
+                raise CredentialEncryptionError("Connection is missing BYOK configuration for decryption")
             extras_json = await decrypt_envelope(
                 provider=_byok_provider,
                 org_id=org_id,
@@ -1126,18 +1173,14 @@ class Store:
 
     async def list_projects(self) -> list[ProjectInfo]:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewayProject).where(GatewayProject.org_id == oid)
-        )
+        result = await self.session.execute(select(GatewayProject).where(GatewayProject.org_id == oid))
         rows = result.scalars().all()
         return [ProjectInfo(**{c.key: getattr(r, c.key) for c in GatewayProject.__table__.columns}) for r in rows]
 
     async def get_project(self, name: str) -> ProjectInfo | None:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayProject).where(
-                GatewayProject.org_id == oid, GatewayProject.name == name
-            )
+            select(GatewayProject).where(GatewayProject.org_id == oid, GatewayProject.name == name)
         )
         row = result.scalar_one_or_none()
         if not row:
@@ -1166,8 +1209,8 @@ class Store:
             name=info.name,
             connection_name=info.connection_name,
             project_dir=info.project_dir,
-            storage=info.storage.value if hasattr(info.storage, 'value') else info.storage,
-            source=info.source.value if hasattr(info.source, 'value') else info.source,
+            storage=info.storage.value if hasattr(info.storage, "value") else info.storage,
+            source=info.source.value if hasattr(info.source, "value") else info.source,
             db_type=info.db_type,
             description=info.description,
             tags=info.tags,
@@ -1190,18 +1233,22 @@ class Store:
             (project_dir / d).mkdir(parents=True, exist_ok=True)
         for d in ("models/staging", "models/marts"):
             (project_dir / d / ".gitkeep").touch()
-        (project_dir / "dbt_project.yml").write_text(
-            _DBT_PROJECT_YML_TEMPLATE.format(name=proj.name))
+        (project_dir / "dbt_project.yml").write_text(_DBT_PROJECT_YML_TEMPLATE.format(name=proj.name))
         profiles_path = project_dir / "profiles.yml"
         profiles_path.write_text(self._generate_profiles_yml(proj.name, connection))
         os.chmod(str(profiles_path), 0o600)
         os.chmod(str(project_dir), 0o700)
         (project_dir / "packages.yml").write_text(_PACKAGES_YML_TEMPLATE)
         return ProjectInfo(
-            id=str(uuid.uuid4()), name=proj.name,
-            connection_name=proj.connection_name, project_dir=str(project_dir),
-            storage=ProjectStorage.managed, source=proj.source,
-            db_type=connection.db_type, description=proj.description, tags=proj.tags,
+            id=str(uuid.uuid4()),
+            name=proj.name,
+            connection_name=proj.connection_name,
+            project_dir=str(project_dir),
+            storage=ProjectStorage.managed,
+            source=proj.source,
+            db_type=connection.db_type,
+            description=proj.description,
+            tags=proj.tags,
         )
 
     def _create_local_project(self, proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
@@ -1216,10 +1263,15 @@ class Store:
             project_dir = local
             storage = ProjectStorage.linked
         return ProjectInfo(
-            id=str(uuid.uuid4()), name=proj.name,
-            connection_name=proj.connection_name, project_dir=str(project_dir),
-            storage=storage, source=proj.source,
-            db_type=connection.db_type, description=proj.description, tags=proj.tags,
+            id=str(uuid.uuid4()),
+            name=proj.name,
+            connection_name=proj.connection_name,
+            project_dir=str(project_dir),
+            storage=storage,
+            source=proj.source,
+            db_type=connection.db_type,
+            description=proj.description,
+            tags=proj.tags,
         )
 
     def _generate_profiles_yml(self, project_name: str, connection: ConnectionInfo) -> str:
@@ -1228,26 +1280,34 @@ class Store:
             return _PROFILES_DUCKDB.format(name=project_name, database=connection.database or ":memory:")
         if db == "postgres":
             return _PROFILES_POSTGRES.format(
-                name=project_name, host=connection.host or "localhost",
-                port=connection.port or 5432, username=connection.username or "",
-                database=connection.database or "")
+                name=project_name,
+                host=connection.host or "localhost",
+                port=connection.port or 5432,
+                username=connection.username or "",
+                database=connection.database or "",
+            )
         if db == "snowflake":
             return _PROFILES_SNOWFLAKE.format(
-                name=project_name, account=connection.account or "",
-                username=connection.username or "", database=connection.database or "",
-                warehouse=connection.warehouse or "", role=connection.role or "")
+                name=project_name,
+                account=connection.account or "",
+                username=connection.username or "",
+                database=connection.database or "",
+                warehouse=connection.warehouse or "",
+                role=connection.role or "",
+            )
         if db == "bigquery":
             return _PROFILES_BIGQUERY.format(
-                name=project_name, project=connection.project or "",
-                dataset=connection.dataset or "", location=getattr(connection, "location", "US") or "US")
+                name=project_name,
+                project=connection.project or "",
+                dataset=connection.dataset or "",
+                location=getattr(connection, "location", "US") or "US",
+            )
         return _PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
 
     async def update_project(self, name: str, update_data: ProjectUpdate) -> ProjectInfo | None:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayProject).where(
-                GatewayProject.org_id == oid, GatewayProject.name == name
-            )
+            select(GatewayProject).where(GatewayProject.org_id == oid, GatewayProject.name == name)
         )
         row = result.scalar_one_or_none()
         if not row:
@@ -1262,9 +1322,7 @@ class Store:
     async def delete_project(self, name: str) -> bool:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayProject).where(
-                GatewayProject.org_id == oid, GatewayProject.name == name
-            )
+            select(GatewayProject).where(GatewayProject.org_id == oid, GatewayProject.name == name)
         )
         row = result.scalar_one_or_none()
         if not row:
@@ -1283,27 +1341,29 @@ class Store:
         oid = self._require_org_id()
         # Redact string literals from SQL to avoid storing PII (Issue #45)
         redacted_sql = redact_sql_literals(entry.sql) if entry.sql else None
-        self.session.add(GatewayAuditLog(
-            id=entry.id or str(uuid.uuid4()),
-            org_id=oid,
-            user_id=self.user_id,
-            timestamp=entry.timestamp,
-            event_type=entry.event_type,
-            connection_name=entry.connection_name,
-            sandbox_id=entry.sandbox_id,
-            sql_text=redacted_sql,
-            tables=entry.tables,
-            rows_returned=entry.rows_returned,
-            cost_usd=entry.cost_usd,
-            blocked=entry.blocked or False,
-            block_reason=entry.block_reason,
-            duration_ms=entry.duration_ms,
-            agent_id=entry.agent_id,
-            parent_id=entry.parent_id,
-            metadata_json=entry.metadata,
-            client_ip=entry.client_ip,
-            user_agent=entry.user_agent,
-        ))
+        self.session.add(
+            GatewayAuditLog(
+                id=entry.id or str(uuid.uuid4()),
+                org_id=oid,
+                user_id=self.user_id,
+                timestamp=entry.timestamp,
+                event_type=entry.event_type,
+                connection_name=entry.connection_name,
+                sandbox_id=entry.sandbox_id,
+                sql_text=redacted_sql,
+                tables=entry.tables,
+                rows_returned=entry.rows_returned,
+                cost_usd=entry.cost_usd,
+                blocked=entry.blocked or False,
+                block_reason=entry.block_reason,
+                duration_ms=entry.duration_ms,
+                agent_id=entry.agent_id,
+                parent_id=entry.parent_id,
+                metadata_json=entry.metadata,
+                client_ip=entry.client_ip,
+                user_agent=entry.user_agent,
+            )
+        )
         await self.session.commit()
 
     async def read_audit(
@@ -1315,6 +1375,7 @@ class Store:
         return_total: bool = False,
     ) -> list[AuditEntry] | tuple[list[AuditEntry], int]:
         from sqlalchemy import func as sa_func
+
         oid = self._require_org_id()
         base = select(GatewayAuditLog).where(GatewayAuditLog.org_id == oid)
         if connection_name:
@@ -1331,25 +1392,27 @@ class Store:
         result = await self.session.execute(q)
         entries = []
         for row in result.scalars():
-            entries.append(AuditEntry(
-                id=row.id,
-                timestamp=row.timestamp,
-                event_type=row.event_type,
-                connection_name=row.connection_name,
-                sandbox_id=row.sandbox_id,
-                sql=row.sql_text,
-                tables=row.tables or [],
-                rows_returned=row.rows_returned,
-                cost_usd=row.cost_usd,
-                blocked=row.blocked,
-                block_reason=row.block_reason,
-                duration_ms=row.duration_ms,
-                agent_id=row.agent_id,
-                parent_id=getattr(row, "parent_id", None),
-                metadata=row.metadata_json or {},
-                client_ip=getattr(row, "client_ip", None),
-                user_agent=getattr(row, "user_agent", None),
-            ))
+            entries.append(
+                AuditEntry(
+                    id=row.id,
+                    timestamp=row.timestamp,
+                    event_type=row.event_type,
+                    connection_name=row.connection_name,
+                    sandbox_id=row.sandbox_id,
+                    sql=row.sql_text,
+                    tables=row.tables or [],
+                    rows_returned=row.rows_returned,
+                    cost_usd=row.cost_usd,
+                    blocked=row.blocked,
+                    block_reason=row.block_reason,
+                    duration_ms=row.duration_ms,
+                    agent_id=row.agent_id,
+                    parent_id=getattr(row, "parent_id", None),
+                    metadata=row.metadata_json or {},
+                    client_ip=getattr(row, "client_ip", None),
+                    user_agent=getattr(row, "user_agent", None),
+                )
+            )
         if return_total:
             return entries, total
         return entries
@@ -1414,9 +1477,7 @@ class Store:
     async def _get_conn_row(self, name: str) -> GatewayConnection | None:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayConnection).where(
-                GatewayConnection.org_id == oid, GatewayConnection.name == name
-            )
+            select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
         )
         return result.scalar_one_or_none()
 
@@ -1427,14 +1488,22 @@ class Store:
             result = await self.session.execute(select(GatewayApiKey))
         else:
             oid = self._require_org_id()
-            result = await self.session.execute(
-                select(GatewayApiKey).where(GatewayApiKey.org_id == oid)
+            result = await self.session.execute(select(GatewayApiKey).where(GatewayApiKey.org_id == oid))
+        return [
+            ApiKeyRecord(
+                id=r.id,
+                name=r.name,
+                prefix=r.prefix,
+                key_hash=r.key_hash,
+                scopes=r.scopes,
+                created_at=r.created_at,
+                last_used_at=r.last_used_at,
+                expires_at=r.expires_at,
+                user_id=r.user_id,
+                org_id=r.org_id,
             )
-        return [ApiKeyRecord(
-            id=r.id, name=r.name, prefix=r.prefix, key_hash=r.key_hash,
-            scopes=r.scopes, created_at=r.created_at, last_used_at=r.last_used_at,
-            expires_at=r.expires_at, user_id=r.user_id, org_id=r.org_id,
-        ) for r in result.scalars()]
+            for r in result.scalars()
+        ]
 
     async def create_api_key(
         self, name: str, scopes: list[str], expires_at: str | None = None
@@ -1449,28 +1518,40 @@ class Store:
         raw_key = "sp_" + secrets.token_hex(16)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         key_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         db_key = GatewayApiKey(
-            id=key_id, org_id=oid, user_id=self.user_id, name=name, prefix=raw_key[:11],
-            key_hash=key_hash, scopes=scopes, created_at=now, expires_at=expires_at,
+            id=key_id,
+            org_id=oid,
+            user_id=self.user_id,
+            name=name,
+            prefix=raw_key[:11],
+            key_hash=key_hash,
+            scopes=scopes,
+            created_at=now,
+            expires_at=expires_at,
         )
         self.session.add(db_key)
         await self.session.commit()
 
         record = ApiKeyRecord(
-            id=key_id, name=name, prefix=raw_key[:11], key_hash=key_hash,
-            scopes=scopes, created_at=now, last_used_at=None,
-            expires_at=expires_at, user_id=self.user_id, org_id=oid,
+            id=key_id,
+            name=name,
+            prefix=raw_key[:11],
+            key_hash=key_hash,
+            scopes=scopes,
+            created_at=now,
+            last_used_at=None,
+            expires_at=expires_at,
+            user_id=self.user_id,
+            org_id=oid,
         )
         return record, raw_key
 
     async def delete_api_key(self, key_id: str) -> bool:
         oid = self._require_org_id()
         result = await self.session.execute(
-            select(GatewayApiKey).where(
-                GatewayApiKey.org_id == oid, GatewayApiKey.id == key_id
-            )
+            select(GatewayApiKey).where(GatewayApiKey.org_id == oid, GatewayApiKey.id == key_id)
         )
         row = result.scalar_one_or_none()
         if not row:
@@ -1491,11 +1572,10 @@ class Store:
         cross-tenant access to shared namespaces.
         """
         import hmac as _hmac
+
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         # Search all keys (not org-scoped — validation doesn't know org yet)
-        result = await self.session.execute(
-            select(GatewayApiKey).where(GatewayApiKey.key_hash == key_hash)
-        )
+        result = await self.session.execute(select(GatewayApiKey).where(GatewayApiKey.key_hash == key_hash))
         row = result.scalar_one_or_none()
         if not row:
             return None
@@ -1511,17 +1591,24 @@ class Store:
             try:
                 expiry = datetime.fromisoformat(row.expires_at)
                 if expiry.tzinfo is None:
-                    expiry = expiry.replace(tzinfo=timezone.utc)
-                if expiry <= datetime.now(timezone.utc):
+                    expiry = expiry.replace(tzinfo=UTC)
+                if expiry <= datetime.now(UTC):
                     return None
             except (ValueError, TypeError):
                 return None  # Corrupt expiry data → treat as expired (fail closed)
-        row.last_used_at = datetime.now(timezone.utc).isoformat()
+        row.last_used_at = datetime.now(UTC).isoformat()
         await self.session.commit()
         return ApiKeyRecord(
-            id=row.id, name=row.name, prefix=row.prefix, key_hash=row.key_hash,
-            scopes=row.scopes, created_at=row.created_at, last_used_at=row.last_used_at,
-            expires_at=row.expires_at, user_id=row.user_id, org_id=row.org_id,
+            id=row.id,
+            name=row.name,
+            prefix=row.prefix,
+            key_hash=row.key_hash,
+            scopes=row.scopes,
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+            expires_at=row.expires_at,
+            user_id=row.user_id,
+            org_id=row.org_id,
         )
 
     # ─── Key Rotation ────────────────────────────────────────────────────
@@ -1533,9 +1620,10 @@ class Store:
         called from the admin-only security_status endpoint which needs a system-wide count.
         """
         from sqlalchemy import func as sa_func
+
         result = await self.session.execute(
-            select(sa_func.count()).select_from(GatewayCredential).where(
-                GatewayCredential.key_version < CURRENT_KEY_VERSION
-            )
+            select(sa_func.count())
+            .select_from(GatewayCredential)
+            .where(GatewayCredential.key_version < CURRENT_KEY_VERSION)
         )
         return result.scalar_one()

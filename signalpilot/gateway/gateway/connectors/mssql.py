@@ -131,11 +131,17 @@ class MSSQLConnector(BaseConnector):
         except pymssql.OperationalError as e:
             err_str = str(e).lower()
             if "login failed" in err_str:
-                raise RuntimeError(f"Authentication failed: Login failed for user '{connect_kwargs.get('user', '')}'") from e
+                raise RuntimeError(
+                    f"Authentication failed: Login failed for user '{connect_kwargs.get('user', '')}'"
+                ) from e
             elif "cannot open database" in err_str:
-                raise RuntimeError(f"Database not found: Cannot open database '{connect_kwargs.get('database', '')}'") from e
+                raise RuntimeError(
+                    f"Database not found: Cannot open database '{connect_kwargs.get('database', '')}'"
+                ) from e
             elif "connection refused" in err_str or "network" in err_str or "unable to connect" in err_str:
-                raise RuntimeError(f"Connection failed: Cannot connect to SQL Server on '{connect_kwargs.get('server', '')}:{connect_kwargs.get('port', '1433')}'") from e
+                raise RuntimeError(
+                    f"Connection failed: Cannot connect to SQL Server on '{connect_kwargs.get('server', '')}:{connect_kwargs.get('port', '1433')}'"
+                ) from e
             raise RuntimeError(f"SQL Server connection error: {e}") from e
 
     def _parse_connection_string(self, conn_str: str) -> dict:
@@ -146,12 +152,12 @@ class MSSQLConnector(BaseConnector):
         - trustServerCertificate=true/false
         - instance=SQLEXPRESS (named instance)
         """
-        from urllib.parse import urlparse, unquote, parse_qs
+        from urllib.parse import parse_qs, unquote, urlparse
 
         s = conn_str
         for prefix in ("mssql+pymssql://", "mssql://", "sqlserver://"):
             if s.startswith(prefix):
-                s = "mssql://" + s[len(prefix):]
+                s = "mssql://" + s[len(prefix) :]
                 break
 
         parsed = urlparse(s)
@@ -209,7 +215,9 @@ class MSSQLConnector(BaseConnector):
             self._safe_close_sync()
             self._reconnect_once()
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._conn is None:
             raise RuntimeError("Not connected")
 
@@ -235,6 +243,7 @@ class MSSQLConnector(BaseConnector):
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
+
         if self._conn is None:
             raise RuntimeError("Not connected")
         self._ensure_connected()
@@ -346,7 +355,6 @@ class MSSQLConnector(BaseConnector):
         """
 
         def _fetch(query: str) -> tuple[list, float]:
-            import time as _time
             try:
                 cursor = self._conn.cursor(as_dict=True)
                 t0 = _time.monotonic()
@@ -370,9 +378,13 @@ class MSSQLConnector(BaseConnector):
             )
 
         # Run the synchronous queries in a thread to avoid blocking the event loop
-        (rows, _col_ms), (rowcount_rows, _rc_ms), (fk_rows, _fk_ms), (idx_rows, _idx_ms), (stat_rows, _stat_ms) = await asyncio.to_thread(
-            _fetch_all_sequential
-        )
+        (
+            (rows, _col_ms),
+            (rowcount_rows, _rc_ms),
+            (fk_rows, _fk_ms),
+            (idx_rows, _idx_ms),
+            (stat_rows, _stat_ms),
+        ) = await asyncio.to_thread(_fetch_all_sequential)
         await self._audit_sql(col_sql.strip(), len(rows), _col_ms)
         await self._audit_sql(rowcount_sql.strip(), len(rowcount_rows), _rc_ms)
         await self._audit_sql(fk_sql.strip(), len(fk_rows), _fk_ms)
@@ -393,12 +405,14 @@ class MSSQLConnector(BaseConnector):
             key = f"{r['table_schema']}.{r['table_name']}"
             if key not in foreign_keys:
                 foreign_keys[key] = []
-            foreign_keys[key].append({
-                "column": r["column_name"],
-                "references_schema": r["referenced_schema"],
-                "references_table": r["referenced_table"],
-                "references_column": r["referenced_column"],
-            })
+            foreign_keys[key].append(
+                {
+                    "column": r["column_name"],
+                    "references_schema": r["referenced_schema"],
+                    "references_table": r["referenced_table"],
+                    "references_column": r["referenced_column"],
+                }
+            )
 
         # Build index map
         indexes: dict[str, list[dict]] = {}
@@ -406,12 +420,14 @@ class MSSQLConnector(BaseConnector):
             key = f"{r['table_schema']}.{r['table_name']}"
             if key not in indexes:
                 indexes[key] = []
-            indexes[key].append({
-                "name": r["index_name"],
-                "columns": r["columns"],
-                "unique": bool(r["is_unique"]),
-                "type": r.get("index_type", ""),
-            })
+            indexes[key].append(
+                {
+                    "name": r["index_name"],
+                    "columns": r["columns"],
+                    "unique": bool(r["is_unique"]),
+                    "type": r.get("index_type", ""),
+                }
+            )
 
         # Build stats map (column → statistics info)
         col_has_stats: set[str] = set()
@@ -485,6 +501,7 @@ class MSSQLConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._conn is None or not columns:
             return {}
         self._ensure_connected()

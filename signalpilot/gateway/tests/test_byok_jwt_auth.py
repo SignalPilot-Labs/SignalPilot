@@ -118,9 +118,7 @@ class TestResolveOrgIdMCPMode:
         assert result == LOCAL_ORG_ID
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_local_when_org_id_absent_in_local_mode(
-        self, monkeypatch
-    ):
+    async def test_falls_back_to_local_when_org_id_absent_in_local_mode(self, monkeypatch):
         monkeypatch.delenv("CLERK_PUBLISHABLE_KEY", raising=False)
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         auth_state = {"user_id": "mcp-user"}  # no org_id
@@ -132,9 +130,7 @@ class TestResolveOrgIdMCPMode:
         assert result == LOCAL_ORG_ID
 
     @pytest.mark.asyncio
-    async def test_raises_403_in_cloud_mode_when_org_id_absent(
-        self, monkeypatch
-    ):
+    async def test_raises_403_in_cloud_mode_when_org_id_absent(self, monkeypatch):
         """In cloud mode, API-key auth without org_id must raise 403."""
         from fastapi import HTTPException
 

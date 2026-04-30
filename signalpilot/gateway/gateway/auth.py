@@ -34,10 +34,7 @@ EXPECTED_AUDIENCE = os.environ.get("CLERK_JWT_AUDIENCE", "")
 JWT_LEEWAY_SECONDS = int(os.environ.get("SP_JWT_LEEWAY", "30"))
 
 if is_cloud_mode() and not EXPECTED_AUDIENCE:
-    logger.warning(
-        "CLERK_JWT_AUDIENCE not set — audience verification disabled. "
-        "Set this for production security."
-    )
+    logger.warning("CLERK_JWT_AUDIENCE not set — audience verification disabled. Set this for production security.")
 
 LOCAL_USER_ID = "local"
 LOCAL_ORG_ID = "local"
@@ -59,7 +56,7 @@ def _get_jwks_client():
     # Derive JWKS URL from publishable key
     for prefix in ("pk_test_", "pk_live_"):
         if pk.startswith(prefix):
-            encoded = pk[len(prefix):]
+            encoded = pk[len(prefix) :]
             padded = encoded + "=" * (-len(encoded) % 4)
             domain = base64.b64decode(padded).decode("utf-8").rstrip("$")
             jwks_url = f"https://{domain}/.well-known/jwks.json"
@@ -78,8 +75,7 @@ if is_cloud_mode():
         _get_jwks_client()
     except Exception as e:
         raise RuntimeError(
-            f"Failed to initialize Clerk JWKS client at startup: {e}. "
-            f"Check CLERK_PUBLISHABLE_KEY format."
+            f"Failed to initialize Clerk JWKS client at startup: {e}. Check CLERK_PUBLISHABLE_KEY format."
         ) from e
 
 
@@ -206,9 +202,7 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
         if org_id:
             current_org_id_var.set(org_id)
             return org_id
-        raise HTTPException(
-            status_code=403, detail="Organization context required"
-        )
+        raise HTTPException(status_code=403, detail="Organization context required")
 
     # Cloud mode: org_id claim is required
     if not org_id:

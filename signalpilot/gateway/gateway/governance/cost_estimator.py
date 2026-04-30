@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
 
 from ..connectors.base import BaseConnector
 
@@ -17,6 +16,7 @@ from ..connectors.base import BaseConnector
 @dataclass
 class CostEstimate:
     """Estimated cost of executing a query."""
+
     estimated_rows: int = 0
     estimated_cost: float = 0.0  # Planner cost units (not USD)
     estimated_usd: float = 0.0  # Rough USD estimate
@@ -32,17 +32,17 @@ class CostEstimate:
 # Cost per row scanned — rough heuristics for managed databases
 # Based on typical cloud pricing for compute + I/O
 _COST_PER_ROW = {
-    "postgres": 0.000_000_3,       # ~$0.10/hr RDS, ~100K rows/sec
-    "redshift": 0.000_000_5,       # ~$0.25/hr per node, higher throughput
-    "mysql": 0.000_000_3,          # ~$0.10/hr RDS
-    "snowflake": 0.000_001_0,      # ~$2/credit, credits burn per-query
-    "bigquery": 0.000_006_25,      # $6.25/TB scanned (2026 pricing), ~1KB/row average
-    "clickhouse": 0.000_000_1,     # Very efficient columnar storage
-    "databricks": 0.000_001_0,     # Similar to Snowflake pricing model
-    "duckdb": 0.0,                 # Local/free
-    "sqlite": 0.0,                 # Local/free
-    "mssql": 0.000_000_4,          # ~$0.10-0.20/hr, SQL Server/Azure SQL
-    "trino": 0.000_000_2,          # Self-hosted federated engine
+    "postgres": 0.000_000_3,  # ~$0.10/hr RDS, ~100K rows/sec
+    "redshift": 0.000_000_5,  # ~$0.25/hr per node, higher throughput
+    "mysql": 0.000_000_3,  # ~$0.10/hr RDS
+    "snowflake": 0.000_001_0,  # ~$2/credit, credits burn per-query
+    "bigquery": 0.000_006_25,  # $6.25/TB scanned (2026 pricing), ~1KB/row average
+    "clickhouse": 0.000_000_1,  # Very efficient columnar storage
+    "databricks": 0.000_001_0,  # Similar to Snowflake pricing model
+    "duckdb": 0.0,  # Local/free
+    "sqlite": 0.0,  # Local/free
+    "mssql": 0.000_000_4,  # ~$0.10-0.20/hr, SQL Server/Azure SQL
+    "trino": 0.000_000_2,  # Self-hosted federated engine
 }
 
 
@@ -210,6 +210,7 @@ class CostEstimator:
         """
         try:
             from ..connectors.bigquery import BigQueryConnector
+
             if isinstance(connector, BigQueryConnector):
                 dry_result = await connector.dry_run(sql)
                 bytes_processed = dry_result.get("total_bytes_processed", 0)
@@ -248,6 +249,7 @@ class CostEstimator:
             for line in plan_text.split("\n"):
                 if "rows=" in line:
                     import re
+
                     match = re.search(r"rows=(\d+)", line)
                     if match:
                         estimated_rows = max(estimated_rows, int(match.group(1)))
@@ -292,10 +294,9 @@ class CostEstimator:
                     explain_sql = f"EXPLAIN PLAN {sql}"
                     rows = await connector.execute(explain_sql)
                     if rows:
-                        plan_text = "\n".join(
-                            str(list(r.values())[0]) for r in rows if r
-                        )
+                        plan_text = "\n".join(str(list(r.values())[0]) for r in rows if r)
                         import re
+
                         for line in plan_text.split("\n"):
                             match = re.search(r"rows:\s*(\d+)", line, re.IGNORECASE)
                             if match:
@@ -328,6 +329,7 @@ class CostEstimator:
             estimated_rows = 0
             if plan_text:
                 import re
+
                 # Look for 'Statistics(sizeInBytes=X, rowCount=Y)' in plan
                 row_match = re.search(r"rowCount=(\d+)", plan_text)
                 if row_match:
@@ -430,6 +432,7 @@ class CostEstimator:
             estimated_rows = 0
             if plan_text:
                 import re
+
                 # Trino EXPLAIN shows "rows: N" or "est. N rows"
                 for match in re.finditer(r"(?:rows|est\.?)\s*[:=]?\s*(\d+)", plan_text, re.IGNORECASE):
                     estimated_rows = max(estimated_rows, int(match.group(1)))

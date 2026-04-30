@@ -89,29 +89,35 @@ class RequestBodySizeLimitMiddleware:
 
     async def _send_413(self, send: Send) -> None:
         body = json.dumps({"detail": "Request body too large."}).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 413,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-            "more_body": False,
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body,
+                "more_body": False,
+            }
+        )
 
 
 # Paths that don't require authentication.
 # /api/metrics is intentionally excluded — it streams live infrastructure data
 # and must be protected by auth to prevent unauthenticated topology enumeration.
-PUBLIC_PATHS = frozenset({
-    "/health",
-    "/docs",
-    "/openapi.json",
-})
+PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/docs",
+        "/openapi.json",
+    }
+)
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -158,6 +164,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if not provided_key:
             # Local mode: allow unauthenticated access (key is optional)
             from .deployment import is_local_mode
+
             if is_local_mode():
                 request.state.auth = {"user_id": "local", "org_id": "local", "auth_method": "local_nokey"}
                 return await call_next(request)
@@ -184,6 +191,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         try:
             from .db.engine import get_session_factory
             from .store import Store
+
             factory = get_session_factory()
             async with factory() as session:
                 store = Store(session)  # No user_id filter for validation
@@ -230,10 +238,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     AUTH_PATHS = frozenset({"/api/keys"})
 
-    EXPENSIVE_PATHS = frozenset({
-        "/api/query",
-        "/api/sandboxes",
-    })
+    EXPENSIVE_PATHS = frozenset(
+        {
+            "/api/query",
+            "/api/sandboxes",
+        }
+    )
 
     def __init__(self, app: ASGIApp, general_rpm: int = 120, expensive_rpm: int = 30, auth_rpm: int = 10) -> None:
         super().__init__(app)
@@ -295,7 +305,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._is_auth(request):
             if not self._check_rate(self._auth_hits[ip], self.auth_rpm):
                 return Response(
-                    content='{"detail":"Rate limit exceeded. Max ' + str(self.auth_rpm) + ' auth requests per minute."}',
+                    content='{"detail":"Rate limit exceeded. Max '
+                    + str(self.auth_rpm)
+                    + ' auth requests per minute."}',
                     status_code=429,
                     media_type="application/json",
                     headers={"Retry-After": "60"},
@@ -305,7 +317,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._is_expensive(request):
             if not self._check_rate(self._expensive_hits[ip], self.expensive_rpm):
                 return Response(
-                    content='{"detail":"Rate limit exceeded. Max ' + str(self.expensive_rpm) + ' expensive requests per minute."}',
+                    content='{"detail":"Rate limit exceeded. Max '
+                    + str(self.expensive_rpm)
+                    + ' expensive requests per minute."}',
                     status_code=429,
                     media_type="application/json",
                     headers={"Retry-After": "60"},
@@ -388,21 +402,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Cache-Control"] = "no-store"
         # interest-cohort=() is kept for older browser coverage; FLoC is deprecated
         # in modern browsers but the directive is harmless.
-        response.headers["Permissions-Policy"] = (
-            "camera=(), microphone=(), geolocation=(), interest-cohort=()"
-        )
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), interest-cohort=()"
         # HSTS is only sent over HTTPS to avoid locking browsers into HTTPS on
         # local HTTP dev setups. `preload` is intentionally omitted — it requires
         # explicit opt-in via hstspreload.org and is a domain-level commitment that
         # cannot be easily rolled back.
-        is_https = (
-            request.headers.get("x-forwarded-proto") == "https"
-            or request.url.scheme == "https"
-        )
+        is_https = request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
         if is_https:
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=63072000; includeSubDomains"
-            )
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         # CSP: SP_GATEWAY_CSP_POLICY overrides the default entirely when set.
         # The deployer owns the full policy — no merging or layering.
         csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY

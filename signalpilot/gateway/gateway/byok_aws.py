@@ -32,10 +32,7 @@ _ERROR_KEY_NOT_FOUND = "KMS key not found"
 _ERROR_THROTTLED = "KMS request throttled after retries"
 _ERROR_GENERIC = "KMS operation failed"
 
-_BOTO3_MISSING_MESSAGE = (
-    "boto3 is required for AWS KMS provider. "
-    "Install with: pip install signalpilot-gateway[aws]"
-)
+_BOTO3_MISSING_MESSAGE = "boto3 is required for AWS KMS provider. Install with: pip install signalpilot-gateway[aws]"
 
 
 # ─── Optional import guard ────────────────────────────────────────────────────
@@ -43,6 +40,7 @@ _BOTO3_MISSING_MESSAGE = (
 try:
     import boto3 as _boto3_module
     from botocore.exceptions import ClientError as _BotoClientError
+
     _BOTO3_AVAILABLE = True
 except ImportError:
     _boto3_module = None  # type: ignore[assignment]
@@ -51,6 +49,7 @@ except ImportError:
 
 
 # ─── AWSKMSProvider ──────────────────────────────────────────────────────────
+
 
 class AWSKMSProvider:
     """AWS KMS BYOK provider.
@@ -108,7 +107,7 @@ class AWSKMSProvider:
                 error_code = exc.response["Error"]["Code"]  # type: ignore[union-attr]
                 if error_code == "ThrottlingException":
                     if attempt < _MAX_RETRY_ATTEMPTS - 1:
-                        delay = _RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                        delay = _RETRY_BASE_DELAY_SECONDS * (2**attempt)
                         jitter = random.uniform(0, _RETRY_JITTER_MAX_SECONDS)
                         logger.warning(
                             "KMS throttled (attempt %d/%d), retrying in %.2fs",
@@ -144,7 +143,7 @@ class AWSKMSProvider:
                 error_code = exc.response["Error"]["Code"]  # type: ignore[union-attr]
                 if error_code == "ThrottlingException":
                     if attempt < _MAX_RETRY_ATTEMPTS - 1:
-                        delay = _RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                        delay = _RETRY_BASE_DELAY_SECONDS * (2**attempt)
                         jitter = random.uniform(0, _RETRY_JITTER_MAX_SECONDS)
                         logger.warning(
                             "KMS throttled (attempt %d/%d), retrying in %.2fs",
@@ -164,6 +163,7 @@ class AWSKMSProvider:
     async def generate_dek(self) -> bytes:
         """Generate a fresh Fernet key (44 bytes) to use as a DEK."""
         from cryptography.fernet import Fernet
+
         return Fernet.generate_key()
 
     async def health_check(self) -> bool:
@@ -183,6 +183,7 @@ class AWSKMSProvider:
 
 # ─── Protocol compliance assertion ───────────────────────────────────────────
 
+
 # Verify AWSKMSProvider satisfies BYOKProvider at import time (runtime_checkable).
 # This is a documentation assertion — it will fail loudly at startup if the
 # interface drifts.
@@ -193,6 +194,7 @@ def _assert_protocol_compliance() -> None:
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _extract_region_from_arn(arn: str) -> str:
     """Extract the AWS region from a KMS key ARN.

@@ -125,11 +125,14 @@ class SandboxedDuckDBConnector(BaseConnector):
         if self._sandbox_client is None:
             try:
                 from ..api.deps import get_sandbox_client
+
                 self._sandbox_client = get_sandbox_client()
             except Exception:
                 # During test_credentials, sandbox client may not be initialized yet.
-                from ..sandbox_client import SandboxClient
                 import os
+
+                from ..sandbox_client import SandboxClient
+
                 url = os.environ.get("SP_SANDBOX_MANAGER_URL", "http://localhost:8180")
                 self._sandbox_client = SandboxClient(base_url=url)
                 logger.info("SandboxedDuckDB: created fallback sandbox client at %s", url)
@@ -138,18 +141,19 @@ class SandboxedDuckDBConnector(BaseConnector):
     def _translate_path(path: str) -> str:
         """Translate a host path to the sandbox mount path."""
         import re
+
         # Windows path: C:\Users\username\... → /host-data/...
-        win_match = re.match(r'^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)[/\\]?(.*)', path)
+        win_match = re.match(r"^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)[/\\]?(.*)", path)
         if win_match:
             remainder = win_match.group(2).replace("\\", "/")
             return f"/host-data/{remainder}" if remainder else "/host-data"
         # Unix path: /home/username/... → /host-data/...
-        unix_match = re.match(r'^/home/([^/]+)/?(.*)', path)
+        unix_match = re.match(r"^/home/([^/]+)/?(.*)", path)
         if unix_match:
             remainder = unix_match.group(2)
             return f"/host-data/{remainder}" if remainder else "/host-data"
         # macOS: /Users/username/... → /host-data/...
-        mac_match = re.match(r'^/Users/([^/]+)/?(.*)', path)
+        mac_match = re.match(r"^/Users/([^/]+)/?(.*)", path)
         if mac_match:
             remainder = mac_match.group(2)
             return f"/host-data/{remainder}" if remainder else "/host-data"
@@ -182,7 +186,9 @@ class SandboxedDuckDBConnector(BaseConnector):
         except json.JSONDecodeError:
             raise RuntimeError(f"Invalid JSON from sandbox: {result.output[:200]}")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         """Execute a query via sandbox and return rows."""
         code = _build_query_code(sql)
         data = await self._run_sandboxed(code, timeout=timeout or self._query_timeout)
@@ -191,6 +197,7 @@ class SandboxedDuckDBConnector(BaseConnector):
     async def _get_schema_impl(self) -> dict[str, Any]:
         """Get schema via sandbox introspection."""
         import time as _time
+
         code = _build_schema_code()
         t0 = _time.monotonic()
         result = await self._run_sandboxed(code, timeout=30)
@@ -207,7 +214,9 @@ class SandboxedDuckDBConnector(BaseConnector):
                 return False
             code = f"import duckdb; conn = duckdb.connect('{_SANDBOX_DB_PATH}', read_only=True); conn.execute('SELECT 1'); conn.close(); print('ok')"
             result = await self._sandbox_client.execute_code_with_mounts(
-                code=code, file_mounts=self._get_mounts(), timeout=10,
+                code=code,
+                file_mounts=self._get_mounts(),
+                timeout=10,
             )
             if not result.success:
                 logger.warning("SandboxedDuckDB health_check failed: %s", result.error)

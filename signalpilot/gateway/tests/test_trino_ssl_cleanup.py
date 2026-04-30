@@ -17,8 +17,8 @@ import pytest
 
 from gateway.connectors.base import BaseConnector
 
-
 # ─── Minimal concrete subclass for testing BaseConnector ─────────────────────
+
 
 class _ConcreteConnector(BaseConnector):
     """Minimal concrete implementation of BaseConnector for unit testing."""

@@ -29,7 +29,6 @@ from gateway.api.deps import get_store
 from gateway.main import app
 from gateway.middleware import APIKeyAuthMiddleware
 
-
 # ─── Shared auth state ────────────────────────────────────────────────────────
 
 _CURRENT_AUTH: dict[str, Any] = {
@@ -119,21 +118,28 @@ class TestConnectionsWriteScope:
 
     def test_add_connection_returns_403_without_write_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections", json={
-            "name": "test-conn", "db_type": "postgres",
-        })
+        response = client.post(
+            "/api/connections",
+            json={
+                "name": "test-conn",
+                "db_type": "postgres",
+            },
+        )
         assert response.status_code == 403
 
     def test_add_connection_passes_with_write_scope(self, client):
         _set_scopes(["write"])
-        response = client.post("/api/connections", json={
-            "name": "scope-test-write",
-            "db_type": "postgres",
-            "host": "db.example.com",
-            "port": 5432,
-            "database": "testdb",
-            "username": "user",
-        })
+        response = client.post(
+            "/api/connections",
+            json={
+                "name": "scope-test-write",
+                "db_type": "postgres",
+                "host": "db.example.com",
+                "port": 5432,
+                "database": "testdb",
+                "username": "user",
+            },
+        )
         assert response.status_code != 403
 
     def test_edit_connection_returns_403_without_write_scope(self, client):
@@ -158,44 +164,44 @@ class TestConnectionsWriteScope:
 
     def test_clone_connection_returns_403_without_write_scope(self, client):
         _set_scopes([])
-        response = client.post(
-            "/api/connections/my-conn/clone", params={"new_name": "clone-name"}
-        )
+        response = client.post("/api/connections/my-conn/clone", params={"new_name": "clone-name"})
         assert response.status_code == 403
 
     def test_clone_connection_passes_with_write_scope(self, client):
         _set_scopes(["write"])
-        response = client.post(
-            "/api/connections/nonexistent-conn/clone", params={"new_name": "clone-name"}
-        )
+        response = client.post("/api/connections/nonexistent-conn/clone", params={"new_name": "clone-name"})
         assert response.status_code != 403
 
     def test_export_connections_returns_403_without_write_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections/export", json={
-            "include_credentials": False, "confirm": True,
-        })
+        response = client.post(
+            "/api/connections/export",
+            json={
+                "include_credentials": False,
+                "confirm": True,
+            },
+        )
         assert response.status_code == 403
 
     def test_export_connections_passes_with_write_scope(self, client):
         _set_scopes(["write"])
-        response = client.post("/api/connections/export", json={
-            "include_credentials": False, "confirm": True,
-        })
+        response = client.post(
+            "/api/connections/export",
+            json={
+                "include_credentials": False,
+                "confirm": True,
+            },
+        )
         assert response.status_code != 403
 
     def test_import_connections_returns_403_without_write_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections/import", json={
-            "connections": []
-        })
+        response = client.post("/api/connections/import", json={"connections": []})
         assert response.status_code == 403
 
     def test_import_connections_passes_with_write_scope(self, client):
         _set_scopes(["write"])
-        response = client.post("/api/connections/import", json={
-            "connections": []
-        })
+        response = client.post("/api/connections/import", json={"connections": []})
         assert response.status_code != 403
 
 
@@ -234,19 +240,29 @@ class TestTestCredentialsWriteScope:
 
     def test_test_credentials_returns_403_without_write_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections/test-credentials", json={
-            "name": "test", "db_type": "postgres",
-            "host": "localhost", "port": 5432,
-        })
+        response = client.post(
+            "/api/connections/test-credentials",
+            json={
+                "name": "test",
+                "db_type": "postgres",
+                "host": "localhost",
+                "port": 5432,
+            },
+        )
         assert response.status_code == 403
 
     def test_test_credentials_passes_with_write_scope(self, client):
         """With write scope, request reaches the handler (non-403 response expected)."""
         _set_scopes(["write"])
-        response = client.post("/api/connections/test-credentials", json={
-            "name": "test", "db_type": "postgres",
-            "host": "db.example.com", "port": 5432,
-        })
+        response = client.post(
+            "/api/connections/test-credentials",
+            json={
+                "name": "test",
+                "db_type": "postgres",
+                "host": "db.example.com",
+                "port": 5432,
+            },
+        )
         assert response.status_code != 403
 
 
@@ -285,16 +301,24 @@ class TestSandboxExecuteScope:
 
     def test_create_sandbox_returns_403_without_execute_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/sandboxes", json={
-            "connection_name": "test-conn", "label": "test sandbox",
-        })
+        response = client.post(
+            "/api/sandboxes",
+            json={
+                "connection_name": "test-conn",
+                "label": "test sandbox",
+            },
+        )
         assert response.status_code == 403
 
     def test_create_sandbox_passes_with_execute_scope(self, client):
         _set_scopes(["execute"])
-        response = client.post("/api/sandboxes", json={
-            "connection_name": "test-conn", "label": "test sandbox",
-        })
+        response = client.post(
+            "/api/sandboxes",
+            json={
+                "connection_name": "test-conn",
+                "label": "test sandbox",
+            },
+        )
         assert response.status_code != 403
 
     def test_kill_sandbox_returns_403_without_execute_scope(self, client):
@@ -309,16 +333,22 @@ class TestSandboxExecuteScope:
 
     def test_execute_in_sandbox_returns_403_without_execute_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/sandboxes/some-sandbox-id/execute", json={
-            "sql": "SELECT 1",
-        })
+        response = client.post(
+            "/api/sandboxes/some-sandbox-id/execute",
+            json={
+                "sql": "SELECT 1",
+            },
+        )
         assert response.status_code == 403
 
     def test_execute_in_sandbox_passes_with_execute_scope(self, client):
         _set_scopes(["execute"])
-        response = client.post("/api/sandboxes/nonexistent-sandbox-id/execute", json={
-            "sql": "SELECT 1",
-        })
+        response = client.post(
+            "/api/sandboxes/nonexistent-sandbox-id/execute",
+            json={
+                "sql": "SELECT 1",
+            },
+        )
         assert response.status_code != 403
 
 
@@ -330,34 +360,46 @@ class TestQueryScope:
 
     def test_query_database_returns_403_without_query_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/query", json={
-            "connection_name": "test-conn",
-            "sql": "SELECT 1",
-        })
+        response = client.post(
+            "/api/query",
+            json={
+                "connection_name": "test-conn",
+                "sql": "SELECT 1",
+            },
+        )
         assert response.status_code == 403
 
     def test_query_database_passes_with_query_scope(self, client):
         _set_scopes(["query"])
-        response = client.post("/api/query", json={
-            "connection_name": "nonexistent-conn",
-            "sql": "SELECT 1",
-        })
+        response = client.post(
+            "/api/query",
+            json={
+                "connection_name": "nonexistent-conn",
+                "sql": "SELECT 1",
+            },
+        )
         assert response.status_code != 403
 
     def test_explain_query_returns_403_without_query_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/query/explain", json={
-            "connection_name": "test-conn",
-            "sql": "SELECT 1",
-        })
+        response = client.post(
+            "/api/query/explain",
+            json={
+                "connection_name": "test-conn",
+                "sql": "SELECT 1",
+            },
+        )
         assert response.status_code == 403
 
     def test_explain_query_passes_with_query_scope(self, client):
         _set_scopes(["query"])
-        response = client.post("/api/query/explain", json={
-            "connection_name": "nonexistent-conn",
-            "sql": "SELECT 1",
-        })
+        response = client.post(
+            "/api/query/explain",
+            json={
+                "connection_name": "nonexistent-conn",
+                "sql": "SELECT 1",
+            },
+        )
         assert response.status_code != 403
 
 
@@ -369,30 +411,36 @@ class TestSettingsAdminScope:
 
     def test_update_settings_returns_403_without_admin_scope(self, client):
         _set_scopes([])
-        response = client.put("/api/settings", json={
-            "sandbox_manager_url": "http://localhost:8180",
-            "sandbox_provider": "local",
-            "default_row_limit": 10000,
-            "default_budget_usd": 10.0,
-            "default_timeout_seconds": 30,
-            "max_concurrent_sandboxes": 10,
-            "blocked_tables": [],
-            "gateway_url": "http://localhost:3300",
-        })
+        response = client.put(
+            "/api/settings",
+            json={
+                "sandbox_manager_url": "http://localhost:8180",
+                "sandbox_provider": "local",
+                "default_row_limit": 10000,
+                "default_budget_usd": 10.0,
+                "default_timeout_seconds": 30,
+                "max_concurrent_sandboxes": 10,
+                "blocked_tables": [],
+                "gateway_url": "http://localhost:3300",
+            },
+        )
         assert response.status_code == 403
 
     def test_update_settings_passes_with_admin_scope(self, client):
         _set_scopes(["admin"])
-        response = client.put("/api/settings", json={
-            "sandbox_manager_url": "http://localhost:8180",
-            "sandbox_provider": "local",
-            "default_row_limit": 10000,
-            "default_budget_usd": 10.0,
-            "default_timeout_seconds": 30,
-            "max_concurrent_sandboxes": 10,
-            "blocked_tables": [],
-            "gateway_url": "http://localhost:3300",
-        })
+        response = client.put(
+            "/api/settings",
+            json={
+                "sandbox_manager_url": "http://localhost:8180",
+                "sandbox_provider": "local",
+                "default_row_limit": 10000,
+                "default_budget_usd": 10.0,
+                "default_timeout_seconds": 30,
+                "max_concurrent_sandboxes": 10,
+                "blocked_tables": [],
+                "gateway_url": "http://localhost:3300",
+            },
+        )
         assert response.status_code != 403
 
 
@@ -510,58 +558,76 @@ class TestUrlUtilityReadScope:
 
     def test_parse_url_returns_403_without_read_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections/parse-url", json={
-            "url": "postgresql://user:pass@db.example.com:5432/mydb",
-            "db_type": "postgres",
-        })
+        response = client.post(
+            "/api/connections/parse-url",
+            json={
+                "url": "postgresql://user:pass@db.example.com:5432/mydb",
+                "db_type": "postgres",
+            },
+        )
         assert response.status_code == 403
 
     def test_parse_url_passes_with_read_scope(self, client):
         _set_scopes(["read"])
-        response = client.post("/api/connections/parse-url", json={
-            "url": "postgresql://user:pass@db.example.com:5432/mydb",
-            "db_type": "postgres",
-        })
+        response = client.post(
+            "/api/connections/parse-url",
+            json={
+                "url": "postgresql://user:pass@db.example.com:5432/mydb",
+                "db_type": "postgres",
+            },
+        )
         assert response.status_code != 403
 
     def test_validate_url_returns_403_without_read_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections/validate-url", json={
-            "connection_string": "postgresql://user:pass@db.example.com:5432/mydb",
-            "db_type": "postgres",
-        })
+        response = client.post(
+            "/api/connections/validate-url",
+            json={
+                "connection_string": "postgresql://user:pass@db.example.com:5432/mydb",
+                "db_type": "postgres",
+            },
+        )
         assert response.status_code == 403
 
     def test_validate_url_passes_with_read_scope(self, client):
         _set_scopes(["read"])
-        response = client.post("/api/connections/validate-url", json={
-            "connection_string": "postgresql://user:pass@db.example.com:5432/mydb",
-            "db_type": "postgres",
-        })
+        response = client.post(
+            "/api/connections/validate-url",
+            json={
+                "connection_string": "postgresql://user:pass@db.example.com:5432/mydb",
+                "db_type": "postgres",
+            },
+        )
         assert response.status_code != 403
 
     def test_build_url_returns_403_without_read_scope(self, client):
         _set_scopes([])
-        response = client.post("/api/connections/build-url", json={
-            "db_type": "postgres",
-            "host": "db.example.com",
-            "port": 5432,
-            "database": "mydb",
-            "username": "user",
-            "password": "pass",
-        })
+        response = client.post(
+            "/api/connections/build-url",
+            json={
+                "db_type": "postgres",
+                "host": "db.example.com",
+                "port": 5432,
+                "database": "mydb",
+                "username": "user",
+                "password": "pass",
+            },
+        )
         assert response.status_code == 403
 
     def test_build_url_passes_with_read_scope(self, client):
         _set_scopes(["read"])
-        response = client.post("/api/connections/build-url", json={
-            "db_type": "postgres",
-            "host": "db.example.com",
-            "port": 5432,
-            "database": "mydb",
-            "username": "user",
-            "password": "pass",
-        })
+        response = client.post(
+            "/api/connections/build-url",
+            json={
+                "db_type": "postgres",
+                "host": "db.example.com",
+                "port": 5432,
+                "database": "mydb",
+                "username": "user",
+                "password": "pass",
+            },
+        )
         assert response.status_code != 403
 
 

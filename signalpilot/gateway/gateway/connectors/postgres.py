@@ -9,6 +9,7 @@ from .base import BaseConnector
 
 try:
     import asyncpg
+
     HAS_ASYNCPG = True
 except ImportError:
     HAS_ASYNCPG = False
@@ -46,7 +47,8 @@ class PostgresConnector(BaseConnector):
 
         # For IAM auth, replace password in connection string with RDS token
         if self._iam_auth:
-            from urllib.parse import urlparse, urlunparse, quote
+            from urllib.parse import quote, urlparse, urlunparse
+
             parsed = urlparse(connection_string)
             host = parsed.hostname or "localhost"
             port = parsed.port or 5432
@@ -88,7 +90,7 @@ class PostgresConnector(BaseConnector):
             raise RuntimeError(f"Database not found: {e}") from e
         except asyncpg.InvalidAuthorizationSpecificationError as e:
             raise RuntimeError(f"Authentication failed: {e}") from e
-        except (OSError, asyncio.TimeoutError) as e:
+        except (TimeoutError, OSError) as e:
             raise RuntimeError(f"Connection failed (host unreachable or timeout): {e}") from e
 
     def _build_ssl_context(self):
@@ -141,7 +143,9 @@ class PostgresConnector(BaseConnector):
             self._pool = None
             raise RuntimeError("Connection lost — please reconnect")
 
-    async def _execute_impl(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def _execute_impl(
+        self, sql: str, params: list | None = None, timeout: int | None = None
+    ) -> list[dict[str, Any]]:
         if self._pool is None:
             raise RuntimeError("Not connected")
         async with self._pool.acquire() as conn:
@@ -282,12 +286,14 @@ class PostgresConnector(BaseConnector):
             key = f"{r['table_schema']}.{r['table_name']}"
             if key not in foreign_keys:
                 foreign_keys[key] = []
-            foreign_keys[key].append({
-                "column": r["column_name"],
-                "references_schema": r["foreign_table_schema"],
-                "references_table": r["foreign_table_name"],
-                "references_column": r["foreign_column_name"],
-            })
+            foreign_keys[key].append(
+                {
+                    "column": r["column_name"],
+                    "references_schema": r["foreign_table_schema"],
+                    "references_table": r["foreign_table_name"],
+                    "references_column": r["foreign_column_name"],
+                }
+            )
 
         # Build column stats map (n_distinct: positive = exact count, negative = fraction of rows)
         col_stats: dict[str, dict] = {}
@@ -309,10 +315,12 @@ class PostgresConnector(BaseConnector):
             key = f"{r['table_schema']}.{r['table_name']}"
             if key not in indexes:
                 indexes[key] = []
-            indexes[key].append({
-                "name": r["index_name"],
-                "definition": r["index_definition"],
-            })
+            indexes[key].append(
+                {
+                    "name": r["index_name"],
+                    "definition": r["index_definition"],
+                }
+            )
 
         # Build schema
         schema: dict[str, Any] = {}
@@ -348,6 +356,7 @@ class PostgresConnector(BaseConnector):
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
         import time as _time
+
         if self._pool is None or not columns:
             return {}
         try:
@@ -361,16 +370,18 @@ class PostgresConnector(BaseConnector):
             # Fallback to per-column queries if UNION ALL fails
             safe_table = self._quote_table(table)
             result: dict[str, list] = {}
+
             async def _sample(col: str):
                 try:
                     safe_col = self._quote_identifier(col)
                     async with self._pool.acquire() as conn:
                         rows = await conn.fetch(
-                            f'SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}'
+                            f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}"
                         )
                         return col, [str(r[col]) for r in rows]
                 except Exception:
                     return col, []
+
             tasks = [_sample(c) for c in columns[:20]]
             results = await asyncio.gather(*tasks)
             for col, values in results:

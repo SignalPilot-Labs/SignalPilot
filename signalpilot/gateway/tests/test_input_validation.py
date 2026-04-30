@@ -31,7 +31,6 @@ from gateway.models import (
     SSLConfig,
 )
 
-
 # ─── Auth bypass for API-level tests ─────────────────────────────────────────
 
 _TEST_AUTH: dict[str, Any] = {
@@ -408,10 +407,7 @@ class TestNumericBounds:
 
 class TestImportConnectionsSizeCap:
     def test_import_too_many_connections_rejected(self, client: TestClient):
-        connections = [
-            {"name": f"conn-{i}", "db_type": "postgres"}
-            for i in range(501)
-        ]
+        connections = [{"name": f"conn-{i}", "db_type": "postgres"} for i in range(501)]
         response = client.post(
             "/api/connections/import",
             json={"connections": connections},
@@ -421,10 +417,7 @@ class TestImportConnectionsSizeCap:
 
     def test_import_exactly_500_connections_not_rejected_by_size_cap(self, client: TestClient):
         """500 connections should pass the size cap check (may fail for other reasons)."""
-        connections = [
-            {"name": f"conn-{i}", "db_type": "postgres"}
-            for i in range(500)
-        ]
+        connections = [{"name": f"conn-{i}", "db_type": "postgres"} for i in range(500)]
         response = client.post(
             "/api/connections/import",
             json={"connections": connections},

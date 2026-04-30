@@ -24,7 +24,6 @@ from gateway.network_validation import (
     validate_connection_params,
 )
 
-
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -44,6 +43,7 @@ def _patch_dns(resolved_ip: str):
 def _patch_dns_failure():
     """Patch socket.getaddrinfo to raise a DNS failure."""
     import socket
+
     return patch(
         "gateway.network_validation.socket.getaddrinfo",
         side_effect=socket.gaierror("Name or service not known"),

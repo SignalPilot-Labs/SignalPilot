@@ -288,7 +288,7 @@ class MCPAuthMiddleware:
                 mcp_user_agent_var.set(_extract_user_agent(scope))
 
                 # Per-key / per-org rate limit (MCP traffic bypasses FastAPI middleware)
-                from ..middleware import check_principal_rate_limit
+                from ..http import check_principal_rate_limit
 
                 rate_error = check_principal_rate_limit(matched.id, key_org_id)
                 if rate_error:

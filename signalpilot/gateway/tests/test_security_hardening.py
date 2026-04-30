@@ -39,7 +39,7 @@ async def _collect_sent(scope, receive, send_fn) -> list[dict[str, Any]]:
     async def capturing_send(message: dict[str, Any]) -> None:
         sent.append(message)
 
-    from gateway.middleware import RequestBodySizeLimitMiddleware
+    from gateway.http import RequestBodySizeLimitMiddleware
 
     async def downstream(scope, receive, send):
         # Drain the receive queue to allow counting_receive to run
@@ -64,7 +64,7 @@ class TestRequestBodySizeLimit:
     """Tests for RequestBodySizeLimitMiddleware."""
 
     def _make_middleware(self, limit: int = 2_097_152):
-        from gateway.middleware import RequestBodySizeLimitMiddleware
+        from gateway.http import RequestBodySizeLimitMiddleware
 
         async def dummy_app(scope, receive, send):
             # Drain body
@@ -154,7 +154,7 @@ class TestRequestBodySizeLimit:
 
     def test_non_http_scope_passes_through(self):
         """WebSocket/lifespan scopes should be passed through unchanged."""
-        from gateway.middleware import RequestBodySizeLimitMiddleware
+        from gateway.http import RequestBodySizeLimitMiddleware
 
         downstream_called = []
 
@@ -423,7 +423,7 @@ class TestSecurityHeadersMiddleware:
         from starlette.routing import Route
         from starlette.testclient import TestClient
 
-        from gateway.middleware import SecurityHeadersMiddleware
+        from gateway.http import SecurityHeadersMiddleware
 
         async def homepage(request: Request) -> PlainTextResponse:
             return PlainTextResponse("ok")
@@ -606,7 +606,7 @@ class TestAuthRateLimiting:
         from starlette.routing import Route
         from starlette.testclient import TestClient
 
-        from gateway.middleware import RateLimitMiddleware
+        from gateway.http import RateLimitMiddleware
 
         async def catch_all(request: StarletteRequest) -> PlainTextResponse:
             return PlainTextResponse("ok")

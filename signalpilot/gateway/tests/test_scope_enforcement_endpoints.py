@@ -26,8 +26,8 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import RequestResponseEndpoint
 
 from gateway.api.deps import get_store
+from gateway.http import APIKeyAuthMiddleware
 from gateway.main import app
-from gateway.middleware import APIKeyAuthMiddleware
 
 # ─── Shared auth state ────────────────────────────────────────────────────────
 

@@ -21,9 +21,9 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from gateway.api.deps import get_store
 from gateway.api.schema import _quote_identifier, _quote_table_name
+from gateway.http import APIKeyAuthMiddleware
 from gateway.main import app
 from gateway.mcp_server import _quote_table
-from gateway.middleware import APIKeyAuthMiddleware
 
 # ─── Shared auth state ───────────────────────────────────────────────────────
 

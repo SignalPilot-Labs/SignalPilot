@@ -24,13 +24,13 @@ from .byok.factory import make_provider
 from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
-from .correlation import RequestCorrelationMiddleware
 from .db.engine import close_db, get_session_factory, init_db
 from .governance.context import current_org_id_var
-from .middleware import (
+from .http import (
     APIKeyAuthMiddleware,
     RateLimitMiddleware,
     RequestBodySizeLimitMiddleware,
+    RequestCorrelationMiddleware,
     SecurityHeadersMiddleware,
     enforce_principal_rate_limit,
 )

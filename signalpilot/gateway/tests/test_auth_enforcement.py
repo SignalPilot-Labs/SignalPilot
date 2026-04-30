@@ -25,8 +25,8 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from gateway.api.deps import get_store
 from gateway.auth import resolve_user_id
+from gateway.http import APIKeyAuthMiddleware, RateLimitMiddleware
 from gateway.main import app
-from gateway.middleware import APIKeyAuthMiddleware, RateLimitMiddleware
 
 # ─── Shared mutable state ─────────────────────────────────────────────────────
 

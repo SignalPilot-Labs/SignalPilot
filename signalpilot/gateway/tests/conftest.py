@@ -48,8 +48,8 @@ def pytest_runtest_setup(item):
     stack (if the app has been started) and clears all hit buckets.
     """
     try:
+        from gateway.http import RateLimitMiddleware
         from gateway.main import app
-        from gateway.middleware import RateLimitMiddleware
 
         current = app.middleware_stack
         while current is not None:

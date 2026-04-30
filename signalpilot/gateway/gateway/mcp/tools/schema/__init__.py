@@ -1,11 +1,18 @@
-# isort: skip_file
-"""mcp/tools/schema package — split from a 949-LOC monolith in r9.
+"""MCP schema tools package.
 
-Submodules are imported in the SAME ORDER as the original file's
-@audited_tool(mcp) decorations, because decoration runs at import time
-and registers the tool onto the FastMCP singleton. Reordering would change
-mcp.list_tools() iteration order — a subtle behavior change.
+Split from ``mcp/tools/schema.py`` (949 LOC) in round 9.
+
+Invariant: MCP ``@audited_tool`` decoration order — ``mcp.list_tools()`` must
+return tools in original registration order; submodule imports must not be
+reordered. Decoration runs at import time and registers onto the FastMCP
+singleton.
+
+``# isort: skip_file`` is mandatory: reordering imports changes tool
+registration order and alters ``mcp.list_tools()`` iteration.
+
+Do not add ``__getattr__`` proxy or ``_common.py`` re-export helpers — see r9 lessons.
 """
+# isort: skip_file
 
 from __future__ import annotations
 

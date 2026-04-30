@@ -1,5 +1,18 @@
+"""Schema linking endpoint package.
+
+Split from ``api/schema/linking.py`` (995 LOC) in round 8.
+
+Invariant: data-only re-export shim; preserves public name surface via
+``__all__``. Imports the endpoint submodule as a side-effect so the route
+handler is registered on the shared router when this package is imported.
+
+``# isort: skip_file`` is mandatory: the endpoint import must precede the
+re-export imports to ensure route registration happens before any symbol
+lookups resolve.
+
+Do not add ``__getattr__`` proxy or ``_common.py`` re-export helpers — see r9 lessons.
+"""
 # isort: skip_file
-"""Schema linking endpoint package — split from a 995-LOC monolith in r8."""
 
 from __future__ import annotations
 

@@ -1,4 +1,17 @@
-"""Schema introspection, compression, and agent-context endpoints."""
+"""Schema introspection, compression, and agent-context endpoints.
+
+Split from ``api/schema.py`` (3736 LOC) in round 5.
+
+Invariant: FastAPI route registration order — submodules are imported in the
+order their endpoints appeared in the original monolith; verify with
+``len(router.routes)`` and route-path order.
+
+``# isort: skip_file`` (via per-import ``# noqa: F401``) is mandatory:
+reordering imports changes endpoint registration order and breaks FastAPI
+path-matching priority.
+
+Do not add ``__getattr__`` proxy or ``_common.py`` re-export helpers — see r9 lessons.
+"""
 
 from __future__ import annotations
 

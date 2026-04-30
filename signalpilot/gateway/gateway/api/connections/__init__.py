@@ -1,4 +1,17 @@
-"""Connection CRUD and management endpoints."""
+"""Connection CRUD and management endpoints.
+
+Split from ``api/connections.py`` (1959 LOC) in round 6.
+
+Invariant: FastAPI route registration order — submodules are imported in the
+order their endpoints appeared in the original monolith; verify with
+``len(router.routes)`` and route-path order. Static-path routes must register
+before parametric ``{name}`` routes to preserve FastAPI's match priority.
+
+``# isort: skip_file`` is mandatory: reordering imports changes endpoint
+registration order and breaks FastAPI path-matching priority.
+
+Do not add ``__getattr__`` proxy or ``_common.py`` re-export helpers — see r9 lessons.
+"""
 
 from __future__ import annotations
 

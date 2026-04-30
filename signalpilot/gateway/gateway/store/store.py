@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
+import gateway.store.endorsements as endorsements_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
 import gateway.store.settings as settings_mod
@@ -589,66 +590,32 @@ class Store:
     # ─── Schema Endorsements ─────────────────────────────────────────────
 
     async def get_schema_endorsements(self, name: str) -> dict:
-        conn = await self._get_conn_row(name)
-        if not conn or not conn.endorsements:
-            return {"endorsed": [], "hidden": [], "mode": "all"}
-        return conn.endorsements
+        oid = self._require_org_id()
+        return await endorsements_mod.get_schema_endorsements(self.session, org_id=oid, name=name)
 
     async def set_schema_endorsements(self, name: str, endorsements: dict) -> dict:
-        conn = await self._get_conn_row(name)
-        if not conn:
-            return {"endorsed": [], "hidden": [], "mode": "all"}
-        conn.endorsements = {
-            "endorsed": endorsements.get("endorsed", []),
-            "hidden": endorsements.get("hidden", []),
-            "mode": endorsements.get("mode", "all"),
-        }
-        await self.session.commit()
-        return conn.endorsements
+        oid = self._require_org_id()
+        return await endorsements_mod.set_schema_endorsements(
+            self.session, org_id=oid, name=name, endorsements=endorsements
+        )
 
     # ─── PII Redaction Config ──────────────────────────────────────────────
 
     async def get_pii_config(self, name: str) -> dict:
-        conn = await self._get_conn_row(name)
-        if not conn:
-            return {"enabled": False, "rules": {}}
-        return {
-            "enabled": conn.pii_enabled or False,
-            "rules": conn.pii_rules or {},
-        }
+        oid = self._require_org_id()
+        return await endorsements_mod.get_pii_config(self.session, org_id=oid, name=name)
 
     async def set_pii_config(self, name: str, enabled: bool, rules: dict[str, str]) -> dict:
-        conn = await self._get_conn_row(name)
-        if not conn:
-            raise ValueError(f"Connection '{name}' not found")
-        conn.pii_enabled = enabled
-        conn.pii_rules = rules
-        await self.session.commit()
-        return {"enabled": conn.pii_enabled, "rules": conn.pii_rules}
+        oid = self._require_org_id()
+        return await endorsements_mod.set_pii_config(self.session, org_id=oid, name=name, enabled=enabled, rules=rules)
 
     async def delete_schema_endorsements(self, name: str):
-        conn = await self._get_conn_row(name)
-        if conn:
-            conn.endorsements = None
-            await self.session.commit()
+        oid = self._require_org_id()
+        return await endorsements_mod.delete_schema_endorsements(self.session, org_id=oid, name=name)
 
     async def apply_endorsement_filter(self, name: str, schema: dict) -> dict:
-        config = await self.get_schema_endorsements(name)
-        mode = config.get("mode", "all")
-        endorsed = set(config.get("endorsed", []))
-        hidden = set(config.get("hidden", []))
-        if mode == "endorsed_only" and endorsed:
-            return {k: v for k, v in schema.items() if k in endorsed}
-        if hidden:
-            return {k: v for k, v in schema.items() if k not in hidden}
-        return schema
-
-    async def _get_conn_row(self, name: str) -> GatewayConnection | None:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
-        )
-        return result.scalar_one_or_none()
+        return await endorsements_mod.apply_endorsement_filter(self.session, org_id=oid, name=name, schema=schema)
 
     # ─── API Keys ───────────────────────────────────────────────────────
     async def list_api_keys(self) -> list[ApiKeyRecord]:

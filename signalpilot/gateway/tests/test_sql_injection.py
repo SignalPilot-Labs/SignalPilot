@@ -291,7 +291,7 @@ class TestExploreColumnValuesInjection:
             yield mock_connector
 
         _set_scopes(["write"])
-        with patch("gateway.api.schema.pool_manager") as mock_pm:
+        with patch("gateway.api.schema.introspection.pool_manager") as mock_pm:
             mock_pm.connection = _fake_conn
             app.dependency_overrides[get_store] = lambda: store
             try:
@@ -328,7 +328,7 @@ class TestExploreColumnValuesInjection:
             yield mock_connector
 
         _set_scopes(["write"])
-        with patch("gateway.api.schema.pool_manager") as mock_pm:
+        with patch("gateway.api.schema.introspection.pool_manager") as mock_pm:
             mock_pm.connection = _fake_conn
             app.dependency_overrides[get_store] = lambda: store
             try:

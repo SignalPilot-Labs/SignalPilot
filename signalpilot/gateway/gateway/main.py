@@ -1,425 +1,365 @@
-"""
-SignalPilot Gateway — FastAPI application.
+"""SignalPilot Gateway — FastAPI application.
 
-Endpoints:
-  GET  /health
-  GET  /api/settings          GET/PUT gateway settings (BYOF config)
-  PUT  /api/settings
-  GET  /api/connections        list connections
-  POST /api/connections        create connection
-  GET  /api/connections/{name} get connection details
-  DELETE /api/connections/{name}
-  POST /api/connections/{name}/test
-
-  GET  /api/sandboxes          list active sandboxes
-  POST /api/sandboxes          create sandbox
-  GET  /api/sandboxes/{id}     get sandbox details
-  DELETE /api/sandboxes/{id}   kill sandbox
-  POST /api/sandboxes/{id}/execute  run code
-
-  POST /api/query              governed SQL query (direct DB)
-
-  GET  /api/audit              audit log
-  GET  /api/metrics            SSE live metrics stream
+All endpoint handlers live in gateway/api/ router modules.
+This file is the app shell: lifespan, middleware, and router registration.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
+import os
 import time
-import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .engine import inject_limit, validate_sql
-from .models import (
-    AuditEntry,
-    ConnectionCreate,
-    ExecuteRequest,
-    GatewaySettings,
-    SandboxCreate,
+from .api import register_routers
+from .byok import DEKCache
+from .byok.factory import make_provider
+from .connectors.health_monitor import health_monitor
+from .connectors.pool_manager import pool_manager
+from .connectors.schema_cache import schema_cache
+from .db.engine import close_db, get_session_factory, init_db
+from .governance.context import current_org_id_var
+from .http import (
+    APIKeyAuthMiddleware,
+    RateLimitMiddleware,
+    RequestBodySizeLimitMiddleware,
+    RequestCorrelationMiddleware,
+    SecurityHeadersMiddleware,
+    enforce_principal_rate_limit,
 )
-from .sandbox_client import SandboxClient
-from .store import (
-    append_audit,
-    create_connection,
-    delete_connection,
-    delete_sandbox,
-    get_connection,
-    get_connection_string,
-    get_sandbox,
-    list_connections,
-    list_sandboxes,
-    load_settings,
-    read_audit,
-    save_settings,
-    upsert_sandbox,
-)
+from .models import ConnectionUpdate
+from .runtime.mode import is_cloud_mode
+from .store import Store, configure_byok
+from .store.crypto import _validate_encryption_health
 
-# ─── Global sandbox client (recreated when settings change) ──────────────────
-
-_sandbox_client: SandboxClient | None = None
+logger = logging.getLogger(__name__)
 
 
-def _get_sandbox_client() -> SandboxClient:
-    global _sandbox_client
-    if _sandbox_client is None:
-        settings = load_settings()
-        _sandbox_client = SandboxClient(
-            base_url=settings.sandbox_manager_url,
-            api_key=settings.sandbox_api_key,
-        )
-    return _sandbox_client
+# ─── Lifespan ─────────────────────────────────────────────────────────────────
 
-
-def _reset_sandbox_client():
-    global _sandbox_client
-    if _sandbox_client is not None:
-        asyncio.create_task(_sandbox_client.close())
-    _sandbox_client = None
-
-
-# ─── App ─────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    if _sandbox_client:
-        await _sandbox_client.close()
+    """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
 
+    # Initialize gateway DB tables
+    await init_db()
+
+    # Load persisted health state into in-memory cache
+    await health_monitor.load_from_db()
+
+    # Verify encryption key is functional at startup
+    if not _validate_encryption_health():
+        logger.error(
+            "STARTUP: Encryption health check failed. "
+            "Credentials may not be readable. Check SP_ENCRYPTION_KEY configuration."
+        )
+    else:
+        logger.info("STARTUP: Encryption health check passed.")
+
+    # Configure BYOK provider — type and config are read from env vars at startup.
+    # SP_BYOK_PROVIDER: provider type string (default: "local")
+    # SP_BYOK_PROVIDER_CONFIG: JSON-encoded provider config dict (optional)
+    byok_provider_type = os.getenv("SP_BYOK_PROVIDER", "local")
+    byok_provider_config_raw = os.getenv("SP_BYOK_PROVIDER_CONFIG")
+    byok_provider_config: dict | None = None
+    if byok_provider_config_raw:
+        import json as _json
+
+        try:
+            byok_provider_config = _json.loads(byok_provider_config_raw)
+        except _json.JSONDecodeError:
+            logger.error("STARTUP FATAL: SP_BYOK_PROVIDER_CONFIG contains invalid JSON")
+            raise SystemExit(1)
+
+    # In cloud mode, skip local BYOK provider auto-registration
+    dek_cache = DEKCache(ttl_seconds=300)
+    if is_cloud_mode() and byok_provider_type == "local":
+        logger.info(
+            "STARTUP: Cloud mode — skipping local BYOK provider; set SP_BYOK_PROVIDER to aws_kms/gcp_kms/azure_kv"
+        )
+    else:
+        byok_provider = make_provider(byok_provider_type, byok_provider_config)
+        configure_byok(byok_provider, dek_cache)
+        logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
+
+    if is_cloud_mode():
+        logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
+
+    async def _health_flush_loop():
+        """Flush buffered health events to DB every 5 seconds."""
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await health_monitor.flush_to_db()
+            except Exception as e:
+                logger.warning("Health flush loop error: %s", e)
+
+    async def _health_cleanup_loop():
+        """Delete health events older than 7 days, every hour."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await health_monitor.cleanup_old_events()
+            except Exception as e:
+                logger.warning("Health cleanup loop error: %s", e)
+
+    async def _health_ping_loop():
+        """Ping each connection every 30s to keep health stats fresh."""
+        await asyncio.sleep(10)  # Wait for startup to settle
+        while True:
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    store = Store(session, allow_unscoped=True)
+                    connections = await store.list_connections()
+                    for conn_info in connections:
+                        token = current_org_id_var.set(conn_info.org_id)
+                        try:
+                            inner_store = Store(session, org_id=conn_info.org_id)
+                            conn_str = await inner_store.get_connection_string(conn_info.name)
+                            if not conn_str:
+                                continue
+                            extras = await inner_store.get_credential_extras(conn_info.name)
+                            start = time.monotonic()
+                            try:
+                                async with pool_manager.connection(
+                                    conn_info.db_type,
+                                    conn_str,
+                                    credential_extras=extras,
+                                    connection_name=conn_info.name,
+                                ) as connector:
+                                    ok = await connector.health_check()
+                                elapsed = (time.monotonic() - start) * 1000
+                                health_monitor.record(
+                                    conn_info.name,
+                                    elapsed,
+                                    ok,
+                                    error=None if ok else "health_check returned false",
+                                    db_type=conn_info.db_type,
+                                )
+                            except Exception as e:
+                                elapsed = (time.monotonic() - start) * 1000
+                                health_monitor.record(
+                                    conn_info.name,
+                                    elapsed,
+                                    False,
+                                    error=str(e)[:200],
+                                    db_type=conn_info.db_type,
+                                )
+                        finally:
+                            current_org_id_var.reset(token)
+            except Exception as e:
+                logger.warning("Health ping loop error: %s", e)
+            await asyncio.sleep(30)
+
+    async def _pool_cleanup_loop():
+        while True:
+            await asyncio.sleep(60)
+            await pool_manager.cleanup_idle()
+
+    async def _schema_refresh_loop():
+        while True:
+            await asyncio.sleep(30)
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    store = Store(session, allow_unscoped=True)  # Background task: needs cross-user access
+                    connections = await store.list_connections()
+                    now = time.time()
+                    for conn_info in connections:
+                        interval = conn_info.schema_refresh_interval
+                        if not interval:
+                            continue
+                        last_refresh = conn_info.last_schema_refresh or 0
+                        if now - last_refresh < interval:
+                            continue
+                        # Outer Store is allow_unscoped; construct a per-org inner Store
+                        # so get_connection_string, get_credential_extras, and update_connection
+                        # are correctly scoped and update_connection's WHERE clause matches.
+                        token = current_org_id_var.set(conn_info.org_id)
+                        try:
+                            inner_store = Store(session, org_id=conn_info.org_id)
+                            conn_str = await inner_store.get_connection_string(conn_info.name)
+                            if not conn_str:
+                                continue
+                            extras = await inner_store.get_credential_extras(conn_info.name)
+                            async with pool_manager.connection(
+                                conn_info.db_type,
+                                conn_str,
+                                credential_extras=extras,
+                                connection_name=conn_info.name,
+                            ) as connector:
+                                schema = await connector.get_schema()
+                            diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)
+                            await inner_store.update_connection(
+                                conn_info.name,
+                                ConnectionUpdate(
+                                    last_schema_refresh=now,
+                                ),
+                            )
+                            if diff_result and diff_result.get("has_changes"):
+                                added = len(diff_result.get("added_tables", []))
+                                removed = len(diff_result.get("removed_tables", []))
+                                modified = len(diff_result.get("modified_tables", []))
+                                logger.info(
+                                    "Schema change detected for '%s': +%d/-%d tables, %d modified",
+                                    conn_info.name,
+                                    added,
+                                    removed,
+                                    modified,
+                                )
+                            else:
+                                logger.info(
+                                    "Scheduled schema refresh for '%s': %d tables (no structural changes)",
+                                    conn_info.name,
+                                    len(schema),
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "Scheduled schema refresh failed for '%s': %s",
+                                conn_info.name,
+                                e,
+                            )
+                        finally:
+                            current_org_id_var.reset(token)
+            except Exception as e:
+                logger.warning("Schema refresh loop error: %s", e)
+
+    health_flush_task = asyncio.create_task(_health_flush_loop())
+    health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
+    health_ping_task = asyncio.create_task(_health_ping_loop())
+    cleanup_task = asyncio.create_task(_pool_cleanup_loop())
+    refresh_task = asyncio.create_task(_schema_refresh_loop())
+
+    # Start MCP session manager if mounted
+    mcp_ctx = None
+    if _mcp_session_manager is not None:
+        mcp_ctx = _mcp_session_manager.run()
+        await mcp_ctx.__aenter__()
+
+    try:
+        yield
+    finally:
+        if mcp_ctx is not None:
+            await mcp_ctx.__aexit__(None, None, None)
+        # Flush any remaining health events before shutdown
+        await health_monitor.flush_to_db()
+        health_flush_task.cancel()
+        health_cleanup_task.cancel()
+        health_ping_task.cancel()
+        cleanup_task.cancel()
+        refresh_task.cancel()
+        await pool_manager.close_all()
+        dek_cache.clear()
+        await close_db()
+        from .api.deps import _sandbox_client
+
+        if _sandbox_client:
+            await _sandbox_client.close()
+
+
+# ─── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="SignalPilot Gateway",
     version="0.1.0",
     description="Governed MCP server for AI database access",
     lifespan=lifespan,
+    dependencies=[Depends(enforce_principal_rate_limit)],
 )
 
+
+# CORS
+def _build_allowed_origins() -> list[str]:
+    raw = os.environ.get("SP_ALLOWED_ORIGINS", "")
+    if is_cloud_mode():
+        if not raw:
+            return [
+                "https://signalpilot.ai",
+                "https://www.signalpilot.ai",
+                "https://app.signalpilot.ai",
+            ]
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        validated = []
+        for origin in origins:
+            if not origin.startswith("https://"):
+                logger.warning("CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin)
+                continue
+            validated.append(origin)
+        return validated
+    if not raw:
+        return ["http://localhost:3000", "http://localhost:3200"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+_ALLOWED_ORIGINS = _build_allowed_origins()
+
+# Middleware stack (last added = outermost = runs first)
+# Execution order (outermost → innermost):
+#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → Auth
+# CORS is outermost so all error responses (including auth errors) get CORS headers.
+# RequestCorrelationMiddleware runs before Auth so auth logs already have a request ID.
+# APIKeyAuthMiddleware is innermost — closest to the application handlers.
+app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(RequestCorrelationMiddleware)
+app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=2_097_152)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
+    allow_credentials=True,
 )
 
-
-# ─── Health ──────────────────────────────────────────────────────────────────
-
-@app.get("/health")
-async def health():
-    settings = load_settings()
-    sandbox_status = "unknown"
-    try:
-        client = _get_sandbox_client()
-        data = await client.health()
-        sandbox_status = data.get("status", "unknown")
-    except Exception as e:
-        sandbox_status = f"error: {e}"
-
-    return {
-        "status": "healthy",
-        "version": "0.1.0",
-        "sandbox_manager": settings.sandbox_manager_url,
-        "sandbox_status": sandbox_status,
-        "active_sandboxes": len(list_sandboxes()),
-        "connections": len(list_connections()),
-    }
+# ─── Global Exception Handler ─────────────────────────────────────────────────
 
 
-# ─── Settings ────────────────────────────────────────────────────────────────
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Safety net: return a generic 500 for any unhandled exception.
 
-@app.get("/api/settings")
-async def get_settings():
-    return load_settings()
-
-
-@app.put("/api/settings")
-async def update_settings(settings: GatewaySettings):
-    save_settings(settings)
-    _reset_sandbox_client()  # Reconnect with new URL
-    return settings
-
-
-# ─── Connections ─────────────────────────────────────────────────────────────
-
-@app.get("/api/connections")
-async def get_connections():
-    return list_connections()
-
-
-@app.post("/api/connections", status_code=201)
-async def add_connection(conn: ConnectionCreate):
-    try:
-        info = create_connection(conn)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    return info
-
-
-@app.get("/api/connections/{name}")
-async def get_connection_detail(name: str):
-    conn = get_connection(name)
-    if not conn:
-        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
-    return conn
-
-
-@app.delete("/api/connections/{name}", status_code=204)
-async def remove_connection(name: str):
-    if not delete_connection(name):
-        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
-
-
-@app.post("/api/connections/{name}/test")
-async def test_connection(name: str):
-    from .connectors.registry import get_connector
-
-    info = get_connection(name)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
-
-    conn_str = get_connection_string(name)
-    if not conn_str:
-        return {"status": "error", "message": "No credentials stored (restart gateway to reload)"}
-
-    connector = get_connector(info.db_type)
-    try:
-        await connector.connect(conn_str)
-        ok = await connector.health_check()
-        await connector.close()
-        return {"status": "healthy" if ok else "error", "message": "Connection test passed" if ok else "Health check failed"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-# ─── Sandboxes ───────────────────────────────────────────────────────────────
-
-@app.get("/api/sandboxes")
-async def get_sandboxes():
-    return list_sandboxes()
-
-
-@app.post("/api/sandboxes", status_code=201)
-async def create_sandbox(req: SandboxCreate):
-    session_token = str(uuid.uuid4())
-    settings = load_settings()
-
-    client = _get_sandbox_client()
-    sandbox = await client.create_sandbox(
-        session_token=session_token,
-        connection_name=req.connection_name,
-        label=req.label,
-        budget_usd=req.budget_usd,
-        row_limit=req.row_limit,
+    HTTPException variants (intentional 4xx/5xx) are re-raised so FastAPI's
+    built-in handler processes them normally and they reach the client unchanged.
+    """
+    if isinstance(exc, (HTTPException, StarletteHTTPException)):
+        raise exc
+    logger.exception(
+        "Unhandled exception in %s %s",
+        request.method,
+        request.url.path,
     )
-    upsert_sandbox(sandbox)
-
-    await append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="connect",
-        connection_name=req.connection_name,
-        sandbox_id=sandbox.id,
-        metadata={"label": req.label},
-    ))
-
-    return sandbox
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-@app.get("/api/sandboxes/{sandbox_id}")
-async def get_sandbox_detail(sandbox_id: str):
-    sandbox = get_sandbox(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found")
-    return sandbox
+# Register all API routers
+register_routers(app)
 
+# Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
+_mcp_session_manager = None
+try:
+    from .mcp import mcp as _mcp_instance
 
-@app.delete("/api/sandboxes/{sandbox_id}", status_code=204)
-async def kill_sandbox(sandbox_id: str):
-    sandbox = get_sandbox(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found")
+    # Override the gateway URL so the MCP tools call back to this same process
+    os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
-    if sandbox.vm_id:
-        client = _get_sandbox_client()
-        await client.kill(sandbox.vm_id)
+    from .auth.mcp_api_key import MCPAuthMiddleware
 
-    delete_sandbox(sandbox_id)
-
-
-@app.post("/api/sandboxes/{sandbox_id}/execute")
-async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest):
-    sandbox = get_sandbox(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found")
-
-    if sandbox.status == "stopped":
-        raise HTTPException(status_code=409, detail="Sandbox has been stopped")
-
-    settings = load_settings()
-    session_token = str(uuid.uuid4())  # In production, this is tied to the session
-
-    client = _get_sandbox_client()
-    result = await client.execute(
-        sandbox=sandbox,
-        code=req.code,
-        session_token=session_token,
-        timeout=req.timeout,
-    )
-
-    # Update sandbox state
-    upsert_sandbox(sandbox)
-
-    await append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="execute",
-        connection_name=sandbox.connection_name,
-        sandbox_id=sandbox_id,
-        metadata={"code_preview": req.code[:200], "success": result.success},
-    ))
-
-    return result
-
-
-# ─── Direct SQL Query ─────────────────────────────────────────────────────────
-
-class QueryRequest(ConnectionCreate.__class__):
-    pass
-
-
-from pydantic import BaseModel
-
-
-class DirectQueryRequest(BaseModel):
-    connection_name: str
-    sql: str
-    row_limit: int = 10_000
-
-
-@app.post("/api/query")
-async def query_database(req: DirectQueryRequest):
-    from .connectors.registry import get_connector
-
-    info = get_connection(req.connection_name)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"Connection '{req.connection_name}' not found")
-
-    settings = load_settings()
-
-    # Validate SQL
-    validation = validate_sql(req.sql)
-    if not validation.ok:
-        await append_audit(AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="block",
-            connection_name=req.connection_name,
-            sql=req.sql,
-            blocked=True,
-            block_reason=validation.blocked_reason,
-        ))
-        raise HTTPException(status_code=400, detail=f"Query blocked: {validation.blocked_reason}")
-
-    # Inject LIMIT
-    safe_sql = inject_limit(req.sql, req.row_limit)
-
-    conn_str = get_connection_string(req.connection_name)
-    if not conn_str:
-        raise HTTPException(status_code=400, detail="No credentials stored for this connection")
-
-    connector = get_connector(info.db_type)
-    start = time.monotonic()
-    try:
-        await connector.connect(conn_str)
-        rows = await connector.execute(safe_sql)
-        await connector.close()
-    except Exception as e:
-        await connector.close()
-        raise HTTPException(status_code=500, detail=str(e))
-
-    elapsed_ms = (time.monotonic() - start) * 1000
-
-    await append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="query",
-        connection_name=req.connection_name,
-        sql=req.sql,
-        tables=validation.tables,
-        rows_returned=len(rows),
-        duration_ms=elapsed_ms,
-    ))
-
-    return {
-        "rows": rows,
-        "row_count": len(rows),
-        "tables": validation.tables,
-        "execution_ms": elapsed_ms,
-        "sql_executed": safe_sql,
-    }
-
-
-# ─── Audit ───────────────────────────────────────────────────────────────────
-
-@app.get("/api/audit")
-async def get_audit(
-    limit: int = Query(default=100, le=500),
-    offset: int = Query(default=0),
-    connection_name: str | None = None,
-    event_type: str | None = None,
-):
-    entries = await read_audit(
-        limit=limit,
-        offset=offset,
-        connection_name=connection_name,
-        event_type=event_type,
-    )
-    return {"entries": entries, "total": len(entries)}
-
-
-# ─── Metrics SSE ─────────────────────────────────────────────────────────────
-
-@app.get("/api/metrics")
-async def metrics_stream():
-    """Server-Sent Events stream of live gateway metrics."""
-
-    async def generate():
-        while True:
-            settings = load_settings()
-            sandboxes = list_sandboxes()
-            running = sum(1 for s in sandboxes if s.status == "running")
-
-            sandbox_health = "unknown"
-            try:
-                client = _get_sandbox_client()
-                data = await client.health()
-                sandbox_health = data.get("status", "unknown")
-                kvm_available = data.get("kvm_available", False)
-                active_vms = data.get("active_vms", 0)
-                max_vms = data.get("max_vms", 10)
-            except Exception:
-                kvm_available = False
-                active_vms = 0
-                max_vms = 10
-
-            payload = {
-                "timestamp": time.time(),
-                "sandbox_manager": settings.sandbox_manager_url,
-                "sandbox_health": sandbox_health,
-                "kvm_available": kvm_available,
-                "active_sandboxes": len(sandboxes),
-                "running_sandboxes": running,
-                "active_vms": active_vms,
-                "max_vms": max_vms,
-                "connections": len(list_connections()),
-            }
-
-            yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(5)
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    _mcp_http_app = _mcp_instance.streamable_http_app()
+    _mcp_session_manager = _mcp_instance.session_manager
+    _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
+    app.mount("/mcp", _mcp_http_app)  # New canonical path
+    app.mount("/", _mcp_http_app)  # Backward compat — remove after client migration
+    logger.info("MCP streamable-http endpoint mounted at /mcp (also / for backward compat)")
+except Exception as e:
+    logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

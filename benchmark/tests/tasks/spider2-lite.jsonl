@@ -1,0 +1,3 @@
+{"instance_id": "test_lite_sqlite001", "instruction": "Query the customers table and return all customers whose city is 'Portland'. Return columns: id, name, city. Order by id.", "type": "sqlite", "db_id": "test_chinook"}
+{"instance_id": "test_lite_sf001", "instruction": "Query INFORMATION_SCHEMA.DATABASES and return the count of databases as 'db_count'.", "type": "snowflake", "db": "SNOWFLAKE", "schema": "INFORMATION_SCHEMA"}
+{"instance_id": "test_lite_bq001", "instruction": "Run SELECT 1 AS test_value, 'hello' AS test_string and return the result.", "type": "bigquery", "project_id": "authacceptor", "dataset": ""}

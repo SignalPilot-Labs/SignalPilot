@@ -2,7 +2,7 @@
 
 # ⚡ SignalPilot Data Agent
 
-### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**, +7.45 over runner-up (Apr 2026)
+### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**, +7.45 over JetBrains DataBao (Apr 2026)
 
 **Governed AI agents for your data stack — db, dbt, and more.** Optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).
 

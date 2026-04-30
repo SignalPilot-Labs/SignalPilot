@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SessionBudget:
     """Tracks spending for a single session."""
+
     session_id: str
     budget_usd: float
     spent_usd: float = 0.0
@@ -64,6 +65,7 @@ class SessionBudget:
 
 class _CacheEntry:
     """LRU cache entry with TTL."""
+
     __slots__ = ("budget", "expires_at")
 
     def __init__(self, budget: SessionBudget, ttl: float = 5.0):
@@ -319,9 +321,10 @@ class BudgetLedger:
         """Return total USD spent across all sessions for the current org."""
         org_id = require_org_id()
 
+        from sqlalchemy import func
+
         from ..db.engine import get_session_factory
         from ..db.models import GatewaySessionBudget
-        from sqlalchemy import func
 
         factory = get_session_factory()
         async with factory() as session:

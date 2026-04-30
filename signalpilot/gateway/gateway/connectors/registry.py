@@ -6,23 +6,24 @@ import os
 
 from ..models import DBType
 from .base import BaseConnector
-from .bigquery import BigQueryConnector
-from .clickhouse import ClickHouseConnector
-from .databricks import DatabricksConnector
-from .duckdb import DuckDBConnector
-from .mssql import MSSQLConnector
-from .mysql import MySQLConnector
-from .trino import TrinoConnector
-from .postgres import PostgresConnector
-from .redshift import RedshiftConnector
-from .snowflake import SnowflakeConnector
-from .sqlite import SQLiteConnector
+from .drivers.bigquery import BigQueryConnector
+from .drivers.clickhouse import ClickHouseConnector
+from .drivers.databricks import DatabricksConnector
+from .drivers.duckdb import DuckDBConnector
+from .drivers.mssql import MSSQLConnector
+from .drivers.mysql import MySQLConnector
+from .drivers.postgres import PostgresConnector
+from .drivers.redshift import RedshiftConnector
+from .drivers.snowflake import SnowflakeConnector
+from .drivers.sqlite import SQLiteConnector
+from .drivers.trino import TrinoConnector
 
 # Local mode: use sandboxed connectors for file-based DBs
 _is_local = os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud"
 if _is_local:
-    from .sandboxed_duckdb import SandboxedDuckDBConnector
-    from .sandboxed_sqlite import SandboxedSQLiteConnector
+    from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
+    from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
+
     _DuckDB: type[BaseConnector] = SandboxedDuckDBConnector
     _SQLite: type[BaseConnector] = SandboxedSQLiteConnector
 else:

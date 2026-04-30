@@ -17,8 +17,8 @@ import pytest
 
 from gateway.connectors.base import BaseConnector
 
-
 # ─── Minimal concrete subclass for testing BaseConnector ─────────────────────
+
 
 class _ConcreteConnector(BaseConnector):
     """Minimal concrete implementation of BaseConnector for unit testing."""
@@ -139,7 +139,7 @@ class TestTrinoConnectorCloseCleanup:
     def test_close_triggers_cleanup(self):
         """TrinoConnector.close() must call _cleanup_temp_files."""
         try:
-            from gateway.connectors.trino import TrinoConnector
+            from gateway.connectors.drivers.trino import TrinoConnector
         except ImportError:
             pytest.skip("trino package not installed")
 
@@ -163,7 +163,7 @@ class TestTrinoConnectorCloseCleanup:
     def test_close_without_connection_still_cleans_up(self):
         """close() with no active connection must still clean up temp files."""
         try:
-            from gateway.connectors.trino import TrinoConnector
+            from gateway.connectors.drivers.trino import TrinoConnector
         except ImportError:
             pytest.skip("trino package not installed")
 

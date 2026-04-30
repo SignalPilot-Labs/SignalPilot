@@ -14,7 +14,7 @@ import asyncio
 import inspect
 from unittest.mock import MagicMock, patch
 
-from gateway.mcp_server import dbt_project_validate
+from gateway.mcp import dbt_project_validate
 
 
 class TestDbtProjectValidateSignature:
@@ -55,14 +55,12 @@ class TestDbtProjectValidateTimeoutClamping:
             mock_result.orphan_patches = []
             return mock_result
 
-        with patch("gateway.mcp_server._validate_project", side_effect=fake_validate):
-            with patch("gateway.mcp_server._format_validation_result", return_value="ok"):
+        with patch("gateway.mcp.tools.dbt_project._validate_project", side_effect=fake_validate):
+            with patch("gateway.mcp.tools.dbt_project._format_validation_result", return_value="ok"):
                 asyncio.run(dbt_project_validate(project_dir="/tmp", timeout=99999))
 
         assert len(captured_timeout) == 1
-        assert captured_timeout[0] <= 300, (
-            f"Expected timeout <= 300 but got {captured_timeout[0]}"
-        )
+        assert captured_timeout[0] <= 300, f"Expected timeout <= 300 but got {captured_timeout[0]}"
 
     def test_timeout_clamped_to_min_1(self):
         """Passing timeout=0 or negative must result in at least 1s timeout."""
@@ -81,14 +79,12 @@ class TestDbtProjectValidateTimeoutClamping:
             mock_result.orphan_patches = []
             return mock_result
 
-        with patch("gateway.mcp_server._validate_project", side_effect=fake_validate):
-            with patch("gateway.mcp_server._format_validation_result", return_value="ok"):
+        with patch("gateway.mcp.tools.dbt_project._validate_project", side_effect=fake_validate):
+            with patch("gateway.mcp.tools.dbt_project._format_validation_result", return_value="ok"):
                 asyncio.run(dbt_project_validate(project_dir="/tmp", timeout=0))
 
         assert len(captured_timeout) == 1
-        assert captured_timeout[0] >= 1, (
-            f"Expected timeout >= 1 but got {captured_timeout[0]}"
-        )
+        assert captured_timeout[0] >= 1, f"Expected timeout >= 1 but got {captured_timeout[0]}"
 
 
 class TestDbtProjectValidatePathValidation:
@@ -106,17 +102,13 @@ class TestDbtProjectValidatePathValidation:
 
     def test_path_with_dotdot_rejected(self):
         """project_dir containing '..' segments must be rejected."""
-        result = asyncio.run(
-            dbt_project_validate(project_dir="/tmp/projects/../../../etc", timeout=60)
-        )
+        result = asyncio.run(dbt_project_validate(project_dir="/tmp/projects/../../../etc", timeout=60))
         assert "Error" in result
         assert ".." in result or "traversal" in result.lower() or "segments" in result.lower()
 
     def test_dotdot_in_middle_rejected(self):
         """Path traversal with '..' anywhere in the path must be rejected."""
-        result = asyncio.run(
-            dbt_project_validate(project_dir="/tmp/../etc/passwd", timeout=60)
-        )
+        result = asyncio.run(dbt_project_validate(project_dir="/tmp/../etc/passwd", timeout=60))
         assert "Error" in result
 
     def test_empty_project_dir_rejected(self):
@@ -136,11 +128,12 @@ class TestDbtProjectValidatePathValidation:
         mock_result.warnings = []
         mock_result.orphan_patches = []
 
-        with patch("gateway.mcp_server._validate_project", return_value=mock_result):
-            with patch("gateway.mcp_server._format_validation_result", return_value="# dbt parse validation\nStatus: ✗ project_missing\n"):
-                result = asyncio.run(
-                    dbt_project_validate(project_dir="/tmp/nonexistent-dbt-project", timeout=60)
-                )
+        with patch("gateway.mcp.tools.dbt_project._validate_project", return_value=mock_result):
+            with patch(
+                "gateway.mcp.tools.dbt_project._format_validation_result",
+                return_value="# dbt parse validation\nStatus: ✗ project_missing\n",
+            ):
+                result = asyncio.run(dbt_project_validate(project_dir="/tmp/nonexistent-dbt-project", timeout=60))
 
         # Should not be a path-validation error
         assert "absolute" not in result.lower() or "Status" in result

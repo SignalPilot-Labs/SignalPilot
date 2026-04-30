@@ -12,6 +12,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import DBSession, OrgAdmin, OrgID, UserID
@@ -34,10 +35,9 @@ from ..models import (
     BYOKRotateRequest,
     BYOKRotateResponse,
 )
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from ..store import _decrypt_with_migration, _encrypt
 from .deps import StoreD
-from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +61,16 @@ def _key_to_response(key: GatewayBYOKKey) -> BYOKKeyResponse:
 
 async def _upsert_org(session: AsyncSession, org_id: str) -> None:
     """Ensure a GatewayOrg row exists for org_id with byok_enabled=True."""
-    result = await session.execute(
-        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
-    )
+    result = await session.execute(select(GatewayOrg).where(GatewayOrg.org_id == org_id))
     org_row = result.scalar_one_or_none()
     if org_row is None:
-        session.add(GatewayOrg(
-            org_id=org_id,
-            byok_enabled=True,
-            created_at=time.time(),
-        ))
+        session.add(
+            GatewayOrg(
+                org_id=org_id,
+                byok_enabled=True,
+                created_at=time.time(),
+            )
+        )
     else:
         org_row.byok_enabled = True
     await session.commit()
@@ -116,8 +116,9 @@ async def create_byok_key(
     await db.refresh(key)
 
     # For local provider: auto-register the key material in memory
-    from ..store import _byok_provider as provider
     from ..byok import LocalBYOKProvider
+    from ..store.byok_state import _byok_provider as provider
+
     if isinstance(provider, LocalBYOKProvider):
         provider.register_key(org_id, body.key_alias)
         logger.info("Local BYOK key registered in-memory for org=%s alias=%s", org_id, body.key_alias)
@@ -216,9 +217,7 @@ async def delete_byok_key(
     if key is None or key.org_id != org_id:
         raise HTTPException(status_code=404, detail="Key not found")
 
-    cred_result = await db.execute(
-        select(GatewayCredential).where(GatewayCredential.byok_key_id == key_id)
-    )
+    cred_result = await db.execute(select(GatewayCredential).where(GatewayCredential.byok_key_id == key_id))
     credentials_using_key = cred_result.scalars().all()
     if credentials_using_key and not force:
         count = len(credentials_using_key)
@@ -241,12 +240,14 @@ async def delete_byok_key(
         await db.commit()
         logger.warning(
             "BYOK key %s force-deleted: %d credential(s) permanently revoked",
-            key_id, len(credentials_using_key),
+            key_id,
+            len(credentials_using_key),
         )
 
     # Revoke key from local provider (deletes key material from disk)
     from ..byok import LocalBYOKProvider
-    from ..store import _byok_provider as current_provider
+    from ..store.byok_state import _byok_provider as current_provider
+
     if isinstance(current_provider, LocalBYOKProvider):
         current_provider.revoke_key(org_id, key.key_alias)
 
@@ -264,7 +265,7 @@ async def validate_byok_key(
     _role: OrgAdmin,
 ) -> dict:
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -283,16 +284,12 @@ async def validate_byok_key(
         ciphertext, wrapped_dek = await encrypt_envelope(
             provider, key.org_id, key.key_alias, BYOK_HEALTH_CHECK_PLAINTEXT
         )
-        recovered = await decrypt_envelope(
-            provider, key.org_id, key.key_alias, wrapped_dek, ciphertext
-        )
+        recovered = await decrypt_envelope(provider, key.org_id, key.key_alias, wrapped_dek, ciphertext)
         if recovered != BYOK_HEALTH_CHECK_PLAINTEXT:
             return {"valid": False, "error": "Round-trip produced incorrect plaintext"}
         return {"valid": True}
     except BYOKKeyError as exc:
-        logger.warning(
-            "BYOK key validation failed for key_id=%s: %s", key_id, exc
-        )
+        logger.warning("BYOK key validation failed for key_id=%s: %s", key_id, exc)
         return {"valid": False, "error": "Key validation failed"}
     except Exception:
         logger.exception("BYOK key validation failed for key_id=%s", key_id)
@@ -310,7 +307,7 @@ async def migrate_credentials_to_byok(
 
     org_id is derived from JWT, not the request body.
     """
-    from ..store import _byok_provider as provider
+    from ..store.byok_state import _byok_provider as provider
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
@@ -350,14 +347,13 @@ async def revert_credentials_to_managed(
 
     org_id is derived from JWT, not the request body.
     """
-    from ..store import _byok_provider as provider, _dek_cache as cache
+    from ..store.byok_state import _byok_provider as provider
+    from ..store.byok_state import _dek_cache as cache
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
 
-    org_result = await store.session.execute(
-        select(GatewayOrg).where(GatewayOrg.org_id == org_id)
-    )
+    org_result = await store.session.execute(select(GatewayOrg).where(GatewayOrg.org_id == org_id))
     if org_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Organization not found")
 
@@ -383,7 +379,8 @@ async def rotate_byok_key_endpoint(
 
     org_id is derived from JWT. key_id is the OLD key to rotate FROM.
     """
-    from ..store import _byok_provider as provider, _dek_cache as cache
+    from ..store.byok_state import _byok_provider as provider
+    from ..store.byok_state import _dek_cache as cache
 
     if provider is None:
         raise HTTPException(status_code=503, detail="BYOK provider not configured")

@@ -4,7 +4,7 @@ Covers:
 - _quote_identifier / _quote_table_name helpers in schema.py
 - explore_column_values: filter_pattern escaping, table quoting, column quoting
 - explore_columns_deep: table_key quoting in stat_sql
-- _quote_table in mcp_server.py
+- _quote_table in gateway.mcp
 - ClickHouseConnector._quote_identifier in fallback path
 - MSSQLConnector string literal escaping in get_sample_values
 """
@@ -21,10 +21,9 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from gateway.api.deps import get_store
 from gateway.api.schema import _quote_identifier, _quote_table_name
+from gateway.http import APIKeyAuthMiddleware
 from gateway.main import app
-from gateway.middleware import APIKeyAuthMiddleware
-from gateway.mcp_server import _quote_table
-
+from gateway.mcp import _quote_table
 
 # ─── Shared auth state ───────────────────────────────────────────────────────
 
@@ -105,18 +104,18 @@ class TestQuoteIdentifierHelper:
         assert result == '"col""name"'
 
     def test_backtick_simple_name(self):
-        assert _quote_identifier("users", '`') == '`users`'
+        assert _quote_identifier("users", "`") == "`users`"
 
     def test_backtick_escapes_embedded_backtick(self):
-        result = _quote_identifier('col`name', '`')
-        assert result == '`col``name`'
+        result = _quote_identifier("col`name", "`")
+        assert result == "`col``name`"
 
     def test_bracket_simple_name(self):
-        assert _quote_identifier("users", '[') == '[users]'
+        assert _quote_identifier("users", "[") == "[users]"
 
     def test_bracket_escapes_embedded_close_bracket(self):
-        result = _quote_identifier('col]name', '[')
-        assert result == '[col]]name]'
+        result = _quote_identifier("col]name", "[")
+        assert result == "[col]]name]"
 
     def test_quote_table_name_single_part(self):
         assert _quote_table_name("users", '"') == '"users"'
@@ -125,7 +124,7 @@ class TestQuoteIdentifierHelper:
         assert _quote_table_name("public.users", '"') == '"public"."users"'
 
     def test_quote_table_name_mssql_bracket(self):
-        assert _quote_table_name("dbo.orders", '[') == '[dbo].[orders]'
+        assert _quote_table_name("dbo.orders", "[") == "[dbo].[orders]"
 
     def test_quote_table_name_escapes_dots_in_name(self):
         # A table name split on '.': ['public', '"evil']
@@ -142,7 +141,7 @@ class TestQuoteIdentifierHelper:
 
 
 class TestMcpServerQuoteTable:
-    """Unit tests for _quote_table in mcp_server.py."""
+    """Unit tests for _quote_table in gateway.mcp."""
 
     def test_simple_table_name(self):
         assert _quote_table("orders") == '"orders"'
@@ -165,7 +164,7 @@ class TestMcpServerQuoteTable:
         assert result == '"x""; DROP TABLE y; --"'
         # The closing " of the identifier is the last character — no raw SQL escape
         # Confirm there is no unescaped injection: split on . gives one part
-        assert '"' not in result[1:-1].replace('""', '')
+        assert '"' not in result[1:-1].replace('""', "")
 
 
 # ─── TestClickHouseQuoteIdentifier ───────────────────────────────────────────
@@ -175,36 +174,36 @@ class TestClickHouseQuoteIdentifier:
     """Unit tests for ClickHouseConnector._quote_identifier."""
 
     def _make_connector(self):
-        from gateway.connectors.clickhouse import ClickHouseConnector
-        conn = ClickHouseConnector.__new__(ClickHouseConnector)
-        return conn
+        from gateway.connectors.drivers.clickhouse import ClickHouseConnector
+
+        return ClickHouseConnector.__new__(ClickHouseConnector)
 
     def test_quote_char_is_backtick(self):
         conn = self._make_connector()
-        assert conn._identifier_quote == '`'
+        assert conn._identifier_quote == "`"
 
     def test_quote_identifier_simple(self):
         conn = self._make_connector()
-        assert conn._quote_identifier("col") == '`col`'
+        assert conn._quote_identifier("col") == "`col`"
 
     def test_quote_identifier_escapes_backtick(self):
         conn = self._make_connector()
-        result = conn._quote_identifier('col`name')
-        assert result == '`col``name`'
+        result = conn._quote_identifier("col`name")
+        assert result == "`col``name`"
 
     def test_quote_identifier_injection_attempt(self):
         conn = self._make_connector()
         # Input has a leading backtick — it gets escaped to ``
         # Result: `` (open) + `` (escaped backtick) + ; DROP TABLE x; -- + ` (close)
-        result = conn._quote_identifier('`; DROP TABLE x; --')
-        assert result.startswith('`')
-        assert result.endswith('`')
+        result = conn._quote_identifier("`; DROP TABLE x; --")
+        assert result.startswith("`")
+        assert result.endswith("`")
         # The embedded backtick is doubled — the identifier is fully enclosed
-        assert result == '```; DROP TABLE x; --`'
+        assert result == "```; DROP TABLE x; --`"
         # No unescaped single backtick that would close the identifier early (between start and end)
         inner = result[1:-1]
         # Any remaining backtick in inner must be doubled
-        assert '`' not in inner.replace('``', '')
+        assert "`" not in inner.replace("``", "")
 
 
 # ─── TestMssqlStringLiteralEscaping ──────────────────────────────────────────
@@ -214,15 +213,14 @@ class TestMssqlStringLiteralEscaping:
     """Unit tests for MSSQL string literal escaping in get_sample_values."""
 
     def _make_connector(self):
-        from gateway.connectors.mssql import MSSQLConnector
+        from gateway.connectors.drivers.mssql import MSSQLConnector
+
         conn = MSSQLConnector.__new__(MSSQLConnector)
         conn._conn = MagicMock()
         return conn
 
     def test_single_quote_in_col_name_escaped_in_literal(self):
         """Column name with a single quote must be escaped in the SQL string literal."""
-        conn = self._make_connector()
-
         # Reconstruct the escaping logic from the fix (same pattern as base.py:267)
         col = "it's"
         safe_name = col.replace("'", "''")
@@ -292,7 +290,7 @@ class TestExploreColumnValuesInjection:
             yield mock_connector
 
         _set_scopes(["write"])
-        with patch("gateway.api.schema.pool_manager") as mock_pm:
+        with patch("gateway.api.schema.introspection.pool_manager") as mock_pm:
             mock_pm.connection = _fake_conn
             app.dependency_overrides[get_store] = lambda: store
             try:
@@ -329,7 +327,7 @@ class TestExploreColumnValuesInjection:
             yield mock_connector
 
         _set_scopes(["write"])
-        with patch("gateway.api.schema.pool_manager") as mock_pm:
+        with patch("gateway.api.schema.introspection.pool_manager") as mock_pm:
             mock_pm.connection = _fake_conn
             app.dependency_overrides[get_store] = lambda: store
             try:
@@ -401,9 +399,9 @@ class TestExploreColumnValuesInjection:
 
     def test_mssql_column_with_close_bracket_is_quoted(self):
         """MSSQL column name with ] must escape it as ]] in bracket quoting."""
-        col = 'col]name'
-        result = _quote_identifier(col, '[')
-        assert result == '[col]]name]'
+        col = "col]name"
+        result = _quote_identifier(col, "[")
+        assert result == "[col]]name]"
 
 
 # ─── TestExploreColumnsDeepTableKeyQuoting ────────────────────────────────────
@@ -418,7 +416,7 @@ class TestExploreColumnsDeepTableKeyQuoting:
         quoted = _quote_table_name(table_key, '"')
         assert quoted == '"public"."orders"'
 
-        sql = f"SELECT MIN(\"amount\") FROM {quoted}"
+        sql = f'SELECT MIN("amount") FROM {quoted}'
         # No unquoted dots in table reference
         assert 'FROM "public"."orders"' in sql
 
@@ -432,4 +430,4 @@ class TestExploreColumnsDeepTableKeyQuoting:
         # No raw SQL keywords outside the quotes
         tail = quoted.split('."', 1)[1][:-1]  # content between the second pair of quotes
         # The injection is contained — verify no unescaped " breaks the quoting
-        assert '"' not in tail.replace('""', '')
+        assert '"' not in tail.replace('""', "")

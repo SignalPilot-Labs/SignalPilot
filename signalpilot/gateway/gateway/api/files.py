@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD, get_sandbox_client_with_store
 
 router = APIRouter(prefix="/api")

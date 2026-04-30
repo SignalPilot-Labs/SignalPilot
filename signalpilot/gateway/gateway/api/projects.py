@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..models import ProjectCreate, ProjectUpdate
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
@@ -67,10 +67,13 @@ async def scan_project(name: str, store: StoreD):
 
     project_map = dbt_scan(proj.project_dir)
     now = time.time()
-    await store.update_project(name, ProjectUpdate(
-        last_scanned_at=now,
-        model_count=project_map.model_count,
-    ))
+    await store.update_project(
+        name,
+        ProjectUpdate(
+            last_scanned_at=now,
+            model_count=project_map.model_count,
+        ),
+    )
     return {
         "project": name,
         "scanned_at": now,
@@ -81,6 +84,7 @@ async def scan_project(name: str, store: StoreD):
 
 class DbtCloudDiscoverRequest(BaseModel):
     """Request to discover projects from a dbt Cloud account."""
+
     token: str = Field(..., min_length=1)
     account_id: str = Field(..., min_length=1, pattern=r"^[0-9]+$")
     host: str = Field(default="cloud.getdbt.com", max_length=255)

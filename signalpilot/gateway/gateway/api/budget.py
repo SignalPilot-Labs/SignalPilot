@@ -9,7 +9,7 @@ from ..auth import UserID
 from ..connectors.pool_manager import pool_manager
 from ..governance.annotations import generate_skeleton, load_annotations
 from ..governance.budget import budget_ledger
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
@@ -79,7 +79,9 @@ async def generate_annotations(name: str, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
             schema = await connector.get_schema()
     except Exception as e:
         raise HTTPException(status_code=500, detail=sanitize_db_error(str(e)))

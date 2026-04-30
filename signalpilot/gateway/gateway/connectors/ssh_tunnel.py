@@ -71,6 +71,7 @@ class SSHTunnel:
         proxy_port = self._config.get("proxy_port", 3128)
         if proxy_host:
             import paramiko
+
             proxy_cmd = _build_proxy_command(proxy_host, proxy_port, ssh_host, ssh_port)
             sock = paramiko.ProxyCommand(proxy_cmd)
             tunnel_kwargs["ssh_proxy"] = sock
@@ -97,9 +98,7 @@ class SSHTunnel:
                     continue
 
             if pkey is None:
-                raise ValueError(
-                    "Could not parse SSH private key. Supported formats: RSA, Ed25519, ECDSA"
-                )
+                raise ValueError("Could not parse SSH private key. Supported formats: RSA, Ed25519, ECDSA")
 
             tunnel_kwargs["ssh_pkey"] = pkey
         elif auth_method == "agent":

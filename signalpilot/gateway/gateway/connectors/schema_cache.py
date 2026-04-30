@@ -76,7 +76,9 @@ def _schema_fingerprint(schema: dict[str, Any]) -> str:
         fks = table.get("foreign_keys", [])
         fk_sigs = []
         for fk in fks:
-            fk_sigs.append(f"{fk.get('column', '')}->{fk.get('references_table', '')}.{fk.get('references_column', '')}")
+            fk_sigs.append(
+                f"{fk.get('column', '')}->{fk.get('references_table', '')}.{fk.get('references_column', '')}"
+            )
         parts.append(f"{table_key}|{'|'.join(sorted(col_sigs))}|FK:{'|'.join(sorted(fk_sigs))}")
     combined = "\n".join(parts)
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
@@ -85,6 +87,7 @@ def _schema_fingerprint(schema: dict[str, Any]) -> str:
 @dataclass
 class _CachedSchema:
     """A cached schema result with expiration tracking and fingerprint."""
+
     data: dict[str, Any]
     cached_at: float
     ttl_seconds: float
@@ -98,6 +101,7 @@ class _CachedSchema:
 @dataclass
 class SchemaDiffEvent:
     """Records a schema change detected during refresh."""
+
     connection_name: str
     timestamp: float  # wall clock time.time()
     diff: dict[str, Any]
@@ -360,11 +364,7 @@ class SchemaCache:
             if all_orgs:
                 cached_connections = len(self._cache)
                 cached_sample_tables = len(self._sample_cache)
-                fingerprints = {
-                    name: entry.fingerprint
-                    for name, entry in self._cache.items()
-                    if entry.fingerprint
-                }
+                fingerprints = {name: entry.fingerprint for name, entry in self._cache.items() if entry.fingerprint}
             else:
                 org_id = require_org_id()
                 org_prefix = f"{org_id}::"
@@ -413,11 +413,13 @@ def _compute_schema_diff(old: dict[str, Any], new: dict[str, Any]) -> dict[str, 
             old_type = old_cols[col_name].get("type", "")
             new_type = new_cols[col_name].get("type", "")
             if old_type != new_type:
-                type_changes.append({
-                    "column": col_name,
-                    "old_type": old_type,
-                    "new_type": new_type,
-                })
+                type_changes.append(
+                    {
+                        "column": col_name,
+                        "old_type": old_type,
+                        "new_type": new_type,
+                    }
+                )
 
         if added_cols or removed_cols or type_changes:
             change: dict[str, Any] = {"table": table_key}

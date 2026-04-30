@@ -23,7 +23,5 @@ def require_org_id() -> str:
     """
     oid = current_org_id_var.get()
     if not oid:
-        raise RuntimeError(
-            "governance call requires org_id context — Store/MCP auth did not set current_org_id_var"
-        )
+        raise RuntimeError("governance call requires org_id context — Store/MCP auth did not set current_org_id_var")
     return oid

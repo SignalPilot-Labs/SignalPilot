@@ -11,16 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
-class ModelStatus(str, Enum):
+class ModelStatus(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Lifecycle status of a dbt model relative to its yml contract."""
 
-    COMPLETE = "complete"      # .sql exists and looks substantive
-    STUB = "stub"              # .sql exists but is trivial / unfinished / unbalanced
-    MISSING = "missing"        # yml defines the model but no .sql exists
-    ORPHAN = "orphan"          # .sql exists but no yml entry — unmanaged model
+    COMPLETE = "complete"  # .sql exists and looks substantive
+    STUB = "stub"  # .sql exists but is trivial / unfinished / unbalanced
+    MISSING = "missing"  # yml defines the model but no .sql exists
+    ORPHAN = "orphan"  # .sql exists but no yml entry — unmanaged model
 
     def is_actionable(self) -> bool:
         """True if the agent needs to do work on this model."""
@@ -32,8 +31,8 @@ class ColumnSpec:
     """A single column from a yml `columns:` block."""
 
     name: str
-    data_type: Optional[str] = None
-    description: Optional[str] = None
+    data_type: str | None = None
+    description: str | None = None
     tests: list[str] = field(default_factory=list)
 
 
@@ -42,22 +41,22 @@ class ModelInfo:
     """One dbt model. May be defined in yml, or sql, or both."""
 
     name: str
-    yml_path: Optional[str] = None      # relative to project_dir
-    sql_path: Optional[str] = None      # relative to project_dir
+    yml_path: str | None = None  # relative to project_dir
+    sql_path: str | None = None  # relative to project_dir
     status: ModelStatus = ModelStatus.MISSING
-    description: Optional[str] = None
-    materialization: Optional[str] = None
+    description: str | None = None
+    materialization: str | None = None
     columns: list[ColumnSpec] = field(default_factory=list)
-    refs_yml: list[str] = field(default_factory=list)      # refs declared in yml
-    refs_sql: list[str] = field(default_factory=list)      # refs found in sql ({{ ref('x') }})
+    refs_yml: list[str] = field(default_factory=list)  # refs declared in yml
+    refs_sql: list[str] = field(default_factory=list)  # refs found in sql ({{ ref('x') }})
     sources_yml: list[tuple[str, str]] = field(default_factory=list)  # (source_name, table) pairs in yml
     sources_sql: list[tuple[str, str]] = field(default_factory=list)  # source() calls in sql
-    tests: list[str] = field(default_factory=list)         # model-level tests
-    unique_key: Optional[str] = None                        # first column with `unique` test
-    sql_size: int = 0                                       # bytes
+    tests: list[str] = field(default_factory=list)  # model-level tests
+    unique_key: str | None = None  # first column with `unique` test
+    sql_size: int = 0  # bytes
     tags: list[str] = field(default_factory=list)
-    config: dict = field(default_factory=dict)              # yml-level config block
-    directory: str = ""                                     # relative directory ("models/staging" etc.)
+    config: dict = field(default_factory=dict)  # yml-level config block
+    directory: str = ""  # relative directory ("models/staging" etc.)
 
     @property
     def all_refs(self) -> list[str]:
@@ -79,11 +78,11 @@ class ModelInfo:
 class SourceInfo:
     """A `source('name', 'table')` declaration from a yml `sources:` block."""
 
-    name: str                                  # source name (the namespace)
-    yml_path: Optional[str] = None
-    schema: Optional[str] = None
-    database: Optional[str] = None
-    description: Optional[str] = None
+    name: str  # source name (the namespace)
+    yml_path: str | None = None
+    schema: str | None = None
+    database: str | None = None
+    description: str | None = None
     tables: list[str] = field(default_factory=list)
     table_descriptions: dict[str, str] = field(default_factory=dict)
 
@@ -93,9 +92,9 @@ class MacroInfo:
     """A `{% macro %}` declaration from a file under macros/."""
 
     name: str
-    file_path: str                             # relative to project_dir
-    signature: Optional[str] = None            # raw arg string between parens, e.g. "amount, divisor=100"
-    description: Optional[str] = None          # leading comment block, if any
+    file_path: str  # relative to project_dir
+    signature: str | None = None  # raw arg string between parens, e.g. "amount, divisor=100"
+    description: str | None = None  # leading comment block, if any
 
 
 @dataclass
@@ -118,12 +117,12 @@ class ProjectMap:
     packages_yml_present: bool = False
     packages: list[str] = field(default_factory=list)
 
-    models: dict[str, ModelInfo] = field(default_factory=dict)   # by model name
-    sources: dict[str, SourceInfo] = field(default_factory=dict) # by source name
-    macros: dict[str, MacroInfo] = field(default_factory=dict)   # by macro name
+    models: dict[str, ModelInfo] = field(default_factory=dict)  # by model name
+    sources: dict[str, SourceInfo] = field(default_factory=dict)  # by source name
+    macros: dict[str, MacroInfo] = field(default_factory=dict)  # by macro name
 
-    work_order: list[str] = field(default_factory=list)          # actionable models in topological order
-    cycles: list[list[str]] = field(default_factory=list)        # any ref cycles among actionable models
+    work_order: list[str] = field(default_factory=list)  # actionable models in topological order
+    cycles: list[list[str]] = field(default_factory=list)  # any ref cycles among actionable models
     unresolved_refs: dict[str, list[str]] = field(default_factory=dict)  # model -> refs that don't resolve
 
     parse_errors: list[ParseError] = field(default_factory=list)
@@ -177,6 +176,6 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     orphan_patches: list[str] = field(default_factory=list)  # yml entries with no matching node
-    degradation_mode: str = "ok"   # ok | dbt_not_installed | profile_missing | parse_failed | manifest_missing
+    degradation_mode: str = "ok"  # ok | dbt_not_installed | profile_missing | parse_failed | manifest_missing
     raw_stdout: str = ""
     raw_stderr: str = ""

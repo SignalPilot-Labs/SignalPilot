@@ -8,8 +8,8 @@ from ..auth import UserID
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
-from ..scope_guard import RequireScope
-from .deps import StoreD, sanitize_db_error  # noqa: F401 — StoreD used for org context
+from ..security.scope_guard import RequireScope
+from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
 
@@ -48,7 +48,9 @@ async def detect_pii(name: str, store: StoreD):
     if cached_schema is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+            async with pool_manager.connection(
+                info.db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
                 cached_schema = await connector.get_schema()
             schema_cache.put(name, cached_schema)
         except Exception as e:
@@ -61,9 +63,7 @@ async def detect_pii(name: str, store: StoreD):
         columns = [col["name"] for col in table_data.get("columns", [])]
         detected = detect_pii_columns(columns)
         if detected:
-            all_detections[table_data.get("name", table_key)] = {
-                col: rule.value for col, rule in detected.items()
-            }
+            all_detections[table_data.get("name", table_key)] = {col: rule.value for col, rule in detected.items()}
 
     return {
         "connection_name": name,
@@ -92,7 +92,9 @@ async def set_pii_config(name: str, store: StoreD, body: dict):
     valid_rules = {"hash", "mask", "hide"}
     for col, rule in rules.items():
         if rule not in valid_rules:
-            raise HTTPException(status_code=422, detail=f"Invalid PII rule '{rule}' for column '{col}'. Must be hash, mask, or drop.")
+            raise HTTPException(
+                status_code=422, detail=f"Invalid PII rule '{rule}' for column '{col}'. Must be hash, mask, or drop."
+            )
     return await store.set_pii_config(name, enabled, rules)
 
 
@@ -116,7 +118,9 @@ async def detect_and_save_pii(name: str, store: StoreD):
     if cached_schema is None:
         try:
             extras = await store.get_credential_extras(name)
-            async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=name) as connector:
+            async with pool_manager.connection(
+                info.db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
                 cached_schema = await connector.get_schema()
             schema_cache.put(name, cached_schema)
         except Exception as e:
@@ -133,7 +137,7 @@ async def detect_and_save_pii(name: str, store: StoreD):
             all_rules[col] = rule.value
 
     # Save and enable
-    result = await store.set_pii_config(name, enabled=True, rules=all_rules)
+    await store.set_pii_config(name, enabled=True, rules=all_rules)
     return {
         "connection_name": name,
         "columns_flagged": len(all_rules),

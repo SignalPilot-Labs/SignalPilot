@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gateway.governance.context import current_org_id_var
-from gateway.mcp_server import mcp_org_id_var, mcp_user_id_var, _store_session
+from gateway.mcp import _store_session, mcp_org_id_var, mcp_user_id_var
 
 
 class TestStoreSessionOrgAssert:
@@ -45,8 +45,8 @@ class TestStoreSessionOrgAssert:
         mock_factory = MagicMock(return_value=mock_session_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store") as mock_store_cls:
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store") as mock_store_cls:
                     mock_store_instance = MagicMock()
                     mock_store_instance.org_id = "local"
                     mock_store_cls.return_value = mock_store_instance
@@ -63,7 +63,7 @@ class TestCheckBudgetOrgScoping:
     @pytest.mark.asyncio
     async def test_check_budget_resolves_org_from_contextvar(self):
         """check_budget returns no-budget-tracking message without RuntimeError."""
-        from gateway.mcp_server import check_budget
+        from gateway.mcp import check_budget
 
         token_org = mcp_org_id_var.set("local")
         token_user = mcp_user_id_var.set("local")
@@ -74,10 +74,10 @@ class TestCheckBudgetOrgScoping:
         mock_factory = MagicMock(return_value=mock_session_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store") as mock_store_cls:
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store") as mock_store_cls:
                     mock_store_cls.return_value = MagicMock(org_id="local")
-                    with patch("gateway.mcp_server.budget_ledger") as mock_ledger:
+                    with patch("gateway.governance.budget.budget_ledger") as mock_ledger:
                         mock_ledger.get_session = AsyncMock(return_value=None)
                         result = await check_budget("default")
             assert "No budget tracking" in result
@@ -92,7 +92,7 @@ class TestCacheStatusOrgScoping:
     @pytest.mark.asyncio
     async def test_cache_status_resolves_org_from_contextvar(self):
         """cache_status returns stats without RuntimeError."""
-        from gateway.mcp_server import cache_status
+        from gateway.mcp import cache_status
 
         token_org = mcp_org_id_var.set("local")
         token_user = mcp_user_id_var.set("local")
@@ -103,8 +103,8 @@ class TestCacheStatusOrgScoping:
         mock_factory = MagicMock(return_value=mock_session_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store") as mock_store_cls:
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store") as mock_store_cls:
                     mock_store_cls.return_value = MagicMock(org_id="local")
                     result = await cache_status()
             assert "Query Cache Status" in result
@@ -120,15 +120,13 @@ class TestFixNondeterminismHazardsOrgScoping:
     @pytest.mark.asyncio
     async def test_fix_nondeterminism_hazards_schema_cache_scoped(self, tmp_path):
         """schema_cache.get is called with org_id='org-X' set in current_org_id_var."""
-        from gateway.mcp_server import fix_nondeterminism_hazards
+        from gateway.mcp import fix_nondeterminism_hazards
 
         # Create a minimal dbt project structure with a nondeterminism warning
         (tmp_path / "dbt_project.yml").write_text("name: test_proj\nversion: '1.0'\n")
         models_dir = tmp_path / "models"
         models_dir.mkdir()
-        (models_dir / "my_model.sql").write_text(
-            "SELECT ROW_NUMBER() OVER (ORDER BY created_at) as rn FROM orders"
-        )
+        (models_dir / "my_model.sql").write_text("SELECT ROW_NUMBER() OVER (ORDER BY created_at) as rn FROM orders")
 
         token_org = mcp_org_id_var.set("org-X")
         token_user = mcp_user_id_var.set("user-X")
@@ -166,9 +164,9 @@ class TestFixNondeterminismHazardsOrgScoping:
         mock_pool_manager.connection = MagicMock(return_value=mock_pool_cm)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store", return_value=mock_store):
-                    with patch("gateway.mcp_server.schema_cache", mock_schema_cache, create=True):
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store", return_value=mock_store):
+                    with patch("gateway.connectors.schema_cache.schema_cache", mock_schema_cache):
                         with patch("gateway.connectors.pool_manager.pool_manager", mock_pool_manager):
                             await fix_nondeterminism_hazards(str(tmp_path), "test_conn")
         finally:
@@ -188,7 +186,7 @@ class TestMCPProjectToolsOrgScoping:
     @pytest.mark.asyncio
     async def test_mcp_create_project_scoped_to_org(self):
         """create_project uses store.create_project, not project_store.create_project."""
-        from gateway.mcp_server import create_project
+        from gateway.mcp import create_project
 
         token_org = mcp_org_id_var.set("org-A")
         token_user = mcp_user_id_var.set("user-A")
@@ -217,8 +215,8 @@ class TestMCPProjectToolsOrgScoping:
         mock_store.create_project = AsyncMock(side_effect=fake_create_project)
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store", return_value=mock_store):
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store", return_value=mock_store):
                     result = await create_project("proj1", "conn1")
         finally:
             mcp_org_id_var.reset(token_org)
@@ -226,17 +224,12 @@ class TestMCPProjectToolsOrgScoping:
 
         assert "proj1" in result
         assert mock_store.create_project.called
-        # Legacy project_store must not be invoked
-        with pytest.raises(Exception):
-            import gateway.project_store as ps
-            # If project_store was used, it would have been imported and called
-            # We verify store.create_project was called instead
         assert "org-A" in captured_org_ids
 
     @pytest.mark.asyncio
     async def test_mcp_list_projects_scoped_to_org(self):
         """list_projects returns only the current org's projects."""
-        from gateway.mcp_server import list_projects
+        from gateway.mcp import list_projects
 
         token_org = mcp_org_id_var.set("org-A")
         token_user = mcp_user_id_var.set("user-A")
@@ -259,8 +252,8 @@ class TestMCPProjectToolsOrgScoping:
         mock_store.list_projects = AsyncMock(return_value=[org_a_proj])
 
         try:
-            with patch("gateway.mcp_server.get_session_factory", return_value=mock_factory):
-                with patch("gateway.mcp_server.Store", return_value=mock_store):
+            with patch("gateway.mcp.context.get_session_factory", return_value=mock_factory):
+                with patch("gateway.mcp.context.Store", return_value=mock_store):
                     result = await list_projects()
         finally:
             mcp_org_id_var.reset(token_org)

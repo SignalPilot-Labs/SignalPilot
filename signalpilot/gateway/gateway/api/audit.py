@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import func as sa_func
+from sqlalchemy import select
 
-MAX_EXPORT_ROWS = int(os.environ.get("SP_MAX_EXPORT_ROWS", "50000"))
-
-from ..scope_guard import RequireScope
+from ..config import get_governance_settings
 from ..db.models import GatewayAuditLog
+from ..security.scope_guard import RequireScope
 from .deps import StoreD
+
+MAX_EXPORT_ROWS = get_governance_settings().sp_max_export_rows
 
 router = APIRouter(prefix="/api")
 
@@ -40,13 +41,14 @@ async def get_audit(
 @router.get("/audit/stats", dependencies=[RequireScope("read")])
 async def get_audit_stats(store: StoreD):
     """Lightweight aggregate stats — single query, no row scanning."""
-    from sqlalchemy import case, Integer
+    from sqlalchemy import case
+
     oid = store._require_org_id()
     q = (
         select(
             GatewayAuditLog.event_type,
             sa_func.count().label("cnt"),
-            sa_func.sum(case((GatewayAuditLog.blocked == True, 1), else_=0)).label("blocked_cnt"),
+            sa_func.sum(case((GatewayAuditLog.blocked.is_(True), 1), else_=0)).label("blocked_cnt"),
         )
         .where(GatewayAuditLog.org_id == oid)
         .group_by(GatewayAuditLog.event_type)
@@ -101,29 +103,43 @@ async def export_audit(
     if format == "csv":
         import csv
         import io
+
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow([
-            "id", "timestamp", "event_type", "connection_name", "sql",
-            "tables", "rows_returned", "duration_ms", "blocked",
-            "block_reason", "agent_id", "metadata",
-        ])
+        writer.writerow(
+            [
+                "id",
+                "timestamp",
+                "event_type",
+                "connection_name",
+                "sql",
+                "tables",
+                "rows_returned",
+                "duration_ms",
+                "blocked",
+                "block_reason",
+                "agent_id",
+                "metadata",
+            ]
+        )
         for entry in entries:
             e = entry if isinstance(entry, dict) else entry.__dict__
-            writer.writerow([
-                e.get("id", ""),
-                e.get("timestamp", ""),
-                e.get("event_type", ""),
-                e.get("connection_name", ""),
-                e.get("sql", ""),
-                ";".join(e.get("tables", [])),
-                e.get("rows_returned", ""),
-                e.get("duration_ms", ""),
-                e.get("blocked", False),
-                e.get("block_reason", ""),
-                e.get("agent_id", ""),
-                json.dumps(e.get("metadata", {})),
-            ])
+            writer.writerow(
+                [
+                    e.get("id", ""),
+                    e.get("timestamp", ""),
+                    e.get("event_type", ""),
+                    e.get("connection_name", ""),
+                    e.get("sql", ""),
+                    ";".join(e.get("tables", [])),
+                    e.get("rows_returned", ""),
+                    e.get("duration_ms", ""),
+                    e.get("blocked", False),
+                    e.get("block_reason", ""),
+                    e.get("agent_id", ""),
+                    json.dumps(e.get("metadata", {})),
+                ]
+            )
         content = output.getvalue()
         return StreamingResponse(
             iter([content]),

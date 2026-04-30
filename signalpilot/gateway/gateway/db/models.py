@@ -10,12 +10,12 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Float,
     Index,
     Integer,
-    JSON,
     LargeBinary,
     String,
     Text,
@@ -167,9 +167,7 @@ class GatewayCredential(GatewayBase):
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     # BYOK columns (Phase 1: read path only; Phase 2 adds write path and API)
     # "managed" (existing Fernet) or "byok" (envelope encryption)
-    encryption_mode: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="managed"
-    )
+    encryption_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default="managed")
     # Wrapped (KMS-encrypted) DEK — only set for BYOK mode
     wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # FK-like reference to gateway_byok_keys.id — only set for BYOK mode
@@ -278,9 +276,7 @@ class GatewayHealthEvent(GatewayBase):
     success: Mapped[bool] = mapped_column(Boolean, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (
-        Index("ix_gw_health_org_conn_ts", "org_id", "connection_name", "timestamp"),
-    )
+    __table_args__ = (Index("ix_gw_health_org_conn_ts", "org_id", "connection_name", "timestamp"),)
 
 
 class GatewaySessionBudget(GatewayBase):

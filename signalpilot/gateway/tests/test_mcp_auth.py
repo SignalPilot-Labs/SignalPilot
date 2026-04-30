@@ -11,13 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from gateway.mcp_auth import (
+from gateway.auth.mcp_api_key import (
     MCPAuthMiddleware,
-    _KeyCache,
     _extract_bearer_key,
+    _KeyCache,
     validate_api_key,
 )
-
 
 # ─── TestKeyCache ─────────────────────────────────────────────────────────────
 
@@ -101,7 +100,8 @@ class TestValidateApiKey:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        import gateway.mcp_auth as mcp_auth
+        import gateway.auth.mcp_api_key as mcp_auth
+
         # Reset module-level cache and client
         original_client = mcp_auth._http_client
         original_cache = mcp_auth._cache
@@ -123,7 +123,8 @@ class TestValidateApiKey:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        import gateway.mcp_auth as mcp_auth
+        import gateway.auth.mcp_api_key as mcp_auth
+
         original_client = mcp_auth._http_client
         mcp_auth._http_client = mock_client
         try:
@@ -137,7 +138,8 @@ class TestValidateApiKey:
         mock_client = AsyncMock()
         mock_client.post.side_effect = httpx.ConnectError("connection refused")
 
-        import gateway.mcp_auth as mcp_auth
+        import gateway.auth.mcp_api_key as mcp_auth
+
         original_client = mcp_auth._http_client
         mcp_auth._http_client = mock_client
         try:
@@ -150,7 +152,8 @@ class TestValidateApiKey:
     async def test_cache_hit_skips_http_call(self):
         mock_client = AsyncMock()
 
-        import gateway.mcp_auth as mcp_auth
+        import gateway.auth.mcp_api_key as mcp_auth
+
         original_client = mcp_auth._http_client
         original_cache = mcp_auth._cache
         mcp_auth._http_client = mock_client
@@ -175,13 +178,12 @@ class TestValidateApiKey:
         """Verify the cache stores the key hash, not the raw key."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "user_id": "u1", "scopes": [], "key_id": "k1", "key_name": "n"
-        }
+        mock_response.json.return_value = {"user_id": "u1", "scopes": [], "key_id": "k1", "key_name": "n"}
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        import gateway.mcp_auth as mcp_auth
+        import gateway.auth.mcp_api_key as mcp_auth
+
         original_client = mcp_auth._http_client
         original_cache = mcp_auth._cache
         mcp_auth._http_client = mock_client
@@ -256,13 +258,15 @@ class TestMCPAuthMiddleware:
         middleware = MCPAuthMiddleware(downstream_app)
         scope = _make_scope()
 
-        import gateway.mcp_auth as mcp_auth
+        import gateway.auth.mcp_api_key as mcp_auth
+
         original_warned = mcp_auth._warned_no_backend_url
         mcp_auth._warned_no_backend_url = False
 
         with patch.dict("os.environ", {}, clear=True):
             # Ensure SP_BACKEND_URL is absent so DB session factory raises
             import os
+
             os.environ.pop("SP_BACKEND_URL", None)
             response = await _collect_response(middleware, scope)
 
@@ -285,7 +289,7 @@ class TestMCPAuthMiddleware:
         middleware = MCPAuthMiddleware(downstream_app)
         scope = _make_scope(headers=_bearer_headers("sp_validkey123"))
 
-        with patch("gateway.mcp_auth.validate_api_key", new=AsyncMock(return_value=auth_info)):
+        with patch("gateway.auth.mcp_api_key.validate_api_key", new=AsyncMock(return_value=auth_info)):
             with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend", "SP_DEPLOYMENT_MODE": "cloud"}):
                 response = await _collect_response(middleware, scope)
 
@@ -300,7 +304,7 @@ class TestMCPAuthMiddleware:
         middleware = MCPAuthMiddleware(downstream_app)
         scope = _make_scope(headers=_bearer_headers("sp_badkey"))
 
-        with patch("gateway.mcp_auth.validate_api_key", new=AsyncMock(return_value=None)):
+        with patch("gateway.auth.mcp_api_key.validate_api_key", new=AsyncMock(return_value=None)):
             with patch.dict("os.environ", {"SP_BACKEND_URL": "http://backend", "SP_DEPLOYMENT_MODE": "cloud"}):
                 response = await _collect_response(middleware, scope)
 
@@ -363,7 +367,7 @@ class TestMCPAuthMiddleware:
         We verify by inspecting the auth dict written to the ASGI scope by the middleware.
         The middleware uses inline imports so we patch at the source module level.
         """
-        from gateway.mcp_server import mcp_org_id_var
+        from gateway.mcp import mcp_org_id_var
 
         # Simulate a matched API key with a stale cloud org_id
         stale_key = MagicMock()
@@ -396,19 +400,18 @@ class TestMCPAuthMiddleware:
 
         scope = _make_scope(headers=_bearer_headers("sp_localkey"))
 
-        # Patch at the modules where mcp_auth.py imports from
+        # Patch at the modules where auth/mcp_api_key.py imports from
         with patch("gateway.db.engine.get_session_factory", return_value=mock_factory):
             with patch("gateway.store.Store", return_value=mock_store):
                 with patch.dict("os.environ", {}, clear=True):
                     import os as _os
+
                     _os.environ.pop("SP_BACKEND_URL", None)
                     _os.environ.pop("SP_DEPLOYMENT_MODE", None)
-                    response = await _collect_response(capturing_middleware, scope)
+                    await _collect_response(capturing_middleware, scope)
 
         # The clamped org_id must be "local", not the stale cloud value
         auth = captured_scope.get("state", {}).get("auth", {})
-        assert auth.get("org_id") == "local", (
-            f"Expected org_id='local' (clamped) but got '{auth.get('org_id')}'"
-        )
+        assert auth.get("org_id") == "local", f"Expected org_id='local' (clamped) but got '{auth.get('org_id')}'"
         # mcp_org_id_var must also be "local"
         assert mcp_org_id_var.get() == "local"

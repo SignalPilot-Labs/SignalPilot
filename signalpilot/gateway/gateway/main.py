@@ -18,25 +18,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .correlation import RequestCorrelationMiddleware
-from .deployment import is_cloud_mode
-from .middleware import APIKeyAuthMiddleware, RateLimitMiddleware, RequestBodySizeLimitMiddleware, SecurityHeadersMiddleware, enforce_principal_rate_limit
-from .models import ConnectionUpdate
+from .api import register_routers
+from .byok import DEKCache
+from .byok.factory import make_provider
 from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
-from .db.engine import init_db, close_db, get_session_factory
+from .db.engine import close_db, get_session_factory, init_db
 from .governance.context import current_org_id_var
-from .byok import DEKCache
-from .byok_factory import make_provider
-from .store import Store, _validate_encryption_health, configure_byok
-from .api import register_routers
-from .api.deps import reset_sandbox_client, _sandbox_client
+from .http import (
+    APIKeyAuthMiddleware,
+    RateLimitMiddleware,
+    RequestBodySizeLimitMiddleware,
+    RequestCorrelationMiddleware,
+    SecurityHeadersMiddleware,
+    enforce_principal_rate_limit,
+)
+from .models import ConnectionUpdate
+from .runtime.mode import is_cloud_mode
+from .store import Store, configure_byok
+from .store.crypto import _validate_encryption_health
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,6 +72,7 @@ async def lifespan(app: FastAPI):
     byok_provider_config: dict | None = None
     if byok_provider_config_raw:
         import json as _json
+
         try:
             byok_provider_config = _json.loads(byok_provider_config_raw)
         except _json.JSONDecodeError:
@@ -75,8 +83,7 @@ async def lifespan(app: FastAPI):
     dek_cache = DEKCache(ttl_seconds=300)
     if is_cloud_mode() and byok_provider_type == "local":
         logger.info(
-            "STARTUP: Cloud mode — skipping local BYOK provider; "
-            "set SP_BYOK_PROVIDER to aws_kms/gcp_kms/azure_kv"
+            "STARTUP: Cloud mode — skipping local BYOK provider; set SP_BYOK_PROVIDER to aws_kms/gcp_kms/azure_kv"
         )
     else:
         byok_provider = make_provider(byok_provider_type, byok_provider_config)
@@ -124,21 +131,28 @@ async def lifespan(app: FastAPI):
                             start = time.monotonic()
                             try:
                                 async with pool_manager.connection(
-                                    conn_info.db_type, conn_str, credential_extras=extras,
+                                    conn_info.db_type,
+                                    conn_str,
+                                    credential_extras=extras,
                                     connection_name=conn_info.name,
                                 ) as connector:
                                     ok = await connector.health_check()
                                 elapsed = (time.monotonic() - start) * 1000
                                 health_monitor.record(
-                                    conn_info.name, elapsed, ok,
+                                    conn_info.name,
+                                    elapsed,
+                                    ok,
                                     error=None if ok else "health_check returned false",
                                     db_type=conn_info.db_type,
                                 )
                             except Exception as e:
                                 elapsed = (time.monotonic() - start) * 1000
                                 health_monitor.record(
-                                    conn_info.name, elapsed, False,
-                                    error=str(e)[:200], db_type=conn_info.db_type,
+                                    conn_info.name,
+                                    elapsed,
+                                    False,
+                                    error=str(e)[:200],
+                                    db_type=conn_info.db_type,
                                 )
                         finally:
                             current_org_id_var.reset(token)
@@ -178,31 +192,41 @@ async def lifespan(app: FastAPI):
                                 continue
                             extras = await inner_store.get_credential_extras(conn_info.name)
                             async with pool_manager.connection(
-                                conn_info.db_type, conn_str, credential_extras=extras,
+                                conn_info.db_type,
+                                conn_str,
+                                credential_extras=extras,
                                 connection_name=conn_info.name,
                             ) as connector:
                                 schema = await connector.get_schema()
                             diff_result = schema_cache.put(conn_info.name, schema, track_diff=True)
-                            await inner_store.update_connection(conn_info.name, ConnectionUpdate(
-                                last_schema_refresh=now,
-                            ))
+                            await inner_store.update_connection(
+                                conn_info.name,
+                                ConnectionUpdate(
+                                    last_schema_refresh=now,
+                                ),
+                            )
                             if diff_result and diff_result.get("has_changes"):
                                 added = len(diff_result.get("added_tables", []))
                                 removed = len(diff_result.get("removed_tables", []))
                                 modified = len(diff_result.get("modified_tables", []))
                                 logger.info(
                                     "Schema change detected for '%s': +%d/-%d tables, %d modified",
-                                    conn_info.name, added, removed, modified,
+                                    conn_info.name,
+                                    added,
+                                    removed,
+                                    modified,
                                 )
                             else:
                                 logger.info(
                                     "Scheduled schema refresh for '%s': %d tables (no structural changes)",
-                                    conn_info.name, len(schema),
+                                    conn_info.name,
+                                    len(schema),
                                 )
                         except Exception as e:
                             logger.warning(
                                 "Scheduled schema refresh failed for '%s': %s",
-                                conn_info.name, e,
+                                conn_info.name,
+                                e,
                             )
                         finally:
                             current_org_id_var.reset(token)
@@ -237,6 +261,7 @@ async def lifespan(app: FastAPI):
         dek_cache.clear()
         await close_db()
         from .api.deps import _sandbox_client
+
         if _sandbox_client:
             await _sandbox_client.close()
 
@@ -250,6 +275,7 @@ app = FastAPI(
     lifespan=lifespan,
     dependencies=[Depends(enforce_principal_rate_limit)],
 )
+
 
 # CORS
 def _build_allowed_origins() -> list[str]:
@@ -265,16 +291,14 @@ def _build_allowed_origins() -> list[str]:
         validated = []
         for origin in origins:
             if not origin.startswith("https://"):
-                logger.warning(
-                    "CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin
-                )
+                logger.warning("CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin)
                 continue
             validated.append(origin)
         return validated
-    else:
-        if not raw:
-            return ["http://localhost:3000", "http://localhost:3200"]
-        return [o.strip() for o in raw.split(",") if o.strip()]
+    if not raw:
+        return ["http://localhost:3000", "http://localhost:3200"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
 
 _ALLOWED_ORIGINS = _build_allowed_origins()
 
@@ -300,6 +324,7 @@ app.add_middleware(
 
 # ─── Global Exception Handler ─────────────────────────────────────────────────
 
+
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Safety net: return a generic 500 for any unhandled exception.
@@ -323,17 +348,18 @@ register_routers(app)
 # Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
 _mcp_session_manager = None
 try:
-    from .mcp_server import mcp as _mcp_instance
+    from .mcp import mcp as _mcp_instance
 
     # Override the gateway URL so the MCP tools call back to this same process
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
-    from .mcp_auth import MCPAuthMiddleware
+    from .auth.mcp_api_key import MCPAuthMiddleware
+
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     app.mount("/mcp", _mcp_http_app)  # New canonical path
-    app.mount("/", _mcp_http_app)     # Backward compat — remove after client migration
+    app.mount("/", _mcp_http_app)  # Backward compat — remove after client migration
     logger.info("MCP streamable-http endpoint mounted at /mcp (also / for backward compat)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

@@ -19,15 +19,14 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from gateway.store import (
-    _atomic_create_file,
-    _load_or_create_salt,
-    _get_encryption_key,
-    get_local_api_key,
-    Store,
-)
 from gateway.models import ConnectionCreate, DBType, ProjectCreate
-
+from gateway.store import (
+    Store,
+    _get_encryption_key,
+    _load_or_create_salt,
+    get_local_api_key,
+)
+from gateway.store._atomic import _atomic_create_file
 
 # ─── _atomic_create_file ─────────────────────────────────────────────────────
 
@@ -79,13 +78,13 @@ class TestLoadOrCreateSalt:
     """Two simultaneous calls must return the same salt bytes."""
 
     def test_creates_salt_file_on_first_call(self, tmp_path: Path) -> None:
-        with patch("gateway.store.DATA_DIR", tmp_path):
+        with patch("gateway.store._constants.DATA_DIR", tmp_path):
             salt = _load_or_create_salt()
         assert len(salt) == 16
         assert (tmp_path / ".encryption_salt").exists()
 
     def test_returns_same_salt_on_repeated_calls(self, tmp_path: Path) -> None:
-        with patch("gateway.store.DATA_DIR", tmp_path):
+        with patch("gateway.store._constants.DATA_DIR", tmp_path):
             salt1 = _load_or_create_salt()
             salt2 = _load_or_create_salt()
         assert salt1 == salt2
@@ -101,8 +100,10 @@ class TestLoadOrCreateSalt:
             written_salts.append(result)
             return result
 
-        with patch("gateway.store.DATA_DIR", tmp_path), \
-             patch("gateway.store._atomic_create_file", side_effect=capturing_atomic):
+        with (
+            patch("gateway.store._constants.DATA_DIR", tmp_path),
+            patch("gateway.store._atomic._atomic_create_file", side_effect=capturing_atomic),
+        ):
             salt_a = _load_or_create_salt()
             # Manually simulate a second process by calling again (file now exists)
             salt_b = _load_or_create_salt()
@@ -117,33 +118,35 @@ class TestGetEncryptionKey:
     """Two simultaneous starts must return the same Fernet key."""
 
     def test_generates_and_caches_key(self, tmp_path: Path) -> None:
-        with patch("gateway.store.DATA_DIR", tmp_path), \
-             patch("gateway.store._CACHED_KEY", None):
-            import gateway.store as store_module
-            old_cache = store_module._CACHED_KEY
-            store_module._CACHED_KEY = None
+        with patch("gateway.store._constants.DATA_DIR", tmp_path), patch("gateway.store.crypto._CACHED_KEY", None):
+            import gateway.store.crypto as _crypto_module
+
+            old_cache = _crypto_module._CACHED_KEY
+            _crypto_module._CACHED_KEY = None
             try:
                 key = _get_encryption_key()
                 assert key is not None
                 assert len(key) > 0
             finally:
-                store_module._CACHED_KEY = old_cache
+                _crypto_module._CACHED_KEY = old_cache
 
     def test_key_is_stripped_from_existing_file(self, tmp_path: Path) -> None:
         """Key file with trailing newline must be stripped."""
         from cryptography.fernet import Fernet
+
         key_val = Fernet.generate_key()
         key_file = tmp_path / ".encryption_key"
         key_file.write_bytes(key_val + b"\n")
 
-        import gateway.store as store_module
-        original_cache = store_module._CACHED_KEY
-        store_module._CACHED_KEY = None
+        import gateway.store.crypto as _crypto_module
+
+        original_cache = _crypto_module._CACHED_KEY
+        _crypto_module._CACHED_KEY = None
         try:
-            with patch("gateway.store.DATA_DIR", tmp_path), \
-                 patch.dict("os.environ", {}, clear=False):
+            with patch("gateway.store._constants.DATA_DIR", tmp_path), patch.dict("os.environ", {}, clear=False):
                 # Remove SP_ENCRYPTION_KEY if set
                 import os
+
                 env_backup = os.environ.pop("SP_ENCRYPTION_KEY", None)
                 try:
                     result = _get_encryption_key()
@@ -153,29 +156,31 @@ class TestGetEncryptionKey:
                     if env_backup is not None:
                         os.environ["SP_ENCRYPTION_KEY"] = env_backup
         finally:
-            store_module._CACHED_KEY = original_cache
+            _crypto_module._CACHED_KEY = original_cache
 
     def test_race_condition_returns_same_key(self, tmp_path: Path) -> None:
         """Two calls without cached key both end up with the same key bytes."""
-        import gateway.store as store_module
-        original_cache = store_module._CACHED_KEY
+        import gateway.store.crypto as _crypto_module
+
+        original_cache = _crypto_module._CACHED_KEY
 
         def reset_and_call() -> bytes:
-            store_module._CACHED_KEY = None
+            _crypto_module._CACHED_KEY = None
             return _get_encryption_key()
 
         import os
+
         env_backup = os.environ.pop("SP_ENCRYPTION_KEY", None)
         try:
-            with patch("gateway.store.DATA_DIR", tmp_path):
+            with patch("gateway.store._constants.DATA_DIR", tmp_path):
                 key_a = reset_and_call()
                 # Second call: cache may be set, but file now exists — result is the same
-                store_module._CACHED_KEY = None
+                _crypto_module._CACHED_KEY = None
                 key_b = _get_encryption_key()
         finally:
             if env_backup is not None:
                 os.environ["SP_ENCRYPTION_KEY"] = env_backup
-            store_module._CACHED_KEY = original_cache
+            _crypto_module._CACHED_KEY = original_cache
 
         assert key_a == key_b
 
@@ -187,13 +192,13 @@ class TestGetLocalApiKey:
     """Two simultaneous calls must return the same key string."""
 
     def test_creates_key_on_first_call(self, tmp_path: Path) -> None:
-        with patch("gateway.store.DATA_DIR", tmp_path):
+        with patch("gateway.store._constants.DATA_DIR", tmp_path):
             key = get_local_api_key()
         assert key.startswith("sp_local_")
         assert (tmp_path / "local_api_key").exists()
 
     def test_returns_same_key_on_repeated_calls(self, tmp_path: Path) -> None:
-        with patch("gateway.store.DATA_DIR", tmp_path):
+        with patch("gateway.store._constants.DATA_DIR", tmp_path):
             key1 = get_local_api_key()
             key2 = get_local_api_key()
         assert key1 == key2
@@ -206,7 +211,7 @@ class TestGetLocalApiKey:
         # Pre-write a key as if a racing process won
         key_file.write_text(winner_key)
 
-        with patch("gateway.store.DATA_DIR", tmp_path):
+        with patch("gateway.store._constants.DATA_DIR", tmp_path):
             result = get_local_api_key()
 
         assert result == winner_key
@@ -369,9 +374,7 @@ class TestCloneConnectionRace:
         store = AsyncMock()
         store.get_connection = AsyncMock(side_effect=[existing_conn, None])
         store.get_connection_string = AsyncMock(return_value=None)
-        store.create_connection = AsyncMock(
-            side_effect=ValueError("Connection 'clone_name' already exists")
-        )
+        store.create_connection = AsyncMock(side_effect=ValueError("Connection 'clone_name' already exists"))
 
         with pytest.raises(HTTPException) as exc_info:
             await clone_connection("source_conn", store, new_name="clone_name")

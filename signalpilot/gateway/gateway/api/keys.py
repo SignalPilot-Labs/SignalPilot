@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Response
 
 from ..auth import OrgAdmin, OrgID, UserID
 from ..models import ApiKeyCreate, ApiKeyCreatedResponse, ApiKeyResponse
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
@@ -13,23 +13,19 @@ router = APIRouter(prefix="/api")
 @router.get("/keys", dependencies=[RequireScope("admin")])
 async def list_keys(store: StoreD) -> list[ApiKeyResponse]:
     records = await store.list_api_keys()
-    return [
-        ApiKeyResponse(**r.model_dump(exclude={"key_hash", "user_id"}))
-        for r in records
-    ]
+    return [ApiKeyResponse(**r.model_dump(exclude={"key_hash", "user_id"})) for r in records]
 
 
 @router.post("/keys", dependencies=[RequireScope("admin")])
 async def create_key(body: ApiKeyCreate, store: StoreD, _role: OrgAdmin) -> ApiKeyCreatedResponse:
     # Enforce API key limit based on org's plan tier
-    from ..governance.plan_limits import get_org_limits, check_api_key_limit
+    from ..governance.plan_limits import check_api_key_limit, get_org_limits
+
     plan = await get_org_limits(store.org_id)
     existing_keys = await store.list_api_keys()
     check_api_key_limit(len(existing_keys), plan)
 
-    record, raw_key = await store.create_api_key(
-        body.name, body.scopes, expires_at=body.expires_at
-    )
+    record, raw_key = await store.create_api_key(body.name, body.scopes, expires_at=body.expires_at)
     return ApiKeyCreatedResponse(
         **record.model_dump(exclude={"key_hash", "user_id"}),
         raw_key=raw_key,
@@ -46,7 +42,7 @@ async def delete_key(key_id: str, store: StoreD, _role: OrgAdmin):
 @router.get("/plan", dependencies=[RequireScope("read")])
 async def get_plan_usage(_user: UserID, org_id: OrgID, store: StoreD):
     """Return current plan tier, limits, and usage for the org."""
-    from ..governance.plan_limits import get_org_limits, daily_query_counter
+    from ..governance.plan_limits import daily_query_counter, get_org_limits
 
     plan = await get_org_limits(org_id)
     connections = await store.list_connections()

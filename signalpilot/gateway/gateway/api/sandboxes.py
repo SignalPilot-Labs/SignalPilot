@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..auth import OrgID, UserID
 from ..models import AuditEntry, ExecuteRequest, SandboxCreate
-from ..scope_guard import RequireScope
+from ..security.scope_guard import RequireScope
 from ..store import (
     delete_sandbox,
     get_sandbox,
@@ -41,14 +41,16 @@ async def create_sandbox(req: SandboxCreate, store: StoreD):
     sandbox.org_id = store.org_id or ""
     upsert_sandbox(sandbox)
 
-    await store.append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="connect",
-        connection_name=req.connection_name,
-        sandbox_id=sandbox.id,
-        metadata={"label": req.label},
-    ))
+    await store.append_audit(
+        AuditEntry(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            event_type="connect",
+            connection_name=req.connection_name,
+            sandbox_id=sandbox.id,
+            metadata={"label": req.label},
+        )
+    )
 
     return sandbox
 
@@ -98,13 +100,15 @@ async def execute_in_sandbox(sandbox_id: str, req: ExecuteRequest, store: StoreD
     # Update sandbox state
     upsert_sandbox(sandbox)
 
-    await store.append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="execute",
-        connection_name=sandbox.connection_name,
-        sandbox_id=sandbox_id,
-        metadata={"code_preview": req.code[:200], "success": result.success},
-    ))
+    await store.append_audit(
+        AuditEntry(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            event_type="execute",
+            connection_name=sandbox.connection_name,
+            sandbox_id=sandbox_id,
+            metadata={"code_preview": req.code[:200], "success": result.success},
+        )
+    )
 
     return result

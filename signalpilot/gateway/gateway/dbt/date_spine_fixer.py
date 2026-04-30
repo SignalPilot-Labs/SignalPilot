@@ -17,7 +17,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 # ── Constants ────────────────────────────────────────────────────────────────
 
 CONFIG_BLOCK = "{{ config(materialized='table') }}\n"
@@ -50,10 +49,10 @@ _RE_BLOCK_COMMENT_CLOSE = re.compile(r"\*/")
 class DateSpineFix:
     """Describes a single file fix — either a new override or an in-place edit."""
 
-    original_path: str        # relative path to the hazard source
-    output_path: Path         # absolute path where the file should be written
-    content: str              # full SQL with replacements applied
-    is_package: bool          # True if this is a new package override
+    original_path: str  # relative path to the hazard source
+    output_path: Path  # absolute path where the file should be written
+    content: str  # full SQL with replacements applied
+    is_package: bool  # True if this is a new package override
     patterns_replaced: list[str] = field(default_factory=list)  # e.g. ["current_date", "now()"]
     already_overridden: bool = False  # True if override already existed — skip write
 
@@ -192,13 +191,15 @@ def generate_date_spine_fixes(
 
             # If override already exists, skip it.
             if output_path.exists():
-                fixes.append(DateSpineFix(
-                    original_path=source_rel,
-                    output_path=output_path,
-                    content="",
-                    is_package=True,
-                    already_overridden=True,
-                ))
+                fixes.append(
+                    DateSpineFix(
+                        original_path=source_rel,
+                        output_path=output_path,
+                        content="",
+                        is_package=True,
+                        already_overridden=True,
+                    )
+                )
                 continue
 
             try:
@@ -207,13 +208,15 @@ def generate_date_spine_fixes(
                 raise OSError(f"Cannot read package source {source_path}: {e}") from e
 
             content, patterns = _make_override_content(source_sql, replacement_date, add_day_offset)
-            fixes.append(DateSpineFix(
-                original_path=source_rel,
-                output_path=output_path,
-                content=content,
-                is_package=True,
-                patterns_replaced=patterns,
-            ))
+            fixes.append(
+                DateSpineFix(
+                    original_path=source_rel,
+                    output_path=output_path,
+                    content=content,
+                    is_package=True,
+                    patterns_replaced=patterns,
+                )
+            )
 
         else:
             # Project model — edit in-place.
@@ -226,12 +229,14 @@ def generate_date_spine_fixes(
                 raise OSError(f"Cannot read project model {source_path}: {e}") from e
 
             content, patterns = _make_inplace_content(source_sql, replacement_date, add_day_offset)
-            fixes.append(DateSpineFix(
-                original_path=source_rel,
-                output_path=output_path,
-                content=content,
-                is_package=False,
-                patterns_replaced=patterns,
-            ))
+            fixes.append(
+                DateSpineFix(
+                    original_path=source_rel,
+                    output_path=output_path,
+                    content=content,
+                    is_package=False,
+                    patterns_replaced=patterns,
+                )
+            )
 
     return fixes

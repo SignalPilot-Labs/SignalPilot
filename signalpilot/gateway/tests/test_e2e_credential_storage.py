@@ -36,18 +36,20 @@ if _BACKEND_URL.startswith("postgresql://") and "+asyncpg" not in _BACKEND_URL:
 def event_loop_policy():
     """Use the default asyncio event loop for the module."""
     import asyncio
+
     return asyncio.DefaultEventLoopPolicy()
 
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session():
     """Create an async DB session against the integration test Postgres."""
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine(_BACKEND_URL, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     from gateway.db.models import GatewayBase
+
     async with engine.begin() as conn:
         await conn.run_sync(GatewayBase.metadata.create_all)
 
@@ -61,6 +63,7 @@ async def db_session():
 async def store(db_session):
     """Create a Store instance wired to the integration DB session."""
     from gateway.store import Store
+
     return Store(db_session, user_id="integration-test-user")
 
 
@@ -68,21 +71,14 @@ async def store(db_session):
 async def cleanup_test_connections(db_session):
     """Clean up any connections created during integration tests."""
     from sqlalchemy import delete
+
     from gateway.db.models import GatewayConnection, GatewayCredential
 
     yield
 
     async with db_session.begin():
-        await db_session.execute(
-            delete(GatewayCredential).where(
-                GatewayCredential.user_id == "integration-test-user"
-            )
-        )
-        await db_session.execute(
-            delete(GatewayConnection).where(
-                GatewayConnection.user_id == "integration-test-user"
-            )
-        )
+        await db_session.execute(delete(GatewayCredential).where(GatewayCredential.user_id == "integration-test-user"))
+        await db_session.execute(delete(GatewayConnection).where(GatewayConnection.user_id == "integration-test-user"))
 
 
 class TestCredentialStorageRoundTrip:
@@ -91,9 +87,10 @@ class TestCredentialStorageRoundTrip:
     @pytest.mark.asyncio
     async def test_credential_is_encrypted_in_db(self, store, db_session):
         """Raw credential value must not appear in the gateway_credentials table."""
-        from gateway.models import ConnectionCreate
         from sqlalchemy import select
+
         from gateway.db.models import GatewayCredential
+        from gateway.models import ConnectionCreate
 
         unique_suffix = uuid.uuid4().hex[:8]
         conn_name = f"inttest-pg-{unique_suffix}"
@@ -156,7 +153,7 @@ class TestCredentialStorageRoundTrip:
     @pytest.mark.asyncio
     async def test_encrypt_decrypt_migration(self, store):
         """Verify the encrypt/decrypt round-trip works with current key."""
-        from gateway.store import _encrypt, _decrypt
+        from gateway.store import _decrypt, _encrypt
 
         original = f"test-cred-{uuid.uuid4().hex}"
         encrypted = _encrypt(original)
@@ -181,10 +178,11 @@ class TestCredentialStorageRoundTrip:
     @pytest.mark.asyncio
     async def test_key_version_set_on_create(self, store, db_session):
         """Newly created credentials must have key_version == CURRENT_KEY_VERSION."""
+        from sqlalchemy import select
+
+        from gateway.db.models import GatewayCredential
         from gateway.models import ConnectionCreate
         from gateway.store import CURRENT_KEY_VERSION
-        from sqlalchemy import select
-        from gateway.db.models import GatewayCredential
 
         unique_suffix = uuid.uuid4().hex[:8]
         conn_name = f"inttest-kv-{unique_suffix}"
@@ -212,10 +210,11 @@ class TestCredentialStorageRoundTrip:
     @pytest.mark.asyncio
     async def test_key_version_preserved_on_update(self, store, db_session):
         """Updating connection credentials sets key_version == CURRENT_KEY_VERSION."""
+        from sqlalchemy import select
+
+        from gateway.db.models import GatewayCredential
         from gateway.models import ConnectionCreate, ConnectionUpdate
         from gateway.store import CURRENT_KEY_VERSION
-        from sqlalchemy import select
-        from gateway.db.models import GatewayCredential
 
         unique_suffix = uuid.uuid4().hex[:8]
         conn_name = f"inttest-kvupd-{unique_suffix}"

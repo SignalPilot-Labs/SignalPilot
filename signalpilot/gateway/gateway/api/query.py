@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 
@@ -15,9 +14,9 @@ from ..engine import inject_limit, validate_sql
 from ..errors import query_error_hint
 from ..governance.annotations import load_annotations
 from ..governance.budget import budget_ledger
+from ..governance.plan_limits import check_query_limit, get_org_limits, record_query
 from ..models import AuditEntry
-from ..scope_guard import RequireScope
-from ..governance.plan_limits import check_query_limit, record_query, get_org_limits
+from ..security.scope_guard import RequireScope
 from .deps import SQLGLOT_DIALECTS, StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
@@ -32,7 +31,9 @@ class DirectQueryRequest(BaseModel):
 
 @router.post("/query", dependencies=[RequireScope("query")])
 async def query_database(req: DirectQueryRequest, store: StoreD, request: Request):
-    _client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else None)
+    _client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else None
+    )
     _user_agent = request.headers.get("user-agent")
 
     # Enforce daily query limit based on org's plan tier
@@ -57,17 +58,19 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
 
     validation = validate_sql(req.sql, blocked_tables=blocked_tables or None, dialect=dialect)
     if not validation.ok:
-        await store.append_audit(AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="block",
-            connection_name=req.connection_name,
-            sql=req.sql,
-            blocked=True,
-            block_reason=validation.blocked_reason,
-            client_ip=_client_ip,
-            user_agent=_user_agent,
-        ))
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="block",
+                connection_name=req.connection_name,
+                sql=req.sql,
+                blocked=True,
+                block_reason=validation.blocked_reason,
+                client_ip=_client_ip,
+                user_agent=_user_agent,
+            )
+        )
         raise HTTPException(status_code=400, detail=f"Query blocked: {validation.blocked_reason}")
 
     try:
@@ -88,6 +91,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
         cost_estimate = None
         try:
             from ..governance.cost_estimator import CostEstimator
+
             cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
         except Exception:
             pass
@@ -95,14 +99,18 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
         start = time.monotonic()
         try:
             rows = await connector.execute(safe_sql, timeout=timeout)
-        except asyncio.TimeoutError:
-            health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, "timeout", info.db_type)
+        except TimeoutError:
+            health_monitor.record(
+                req.connection_name, (time.monotonic() - start) * 1000, False, "timeout", info.db_type
+            )
             raise HTTPException(
                 status_code=408,
                 detail=f"Query timed out after {timeout}s. Consider adding more specific WHERE clauses or reducing the scope.",
             )
         except Exception as e:
-            health_monitor.record(req.connection_name, (time.monotonic() - start) * 1000, False, str(e)[:200], info.db_type)
+            health_monitor.record(
+                req.connection_name, (time.monotonic() - start) * 1000, False, str(e)[:200], info.db_type
+            )
             sanitized = sanitize_db_error(str(e))
             hint = query_error_hint(str(e), info.db_type)
             detail = {"error": sanitized, "hint": hint} if hint else sanitized
@@ -115,6 +123,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
 
     # Apply PII redaction
     from ..governance.pii import PIIRedactor
+
     pii_redactor = PIIRedactor()
     if info.pii_enabled and info.pii_rules:
         for col_name, rule in info.pii_rules.items():
@@ -129,20 +138,22 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
     query_cost_usd = (elapsed_ms / 1000) * 0.000014
     await budget_ledger.charge("default", query_cost_usd)
 
-    await store.append_audit(AuditEntry(
-        id=str(uuid.uuid4()),
-        timestamp=time.time(),
-        event_type="query",
-        connection_name=req.connection_name,
-        sql=req.sql,
-        tables=validation.tables,
-        rows_returned=len(rows),
-        duration_ms=elapsed_ms,
-        cost_usd=query_cost_usd,
-        metadata={"pii_redacted": pii_redactor.last_redacted_columns} if pii_redactor.last_redacted_columns else {},
-        client_ip=_client_ip,
-        user_agent=_user_agent,
-    ))
+    await store.append_audit(
+        AuditEntry(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            event_type="query",
+            connection_name=req.connection_name,
+            sql=req.sql,
+            tables=validation.tables,
+            rows_returned=len(rows),
+            duration_ms=elapsed_ms,
+            cost_usd=query_cost_usd,
+            metadata={"pii_redacted": pii_redactor.last_redacted_columns} if pii_redactor.last_redacted_columns else {},
+            client_ip=_client_ip,
+            user_agent=_user_agent,
+        )
+    )
 
     response = {
         "rows": rows,
@@ -160,7 +171,8 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
         }
     if info.db_type == "bigquery":
         try:
-            from ..connectors.bigquery import BigQueryConnector
+            from ..connectors.drivers.bigquery import BigQueryConnector
+
             if isinstance(connector, BigQueryConnector):
                 job_stats = connector.get_last_job_stats()
                 if job_stats:
@@ -198,8 +210,11 @@ async def explain_query(req: DirectQueryRequest, store: StoreD):
 
     try:
         extras = await store.get_credential_extras(req.connection_name)
-        async with pool_manager.connection(info.db_type, conn_str, credential_extras=extras, connection_name=req.connection_name) as connector:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=req.connection_name
+        ) as connector:
             from ..governance.cost_estimator import CostEstimator
+
             cost_estimate = await CostEstimator.estimate(connector, safe_sql, info.db_type)
 
         return {

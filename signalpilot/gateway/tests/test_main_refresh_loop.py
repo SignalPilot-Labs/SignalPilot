@@ -7,7 +7,7 @@ non-local orgs.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -29,6 +29,7 @@ class TestSchemaRefreshLoopInnerStore:
         and update_connection is called on that inner instance.
         """
         import time
+
         from gateway.models import ConnectionInfo, ConnectionUpdate, DBType
 
         conn_info = MagicMock(spec=ConnectionInfo)
@@ -64,14 +65,10 @@ class TestSchemaRefreshLoopInnerStore:
             conn_str = await inner_store.get_connection_string(conn_info.name)
             assert conn_str is not None
             extras = await inner_store.get_credential_extras(conn_info.name)
-            async with mock_pool_manager.connection(
-                conn_info.db_type, conn_str, credential_extras=extras
-            ) as connector:
+            async with mock_pool_manager.connection(conn_info.db_type, conn_str, credential_extras=extras) as connector:
                 schema = await connector.get_schema()
             mock_schema_cache.put(conn_info.name, schema, track_diff=True)
-            await inner_store.update_connection(conn_info.name, ConnectionUpdate(
-                last_schema_refresh=now
-            ))
+            await inner_store.update_connection(conn_info.name, ConnectionUpdate(last_schema_refresh=now))
         finally:
             current_org_id_var.reset(token)
 
@@ -89,8 +86,6 @@ class TestSchemaRefreshLoopInnerStore:
         from gateway.main import Store
 
         constructed_stores: list[dict] = []
-
-        original_init = Store.__init__
 
         def capturing_init(self, session, org_id=None, user_id=None, allow_unscoped=False):
             constructed_stores.append({"org_id": org_id, "allow_unscoped": allow_unscoped})

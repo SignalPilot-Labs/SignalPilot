@@ -10,7 +10,6 @@ cache (fast reads) with DB persistence for restart survival.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
@@ -19,7 +18,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, select, update
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HealthEvent:
     """A single health check or query event."""
+
     timestamp: float
     latency_ms: float
     success: bool
@@ -36,6 +36,7 @@ class HealthEvent:
 @dataclass
 class ConnectionHealth:
     """Aggregated health stats for a single connection."""
+
     connection_name: str
     db_type: str
     events: deque[HealthEvent] = field(default_factory=lambda: deque(maxlen=500))
@@ -47,12 +48,14 @@ class ConnectionHealth:
     def record_event(self, latency_ms: float, success: bool, error: str | None = None) -> None:
         """Record a query or health check event."""
         with self._lock:
-            self.events.append(HealthEvent(
-                timestamp=time.time(),
-                latency_ms=latency_ms,
-                success=success,
-                error=error,
-            ))
+            self.events.append(
+                HealthEvent(
+                    timestamp=time.time(),
+                    latency_ms=latency_ms,
+                    success=success,
+                    error=error,
+                )
+            )
             self.last_check = time.time()
             if success:
                 self.consecutive_failures = 0
@@ -84,23 +87,27 @@ class ConnectionHealth:
             bucket_events = [e for e in recent if bucket_start <= e.timestamp < bucket_end]
             if bucket_events:
                 latencies = [e.latency_ms for e in bucket_events if e.success]
-                buckets.append({
-                    "timestamp": round(bucket_start, 1),
-                    "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
-                    "max_latency_ms": round(max(latencies), 2) if latencies else None,
-                    "successes": sum(1 for e in bucket_events if e.success),
-                    "failures": sum(1 for e in bucket_events if not e.success),
-                    "total": len(bucket_events),
-                })
+                buckets.append(
+                    {
+                        "timestamp": round(bucket_start, 1),
+                        "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+                        "max_latency_ms": round(max(latencies), 2) if latencies else None,
+                        "successes": sum(1 for e in bucket_events if e.success),
+                        "failures": sum(1 for e in bucket_events if not e.success),
+                        "total": len(bucket_events),
+                    }
+                )
             else:
-                buckets.append({
-                    "timestamp": round(bucket_start, 1),
-                    "avg_latency_ms": None,
-                    "max_latency_ms": None,
-                    "successes": 0,
-                    "failures": 0,
-                    "total": 0,
-                })
+                buckets.append(
+                    {
+                        "timestamp": round(bucket_start, 1),
+                        "avg_latency_ms": None,
+                        "max_latency_ms": None,
+                        "successes": 0,
+                        "failures": 0,
+                        "total": 0,
+                    }
+                )
         return buckets
 
     def stats(self, window_seconds: int = 300) -> dict[str, Any]:
@@ -185,6 +192,7 @@ class HealthMonitor:
     @staticmethod
     def _key(connection_name: str) -> str:
         from ..governance.context import require_org_id
+
         org_id = require_org_id()
         return f"{org_id}::{connection_name}"
 
@@ -200,11 +208,16 @@ class HealthMonitor:
             return self._connections[key]
 
     def record(
-        self, connection_name: str, latency_ms: float, success: bool,
-        error: str | None = None, db_type: str = "unknown",
+        self,
+        connection_name: str,
+        latency_ms: float,
+        success: bool,
+        error: str | None = None,
+        db_type: str = "unknown",
     ) -> None:
         """Record an event for a connection."""
         from ..governance.context import require_org_id
+
         org_id = require_org_id()
 
         health = self.get_or_create(connection_name, db_type)
@@ -225,6 +238,7 @@ class HealthMonitor:
     def all_stats(self, window_seconds: int = 300) -> list[dict[str, Any]]:
         """Get stats for all monitored connections in the current org."""
         from ..governance.context import require_org_id
+
         org_id = require_org_id()
         prefix = f"{org_id}::"
         with self._lock:
@@ -241,7 +255,10 @@ class HealthMonitor:
         return health.stats(window_seconds)
 
     def connection_history(
-        self, connection_name: str, window_seconds: int = 3600, bucket_seconds: int = 60,
+        self,
+        connection_name: str,
+        window_seconds: int = 3600,
+        bucket_seconds: int = 60,
     ) -> list[dict[str, Any]] | None:
         """Get time-bucketed health history for a connection (for charts).
 
@@ -256,16 +273,18 @@ class HealthMonitor:
         return health.history(window_seconds, bucket_seconds)
 
     async def connection_history_from_db(
-        self, connection_name: str, window_seconds: int = 3600, bucket_seconds: int = 60,
+        self,
+        connection_name: str,
+        window_seconds: int = 3600,
+        bucket_seconds: int = 60,
     ) -> list[dict[str, Any]]:
         """Get time-bucketed health history from DB (survives restarts)."""
-        from ..governance.context import require_org_id
         from ..db.engine import get_session_factory
         from ..db.models import GatewayHealthEvent
+        from ..governance.context import require_org_id
 
         org_id = require_org_id()
         cutoff = time.time() - window_seconds
-        now = time.time()
 
         factory = get_session_factory()
         async with factory() as session:
@@ -291,23 +310,27 @@ class HealthMonitor:
             bucket_rows = [r for r in rows if bucket_start <= r.timestamp < bucket_end]
             if bucket_rows:
                 latencies = [r.latency_ms for r in bucket_rows if r.success]
-                buckets.append({
-                    "timestamp": round(bucket_start, 1),
-                    "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
-                    "max_latency_ms": round(max(latencies), 2) if latencies else None,
-                    "successes": sum(1 for r in bucket_rows if r.success),
-                    "failures": sum(1 for r in bucket_rows if not r.success),
-                    "total": len(bucket_rows),
-                })
+                buckets.append(
+                    {
+                        "timestamp": round(bucket_start, 1),
+                        "avg_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+                        "max_latency_ms": round(max(latencies), 2) if latencies else None,
+                        "successes": sum(1 for r in bucket_rows if r.success),
+                        "failures": sum(1 for r in bucket_rows if not r.success),
+                        "total": len(bucket_rows),
+                    }
+                )
             else:
-                buckets.append({
-                    "timestamp": round(bucket_start, 1),
-                    "avg_latency_ms": None,
-                    "max_latency_ms": None,
-                    "successes": 0,
-                    "failures": 0,
-                    "total": 0,
-                })
+                buckets.append(
+                    {
+                        "timestamp": round(bucket_start, 1),
+                        "avg_latency_ms": None,
+                        "max_latency_ms": None,
+                        "successes": 0,
+                        "failures": 0,
+                        "total": 0,
+                    }
+                )
         return buckets
 
     def remove(self, connection_name: str) -> None:
@@ -319,7 +342,7 @@ class HealthMonitor:
     async def flush_to_db(self) -> None:
         """Batch-insert pending events to DB and sync connection health state."""
         from ..db.engine import get_session_factory
-        from ..db.models import GatewayHealthEvent, GatewayConnection
+        from ..db.models import GatewayConnection, GatewayHealthEvent
 
         # Grab pending events
         with self._pending_lock:
@@ -337,15 +360,17 @@ class HealthMonitor:
                 # Batch insert health events
                 if events:
                     for org_id, conn_name, evt in events:
-                        session.add(GatewayHealthEvent(
-                            id=str(uuid.uuid4()),
-                            org_id=org_id,
-                            connection_name=conn_name,
-                            timestamp=evt.timestamp,
-                            latency_ms=evt.latency_ms,
-                            success=evt.success,
-                            error=evt.error,
-                        ))
+                        session.add(
+                            GatewayHealthEvent(
+                                id=str(uuid.uuid4()),
+                                org_id=org_id,
+                                connection_name=conn_name,
+                                timestamp=evt.timestamp,
+                                latency_ms=evt.latency_ms,
+                                success=evt.success,
+                                error=evt.error,
+                            )
+                        )
 
                 # Sync connection health state columns
                 for key in dirty:
@@ -389,9 +414,7 @@ class HealthMonitor:
             async with factory() as session:
                 # Load connection health state
                 result = await session.execute(
-                    select(GatewayConnection).where(
-                        GatewayConnection.health_last_check.isnot(None)
-                    )
+                    select(GatewayConnection).where(GatewayConnection.health_last_check.isnot(None))
                 )
                 connections = result.scalars().all()
 
@@ -421,19 +444,22 @@ class HealthMonitor:
                         health = self._connections.get(key)
                     if health is None:
                         continue
-                    health.events.append(HealthEvent(
-                        timestamp=evt.timestamp,
-                        latency_ms=evt.latency_ms,
-                        success=evt.success,
-                        error=evt.error,
-                    ))
+                    health.events.append(
+                        HealthEvent(
+                            timestamp=evt.timestamp,
+                            latency_ms=evt.latency_ms,
+                            success=evt.success,
+                            error=evt.error,
+                        )
+                    )
 
                 loaded_conns = len(connections)
                 loaded_events = len(events)
                 if loaded_conns or loaded_events:
                     logger.info(
                         "Loaded health state from DB: %d connections, %d recent events",
-                        loaded_conns, loaded_events,
+                        loaded_conns,
+                        loaded_events,
                     )
         except Exception:
             logger.warning("Failed to load health state from DB", exc_info=True)
@@ -447,11 +473,7 @@ class HealthMonitor:
         factory = get_session_factory()
         try:
             async with factory() as session:
-                result = await session.execute(
-                    delete(GatewayHealthEvent).where(
-                        GatewayHealthEvent.timestamp < cutoff
-                    )
-                )
+                result = await session.execute(delete(GatewayHealthEvent).where(GatewayHealthEvent.timestamp < cutoff))
                 await session.commit()
                 deleted = result.rowcount
                 if deleted:

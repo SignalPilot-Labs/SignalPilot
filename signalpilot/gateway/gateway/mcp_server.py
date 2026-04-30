@@ -2609,78 +2609,74 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     return "\n".join(lines)
 
 
-if not _is_cloud:
-    @mcp.tool()
-    async def dbt_error_parser(error_output: str) -> str:
-        """
-        Parse raw dbt stderr/stdout and extract structured, actionable error info.
+@mcp.tool()
+async def dbt_error_parser(error_output: str) -> str:
+    """
+    Parse raw dbt stderr/stdout and extract structured, actionable error info.
 
-        No LLM involved — pure regex and string pattern matching against common
-        dbt error formats. Provides a suggested fix for known error categories.
+    No LLM involved — pure regex and string pattern matching against common
+    dbt error formats. Provides a suggested fix for known error categories.
 
-        Args:
-            error_output: Raw dbt command output (stderr or combined stdout/stderr)
+    Args:
+        error_output: Raw dbt command output (stderr or combined stdout/stderr)
 
-        Returns:
-            Structured error summary with model name, type, location, message, and suggested fix.
-        """
-        from .deployment import is_cloud_mode
-        if is_cloud_mode():
-            return "Error: dbt error parsing is not available in cloud mode"
-        if not error_output or not error_output.strip():
-            return "Error: error_output cannot be empty."
+    Returns:
+        Structured error summary with model name, type, location, message, and suggested fix.
+    """
+    if not error_output or not error_output.strip():
+        return "Error: error_output cannot be empty."
 
-        model_match = (
-            re.search(r'model\s+"[^.]+\.[^.]+\.([^"]+)"', error_output)
-            or re.search(r'(?:Compilation|Database|Runtime|Test)\s+Error\s+in\s+model\s+(\S+)', error_output)
-        )
-        model_name = model_match.group(1) if model_match else "(not detected)"
+    model_match = (
+        re.search(r'model\s+"[^.]+\.[^.]+\.([^"]+)"', error_output)
+        or re.search(r'(?:Compilation|Database|Runtime|Test)\s+Error\s+in\s+model\s+(\S+)', error_output)
+    )
+    model_name = model_match.group(1) if model_match else "(not detected)"
 
-        type_match = re.search(r'(Compilation Error|Database Error|Runtime Error|Test Error|dbt\.exceptions\.\w+)', error_output)
-        error_type = type_match.group(1) if type_match else "(not detected)"
+    type_match = re.search(r'(Compilation Error|Database Error|Runtime Error|Test Error|dbt\.exceptions\.\w+)', error_output)
+    error_type = type_match.group(1) if type_match else "(not detected)"
 
-        location_match = (
-            re.search(r'at \[(\d+):(\d+)\]', error_output)
-            or re.search(r'[Ll]ine\s+(\d+)', error_output)
-        )
-        if location_match:
-            location = f"line {location_match.group(1)}" if len(location_match.groups()) == 1 else f"line {location_match.group(1)}, col {location_match.group(2)}"
-        else:
-            location = "(not detected)"
+    location_match = (
+        re.search(r'at \[(\d+):(\d+)\]', error_output)
+        or re.search(r'[Ll]ine\s+(\d+)', error_output)
+    )
+    if location_match:
+        location = f"line {location_match.group(1)}" if len(location_match.groups()) == 1 else f"line {location_match.group(1)}, col {location_match.group(2)}"
+    else:
+        location = "(not detected)"
 
-        msg_match = re.search(r'(?:ERROR|error):\s+(.+)', error_output)
-        core_message = msg_match.group(1).strip() if msg_match else "(not detected)"
+    msg_match = re.search(r'(?:ERROR|error):\s+(.+)', error_output)
+    core_message = msg_match.group(1).strip() if msg_match else "(not detected)"
 
-        error_lower = error_output.lower()
-        col_missing = re.search(r'column "?([^"\s]+)"? does not exist', error_output, re.IGNORECASE)
-        table_missing = re.search(r'(?:table|relation)\s+"?([^"\s]+)"?\s+does not exist', error_output, re.IGNORECASE)
+    error_lower = error_output.lower()
+    col_missing = re.search(r'column "?([^"\s]+)"? does not exist', error_output, re.IGNORECASE)
+    table_missing = re.search(r'(?:table|relation)\s+"?([^"\s]+)"?\s+does not exist', error_output, re.IGNORECASE)
 
-        if col_missing:
-            col = col_missing.group(1)
-            suggested_fix = f"Check column name {col} in your SELECT. Use check_model_schema to compare actual vs expected columns."
-        elif table_missing:
-            tbl = table_missing.group(1)
-            suggested_fix = f"Model {tbl} has not been materialized. Run `dbt run --select {tbl}` first."
-        elif "syntax error" in error_lower:
-            suggested_fix = "Review the SQL at the indicated line number."
-        elif "ambiguous column" in error_lower:
-            suggested_fix = "Qualify the column with a table alias."
-        elif "divide by zero" in error_lower or "division by zero" in error_lower:
-            suggested_fix = "Wrap denominator in NULLIF(denominator, 0)."
-        elif "unique constraint" in error_lower:
-            suggested_fix = "Deduplicate source data or add a ROW_NUMBER() window to resolve duplicates."
-        else:
-            suggested_fix = "Review the error message above."
+    if col_missing:
+        col = col_missing.group(1)
+        suggested_fix = f"Check column name {col} in your SELECT. Use check_model_schema to compare actual vs expected columns."
+    elif table_missing:
+        tbl = table_missing.group(1)
+        suggested_fix = f"Model {tbl} has not been materialized. Run `dbt run --select {tbl}` first."
+    elif "syntax error" in error_lower:
+        suggested_fix = "Review the SQL at the indicated line number."
+    elif "ambiguous column" in error_lower:
+        suggested_fix = "Qualify the column with a table alias."
+    elif "divide by zero" in error_lower or "division by zero" in error_lower:
+        suggested_fix = "Wrap denominator in NULLIF(denominator, 0)."
+    elif "unique constraint" in error_lower:
+        suggested_fix = "Deduplicate source data or add a ROW_NUMBER() window to resolve duplicates."
+    else:
+        suggested_fix = "Review the error message above."
 
-        lines = [
-            "dbt Error Summary:",
-            f"  Model: {model_name}",
-            f"  Type: {error_type}",
-            f"  Location: {location}",
-            f"  Message: {core_message}",
-            f"  Suggested fix: {suggested_fix}",
-        ]
-        return "\n".join(lines)
+    lines = [
+        "dbt Error Summary:",
+        f"  Model: {model_name}",
+        f"  Type: {error_type}",
+        f"  Location: {location}",
+        f"  Message: {core_message}",
+        f"  Suggested fix: {suggested_fix}",
+    ]
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -3431,50 +3427,48 @@ if not _is_cloud:
         )
 
 
-if not _is_cloud:
-    @mcp.tool()
-    async def list_projects() -> str:
-        """List all configured dbt projects."""
-        async with _store_session() as store:
-            projects = await store.list_projects()
-        if not projects:
-            return "No projects configured."
-        lines = [f"Found {len(projects)} project(s):\n"]
-        for p in projects:
-            lines.append(
-                f"  - {p.name}  ({p.db_type}, {p.status.value})  "
-                f"connection={p.connection_name}  models={p.model_count}"
-            )
-        return "\n".join(lines)
+@mcp.tool()
+async def list_projects() -> str:
+    """List all configured dbt projects."""
+    async with _store_session() as store:
+        projects = await store.list_projects()
+    if not projects:
+        return "No projects configured."
+    lines = [f"Found {len(projects)} project(s):\n"]
+    for p in projects:
+        lines.append(
+            f"  - {p.name}  ({p.db_type}, {p.status.value})  "
+            f"connection={p.connection_name}  models={p.model_count}"
+        )
+    return "\n".join(lines)
 
 
-if not _is_cloud:
-    @mcp.tool()
-    async def get_project(name: str) -> str:
-        """Get dbt project detail including path and model count."""
-        async with _store_session() as store:
-            proj = await store.get_project(name)
-        if not proj:
-            return f"Error: Project '{name}' not found."
-        lines = [
-            f"Project: {proj.name}",
-            f"  id: {proj.id}",
-            f"  connection: {proj.connection_name}",
-            f"  db_type: {proj.db_type}",
-            f"  project_dir: {proj.project_dir}",
-            f"  storage: {proj.storage.value}",
-            f"  source: {proj.source.value}",
-            f"  status: {proj.status.value}",
-            f"  model_count: {proj.model_count}",
-            f"  dbt_version: {proj.dbt_version}",
-        ]
-        if proj.description:
-            lines.append(f"  description: {proj.description}")
-        if proj.tags:
-            lines.append(f"  tags: {', '.join(proj.tags)}")
-        if proj.git_remote:
-            lines.append(f"  git_remote: {proj.git_remote}")
-        return "\n".join(lines)
+@mcp.tool()
+async def get_project(name: str) -> str:
+    """Get dbt project detail including path and model count."""
+    async with _store_session() as store:
+        proj = await store.get_project(name)
+    if not proj:
+        return f"Error: Project '{name}' not found."
+    lines = [
+        f"Project: {proj.name}",
+        f"  id: {proj.id}",
+        f"  connection: {proj.connection_name}",
+        f"  db_type: {proj.db_type}",
+        f"  project_dir: {proj.project_dir}",
+        f"  storage: {proj.storage.value}",
+        f"  source: {proj.source.value}",
+        f"  status: {proj.status.value}",
+        f"  model_count: {proj.model_count}",
+        f"  dbt_version: {proj.dbt_version}",
+    ]
+    if proj.description:
+        lines.append(f"  description: {proj.description}")
+    if proj.tags:
+        lines.append(f"  tags: {', '.join(proj.tags)}")
+    if proj.git_remote:
+        lines.append(f"  git_remote: {proj.git_remote}")
+    return "\n".join(lines)
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

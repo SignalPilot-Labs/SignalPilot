@@ -93,7 +93,7 @@ class BaseConnector(ABC):
             parent_id = None
             user_id = None
             try:
-                from ..mcp_server import mcp_audit_id_var, mcp_user_id_var
+                from ..mcp import mcp_audit_id_var, mcp_user_id_var
 
                 parent_id = mcp_audit_id_var.get(None)
                 user_id = mcp_user_id_var.get(None)

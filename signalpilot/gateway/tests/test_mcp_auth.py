@@ -367,7 +367,7 @@ class TestMCPAuthMiddleware:
         We verify by inspecting the auth dict written to the ASGI scope by the middleware.
         The middleware uses inline imports so we patch at the source module level.
         """
-        from gateway.mcp_server import mcp_org_id_var
+        from gateway.mcp import mcp_org_id_var
 
         # Simulate a matched API key with a stale cloud org_id
         stale_key = MagicMock()

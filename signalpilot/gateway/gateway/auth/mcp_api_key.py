@@ -200,7 +200,7 @@ class MCPAuthMiddleware:
         from sqlalchemy.exc import SQLAlchemyError
 
         from ..db.engine import get_session_factory
-        from ..mcp_server import mcp_org_id_var, mcp_user_id_var
+        from ..mcp import mcp_org_id_var, mcp_user_id_var
         from ..store import Store
 
         try:
@@ -230,7 +230,7 @@ class MCPAuthMiddleware:
                     # Set user_id and org_id to "local" so MCP tools can access the store
                     mcp_user_id_var.set("local")
                     mcp_org_id_var.set("local")
-                    from ..mcp_server import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                    from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                     mcp_raw_key_var.set(None)
                     mcp_client_ip_var.set(_extract_client_ip(scope))
@@ -281,7 +281,7 @@ class MCPAuthMiddleware:
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
-                from ..mcp_server import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))

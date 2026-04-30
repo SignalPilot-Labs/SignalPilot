@@ -348,7 +348,7 @@ register_routers(app)
 # Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
 _mcp_session_manager = None
 try:
-    from .mcp_server import mcp as _mcp_instance
+    from .mcp import mcp as _mcp_instance
 
     # Override the gateway URL so the MCP tools call back to this same process
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")

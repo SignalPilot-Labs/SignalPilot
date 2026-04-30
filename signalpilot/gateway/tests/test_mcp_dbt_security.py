@@ -14,7 +14,7 @@ import asyncio
 import inspect
 from unittest.mock import MagicMock, patch
 
-from gateway.mcp_server import dbt_project_validate
+from gateway.mcp import dbt_project_validate
 
 
 class TestDbtProjectValidateSignature:

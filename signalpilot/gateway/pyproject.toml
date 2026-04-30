@@ -48,7 +48,7 @@ all-connectors = [
 
 [project.scripts]
 sp = "gateway.cli:app"
-signalpilot-mcp = "gateway.mcp_server:main"
+signalpilot-mcp = "gateway.mcp:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gateway"]
@@ -81,7 +81,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["F401", "F811"]
-"gateway/mcp_server.py" = ["F401"]   # shim re-exports — no F403 needed (no star-import)
 
 [tool.ruff.format]
 quote-style = "double"

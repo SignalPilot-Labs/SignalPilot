@@ -4,7 +4,7 @@ Covers:
 - _quote_identifier / _quote_table_name helpers in schema.py
 - explore_column_values: filter_pattern escaping, table quoting, column quoting
 - explore_columns_deep: table_key quoting in stat_sql
-- _quote_table in mcp_server.py
+- _quote_table in gateway.mcp
 - ClickHouseConnector._quote_identifier in fallback path
 - MSSQLConnector string literal escaping in get_sample_values
 """
@@ -23,7 +23,7 @@ from gateway.api.deps import get_store
 from gateway.api.schema import _quote_identifier, _quote_table_name
 from gateway.http import APIKeyAuthMiddleware
 from gateway.main import app
-from gateway.mcp_server import _quote_table
+from gateway.mcp import _quote_table
 
 # ─── Shared auth state ───────────────────────────────────────────────────────
 
@@ -141,7 +141,7 @@ class TestQuoteIdentifierHelper:
 
 
 class TestMcpServerQuoteTable:
-    """Unit tests for _quote_table in mcp_server.py."""
+    """Unit tests for _quote_table in gateway.mcp."""
 
     def test_simple_table_name(self):
         assert _quote_table("orders") == '"orders"'

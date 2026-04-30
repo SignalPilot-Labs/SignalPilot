@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gateway.governance.context import current_org_id_var
-from gateway.mcp_server import _store_session, mcp_org_id_var, mcp_user_id_var
+from gateway.mcp import _store_session, mcp_org_id_var, mcp_user_id_var
 
 
 class TestStoreSessionOrgAssert:
@@ -63,7 +63,7 @@ class TestCheckBudgetOrgScoping:
     @pytest.mark.asyncio
     async def test_check_budget_resolves_org_from_contextvar(self):
         """check_budget returns no-budget-tracking message without RuntimeError."""
-        from gateway.mcp_server import check_budget
+        from gateway.mcp import check_budget
 
         token_org = mcp_org_id_var.set("local")
         token_user = mcp_user_id_var.set("local")
@@ -92,7 +92,7 @@ class TestCacheStatusOrgScoping:
     @pytest.mark.asyncio
     async def test_cache_status_resolves_org_from_contextvar(self):
         """cache_status returns stats without RuntimeError."""
-        from gateway.mcp_server import cache_status
+        from gateway.mcp import cache_status
 
         token_org = mcp_org_id_var.set("local")
         token_user = mcp_user_id_var.set("local")
@@ -120,7 +120,7 @@ class TestFixNondeterminismHazardsOrgScoping:
     @pytest.mark.asyncio
     async def test_fix_nondeterminism_hazards_schema_cache_scoped(self, tmp_path):
         """schema_cache.get is called with org_id='org-X' set in current_org_id_var."""
-        from gateway.mcp_server import fix_nondeterminism_hazards
+        from gateway.mcp import fix_nondeterminism_hazards
 
         # Create a minimal dbt project structure with a nondeterminism warning
         (tmp_path / "dbt_project.yml").write_text("name: test_proj\nversion: '1.0'\n")
@@ -186,7 +186,7 @@ class TestMCPProjectToolsOrgScoping:
     @pytest.mark.asyncio
     async def test_mcp_create_project_scoped_to_org(self):
         """create_project uses store.create_project, not project_store.create_project."""
-        from gateway.mcp_server import create_project
+        from gateway.mcp import create_project
 
         token_org = mcp_org_id_var.set("org-A")
         token_user = mcp_user_id_var.set("user-A")
@@ -229,7 +229,7 @@ class TestMCPProjectToolsOrgScoping:
     @pytest.mark.asyncio
     async def test_mcp_list_projects_scoped_to_org(self):
         """list_projects returns only the current org's projects."""
-        from gateway.mcp_server import list_projects
+        from gateway.mcp import list_projects
 
         token_org = mcp_org_id_var.set("org-A")
         token_user = mcp_user_id_var.set("user-A")

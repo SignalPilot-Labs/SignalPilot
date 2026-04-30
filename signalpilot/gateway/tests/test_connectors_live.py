@@ -2156,7 +2156,7 @@ class TestMCPListTables:
 
     def test_list_tables_exists(self):
         """MCP server has list_tables function."""
-        from gateway.mcp_server import list_tables
+        from gateway.mcp import list_tables
 
         assert callable(list_tables)
 
@@ -2164,7 +2164,7 @@ class TestMCPListTables:
         """list_tables includes FK references in output."""
         import inspect
 
-        from gateway.mcp_server import list_tables
+        from gateway.mcp import list_tables
 
         source = inspect.getsource(list_tables)
         assert "fk_map" in source
@@ -2392,19 +2392,19 @@ class TestMCPJoinTools:
     """Tests for MCP find_join_path and get_relationships tools."""
 
     def test_find_join_path_exists(self):
-        from gateway.mcp_server import find_join_path
+        from gateway.mcp import find_join_path
 
         assert callable(find_join_path)
 
     def test_get_relationships_exists(self):
-        from gateway.mcp_server import get_relationships
+        from gateway.mcp import get_relationships
 
         assert callable(get_relationships)
 
     def test_find_join_path_has_max_hops(self):
         import inspect
 
-        from gateway.mcp_server import find_join_path
+        from gateway.mcp import find_join_path
 
         source = inspect.getsource(find_join_path)
         assert "max_hops" in source
@@ -2412,7 +2412,7 @@ class TestMCPJoinTools:
     def test_get_relationships_formats(self):
         import inspect
 
-        from gateway.mcp_server import get_relationships
+        from gateway.mcp import get_relationships
 
         source = inspect.getsource(get_relationships)
         assert "compact" in source
@@ -2442,7 +2442,7 @@ class TestExploreTable:
         assert "references_table" in source
 
     def test_explore_table_mcp_tool_exists(self):
-        from gateway.mcp_server import explore_table
+        from gateway.mcp import explore_table
 
         assert callable(explore_table)
 
@@ -2499,7 +2499,7 @@ class TestSchemaOverview:
         assert "/api/connections/{name}/schema/overview" in routes
 
     def test_overview_mcp_tool_exists(self):
-        from gateway.mcp_server import schema_overview
+        from gateway.mcp import schema_overview
 
         assert callable(schema_overview)
 
@@ -2787,42 +2787,42 @@ class TestMCPCapabilitiesTools:
 
     def test_connector_capabilities_tool_exists(self):
         """connector_capabilities MCP tool is registered."""
-        from gateway.mcp_server import mcp
+        from gateway.mcp import mcp
 
         tools = mcp._tool_manager._tools
         assert "connector_capabilities" in tools
 
     def test_schema_diff_tool_exists(self):
         """schema_diff MCP tool is registered."""
-        from gateway.mcp_server import mcp
+        from gateway.mcp import mcp
 
         tools = mcp._tool_manager._tools
         assert "schema_diff" in tools
 
     def test_schema_ddl_tool_exists(self):
         """schema_ddl MCP tool is registered."""
-        from gateway.mcp_server import mcp
+        from gateway.mcp import mcp
 
         tools = mcp._tool_manager._tools
         assert "schema_ddl" in tools
 
     def test_schema_link_mcp_tool_exists(self):
         """schema_link MCP tool is registered."""
-        from gateway.mcp_server import mcp
+        from gateway.mcp import mcp
 
         tools = mcp._tool_manager._tools
         assert "schema_link" in tools
 
     def test_explain_query_mcp_tool_exists(self):
         """explain_query MCP tool is registered."""
-        from gateway.mcp_server import mcp
+        from gateway.mcp import mcp
 
         tools = mcp._tool_manager._tools
         assert "explain_query" in tools
 
     def test_query_history_mcp_tool_exists(self):
         """query_history MCP tool is registered."""
-        from gateway.mcp_server import mcp
+        from gateway.mcp import mcp
 
         tools = mcp._tool_manager._tools
         assert "query_history" in tools

@@ -28,7 +28,7 @@ from gateway.mcp.tools.schema import exploration_columns as _expl_col  # noqa: F
 from gateway.mcp.tools.schema import stats as _stats  # noqa: F401  # schema_statistics(816)
 from gateway.mcp.tools.schema import explore_value as _expl_val  # noqa: F401  # explore_column(884)
 
-# Re-exports for the sole importer (gateway.mcp_server) and any defensive patches.
+# Re-exports for the sole importer (gateway.mcp package re-exports) and any defensive patches.
 from gateway.mcp.tools.schema.catalog import describe_table, list_tables
 from gateway.mcp.tools.schema.dates import get_date_boundaries
 from gateway.mcp.tools.schema.relationships import find_join_path, get_relationships

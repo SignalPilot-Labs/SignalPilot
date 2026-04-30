@@ -8,9 +8,38 @@
 
 **Governed AI agents with connector suites and access to your data stack (db, dbt and more), optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).**
 
-[📅 Book an intro](https://cal.com/fahimaziz/autofyn-intro) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [🚀 Try SignalPilot](#use-with-claude-code-plugin) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📊 See benchmarks](benchmark/)
+[![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
+
+[🌐 Live App](https://app.signalpilot.ai/) · [🚀 Quick Start](#quick-start) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 Benchmarks](benchmark/) · [⚙️ AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book a demo](https://cal.com/fahimaziz/autofyn-intro)
 
 </div>
+
+---
+
+## SignalPilot Cloud
+
+**The fastest way to get started.** No Docker, no setup — sign up and connect your databases in 60 seconds.
+
+👉 **[app.signalpilot.ai](https://app.signalpilot.ai/)** — free tier available
+
+1. **Sign up** at [app.signalpilot.ai](https://app.signalpilot.ai/) and create your team
+2. **Connect your database** — Postgres, Snowflake, BigQuery, DuckDB, and more
+3. **Get your API key** from Settings → API Keys
+4. **Add to Claude Code:**
+
+```bash
+claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
+  --header "Authorization: Bearer YOUR_API_KEY"
+```
+
+That's it. Claude Code now has governed access to your data stack — schema discovery, read-only SQL, dbt tools, audit logging.
+
+**Want the full plugin with dbt skills?** Also install:
+
+```bash
+claude plugin marketplace add https://github.com/SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
+```
 
 ---
 
@@ -18,7 +47,7 @@
 
 We partner with data, analytics, and platform teams who want to put AI agents to work on real warehouse workloads — safely.
 
-- **Governed production access** — bring SignalPilot into your Snowflake / BigQuery / Postgres / dbt stack with enterprise guardrails (read-only, LIMIT-injected, DDL/DML-blocked, fully audit-logged).
+- **Governed production access** — bring SignalPilot into your Snowflake / BigQuery / Postgres / dbt stack with enterprise guardrails.
 - **Harness & agent optimization with AutoFyn** — we tune your agent harness, prompts, skills, and retrieval to hit production accuracy targets on *your* data, not a leaderboard.
 - **Benchmark-driven evaluation** — we bring the same eval rigor that earned us the official #1 spot on Spider 2.0-DBT (51.56, +7.45 over the runner-up) into your environment: custom task suites, regression tracking, and measurable lift.
 - **Enterprise support** — SSO, private deployments, SLAs, and hands-on engineering support.
@@ -27,30 +56,39 @@ We partner with data, analytics, and platform teams who want to put AI agents to
 
 ---
 
-## Try SignalPilot Data Agent
+## Quick Start
 
-**Give your AI agent governed, production-ready access to your data stack** — db, dbt, and more. Schema discovery, read-only SQL, dbt project management, all through a single MCP server. No hallucinated tables. No dropped rows. No unbounded queries.
+### Option A: SignalPilot Cloud (recommended)
+
+See [SignalPilot Cloud](#signalpilot-cloud) above — sign up, connect, go.
+
+### Option B: Self-hosted (Docker)
 
 ```bash
-# Start SignalPilot
 git clone https://github.com/SignalPilot-Labs/signalpilot.git
 cd signalpilot
 docker compose up -d
-# Web UI available at http://localhost:3200
-
-# Connect the MCP server to Claude Code
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-
-# (Optional) Install the plugin for skills + agents
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
+# Web UI at http://localhost:3200 · MCP at http://localhost:3300/mcp
 ```
 
-That's it. Claude Code now has governed access to your databases.
+Then add the MCP to Claude Code:
+
+```bash
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
+```
+
+And install the plugin for dbt skills:
+
+```bash
+claude plugin marketplace add ./plugin
+claude plugin install signalpilot-dbt@signalpilot
+```
 
 ---
 
 ## What It Does
+
+Other MCP-DB servers don't enforce LIMIT injection, DDL blocking, dangerous function blocking, or audit logging by default. SignalPilot does — that's why agents on it set the SOTA on Spider 2.0-DBT.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -60,10 +98,11 @@ That's it. Claude Code now has governed access to your databases.
 ┌────────────────────────────▼────────────────────────────────┐
 │  SignalPilot Gateway                                         │
 │  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │
-│  │ Governance │ │ Schema       │ │ dbt Project           │ │
-│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │
+│  │ Governance │ │ Schema       │ │ dbt & Query           │ │
+│  │ • LIMIT    │ │ • DDL        │ │ • Error parser        │ │
 │  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │
-│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │
+│  │ • Fn block │ │ • Join paths │ │ • Date boundaries     │ │
+│  │ • Audit    │ │ • Statistics │ │ • Grain analysis      │ │
 │  └────────────┘ └──────────────┘ └───────────────────────┘ │
 └────────────────────────────┬────────────────────────────────┘
                              │
@@ -74,189 +113,121 @@ That's it. Claude Code now has governed access to your databases.
    └─────────┘        └──────────┘        └──────────┘
 ```
 
-**Governance** — Every query is read-only, LIMIT-injected, DDL/DML-blocked, and audit-logged. Your AI agent cannot drop tables, modify data, or run unbounded queries.
+**Governance** — Every query is parsed to AST, validated read-only, checked against a 79-function denylist across 7 database dialects, LIMIT-injected, and audit-logged with PII redaction. Your AI agent cannot drop tables, read server files, or run unbounded queries.
 
-**Schema Discovery** — 10+ tools for exploring databases without writing SQL: table lists, column types, sample data, join path discovery, value distributions.
+**Schema Discovery** — 15+ tools for exploring databases without writing SQL: table lists, column types, sample data, join path discovery, value distributions, schema linking, DDL generation.
 
-**dbt Intelligence** — Project mapping, parse validation, model schema checking, fan-out detection, cardinality auditing, date boundary analysis.
+**dbt Intelligence** — Error parsing, model schema checking, fan-out detection, cardinality auditing, date boundary analysis, SQL skeleton generation.
 
 ---
 
-## Use With Claude Code (Plugin)
+## MCP Tools (25)
 
-### Step 1: Connect the MCP server
-
-```bash
-# Cloud (signalpilot.ai)
-claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
-  --header "Authorization: Bearer sp_YOUR_API_KEY"
-
-# Local / self-hosted
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-```
-
-### Step 2: Install the plugin (optional — adds skills + agents)
-
-```bash
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
-
-Step 1 gives you all 30+ MCP tools. Step 2 adds 10 dbt/SQL skills and a verification agent on top. See [`plugin/README.md`](plugin/README.md) for details.
+| Category | Tools |
+|----------|-------|
+| **Query** | `query_database`, `validate_sql`, `explain_query`, `estimate_query_cost`, `debug_cte_query` |
+| **Schema** | `list_tables`, `describe_table`, `explore_table`, `explore_column`, `explore_columns`, `schema_overview`, `schema_ddl`, `schema_link`, `schema_diff`, `schema_statistics` |
+| **Relationships** | `get_relationships`, `find_join_path`, `compare_join_types` |
+| **dbt** | `dbt_error_parser`, `generate_sql_skeleton`, `check_model_schema`, `validate_model_output`, `audit_model_sources`, `analyze_grain` |
+| **Operational** | `list_database_connections`, `connection_health`, `connector_capabilities`, `get_date_boundaries`, `check_budget`, `query_history`, `list_projects`, `get_project` |
 
 ---
 
 ## Use With Any MCP Client
 
-SignalPilot exposes a standard MCP server via streamable-http transport.
-
 ### Claude Code (one-liner)
 
 ```bash
-claude mcp add --transport http signalpilot http://localhost:3300/mcp \
-  --header "Authorization: Bearer sp_your_api_key_here"
+# Cloud
+claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
+  --header "Authorization: Bearer YOUR_API_KEY"
+
+# Self-hosted
+claude mcp add --transport http signalpilot http://localhost:3300/mcp
 ```
 
-### Claude Code / Claude Desktop (JSON config)
+### Claude Desktop / Cursor / Any MCP Client
 
-Add to `.mcp.json` in your project root:
+Add to your MCP config (`.mcp.json`, `.cursor/mcp.json`, etc.):
 
 ```json
 {
   "mcpServers": {
     "signalpilot": {
       "type": "http",
-      "url": "http://localhost:3300/mcp",
+      "url": "https://gateway.signalpilot.ai/mcp",
       "headers": {
-        "X-API-Key": "sp_your_api_key_here"
+        "Authorization": "Bearer YOUR_API_KEY"
       }
     }
   }
 }
 ```
 
-### Cursor
+For self-hosted, replace the URL with `http://localhost:3300/mcp` and omit headers in local mode.
 
-Add to `.cursor/mcp.json`:
+---
 
-```json
-{
-  "mcpServers": {
-    "signalpilot": {
-      "url": "http://localhost:3300/mcp",
-      "headers": {
-        "X-API-Key": "sp_your_api_key_here"
-      }
-    }
-  }
-}
+## Plugin (Claude Code)
+
+The [SignalPilot plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds battle-tested dbt skills to Claude Code — the same skills that power the Spider 2.0-DBT SOTA.
+
+```bash
+# From the marketplace (cloud or self-hosted)
+claude plugin marketplace add https://github.com/SignalPilot-Labs/signalpilot-plugin
+claude plugin install signalpilot-dbt@signalpilot
+
+# Or from a local clone
+claude plugin marketplace add ./plugin
+claude plugin install signalpilot-dbt@signalpilot
 ```
 
-### Generic HTTP (Any MCP Client)
-
-```json
-{
-  "url": "http://localhost:3300/mcp",
-  "transport": "streamable-http",
-  "headers": {
-    "X-API-Key": "sp_your_api_key_here"
-  }
-}
-```
-
-Replace `sp_your_api_key_here` with your API key from **Settings → API Keys** in the web UI. In local mode without an API key configured, the `headers` field can be omitted.
+**Included skills:**
+- `dbt-workflow` — full 5-step dbt lifecycle (scan, map, validate, write, verify)
+- `dbt-write` — column naming, type preservation, JOIN defaults
+- `dbt-debugging` — error diagnosis, orphan patches, zero-row fixes
+- `dbt-date-spines` — current_date/now() hazard detection and fixing
+- `duckdb-sql` / `snowflake-sql` / `bigquery-sql` / `sqlite-sql` — dialect-specific patterns
+- `sql-workflow` — structured query building with CTE verification loops
 
 ---
 
 ## Connect a Database
 
-Via the web UI at `http://localhost:3200`, or via API:
+Via the web UI at [app.signalpilot.ai](https://app.signalpilot.ai/) or `http://localhost:3200`, or via API:
 
 ```bash
 curl -X POST http://localhost:3300/api/connections \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-warehouse",
-    "db_type": "duckdb",
-    "database": "/path/to/warehouse.duckdb"
+    "db_type": "postgres",
+    "host": "your-db-host.com",
+    "port": 5432,
+    "database": "analytics",
+    "username": "readonly_user",
+    "password": "your_password",
+    "ssl": true
   }'
 ```
 
-Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
+**Supported connectors:** PostgreSQL, DuckDB, SQLite, Snowflake, BigQuery, ClickHouse, MySQL, Trino, Databricks, Redshift, MSSQL.
 
 ---
 
-## MCP Tools (40 Tools)
+## Security
 
-### Data Exploration (9 tools)
+SignalPilot is built for production multi-tenant deployments:
 
-| Tool | Description |
-|------|-------------|
-| `list_tables` | Compact one-line-per-table overview: columns, PKs, FKs, row counts |
-| `describe_table` | Full column details: types, nullability, PKs, annotations, PII flags |
-| `explore_table` | Deep-dive: column details + FK refs + sample values + referenced tables |
-| `explore_column` | Distinct values with counts, NULL stats, optional LIKE filter |
-| `explore_columns` | Multi-column stats: distinct counts, uniqueness, min/max/avg, samples |
-| `schema_overview` | Database-wide summary: table count, total rows, FK density, hub tables |
-| `schema_ddl` | Full schema as CREATE TABLE DDL with FK constraints |
-| `schema_statistics` | High-level stats: table sizes, FK connectivity (sorted by row count) |
-| `schema_diff` | Compare current schema against last cached version (DDL changes) |
+- **Read-only governance** — all queries parsed to AST, DDL/DML blocked, dangerous functions blocked (79+ across 7 dialects)
+- **Tenant isolation** — API keys, connections, and audit logs are org-scoped
+- **Encryption at rest** — credentials encrypted with Fernet (AES-128-CBC + HMAC-SHA256)
+- **Audit logging** — every query logged with PII redaction (string literals replaced)
+- **Rate limiting** — per-IP, per-key, and per-org rate limits with auth brute-force protection
+- **Non-root containers** — gateway runs as UID 10001
+- **CSP hardening** — `unsafe-eval` removed, security headers on all responses
 
-### Query Intelligence (11 tools)
-
-| Tool | Description |
-|------|-------------|
-| `query_database` | Execute governed, read-only SQL with auto-LIMIT, DDL blocking, audit, PII redaction |
-| `validate_sql` | Syntax + semantic validation via EXPLAIN (no execution, no budget charge) |
-| `explain_query` | Execution plan with row estimates and cost warnings |
-| `estimate_query_cost` | Dry-run cost estimate before executing (BigQuery: exact bytes) |
-| `debug_cte_query` | Break CTE query into steps, validate each independently |
-| `schema_link` | Find tables relevant to a natural-language question (NL → schema) |
-| `find_join_path` | FK-based join path discovery between two tables (1–6 hops) |
-| `get_relationships` | Full ERD: all FK relationships as arrows or adjacency list |
-| `compare_join_types` | Compare row counts across INNER/LEFT/RIGHT/FULL OUTER JOIN |
-| `get_date_boundaries` | MIN/MAX dates across all DATE/TIMESTAMP columns |
-| `query_history` | Recent successful queries for a connection (session memory) |
-
-### dbt Project Intelligence (6 tools)
-
-| Tool | Description |
-|------|-------------|
-| `dbt_project_map` | Full project discovery from filesystem — models, status, deps, hazards |
-| `dbt_project_validate` | Run `dbt parse` safely, surface structural errors + warnings |
-| `generate_sql_skeleton` | Generate a SQL template from YML column spec + ref tables |
-| `dbt_error_parser` | Parse raw dbt error output into structured diagnosis + fix suggestion |
-| `fix_date_spine_hazards` | Auto-fix `current_date`/`now()` in all project + package models |
-| `fix_nondeterminism_hazards` | Auto-fix window functions with ambiguous ORDER BY |
-
-### Model Verification (4 tools)
-
-| Tool | Description |
-|------|-------------|
-| `check_model_schema` | Compare materialized columns vs YML-declared columns |
-| `validate_model_output` | Row count validation + fan-out detection + empty model detection |
-| `analyze_grain` | Cardinality analysis: per-key distinct counts, fan-out factors |
-| `audit_model_sources` | Upstream audit: source row counts, fan-out/over-filter ratios, NULL scan |
-
-### Compute & Infrastructure (7 tools)
-
-| Tool | Description |
-|------|-------------|
-| `execute_code` | Run Python 3.12 in isolated gVisor sandbox (~300ms boot, 1–300s timeout) |
-| `sandbox_status` | Check gVisor availability, active VM count, health |
-| `list_database_connections` | List all configured database connections |
-| `connection_health` | Latency percentiles (p50/p95/p99), error rates, status per connection |
-| `connector_capabilities` | Connector tier classification (Tier 1/2/3) and available features |
-| `check_budget` | Remaining query budget for a session |
-| `cache_status` | Query cache hit rate and statistics |
-
-### Project Management (3 tools)
-
-| Tool | Description |
-|------|-------------|
-| `create_project` | Create/register a dbt project |
-| `list_projects` | List all dbt projects |
-| `get_project` | Get details of a specific dbt project |
+See [SECURITY.md](SECURITY.md) for our vulnerability reporting policy.
 
 ---
 
@@ -267,25 +238,41 @@ SignalPilot/
 ├── signalpilot/
 │   ├── gateway/              # FastAPI backend — MCP server, REST API, governance
 │   │   └── gateway/
-│   │       ├── api/          # 13 API modules, 100+ REST endpoints
+│   │       ├── api/          # REST API modules
 │   │       ├── connectors/   # 11 database connectors + pooling + SSH tunneling
 │   │       ├── governance/   # Budget, cache, PII redaction, annotations
-│   │       ├── dbt/          # Project scanning, validation, hazard fixing
+│   │       ├── mcp/          # 25 MCP tool definitions (modular package)
+│   │       ├── engine/       # SQL validation, LIMIT injection, function denylist
+│   │       ├── dbt/          # Project scanning, validation, hazard detection
 │   │       ├── db/           # SQLAlchemy ORM models + async engine
-│   │       ├── mcp_server.py # 39 MCP tool definitions
-│   │       ├── store.py      # Encrypted credential storage (Fernet/PBKDF2)
-│   │       └── auth.py       # Clerk JWT (cloud) / local auth
-│   └── web/                  # Next.js 16 frontend — 20 pages, Tailwind CSS
-│       ├── app/              # App router pages (dashboard, connections, query, etc.)
-│       ├── components/       # 20 UI components (sidebar, command palette, etc.)
-│       └── lib/              # API client, auth context, hooks
+│   │       └── auth.py       # Clerk JWT (cloud) / local auth + org role enforcement
+│   └── web/                  # Next.js 16 frontend — dashboard, connections, query
 ├── plugin/                   # Claude Code plugin (10 skills, 1 verifier agent)
 │   ├── agents/               # Verifier agent (7-check post-build protocol)
 │   └── skills/               # dbt-workflow, sql-workflow, db-specific SQL, etc.
-├── sp-sandbox/               # gVisor sandboxed Python execution
 ├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 51.56%)
 └── docker-compose.yml        # Full stack: web, gateway, postgres, sandbox
 ```
+
+---
+
+## Community
+
+- 🐛 [Open an issue](https://github.com/SignalPilot-Labs/signalpilot/issues) — bugs, feature requests, connector requests
+- 💬 [GitHub Discussions](https://github.com/SignalPilot-Labs/signalpilot/discussions) — questions, ideas, show-and-tell
+- 🔒 [Security policy](SECURITY.md) — report vulnerabilities responsibly
+
+### Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=SignalPilot-Labs/signalpilot)](https://github.com/SignalPilot-Labs/signalpilot/graphs/contributors)
+
+---
+
+## Star History
+
+If SignalPilot is useful, please ⭐ — it helps a ton.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=SignalPilot-Labs/signalpilot&type=Date)](https://star-history.com/#SignalPilot-Labs/signalpilot&Date)
 
 ---
 

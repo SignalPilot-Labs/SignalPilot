@@ -1,5 +1,7 @@
 # In-memory `_active_sandboxes` is a process-global dict shared across all tenants
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: sandboxes-store-not-org-scoped
 - Severity: High
 - Cloud impact: Yes

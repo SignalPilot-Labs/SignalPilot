@@ -1,5 +1,7 @@
 # Sandbox HTML output rendered via `dangerouslySetInnerHTML` after client-side allowlist sanitizer
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: sandbox-output-html-rendered-with-dangerouslysetinnerhtml
 - Severity: Medium
 - Cloud impact: Yes

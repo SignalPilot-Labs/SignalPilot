@@ -1,5 +1,7 @@
 # `sandbox_manager.py /execute` accepts any session_token; one tenant can execute under another tenant's session_token if guessed
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: sandbox-execute-no-tenant-binding
 - Severity: Medium
 - Cloud impact: Partial

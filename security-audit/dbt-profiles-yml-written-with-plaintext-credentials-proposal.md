@@ -1,5 +1,7 @@
 # `_create_new_project` writes credentials into `profiles.yml` on disk
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: dbt-profiles-yml-written-with-plaintext-credentials
 - Severity: Medium
 - Cloud impact: Partial

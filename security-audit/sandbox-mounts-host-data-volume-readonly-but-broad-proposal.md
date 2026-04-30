@@ -1,5 +1,7 @@
 # Sandbox container mounts `${HOST_DATA_DIR:-~}:/host-data:ro` — entire user home by default
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: sandbox-mounts-host-data-volume-readonly-but-broad
 - Severity: Medium
 - Cloud impact: Partial

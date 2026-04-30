@@ -1,6 +1,6 @@
 # SignalPilot Security Audit
 
-**Audit date:** 2026-04-30
+**Audit date:** 2026-04-30 (round 1) / verified + extended 2026-04-30 (round 2)
 **Repo branch:** `autofyn/i-need-you-to-ge-30a2b9`
 **Audited surface:** `signalpilot.ai` (cloud), `gateway.signalpilot.ai` (hosted gateway), hosted sandbox service.
 
@@ -8,11 +8,22 @@
 
 ## How to read this audit
 
-Start with [`issues.md`](issues.md). It contains the executive summary table listing all 58 findings sorted by severity, a one-sentence description of each, the affected file(s), and a link to the detailed proposal.
+Start with [`issues.md`](issues.md). It contains the executive summary table listing all 68 findings sorted by severity, a one-sentence description of each, the affected file(s), the round-2 verification status, and a link to the detailed proposal.
 
 Each `{slug}-proposal.md` contains: a plain-language problem description with exact file and line citations, an attacker-centric exploit scenario, the exact code change needed (design-level sketch, not full implementation), and a verification/test plan the team can run to confirm the fix.
 
 Severity is graded against the **hosted multi-tenant cloud deployment**. Behavior that only affects local/Docker-compose setups is noted explicitly and demoted to Low or Info unless it has a realistic cloud impact path.
+
+---
+
+## Round 2 deltas
+
+Round 2 (re-)verified every round-1 finding against current source and added 10 new findings. See `/tmp/round-2/audit-verification.md` for the per-finding verification log.
+
+- **55** of round 1's findings are still **VALID** as written.
+- **1** finding (#44 request-correlation-header-not-validated) is **STALE** — the original log-injection vector is closed by `_REQUEST_ID_PATTERN` validation; severity demoted from Low to Info.
+- **1** finding (#56 mcp execute_code tool in cloud) is **FIXED** in current source — tool registration now wrapped in `if not _is_cloud:`.
+- **10 new findings** added (#59-#68): git-clone arg injection, dbt Cloud SSRF, MCP XFF spoofing, sandbox container caps, audit-export memory cap, billing open-redirect, MCP-mount-at-root fall-through, shared-volume key leak, OPTIONS-bypasses-middlewares, and `last_used_at` admin leakage / write amplification.
 
 ---
 
@@ -37,11 +48,13 @@ Severity is graded against the **hosted multi-tenant cloud deployment**. Behavio
 - `Dockerfile.gateway`, `Dockerfile.sandbox`, `Dockerfile.web`, `docker-compose.yml`
 - Cloud-mode configuration and multi-tenant isolation
 
+**Deprioritized (2026-04-30):** The owner has disabled the sandbox feature (sandbox containers, `/execute`, sandbox UI, MCP `execute_code`, host-data mounts, shared-volume key plumbing) and the project / project-import feature (git-clone project creation, dbt Cloud project discovery, dbt `profiles.yml` materialization) in the cloud deployment and is not actively maintaining them. Findings touching those features remain in the audit at their original severity, but should be treated as low priority until the features are re-enabled. See the "Deprioritized scope (2026-04-30)" section in [`issues.md`](issues.md) for the full ID list.
+
 **Out of scope (explicit):**
 - Binary review of the `runsc` (gVisor) runtime itself
 - Third-party JavaScript supply chain beyond `package-lock.json` lockfile inspection
 - SOC 2 controls, organizational policies, or pen-test of the live cloud environment
-- Stripe/billing webhook implementation (flagged as finding #52 for follow-up)
+- Stripe/billing webhook implementation (flagged as findings #52 and #64 for follow-up)
 - AWS/GCP/Azure account-level IAM configuration not in this repo
 - Infra-as-code (Terraform, Pulumi, etc.) — not present in repo
 
@@ -49,7 +62,7 @@ Severity is graded against the **hosted multi-tenant cloud deployment**. Behavio
 
 ## Methodology
 
-Static code review of the repository at the branch listed above. Every file named in the findings list was read directly. Line numbers were verified by reading the source at review time.
+Static code review of the repository at the branch listed above. Every file named in the findings list was read directly. Line numbers were verified by reading the source at review time. Round 2 re-read the cited regions for every prior finding and added new file reads (notably `project_store.py`, `api/projects.py`, `correlation.py`, `mcp_server.py`).
 
 No dynamic testing was performed. Exploit scenarios are constructed from reading the code; they have not been verified against a live deployment.
 

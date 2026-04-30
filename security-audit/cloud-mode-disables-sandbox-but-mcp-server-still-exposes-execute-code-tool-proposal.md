@@ -1,5 +1,7 @@
 # `main.py` logs "sandbox disabled in cloud" but MCP server tool registry still includes `execute_code`
 
+**Status:** DEPRIORITIZED — feature disabled in cloud as of 2026-04-30; owner not actively maintaining. Severity rating retained to reflect technical risk; treat as low-priority until the feature is re-enabled.
+
 - Slug: cloud-mode-disables-sandbox-but-mcp-server-still-exposes-execute-code-tool
 - Severity: Medium
 - Cloud impact: Yes

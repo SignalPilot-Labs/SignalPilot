@@ -5,26 +5,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import time
 import uuid
-from pathlib import Path
 
 from sqlalchemy import delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import gateway.store._constants as _constants
 import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
-import gateway.store.dbt_templates as dbt_templates
 import gateway.store.paths as paths
+import gateway.store.projects as projects
 from gateway.byok import decrypt_envelope, encrypt_fields_envelope
 from gateway.db.models import (
     GatewayConnection,
     GatewayCredential,
-    GatewayProject,
     GatewaySetting,
 )
 from gateway.governance.context import current_org_id_var
@@ -36,10 +32,6 @@ from gateway.models import (
     ConnectionUpdate,
     DBType,
     GatewaySettings,
-    ProjectCreate,
-    ProjectInfo,
-    ProjectStorage,
-    ProjectUpdate,
     SSHTunnelConfig,
     SSLConfig,
 )
@@ -554,169 +546,41 @@ class Store:
 
     # ─── Projects ────────────────────────────────────────────────────────
 
-    async def list_projects(self) -> list[ProjectInfo]:
+    async def list_projects(self) -> list[projects.ProjectInfo]:
         oid = self._require_org_id()
-        result = await self.session.execute(select(GatewayProject).where(GatewayProject.org_id == oid))
-        rows = result.scalars().all()
-        return [ProjectInfo(**{c.key: getattr(r, c.key) for c in GatewayProject.__table__.columns}) for r in rows]
+        return await projects.list_projects(self.session, org_id=oid)
 
-    async def get_project(self, name: str) -> ProjectInfo | None:
+    async def get_project(self, name: str) -> projects.ProjectInfo | None:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewayProject).where(GatewayProject.org_id == oid, GatewayProject.name == name)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return None
-        return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
+        return await projects.get_project(self.session, org_id=oid, name=name)
 
-    async def create_project(self, proj: ProjectCreate) -> ProjectInfo:
+    async def create_project(self, proj: projects.ProjectCreate) -> projects.ProjectInfo:
         oid = self._require_org_id()
-        existing = await self.get_project(proj.name)
-        if existing:
-            raise ValueError(f"Project '{proj.name}' already exists")
-
-        connection = await self.get_connection(proj.connection_name)
-        if connection is None:
-            raise ValueError(f"Connection '{proj.connection_name}' not found")
-
-        if proj.source.value == "local":
-            info = self._create_local_project(proj, connection)
-        else:
-            info = self._create_new_project(proj, connection)
-
-        db_proj = GatewayProject(
-            id=info.id,
+        return await projects.create_project(
+            self.session,
             org_id=oid,
             user_id=self.user_id,
-            name=info.name,
-            connection_name=info.connection_name,
-            project_dir=info.project_dir,
-            storage=info.storage.value if hasattr(info.storage, "value") else info.storage,
-            source=info.source.value if hasattr(info.source, "value") else info.source,
-            db_type=info.db_type,
-            description=info.description,
-            tags=info.tags,
-        )
-        self.session.add(db_proj)
-        try:
-            await self.session.commit()
-        except IntegrityError as e:
-            await self.session.rollback()
-            orig = str(e.orig) if e.orig is not None else str(e)
-            if "uq_gw_proj_org_name" in orig:
-                raise ValueError(f"Project '{proj.name}' already exists") from e
-            raise
-        return info
-
-    def _create_new_project(self, proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
-        project_dir = _constants.DATA_DIR / "projects" / proj.name
-        project_dir.mkdir(parents=True, exist_ok=True)
-        for d in dbt_templates._SCAFFOLD_DIRS:
-            (project_dir / d).mkdir(parents=True, exist_ok=True)
-        for d in ("models/staging", "models/marts"):
-            (project_dir / d / ".gitkeep").touch()
-        (project_dir / "dbt_project.yml").write_text(dbt_templates._DBT_PROJECT_YML_TEMPLATE.format(name=proj.name))
-        profiles_path = project_dir / "profiles.yml"
-        profiles_path.write_text(self._generate_profiles_yml(proj.name, connection))
-        os.chmod(str(profiles_path), 0o600)
-        os.chmod(str(project_dir), 0o700)
-        (project_dir / "packages.yml").write_text(dbt_templates._PACKAGES_YML_TEMPLATE)
-        return ProjectInfo(
-            id=str(uuid.uuid4()),
-            name=proj.name,
-            connection_name=proj.connection_name,
-            project_dir=str(project_dir),
-            storage=ProjectStorage.managed,
-            source=proj.source,
-            db_type=connection.db_type,
-            description=proj.description,
-            tags=proj.tags,
+            proj=proj,
+            get_connection=self.get_connection,
+            get_existing_project=self.get_project,
         )
 
-    def _create_local_project(self, proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
-        local = Path(proj.local_path or "")
-        if not local.exists() or not (local / "dbt_project.yml").exists():
-            raise ValueError(f"Path '{local}' does not exist or lacks dbt_project.yml")
-        if proj.link_mode == "copy":
-            project_dir = _constants.DATA_DIR / "projects" / proj.name
-            shutil.copytree(str(local), str(project_dir), dirs_exist_ok=True)
-            storage = ProjectStorage.managed
-        else:
-            project_dir = local
-            storage = ProjectStorage.linked
-        return ProjectInfo(
-            id=str(uuid.uuid4()),
-            name=proj.name,
-            connection_name=proj.connection_name,
-            project_dir=str(project_dir),
-            storage=storage,
-            source=proj.source,
-            db_type=connection.db_type,
-            description=proj.description,
-            tags=proj.tags,
-        )
+    def _create_new_project(self, proj: projects.ProjectCreate, connection: ConnectionInfo) -> projects.ProjectInfo:
+        return projects.create_new_project(proj, connection)
+
+    def _create_local_project(self, proj: projects.ProjectCreate, connection: ConnectionInfo) -> projects.ProjectInfo:
+        return projects.create_local_project(proj, connection)
 
     def _generate_profiles_yml(self, project_name: str, connection: ConnectionInfo) -> str:
-        db = connection.db_type
-        if db == "duckdb":
-            return dbt_templates._PROFILES_DUCKDB.format(name=project_name, database=connection.database or ":memory:")
-        if db == "postgres":
-            return dbt_templates._PROFILES_POSTGRES.format(
-                name=project_name,
-                host=connection.host or "localhost",
-                port=connection.port or 5432,
-                username=connection.username or "",
-                database=connection.database or "",
-            )
-        if db == "snowflake":
-            return dbt_templates._PROFILES_SNOWFLAKE.format(
-                name=project_name,
-                account=connection.account or "",
-                username=connection.username or "",
-                database=connection.database or "",
-                warehouse=connection.warehouse or "",
-                role=connection.role or "",
-            )
-        if db == "bigquery":
-            return dbt_templates._PROFILES_BIGQUERY.format(
-                name=project_name,
-                project=connection.project or "",
-                dataset=connection.dataset or "",
-                location=getattr(connection, "location", "US") or "US",
-            )
-        return dbt_templates._PROFILES_PLACEHOLDER.format(name=project_name, db_type=db)
+        return projects.generate_profiles_yml(project_name, connection)
 
-    async def update_project(self, name: str, update_data: ProjectUpdate) -> ProjectInfo | None:
+    async def update_project(self, name: str, update_data: projects.ProjectUpdate) -> projects.ProjectInfo | None:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewayProject).where(GatewayProject.org_id == oid, GatewayProject.name == name)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return None
-        for key, value in update_data.model_dump(exclude_none=True).items():
-            if hasattr(row, key):
-                setattr(row, key, value)
-        await self.session.commit()
-        await self.session.refresh(row)
-        return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
+        return await projects.update_project(self.session, org_id=oid, name=name, update_data=update_data)
 
     async def delete_project(self, name: str) -> bool:
         oid = self._require_org_id()
-        result = await self.session.execute(
-            select(GatewayProject).where(GatewayProject.org_id == oid, GatewayProject.name == name)
-        )
-        row = result.scalar_one_or_none()
-        if not row:
-            return False
-        if row.storage == "managed" and row.project_dir:
-            project_dir = Path(row.project_dir)
-            if project_dir.exists():
-                shutil.rmtree(project_dir)
-        await self.session.delete(row)
-        await self.session.commit()
-        return True
+        return await projects.delete_project(self.session, org_id=oid, name=name)
 
     # ─── Audit ───────────────────────────────────────────────────────────
 

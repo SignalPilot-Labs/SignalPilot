@@ -372,7 +372,7 @@ def _infer_implicit_joins(schema: dict[str, Any]) -> list[dict[str, Any]]:
     # Also build: column_name -> list of (full_key, table_data) that have it
     pk_columns: dict[str, list[tuple[str, dict]]] = {}
 
-    for key, table in schema.items():
+    for _key, table in schema.items():
         tbl_name = table.get("name", "").lower()
         tbl_schema = table.get("schema", "")
         full_name = f"{tbl_schema}.{table.get('name', '')}" if tbl_schema else table.get("name", "")

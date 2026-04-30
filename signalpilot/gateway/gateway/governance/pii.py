@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any
 
 
-class PIIRule(str, Enum):
+class PIIRule(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Redaction strategy for PII columns."""
 
     hash = "hash"  # SHA-256 hash of the value
@@ -70,7 +70,7 @@ class PIIRedactor:
         }
         """
         tables = annotations.get("tables", {})
-        for table_name, table_config in tables.items():
+        for _table_name, table_config in tables.items():
             columns = table_config.get("columns", {})
             for col_name, col_config in columns.items():
                 pii_rule = col_config.get("pii")

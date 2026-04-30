@@ -836,7 +836,7 @@ async def get_schema_ddl(
                     prefix_groups[prefix] = []
                 prefix_groups[prefix].append(key)
 
-        for prefix, members in prefix_groups.items():
+        for _prefix, members in prefix_groups.items():
             if len(members) >= 3:
                 # Pick the member with most columns as representative
                 rep = max(members, key=lambda k: len(filtered[k].get("columns", [])))
@@ -1826,7 +1826,6 @@ async def schema_link(
         score = 0.0
         col_scores: dict[str, float] = {}
         table_name_lower = table_data.get("name", "").lower()
-        schema_name_lower = table_data.get("schema", "").lower()
 
         # Split table name into parts for compound matching (order_items -> ["order", "items"])
         table_name_parts = set(table_name_lower.split("_"))
@@ -1870,7 +1869,6 @@ async def schema_link(
 
         # N-gram matching: "order_items" bigram matches the table name directly
         # This catches compound terms like "customer address" → "customer_address"
-        full_table_key_lower = f"{schema_name_lower}.{table_name_lower}"
         for ng in ngram_terms:
             if ng == table_name_lower:
                 score += 12.0  # Exact compound match is very strong
@@ -2006,8 +2004,6 @@ async def schema_link(
         for fk in filtered[lk].get("foreign_keys", []):
             ref_table = fk.get("references_table", "")
             ref_col = fk.get("references_column", "")
-            ref_schema = fk.get("references_schema", "")
-            ref_key = f"{ref_schema}.{ref_table}" if ref_schema else ref_table
             # Find the matching linked table key
             for candidate_key in linked_keys:
                 if filtered.get(candidate_key, {}).get("name", "") == ref_table:
@@ -2421,8 +2417,6 @@ async def refine_schema(
     body = await request.json()
     draft_sql = body.get("draft_sql", "")
     question = body.get("question", "")
-    format = body.get("format", "ddl")
-
     if not draft_sql:
         raise HTTPException(status_code=400, detail="draft_sql is required")
 
@@ -2852,7 +2846,7 @@ async def get_schema_refresh_status(name: str, store: StoreD):
 @router.get("/connections/{name}/schema/diff-history", dependencies=[RequireScope("read")])
 async def get_schema_diff_history(name: str, store: StoreD):
     """Get schema change history for a connection."""
-    info = await require_connection(store, name)
+    await require_connection(store, name)
 
     history = schema_cache.get_diff_history(name)
     return {
@@ -2939,7 +2933,7 @@ async def get_schema_relationships(
 
     # Extract all FK relationships (explicit)
     relationships: list[dict] = []
-    for key, table in filtered.items():
+    for _key, table in filtered.items():
         tbl_schema = table.get("schema", "")
         tbl_name = table.get("name", "")
         for fk in table.get("foreign_keys", []):
@@ -3036,7 +3030,7 @@ async def get_join_paths(
 
     # Build bidirectional adjacency list with join info
     edges: dict[str, list[tuple[str, str, str, str]]] = {}
-    for key, table in filtered.items():
+    for _key, table in filtered.items():
         tbl_schema = table.get("schema", "")
         tbl_name = table.get("name", "")
         full_name = f"{tbl_schema}.{tbl_name}" if tbl_schema else tbl_name
@@ -3330,7 +3324,7 @@ async def search_schema(
 
     scored.sort(key=lambda x: x[0], reverse=True)
     results = {}
-    for score, key, table in scored[:limit]:
+    for _score, key, table in scored[:limit]:
         results[key] = table
 
     if include_samples and results:
@@ -3339,7 +3333,7 @@ async def search_schema(
             async with pool_manager.connection(
                 info.db_type, conn_str, credential_extras=extras, connection_name=name
             ) as connector:
-                for key, table in results.items():
+                for _key, table in results.items():
                     matched_cols = table.get("_matched_columns", [])
                     if matched_cols and hasattr(connector, "get_sample_values"):
                         full_name = (
@@ -3497,7 +3491,6 @@ async def generate_semantic_model(name: str, store: StoreD):
                 model["joins"].append(join_entry)
                 joins_added += 1
 
-        tbl_name = table.get("name", "")
         for col in table.get("columns", []):
             col_name = col.get("name", "")
             natural = col_name.replace("_", " ").replace("-", " ").lower()

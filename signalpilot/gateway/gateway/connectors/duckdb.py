@@ -102,7 +102,7 @@ class DuckDBConnector(BaseConnector):
                     result = conn.execute(sql)
                 columns = [desc[0] for desc in result.description]
                 rows = result.fetchall()
-                return [{col: val for col, val in zip(columns, row)} for row in rows]
+                return [{col: val for col, val in zip(columns, row, strict=False)} for row in rows]
             finally:
                 if use_transient:
                     conn.close()

@@ -1832,7 +1832,8 @@ async def diagnose_connection(name: str, store: StoreD):
             tls_sock = context.wrap_socket(socket.socket(socket.AF_INET), server_hostname=host)
             tls_sock.settimeout(5)
             await asyncio.to_thread(tls_sock.connect, (host, port))
-            cert = tls_sock.getpeercert(binary_form=False) or {}
+            # Force peer-cert resolution to surface chain errors.
+            tls_sock.getpeercert(binary_form=False)
             tls_version = tls_sock.version()
             tls_sock.close()
             diagnostics.append(

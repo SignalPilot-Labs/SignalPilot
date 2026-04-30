@@ -137,7 +137,7 @@ async def detect_and_save_pii(name: str, store: StoreD):
             all_rules[col] = rule.value
 
     # Save and enable
-    result = await store.set_pii_config(name, enabled=True, rules=all_rules)
+    await store.set_pii_config(name, enabled=True, rules=all_rules)
     return {
         "connection_name": name,
         "columns_flagged": len(all_rules),

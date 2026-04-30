@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
-class ModelStatus(str, Enum):
+class ModelStatus(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Lifecycle status of a dbt model relative to its yml contract."""
 
     COMPLETE = "complete"  # .sql exists and looks substantive

@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -195,11 +194,6 @@ class MCPAuthMiddleware:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
-
-        backend_url = os.environ.get("SP_BACKEND_URL")
-        # Only use backend-based auth in cloud mode. In local mode, fall through
-        # to the local key check (or pass-through if no keys exist).
-        is_cloud = backend_url and os.environ.get("SP_DEPLOYMENT_MODE", "local") == "cloud"
 
         # All modes: validate against gateway's own DB-backed API keys
         # (API keys are now org-scoped and managed by the gateway, not the backend)

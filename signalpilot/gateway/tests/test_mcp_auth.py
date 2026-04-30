@@ -408,7 +408,7 @@ class TestMCPAuthMiddleware:
 
                     _os.environ.pop("SP_BACKEND_URL", None)
                     _os.environ.pop("SP_DEPLOYMENT_MODE", None)
-                    response = await _collect_response(capturing_middleware, scope)
+                    await _collect_response(capturing_middleware, scope)
 
         # The clamped org_id must be "local", not the stale cloud value
         auth = captured_scope.get("state", {}).get("auth", {})

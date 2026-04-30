@@ -65,7 +65,7 @@ class TestPostgresConnector:
     @pytest.mark.asyncio
     async def test_readonly_enforcement(self, connector):
         await connector.connect(self.CONN_STR)
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             await connector.execute("CREATE TABLE _test_readonly (id int)")
         await connector.close()
 
@@ -917,13 +917,10 @@ class TestTableGrouping:
             },
         }
         groups = _group_tables(schema)
-        # invoices should be grouped with customers via FK
-        found = False
+        # invoices should be grouped with customers via FK; if not, _other is acceptable
         for group_tables in groups.values():
             if "public.customers" in group_tables and "public.invoices" in group_tables:
-                found = True
                 break
-        # If not FK-grouped (single-word names go to _other), that's acceptable
         assert len(groups) >= 1
 
     def test_single_tables_ungrouped(self):
@@ -1208,7 +1205,7 @@ class TestPostgresSSLConfig:
         import ssl
 
         try:
-            ctx = c._build_ssl_context()
+            c._build_ssl_context()
         except ssl.SSLError:
             # Expected — test cert is not valid, but context was created
             pass
@@ -2220,7 +2217,7 @@ class TestSchemaRelationships:
 
         # Extract relationships using same logic as endpoint
         relationships = []
-        for key, table in schema.items():
+        for _key, table in schema.items():
             for fk in table.get("foreign_keys", []):
                 ref_schema = fk.get("references_schema", table.get("schema", ""))
                 relationships.append(
@@ -2263,7 +2260,7 @@ class TestSchemaRelationships:
 
         # Build graph using same logic as endpoint
         graph: dict[str, list[str]] = {}
-        for key, table in schema.items():
+        for _key, table in schema.items():
             for fk in table.get("foreign_keys", []):
                 from_q = f"{table['schema']}.{table['name']}"
                 to_q = f"{fk.get('references_schema', '')}.{fk['references_table']}"
@@ -3453,7 +3450,7 @@ class TestSampleValuesBatching:
         assert isinstance(result, dict)
         # Should have at least one column with values
         if result:
-            for col, vals in result.items():
+            for _col, vals in result.items():
                 assert isinstance(vals, list)
                 assert all(isinstance(v, str) for v in vals)
         await c.close()
@@ -3468,7 +3465,7 @@ class TestSampleValuesBatching:
         result = await c.get_sample_values("test_analytics.users", ["username", "email"], limit=5)
         assert isinstance(result, dict)
         if result:
-            for col, vals in result.items():
+            for _col, vals in result.items():
                 assert isinstance(vals, list)
         await c.close()
 
@@ -3482,7 +3479,7 @@ class TestSampleValuesBatching:
         result = await c.get_sample_values("dbo.customers", ["name", "email"], limit=5)
         assert isinstance(result, dict)
         if result:
-            for col, vals in result.items():
+            for _col, vals in result.items():
                 assert isinstance(vals, list)
         await c.close()
 

@@ -224,11 +224,6 @@ class TestMCPProjectToolsOrgScoping:
 
         assert "proj1" in result
         assert mock_store.create_project.called
-        # Legacy project_store must not be invoked
-        with pytest.raises(Exception):
-            import gateway.project_store as ps
-            # If project_store was used, it would have been imported and called
-            # We verify store.create_project was called instead
         assert "org-A" in captured_org_ids
 
     @pytest.mark.asyncio

@@ -87,8 +87,6 @@ class TestSchemaRefreshLoopInnerStore:
 
         constructed_stores: list[dict] = []
 
-        original_init = Store.__init__
-
         def capturing_init(self, session, org_id=None, user_id=None, allow_unscoped=False):
             constructed_stores.append({"org_id": org_id, "allow_unscoped": allow_unscoped})
             # Call the real __init__ would require a DB session; skip by using MagicMock

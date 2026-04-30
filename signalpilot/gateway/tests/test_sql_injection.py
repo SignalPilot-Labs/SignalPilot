@@ -222,8 +222,6 @@ class TestMssqlStringLiteralEscaping:
 
     def test_single_quote_in_col_name_escaped_in_literal(self):
         """Column name with a single quote must be escaped in the SQL string literal."""
-        conn = self._make_connector()
-
         # Reconstruct the escaping logic from the fix (same pattern as base.py:267)
         col = "it's"
         safe_name = col.replace("'", "''")

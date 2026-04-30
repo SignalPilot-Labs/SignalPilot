@@ -280,9 +280,8 @@ class BaseConnector(ABC):
             self._query_timeout = extras["query_timeout"]
         self._set_connector_specific_extras(extras)
 
-    def _set_connector_specific_extras(self, extras: dict) -> None:
+    def _set_connector_specific_extras(self, extras: dict) -> None:  # noqa: B027 — optional override hook, default no-op is correct
         """Override in subclasses for connector-specific extras."""
-        pass
 
     # ─── IAM auth (shared by postgres, mysql, redshift) ───────────────
 

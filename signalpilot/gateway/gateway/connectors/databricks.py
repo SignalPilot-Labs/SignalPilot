@@ -224,7 +224,7 @@ class DatabricksConnector(BaseConnector):
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             cursor.close()
-            return [dict(zip(columns, row)) for row in rows]
+            return [dict(zip(columns, row, strict=False)) for row in rows]
 
         try:
             return await self._run_in_thread(_run, timeout=effective_timeout, label="Databricks")
@@ -387,7 +387,7 @@ class DatabricksConnector(BaseConnector):
 
             # Row counts via DESCRIBE DETAIL (Delta tables — batch up to 50 tables)
             tables_to_detail = [(k, v) for k, v in schema.items() if v.get("type") != "view"][:50]
-            for key, table_data in tables_to_detail:
+            for _key, table_data in tables_to_detail:
                 try:
                     rc_cursor = self._conn.cursor()
                     safe_table = f"`{table_data['schema']}`.`{table_data['name']}`"
@@ -399,7 +399,7 @@ class DatabricksConnector(BaseConnector):
                     await self._audit_sql(_detail_sql.strip(), 1 if detail else 0, (_time.monotonic() - t0) * 1000)
                     rc_cursor.close()
                     if detail and col_names:
-                        row_dict = dict(zip(col_names, detail))
+                        row_dict = dict(zip(col_names, detail, strict=False))
                         if "numFiles" in row_dict:
                             table_data["num_files"] = row_dict["numFiles"]
                         if "sizeInBytes" in row_dict:

@@ -285,7 +285,6 @@ class HealthMonitor:
 
         org_id = require_org_id()
         cutoff = time.time() - window_seconds
-        now = time.time()
 
         factory = get_session_factory()
         async with factory() as session:

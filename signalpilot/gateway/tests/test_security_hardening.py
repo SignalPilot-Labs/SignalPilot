@@ -703,7 +703,7 @@ class TestSseResourceLimits:
                             detail="Too many concurrent SSE connections. Try again later.",
                             headers={"Retry-After": "30"},
                         )
-                    assert False, "Should have raised 429"
+                    raise AssertionError("Should have raised 429")
                 except HTTPException as exc:
                     assert exc.status_code == 429
                     assert exc.headers is not None

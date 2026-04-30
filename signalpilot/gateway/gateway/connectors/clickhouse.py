@@ -251,7 +251,7 @@ class ClickHouseConnector(BaseConnector):
             if isinstance(result, tuple) and len(result) == 2:
                 rows_data, columns_info = result
                 col_names = [c[0] for c in columns_info]
-                return [dict(zip(col_names, row)) for row in rows_data]
+                return [dict(zip(col_names, row, strict=False)) for row in rows_data]
             return []
 
         try:
@@ -330,7 +330,7 @@ class ClickHouseConnector(BaseConnector):
         meta_rows, meta_cols = meta_result
         meta_col_names = [c[0] for c in meta_cols] if meta_cols else []
         for r in meta_rows:
-            rd = dict(zip(meta_col_names, r))
+            rd = dict(zip(meta_col_names, r, strict=False))
             key = f"{rd['database']}.{rd['table_name']}"
             table_meta[key] = {
                 "engine": rd.get("engine", ""),
@@ -345,7 +345,7 @@ class ClickHouseConnector(BaseConnector):
         stats_rows, stats_cols = stats_result
         stats_col_names = [c[0] for c in stats_cols] if stats_cols else []
         for r in stats_rows:
-            rd = dict(zip(stats_col_names, r))
+            rd = dict(zip(stats_col_names, r, strict=False))
             stat_key = f"{rd['database']}.{rd['table']}.{rd['column']}"
             col_stats[stat_key] = {
                 "data_bytes": rd.get("uncompressed_bytes", 0),
@@ -354,7 +354,7 @@ class ClickHouseConnector(BaseConnector):
 
         schema: dict[str, Any] = {}
         for row_vals in rows_data:
-            row = dict(zip(col_names, row_vals))
+            row = dict(zip(col_names, row_vals, strict=False))
             key = f"{row['database']}.{row['table']}"
             if key not in schema:
                 meta = table_meta.get(key, {})

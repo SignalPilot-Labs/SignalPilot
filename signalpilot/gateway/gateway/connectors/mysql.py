@@ -101,10 +101,6 @@ class MySQLConnector(BaseConnector):
 
         # SSL support — pymysql uses ssl dict with ca/cert/key paths or content
         if self._ssl_config and self._ssl_config.get("enabled"):
-            import ssl as ssl_module
-
-            ssl_ctx = ssl_module.create_default_context()
-
             # Write PEM content to temp files using base class helper
             ssl_paths = self._write_ssl_files()
 

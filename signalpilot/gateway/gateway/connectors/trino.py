@@ -226,7 +226,7 @@ class TrinoConnector(BaseConnector):
             cursor.execute(sql)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
-            return [dict(zip(columns, row)) for row in rows]
+            return [dict(zip(columns, row, strict=False)) for row in rows]
 
         try:
             return await self._run_in_thread(_run, timeout=effective_timeout, label="Trino")

@@ -29,7 +29,7 @@ class TestSensitivePatternsSync:
             f"Pattern count mismatch: mcp_errors has {len(_SENSITIVE_PATTERNS)}, "
             f"api/deps has {len(deps_patterns)}. Update mcp_errors.py to match."
         )
-        for i, (mcp_pat, dep_pat) in enumerate(zip(_SENSITIVE_PATTERNS, deps_patterns)):
+        for i, (mcp_pat, dep_pat) in enumerate(zip(_SENSITIVE_PATTERNS, deps_patterns, strict=True)):
             assert mcp_pat.pattern == dep_pat.pattern, (
                 f"Pattern {i} mismatch: mcp_errors={mcp_pat.pattern!r}, api/deps={dep_pat.pattern!r}"
             )

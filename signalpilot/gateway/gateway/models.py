@@ -21,7 +21,7 @@ def _validate_string_list(v: list[str], max_item_len: int, field_name: str) -> l
 # ─── Settings ────────────────────────────────────────────────────────────────
 
 
-class SandboxProvider(str, Enum):
+class SandboxProvider(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     local = "local"  # local sandbox_manager at socket/http
     remote = "remote"  # BYOS -- remote sandbox manager HTTP endpoint
 
@@ -121,7 +121,7 @@ class ApiKeyCreatedResponse(ApiKeyResponse):
 # ─── Connections ─────────────────────────────────────────────────────────────
 
 
-class DBType(str, Enum):
+class DBType(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     postgres = "postgres"
     duckdb = "duckdb"
     mysql = "mysql"
@@ -370,7 +370,7 @@ class ConnectionInfo(BaseModel):
 # ─── Projects ─────────────────────────────────────────────────────────────────
 
 
-class ProjectSource(str, Enum):
+class ProjectSource(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """How the dbt project was created or imported."""
 
     new = "new"
@@ -379,14 +379,14 @@ class ProjectSource(str, Enum):
     dbt_cloud = "dbt-cloud"
 
 
-class ProjectStorage(str, Enum):
+class ProjectStorage(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Whether the project files are managed by SignalPilot or externally linked."""
 
     managed = "managed"
     linked = "linked"
 
 
-class ProjectStatus(str, Enum):
+class ProjectStatus(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Lifecycle status of a dbt project."""
 
     active = "active"

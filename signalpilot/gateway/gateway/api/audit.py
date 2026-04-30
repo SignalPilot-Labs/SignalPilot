@@ -11,11 +11,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func as sa_func
 from sqlalchemy import select
 
-MAX_EXPORT_ROWS = int(os.environ.get("SP_MAX_EXPORT_ROWS", "50000"))
-
 from ..db.models import GatewayAuditLog
 from ..scope_guard import RequireScope
 from .deps import StoreD
+
+MAX_EXPORT_ROWS = int(os.environ.get("SP_MAX_EXPORT_ROWS", "50000"))
 
 router = APIRouter(prefix="/api")
 
@@ -48,7 +48,7 @@ async def get_audit_stats(store: StoreD):
         select(
             GatewayAuditLog.event_type,
             sa_func.count().label("cnt"),
-            sa_func.sum(case((GatewayAuditLog.blocked == True, 1), else_=0)).label("blocked_cnt"),
+            sa_func.sum(case((GatewayAuditLog.blocked.is_(True), 1), else_=0)).label("blocked_cnt"),
         )
         .where(GatewayAuditLog.org_id == oid)
         .group_by(GatewayAuditLog.event_type)

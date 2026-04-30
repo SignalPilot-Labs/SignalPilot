@@ -310,7 +310,7 @@ class BigQueryConnector(BaseConnector):
         for i in range(0, len(all_table_refs), batch_size):
             batch = all_table_refs[i : i + batch_size]
             tables = await asyncio.gather(*(asyncio.to_thread(_get_table, ref) for _, ref in batch))
-            for (dataset_id, _), table in zip(batch, tables):
+            for (dataset_id, _), table in zip(batch, tables, strict=False):
                 key = f"{dataset_id}.{table.table_id}"
 
                 def _flatten_fields(fields, prefix=""):

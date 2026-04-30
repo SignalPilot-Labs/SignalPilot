@@ -188,7 +188,7 @@ class AWSKMSProvider:
 # This is a documentation assertion — it will fail loudly at startup if the
 # interface drifts.
 def _assert_protocol_compliance() -> None:
-    assert isinstance.__doc__  # noqa: B015 — just ensuring runtime check works
+    assert isinstance.__doc__
     # Not called at module level to avoid requiring boto3 at import time.
     # Called from tests to verify compliance.
 

@@ -10,7 +10,7 @@ Entry point: signalpilot-mcp = "gateway.mcp_server:main"
 from __future__ import annotations
 
 # Trigger tool registration (all @audited_tool(mcp) decorators run at import time).
-import gateway.mcp  # noqa: F401
+import gateway.mcp
 from gateway.db.engine import get_session_factory
 from gateway.dbt import (
     format_validation_result as _format_validation_result,

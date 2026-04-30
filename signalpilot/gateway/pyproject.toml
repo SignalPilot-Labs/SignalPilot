@@ -60,14 +60,15 @@ extend-exclude = ["**/__pycache__", "build", "dist"]
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "PIE", # flake8-pie
-    "UP",  # pyupgrade
-    "W",   # pycodestyle warnings
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "PIE",    # flake8-pie
+    "RUF100", # unused-noqa (rest of RUF family deferred — see r12)
+    "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
 ]
 ignore = [
     "E501",  # formatter handles long lines

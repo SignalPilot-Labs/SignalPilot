@@ -56,7 +56,7 @@ async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
 
     # Read the module-level provider — import at function scope to pick up the
     # current value (configure_byok may have been called after module import).
-    from ..store.byok_state import _byok_provider as current_provider  # noqa: PLC0415
+    from ..store.byok_state import _byok_provider as current_provider
 
     byok_provider_type = type(current_provider).__name__ if current_provider is not None else "none"
 

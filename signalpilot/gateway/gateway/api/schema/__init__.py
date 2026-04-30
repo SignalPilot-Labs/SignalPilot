@@ -16,7 +16,7 @@ Do not add ``__getattr__`` proxy or ``_common.py`` re-export helpers — see r9 
 from __future__ import annotations
 
 from gateway.api.schema import (  # noqa: F401  (side-effect: route registration)
-    _router,  # noqa: F401
+    _router,
     agent_context,
     compact,
     endorsements,

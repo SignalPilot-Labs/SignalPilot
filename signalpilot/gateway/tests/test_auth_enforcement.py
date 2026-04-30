@@ -63,7 +63,7 @@ async def _controlled_dispatch(
     return await call_next(request)
 
 
-async def _resolve_user_id_override(request: Request) -> str:  # noqa: ARG001
+async def _resolve_user_id_override(request: Request) -> str:
     """Overrides resolve_user_id.
 
     api_key mode: returns "test-user" (JWT verification bypassed).

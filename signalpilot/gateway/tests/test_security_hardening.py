@@ -537,7 +537,7 @@ class TestCorsOriginValidation:
                     "with allow_credentials=True; skipping."
                 )
                 continue
-            if not (origin.startswith("http://") or origin.startswith("https://")):
+            if not (origin.startswith(("http://", "https://"))):
                 logger.warning(
                     "SP_ALLOWED_ORIGINS entry %r is not a valid HTTP/HTTPS origin; skipping.",
                     origin,

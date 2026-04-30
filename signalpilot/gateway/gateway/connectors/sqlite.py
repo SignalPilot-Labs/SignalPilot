@@ -30,9 +30,9 @@ class SQLiteConnector(BaseConnector):
             err_str = str(e).lower()
             if "unable to open" in err_str:
                 raise RuntimeError(f"Cannot open database file: {connection_string}") from e
-            elif "not a database" in err_str or "file is not a database" in err_str:
+            if "not a database" in err_str or "file is not a database" in err_str:
                 raise RuntimeError(f"File is not a valid SQLite database: {connection_string}") from e
-            elif "readonly" in err_str or "read-only" in err_str:
+            if "readonly" in err_str or "read-only" in err_str:
                 raise RuntimeError(f"Database is read-only: {connection_string}") from e
             raise RuntimeError(f"SQLite connection error: {e}") from e
         except Exception as e:

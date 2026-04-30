@@ -46,7 +46,7 @@ class TestPostgresConnector:
         assert isinstance(schema, dict)
         # Should have tables
         if len(schema) > 0:
-            first_table = list(schema.values())[0]
+            first_table = next(iter(schema.values()))
             assert "columns" in first_table
             assert "schema" in first_table
             assert "name" in first_table
@@ -111,7 +111,7 @@ class TestMySQLConnector:
         schema = await connector.get_schema()
         assert isinstance(schema, dict)
         if len(schema) > 0:
-            first_table = list(schema.values())[0]
+            first_table = next(iter(schema.values()))
             assert "columns" in first_table
             assert "foreign_keys" in first_table
             assert "row_count" in first_table
@@ -226,7 +226,7 @@ class TestSQLiteConnector:
         assert "users" in schema
         assert len(schema["users"]["columns"]) == 3
         # Check PK detection
-        id_col = [c for c in schema["users"]["columns"] if c["name"] == "id"][0]
+        id_col = next(c for c in schema["users"]["columns"] if c["name"] == "id")
         assert id_col["primary_key"] is True
         await connector.close()
 
@@ -2123,7 +2123,7 @@ class TestDuckDBSchemaImprovements:
         await conn.execute("INSERT INTO test_pk VALUES (1, 'a'), (2, 'b')")
         schema = await conn.get_schema()
         assert len(schema) >= 1
-        table = list(schema.values())[0]
+        table = next(iter(schema.values()))
         # Check primary key detected
         id_col = next(c for c in table["columns"] if c["name"] == "id")
         assert id_col["primary_key"] is True
@@ -2336,8 +2336,8 @@ class TestJoinPathDiscovery:
             for from_t, from_col, to_t, to_col in edges.get(current, []):
                 if to_t in path_tables:
                     continue
-                new_tables = path_tables + [to_t]
-                new_joins = path_joins + [{"from": f"{from_t}.{from_col}", "to": f"{to_t}.{to_col}"}]
+                new_tables = [*path_tables, to_t]
+                new_joins = [*path_joins, {"from": f"{from_t}.{from_col}", "to": f"{to_t}.{to_col}"}]
                 if to_t == dst:
                     paths.append({"hops": len(new_joins), "tables": new_tables, "joins": new_joins})
                 else:
@@ -3126,7 +3126,7 @@ class TestMSSQLConnector:
         schema = await connector.get_schema()
         assert isinstance(schema, dict)
         if len(schema) > 0:
-            first_table = list(schema.values())[0]
+            first_table = next(iter(schema.values()))
             assert "columns" in first_table
             assert "foreign_keys" in first_table
             assert "indexes" in first_table
@@ -3149,7 +3149,7 @@ class TestMSSQLConnector:
             pytest.skip("MSSQL not available")
         schema = await connector.get_schema()
         if schema:
-            first_table_key = list(schema.keys())[0]
+            first_table_key = next(iter(schema.keys()))
             cols = [c["name"] for c in schema[first_table_key]["columns"][:3]]
             samples = await connector.get_sample_values(first_table_key, cols, limit=3)
             assert isinstance(samples, dict)

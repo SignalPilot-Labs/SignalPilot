@@ -147,11 +147,10 @@ async def schema_link(connection_name: str, question: str, format: str = "ddl", 
 
     if format == "compact":
         return header + "\n" + data.get("schema", "")
-    elif format == "json":
+    if format == "json":
         import json as _json
 
         return header + "\n" + _json.dumps(data.get("tables", {}), indent=2, default=str)
-    else:
-        tokens = data.get("token_estimate", 0)
-        header += f"-- Est. tokens: {tokens}\n\n"
-        return header + data.get("ddl", "")
+    tokens = data.get("token_estimate", 0)
+    header += f"-- Est. tokens: {tokens}\n\n"
+    return header + data.get("ddl", "")

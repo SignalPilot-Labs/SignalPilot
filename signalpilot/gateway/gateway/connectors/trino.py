@@ -149,7 +149,7 @@ class TrinoConnector(BaseConnector):
             err_str = str(e).lower()
             if "unauthorized" in err_str or "401" in err_str or "authentication" in err_str:
                 raise RuntimeError(f"Authentication failed: {e}") from e
-            elif "connection refused" in err_str or "connect" in err_str:
+            if "connection refused" in err_str or "connect" in err_str:
                 raise RuntimeError(
                     f"Connection failed: cannot connect to Trino at {params.get('host', '')}:{params.get('port', 8080)}"
                 ) from e

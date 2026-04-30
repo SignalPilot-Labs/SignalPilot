@@ -153,9 +153,9 @@ class ClickHouseConnector(BaseConnector):
                 break
         if "authentication" in err_lower or "wrong password" in err_lower:
             return RuntimeError(f"Authentication failed: {msg}")
-        elif "connection refused" in err_lower or "timed out" in err_lower:
+        if "connection refused" in err_lower or "timed out" in err_lower:
             return RuntimeError(f"Connection failed: {msg}")
-        elif "unknown database" in err_lower or "database .* doesn't exist" in err_lower:
+        if "unknown database" in err_lower or "database .* doesn't exist" in err_lower:
             return RuntimeError(f"Database not found: {msg}")
         return RuntimeError(f"ClickHouse connection error: {msg}")
 
@@ -214,7 +214,7 @@ class ClickHouseConnector(BaseConnector):
             result = self._http_client.query(sql, parameters=params, settings=settings or {})
             col_names = result.column_names
             return result.result_rows, [(name,) for name in col_names]
-        elif self._client:
+        if self._client:
             execute_args = {"with_column_types": True}
             if settings:
                 execute_args["settings"] = settings

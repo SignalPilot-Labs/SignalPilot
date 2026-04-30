@@ -133,9 +133,9 @@ class SnowflakeConnector(BaseConnector):
             err_str = str(e).lower()
             if "incorrect username or password" in err_str or "authentication" in err_str:
                 raise RuntimeError(f"Authentication failed: {str(e).split(chr(10))[0]}") from e
-            elif "account" in err_str and ("not found" in err_str or "invalid" in err_str):
+            if "account" in err_str and ("not found" in err_str or "invalid" in err_str):
                 raise RuntimeError(f"Account not found: verify account identifier '{params.get('account', '')}'") from e
-            elif "warehouse" in err_str and "does not exist" in err_str:
+            if "warehouse" in err_str and "does not exist" in err_str:
                 raise RuntimeError(f"Warehouse not found: '{params.get('warehouse', '')}'") from e
             raise RuntimeError(f"Snowflake connection error: {str(e).split(chr(10))[0]}") from e
         except Exception as e:

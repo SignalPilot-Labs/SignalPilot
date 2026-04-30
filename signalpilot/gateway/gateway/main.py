@@ -295,10 +295,9 @@ def _build_allowed_origins() -> list[str]:
                 continue
             validated.append(origin)
         return validated
-    else:
-        if not raw:
-            return ["http://localhost:3000", "http://localhost:3200"]
-        return [o.strip() for o in raw.split(",") if o.strip()]
+    if not raw:
+        return ["http://localhost:3000", "http://localhost:3200"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 _ALLOWED_ORIGINS = _build_allowed_origins()

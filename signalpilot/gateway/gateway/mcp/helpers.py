@@ -14,19 +14,18 @@ async def _get_column_names(connector, db_type: str, table_name: str, connection
     if db_type in ("sqlite", "duckdb"):
         rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         return [r.get("name", "") for r in rows if r.get("name")]
+    parts = table_name.split(".")
+    if len(parts) == 2:
+        schema, tbl = parts
     else:
-        parts = table_name.split(".")
-        if len(parts) == 2:
-            schema, tbl = parts
-        else:
-            schema, tbl = "public", parts[0]
-        sql = (
-            f"SELECT column_name FROM information_schema.columns "
-            f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
-            f"ORDER BY ordinal_position"
-        )
-        rows = await connector.execute(sql)
-        return [r.get("column_name", "") for r in rows if r.get("column_name")]
+        schema, tbl = "public", parts[0]
+    sql = (
+        f"SELECT column_name FROM information_schema.columns "
+        f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
+        f"ORDER BY ordinal_position"
+    )
+    rows = await connector.execute(sql)
+    return [r.get("column_name", "") for r in rows if r.get("column_name")]
 
 
 async def _get_sandbox_url() -> str:

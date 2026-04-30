@@ -58,7 +58,7 @@ class BigQueryConnector(BaseConnector):
             err_str = str(e).lower()
             if "credentials" in err_str or "authentication" in err_str:
                 raise RuntimeError(f"Authentication failed: {e}") from e
-            elif "project" in err_str and ("not found" in err_str or "invalid" in err_str):
+            if "project" in err_str and ("not found" in err_str or "invalid" in err_str):
                 raise RuntimeError(f"GCP project not found: '{self._project}'") from e
             raise RuntimeError(f"BigQuery connection error: {e}") from e
 

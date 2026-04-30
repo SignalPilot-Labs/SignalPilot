@@ -276,23 +276,22 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             if issues:
                 parts.append(f"Local checks: {'; '.join(issues)}")
             return "\n".join(parts)
-        else:
-            # Extract error details
-            error_text = r.text[:500]
-            # Get db_type for dialect-specific hints
-            db_type = ""
-            try:
-                async with httpx.AsyncClient(timeout=5) as client2:
-                    r2 = await client2.get(f"{gw}/api/connections/{connection_name}", headers=_gw_headers())
-                    if r2.status_code == 200:
-                        db_type = r2.json().get("db_type", "")
-            except Exception:
-                pass
-            hint = query_error_hint(error_text, db_type)
-            parts = [f"INVALID ✗\n{sanitize_mcp_error(error_text, cap=500)}"]
-            if hint:
-                parts.append(f"\nSuggested fix: {hint}")
-            return "\n".join(parts)
+        # Extract error details
+        error_text = r.text[:500]
+        # Get db_type for dialect-specific hints
+        db_type = ""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client2:
+                r2 = await client2.get(f"{gw}/api/connections/{connection_name}", headers=_gw_headers())
+                if r2.status_code == 200:
+                    db_type = r2.json().get("db_type", "")
+        except Exception:
+            pass
+        hint = query_error_hint(error_text, db_type)
+        parts = [f"INVALID ✗\n{sanitize_mcp_error(error_text, cap=500)}"]
+        if hint:
+            parts.append(f"\nSuggested fix: {hint}")
+        return "\n".join(parts)
     except Exception as e:
         return f"Validation error: {sanitize_mcp_error(str(e))}"
 

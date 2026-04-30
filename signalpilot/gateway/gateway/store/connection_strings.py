@@ -19,18 +19,18 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         )
         ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
         return f"postgresql://{user}{pw}@{host}:{port}/{db}{ssl_param}"
-    elif conn.db_type == DBType.mysql:
+    if conn.db_type == DBType.mysql:
         user = url_quote(conn.username or "", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
         port = conn.port or 3306
         db = conn.database or ""
         return f"mysql+pymysql://{user}{pw}@{host}:{port}/{db}"
-    elif conn.db_type == DBType.duckdb:
+    if conn.db_type == DBType.duckdb:
         return conn.database or ":memory:"
-    elif conn.db_type == DBType.sqlite:
+    if conn.db_type == DBType.sqlite:
         return conn.database or ":memory:"
-    elif conn.db_type == DBType.snowflake:
+    if conn.db_type == DBType.snowflake:
         account = conn.account or ""
         user = url_quote(conn.username or "", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
@@ -44,9 +44,9 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
             params.append(f"role={url_quote(conn.role, safe='')}")
         query = f"?{'&'.join(params)}" if params else ""
         return f"snowflake://{user}{pw}@{account}{path}{query}"
-    elif conn.db_type == DBType.bigquery:
+    if conn.db_type == DBType.bigquery:
         return conn.project or ""
-    elif conn.db_type == DBType.redshift:
+    if conn.db_type == DBType.redshift:
         user = url_quote(conn.username or "", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
@@ -54,7 +54,7 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         db = conn.database or "dev"
         ssl_param = "?sslmode=require" if conn.ssl else ""
         return f"redshift://{user}{pw}@{host}:{port}/{db}{ssl_param}"
-    elif conn.db_type == DBType.clickhouse:
+    if conn.db_type == DBType.clickhouse:
         user = url_quote(conn.username or "default", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
@@ -68,7 +68,7 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
             scheme = "clickhouses" if use_ssl else "clickhouse"
             port = conn.port or (9440 if use_ssl else 9000)
         return f"{scheme}://{user}{pw}@{host}:{port}/{db}"
-    elif conn.db_type == DBType.databricks:
+    if conn.db_type == DBType.databricks:
         host = conn.host or ""
         http_path = url_quote(conn.http_path or "", safe="/")
         token = url_quote(conn.access_token or "", safe="")
@@ -79,14 +79,14 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
             params.append(f"schema={url_quote(conn.schema_name, safe='')}")
         query = f"?{'&'.join(params)}" if params else ""
         return f"databricks://{token}@{host}/{http_path}{query}"
-    elif conn.db_type == DBType.mssql:
+    if conn.db_type == DBType.mssql:
         user = url_quote(conn.username or "sa", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
         port = conn.port or 1433
         db = conn.database or "master"
         return f"mssql://{user}{pw}@{host}:{port}/{db}"
-    elif conn.db_type == DBType.trino:
+    if conn.db_type == DBType.trino:
         user = url_quote(conn.username or "trino", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"

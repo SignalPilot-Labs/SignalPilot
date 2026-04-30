@@ -71,24 +71,23 @@ class RedshiftConnector(BaseConnector):
                 dbName=db_name,
             )
             return resp["dbUser"], resp["dbPassword"]
-        else:
-            # Provisioned Redshift — use redshift client
-            cluster_id = self._iam_cluster_id
-            if not cluster_id:
-                # Try to extract cluster ID from host: cluster-id.xxx.region.redshift.amazonaws.com
-                parts = host.split(".")
-                if parts:
-                    cluster_id = parts[0]
-            if not cluster_id:
-                raise RuntimeError("IAM auth requires a cluster_id or a standard Redshift endpoint hostname")
-            client = boto3.client("redshift", **boto_kwargs)
-            resp = client.get_cluster_credentials(
-                ClusterIdentifier=cluster_id,
-                DbUser=db_user or "admin",
-                DbName=db_name or "dev",
-                AutoCreate=False,
-            )
-            return resp["DbUser"], resp["DbPassword"]
+        # Provisioned Redshift — use redshift client
+        cluster_id = self._iam_cluster_id
+        if not cluster_id:
+            # Try to extract cluster ID from host: cluster-id.xxx.region.redshift.amazonaws.com
+            parts = host.split(".")
+            if parts:
+                cluster_id = parts[0]
+        if not cluster_id:
+            raise RuntimeError("IAM auth requires a cluster_id or a standard Redshift endpoint hostname")
+        client = boto3.client("redshift", **boto_kwargs)
+        resp = client.get_cluster_credentials(
+            ClusterIdentifier=cluster_id,
+            DbUser=db_user or "admin",
+            DbName=db_name or "dev",
+            AutoCreate=False,
+        )
+        return resp["DbUser"], resp["DbPassword"]
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PSYCOPG2:
@@ -132,7 +131,7 @@ class RedshiftConnector(BaseConnector):
             err_str = str(e).lower()
             if "password authentication failed" in err_str:
                 raise RuntimeError(f"Authentication failed: {e}") from e
-            elif "could not connect" in err_str or "connection refused" in err_str:
+            if "could not connect" in err_str or "connection refused" in err_str:
                 raise RuntimeError(f"Connection failed (host unreachable or timeout): {e}") from e
             raise RuntimeError(f"Redshift connection error: {e}") from e
         except Exception as e:

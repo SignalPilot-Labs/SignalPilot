@@ -71,6 +71,7 @@ select = [
     "RUF100", # unused-noqa (rest of RUF family deferred — see r12)
     "UP",     # pyupgrade
     "W",      # pycodestyle warnings
+    "RET",    # flake8-return (enabled r14)
 ]
 ignore = [
     "E501",  # formatter handles long lines

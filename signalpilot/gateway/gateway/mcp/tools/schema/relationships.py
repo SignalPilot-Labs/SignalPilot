@@ -91,7 +91,7 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
             return "No foreign key relationships found"
         header = f"Foreign Key Relationships ({len(rels)}):\n"
         return header + "\n".join(f"  {r}" for r in rels)
-    elif format == "graph":
+    if format == "graph":
         adj = data.get("adjacency", {})
         if not adj:
             return "No relationships found"
@@ -99,5 +99,4 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
         for table, neighbors in adj.items():
             lines.append(f"  {table} ↔ {', '.join(neighbors)}")
         return "\n".join(lines)
-    else:
-        return json.dumps(data, indent=2)
+    return json.dumps(data, indent=2)

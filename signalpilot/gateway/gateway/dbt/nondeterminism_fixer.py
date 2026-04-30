@@ -170,9 +170,8 @@ def _rewrite_over_clause(over_body: str, tiebreaker: str) -> str:
         # Append tiebreaker after existing ORDER BY columns.
         insert_pos = ob_match.end()
         return over_body[:insert_pos].rstrip() + f", {tiebreaker}" + over_body[insert_pos:]
-    else:
-        # No ORDER BY — add one before the closing (which is already stripped from body).
-        return over_body.rstrip() + f" ORDER BY {tiebreaker}"
+    # No ORDER BY — add one before the closing (which is already stripped from body).
+    return over_body.rstrip() + f" ORDER BY {tiebreaker}"
 
 
 def _apply_tiebreaker_to_sql(

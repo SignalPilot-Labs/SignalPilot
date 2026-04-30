@@ -94,7 +94,7 @@ async def get_schema_relationships(
             "relationships": lines,
         }
 
-    elif format == "graph":
+    if format == "graph":
         graph: dict[str, list[str]] = {}
         for r in relationships:
             from_qual = f"{r['from_schema']}.{r['from_table']}" if r["from_schema"] else r["from_table"]
@@ -115,13 +115,13 @@ async def get_schema_relationships(
             "adjacency": graph,
         }
 
-    else:  # full
-        return {
-            "connection_name": name,
-            "format": "full",
-            "relationship_count": len(relationships),
-            "relationships": relationships,
-        }
+    # full
+    return {
+        "connection_name": name,
+        "format": "full",
+        "relationship_count": len(relationships),
+        "relationships": relationships,
+    }
 
 
 @router.get("/connections/{name}/schema/join-paths", dependencies=[RequireScope("read")])

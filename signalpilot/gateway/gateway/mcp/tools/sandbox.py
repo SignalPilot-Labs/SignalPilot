@@ -97,9 +97,8 @@ if not _is_cloud:
                 meta.append(f"total={data['execution_ms']:.0f}ms")
             suffix = f"\n[{', '.join(meta)}]" if meta else ""
             return output + suffix if output else f"(no output){suffix}"
-        else:
-            error = data.get("error", "Unknown error")
-            return f"Error:\n{sanitize_mcp_error(str(error))}"
+        error = data.get("error", "Unknown error")
+        return f"Error:\n{sanitize_mcp_error(str(error))}"
 
     @audited_tool(mcp)
     async def sandbox_status() -> str:

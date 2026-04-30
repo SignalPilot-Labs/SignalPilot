@@ -24,9 +24,9 @@ def query_error_hint(error: str, db_type: str) -> str | None:
     if "syntax error" in err_lower or "parse error" in err_lower:
         if db_type == "bigquery":
             return "BigQuery uses backticks for identifiers and has different function names (e.g., SAFE_DIVIDE, FORMAT_TIMESTAMP)."
-        elif db_type == "snowflake":
+        if db_type == "snowflake":
             return "Snowflake uses double-quotes for case-sensitive identifiers. Column/table names are uppercase by default."
-        elif db_type == "clickhouse":
+        if db_type == "clickhouse":
             return "ClickHouse SQL differs from standard SQL — use toDate(), formatDateTime(), arrayJoin()."
         return "Check SQL syntax — consider quoting identifiers and verifying function names for this database dialect."
 
@@ -96,8 +96,7 @@ def query_error_hint(error: str, db_type: str) -> str | None:
             "mssql": "SQL Server uses + for concatenation or CONCAT() function.",
             "mysql": "MySQL uses CONCAT() function. || is logical OR by default.",
         }
-        hint = dialect_hints.get(db_type, "Use CONCAT() for portable string concatenation.")
-        return hint
+        return dialect_hints.get(db_type, "Use CONCAT() for portable string concatenation.")
 
     # NULL handling
     if "null" in err_lower and ("operator" in err_lower or "comparison" in err_lower):

@@ -266,7 +266,7 @@ async def generate_sql_skeleton(model_name: str, yml_columns: str, ref_tables: s
         )
         from_clause = "source"
 
-    sql = (
+    return (
         f"{config_block}\n\n"
         f"with\n\n"
         f"{source_ctes},\n\n"
@@ -278,4 +278,3 @@ async def generate_sql_skeleton(model_name: str, yml_columns: str, ref_tables: s
         f")\n\n"
         f"select * from final"
     )
-    return sql

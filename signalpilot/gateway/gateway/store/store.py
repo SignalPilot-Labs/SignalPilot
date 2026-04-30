@@ -857,7 +857,7 @@ class Store:
         hidden = set(config.get("hidden", []))
         if mode == "endorsed_only" and endorsed:
             return {k: v for k, v in schema.items() if k in endorsed}
-        elif hidden:
+        if hidden:
             return {k: v for k, v in schema.items() if k not in hidden}
         return schema
 

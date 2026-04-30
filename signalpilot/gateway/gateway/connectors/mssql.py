@@ -134,11 +134,11 @@ class MSSQLConnector(BaseConnector):
                 raise RuntimeError(
                     f"Authentication failed: Login failed for user '{connect_kwargs.get('user', '')}'"
                 ) from e
-            elif "cannot open database" in err_str:
+            if "cannot open database" in err_str:
                 raise RuntimeError(
                     f"Database not found: Cannot open database '{connect_kwargs.get('database', '')}'"
                 ) from e
-            elif "connection refused" in err_str or "network" in err_str or "unable to connect" in err_str:
+            if "connection refused" in err_str or "network" in err_str or "unable to connect" in err_str:
                 raise RuntimeError(
                     f"Connection failed: Cannot connect to SQL Server on '{connect_kwargs.get('server', '')}:{connect_kwargs.get('port', '1433')}'"
                 ) from e

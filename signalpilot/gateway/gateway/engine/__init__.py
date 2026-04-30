@@ -250,8 +250,7 @@ _STACKING_PATTERN = re.compile(r";\s*\w", re.IGNORECASE)
 def _strip_sql_comments(sql: str) -> str:
     """Remove SQL comments to prevent stacking detection bypass."""
     result = _MULTI_LINE_COMMENT.sub(" ", sql)
-    result = _SINGLE_LINE_COMMENT.sub(" ", result)
-    return result
+    return _SINGLE_LINE_COMMENT.sub(" ", result)
 
 
 # Strip string literals to prevent false positives in regex-based checks

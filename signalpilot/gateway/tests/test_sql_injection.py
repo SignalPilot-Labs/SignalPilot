@@ -176,8 +176,7 @@ class TestClickHouseQuoteIdentifier:
     def _make_connector(self):
         from gateway.connectors.clickhouse import ClickHouseConnector
 
-        conn = ClickHouseConnector.__new__(ClickHouseConnector)
-        return conn
+        return ClickHouseConnector.__new__(ClickHouseConnector)
 
     def test_quote_char_is_backtick(self):
         conn = self._make_connector()

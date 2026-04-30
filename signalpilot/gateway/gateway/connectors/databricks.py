@@ -143,11 +143,11 @@ class DatabricksConnector(BaseConnector):
             err_str = str(e).lower()
             if "unauthorized" in err_str or "403" in err_str or "401" in err_str:
                 raise RuntimeError(f"Authentication failed: invalid credentials for {auth_method} auth") from e
-            elif "not found" in err_str or "404" in err_str:
+            if "not found" in err_str or "404" in err_str:
                 raise RuntimeError(f"Warehouse not found: verify http_path '{params.get('http_path', '')}'") from e
-            elif "timeout" in err_str or "timed out" in err_str:
+            if "timeout" in err_str or "timed out" in err_str:
                 raise RuntimeError(f"Connection timed out: {e}") from e
-            elif "connection" in err_str and ("refused" in err_str or "failed" in err_str):
+            if "connection" in err_str and ("refused" in err_str or "failed" in err_str):
                 raise RuntimeError(f"Connection failed: verify hostname '{params.get('host', '')}'") from e
             raise RuntimeError(f"Databricks connection error: {e}") from e
 

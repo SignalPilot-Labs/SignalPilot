@@ -14,40 +14,25 @@ const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 const clerkEnabled = IS_CLOUD_MODE;
 
 // ---------------------------------------------------------------------------
-// Nonce generation — edge-runtime-safe (no Node crypto.randomBytes)
-// ---------------------------------------------------------------------------
-
-function generateNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  // btoa-safe: convert bytes to a binary string then base64-encode
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary);
-}
-
-// ---------------------------------------------------------------------------
 // Security header helper — applied in BOTH paths
 // ---------------------------------------------------------------------------
 
 function applySecurityHeaders(
   response: NextResponse,
   withClerk: boolean,
-  request: NextRequest,
-  nonce: string
+  request: NextRequest
 ): void {
   const gatewayUrl =
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
   let connectSrc = `'self' ${gatewayUrl}`;
-  // CSP script-src: nonce + strict-dynamic for modern browsers.
-  // 'unsafe-inline' is kept as fallback because Next.js injects inline scripts
-  // for hydration/chunk preloading that don't carry the nonce. Browsers that
-  // support 'strict-dynamic' IGNORE 'unsafe-inline' (per CSP spec), so modern
-  // browsers get nonce-only enforcement. 'unsafe-eval' is removed entirely.
-  let scriptSrc = `'self' 'unsafe-inline' 'nonce-${nonce}' 'strict-dynamic'`;
+  // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
+  // scripts for hydration/chunk preloading that cannot carry a nonce (the nonce
+  // is generated in middleware but Next.js renders inline scripts at build time).
+  // 'unsafe-eval' is REMOVED — this is the main XSS hardening win, blocking
+  // eval(), new Function(), setTimeout(string), etc.
+  let scriptSrc = "'self' 'unsafe-inline'";
   let imgSrc = "'self' data: blob:";
-  // Fix JetBrains Mono CSP bug: cdn.jsdelivr.net was not in font-src
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 
   let workerSrc = "'self'";
@@ -57,7 +42,6 @@ function applySecurityHeaders(
   if (withClerk) {
     connectSrc +=
       " https://*.clerk.accounts.dev https://*.signalpilot.ai https://clerk-telemetry.com";
-    // Explicit origins kept as fallback for browsers without strict-dynamic
     scriptSrc += " https://*.clerk.accounts.dev https://*.signalpilot.ai https://challenges.cloudflare.com";
     imgSrc += " https://img.clerk.com";
     workerSrc += " blob:";
@@ -132,29 +116,14 @@ if (clerkEnabled) {
       await auth.protect();
     }
 
-    const nonce = generateNonce();
-
-    // Forward nonce to server components via request header
-    const requestHeaders = new Headers(req.headers);
-    requestHeaders.set("x-nonce", nonce);
-
-    const response = NextResponse.next({
-      request: { headers: requestHeaders },
-    });
-    applySecurityHeaders(response, true, req, nonce);
+    const response = NextResponse.next();
+    applySecurityHeaders(response, true, req);
     return response;
   });
 } else {
   middlewareExport = (req: NextRequest) => {
-    const nonce = generateNonce();
-
-    const requestHeaders = new Headers(req.headers);
-    requestHeaders.set("x-nonce", nonce);
-
-    const response = NextResponse.next({
-      request: { headers: requestHeaders },
-    });
-    applySecurityHeaders(response, false, req, nonce);
+    const response = NextResponse.next();
+    applySecurityHeaders(response, false, req);
     return response;
   };
 }

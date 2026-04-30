@@ -25,15 +25,19 @@
 
 ---
 
-## SignalPilot Cloud
+## What SignalPilot Is
 
-**No Docker, no setup** — sign up and connect your databases in 60 seconds.
+**One entrypoint, three pieces of infrastructure** on the same gateway.
 
-👉 **[app.signalpilot.ai](https://app.signalpilot.ai/)**
+Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code)**. Underneath it, three components do the work:
+
+1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 25 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
+2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 25 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
+3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://app.signalpilot.ai) for SSO and hosted history.
 
 ---
 
-**Index** — [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
+**Index** — [What It Is](#what-signalpilot-is) · [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
 
 ---
 
@@ -150,6 +154,8 @@ See [`plugin/README.md`](plugin/README.md) for details.
 ---
 
 ## Use With Any MCP Client
+
+> ⚠️ **Experimental for non-Claude clients.** The 25 MCP tools work over `streamable-http` from any MCP client (Cursor, Codex, custom Agent SDK) — but the SignalPilot skills are Claude Code-specific and don't run outside it. You'll have the tools without skill orchestration. The Claude Code Plugin is the supported path; treat the configs below as best-effort.
 
 ### Claude Code (one-liner)
 

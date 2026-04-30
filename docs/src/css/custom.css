@@ -157,3 +157,20 @@ pre,
   background: #00ff88;
   color: #050505;
 }
+
+/* ── Figure gallery ── */
+.markdown figure {
+  margin: 1.5rem 0;
+}
+.markdown figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0;
+  border: 1px solid var(--ifm-color-emphasis-300);
+}
+.markdown figure figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--ifm-color-content-secondary);
+}

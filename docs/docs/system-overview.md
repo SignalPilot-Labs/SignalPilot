@@ -30,13 +30,30 @@ sidebar_position: 3
 
 ## In motion
 
-| Step | What it shows |
-|------|---------------|
-| ![Ask](./images/ask.gif) | A natural-language ask flowing through Claude Code → MCP → governed query. |
-| ![Schema scan](./images/scanning.gif) | dbt project scan + schema discovery before a build. |
-| ![DAG](./images/dag.gif) | dbt DAG / model lineage as the workflow expands. |
-| ![Governance](./images/governance.gif) | Parse-time governance rejecting a DDL attempt. |
-| ![Receipt](./images/receipt.gif) | Verifier-agent receipt after a successful build. |
+<figure>
+  <img src={require('./images/ask.gif').default} width="480" alt="" />
+  <figcaption>A natural-language ask flowing through Claude Code → MCP → governed query.</figcaption>
+</figure>
+
+<figure>
+  <img src={require('./images/scanning.gif').default} width="480" alt="" />
+  <figcaption>dbt project scan + schema discovery before a build.</figcaption>
+</figure>
+
+<figure>
+  <img src={require('./images/dag.gif').default} width="480" alt="" />
+  <figcaption>dbt DAG / model lineage as the workflow expands.</figcaption>
+</figure>
+
+<figure>
+  <img src={require('./images/governance.gif').default} width="480" alt="" />
+  <figcaption>Parse-time governance rejecting a DDL attempt.</figcaption>
+</figure>
+
+<figure>
+  <img src={require('./images/receipt.gif').default} width="480" alt="" />
+  <figcaption>Verifier-agent receipt after a successful build.</figcaption>
+</figure>
 
 ## Components
 

@@ -10,7 +10,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SP_DATA_DIR` | — | Path to the directory where the gateway stores its SQLite database and local state. Required in self-hosted deployments. |
+| `SP_DATA_DIR` | `~/.signalpilot` | Path to the directory where the gateway stores its SQLite database, encryption salt, annotations, and local state. Override per-deployment (e.g. `/var/lib/signalpilot`). |
 
 ## Encryption
 
@@ -26,7 +26,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SP_GATEWAY_URL` | — | Public URL of this gateway instance. Used for internal service-to-service callbacks. |
+| `SP_GATEWAY_URL` | `http://localhost:3300` | Public URL of this gateway instance. Used for internal service-to-service callbacks and embedded in MCP tool responses. Override when reverse-proxying or hosting at a non-default port. |
 | `SP_SANDBOX_MANAGER_URL` | — | URL of the sandbox manager service (DuckDB/SQLite sandboxed execution). Required when using sandbox-backed connectors. |
 | `SP_GATEWAY_CSP_POLICY` | — | Override the default `Content-Security-Policy` header. Leave unset to use the built-in policy. |
 | `SP_BACKEND_URL` | — | URL of the SignalPilot backend API (cloud deployments only). |

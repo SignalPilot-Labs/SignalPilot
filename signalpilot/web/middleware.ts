@@ -17,6 +17,19 @@ const clerkEnabled = IS_CLOUD_MODE;
 // Security header helper — applied in BOTH paths
 // ---------------------------------------------------------------------------
 
+/**
+ * Validate that a string is a safe URL (http: or https: protocol, no injection chars).
+ * Prevents a compromised env var from injecting arbitrary CSP directives.
+ */
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
 function applySecurityHeaders(
   response: NextResponse,
   withClerk: boolean,
@@ -25,7 +38,12 @@ function applySecurityHeaders(
   const gatewayUrl =
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
-  let connectSrc = `'self' ${gatewayUrl}`;
+  let connectSrc = "'self'";
+  if (isSafeUrl(gatewayUrl)) {
+    connectSrc += ` ${gatewayUrl}`;
+  } else {
+    console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
+  }
   // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
   // scripts for hydration/chunk preloading that cannot carry a nonce (the nonce
   // is generated in middleware but Next.js renders inline scripts at build time).
@@ -50,7 +68,11 @@ function applySecurityHeaders(
 
   const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
-  connectSrc += ` ${backendUrl}`;
+  if (isSafeUrl(backendUrl)) {
+    connectSrc += ` ${backendUrl}`;
+  } else {
+    console.warn(`CSP: NEXT_PUBLIC_BACKEND_URL is not a valid URL, omitting from connect-src: ${backendUrl}`);
+  }
 
   response.headers.set(
     "Content-Security-Policy",

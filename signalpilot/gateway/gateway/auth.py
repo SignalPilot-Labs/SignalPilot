@@ -9,6 +9,7 @@ Resolves every request to a user_id and org_id:
 from __future__ import annotations
 
 import base64
+import datetime
 import logging
 import os
 from typing import Annotated
@@ -23,12 +24,14 @@ from .deployment import is_cloud_mode
 logger = logging.getLogger(__name__)
 
 if is_cloud_mode() and not os.environ.get("CLERK_PUBLISHABLE_KEY"):
-    logger.error(
+    raise RuntimeError(
         "Cloud mode is enabled (SP_DEPLOYMENT_MODE=cloud) but CLERK_PUBLISHABLE_KEY is not set. "
-        "JWT authentication will fail."
+        "JWT authentication cannot function without this key. "
+        "Set CLERK_PUBLISHABLE_KEY or switch to local mode."
     )
 
 EXPECTED_AUDIENCE = os.environ.get("CLERK_JWT_AUDIENCE", "")
+JWT_LEEWAY_SECONDS = int(os.environ.get("SP_JWT_LEEWAY", "30"))
 
 if is_cloud_mode() and not EXPECTED_AUDIENCE:
     logger.warning(
@@ -66,6 +69,18 @@ def _get_jwks_client():
             return _jwks_client
 
     raise ValueError(f"Cannot derive JWKS URL from publishable key: {pk[:12]}...")
+
+
+# Eagerly initialize JWKS client at import time so a malformed
+# CLERK_PUBLISHABLE_KEY crashes the process at startup, not at first request.
+if is_cloud_mode():
+    try:
+        _get_jwks_client()
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to initialize Clerk JWKS client at startup: {e}. "
+            f"Check CLERK_PUBLISHABLE_KEY format."
+        ) from e
 
 
 def _extract_jwt_token(request: Request) -> str | None:
@@ -118,11 +133,14 @@ async def resolve_user_id(request: Request) -> str:
         decode_kwargs: dict = dict(
             algorithms=["RS256"],
             issuer=_expected_issuer,
+            leeway=datetime.timedelta(seconds=JWT_LEEWAY_SECONDS),
         )
+        options: dict = {"require": ["exp", "iat", "sub"]}
         if EXPECTED_AUDIENCE:
             decode_kwargs["audience"] = EXPECTED_AUDIENCE
         else:
-            decode_kwargs["options"] = {"verify_aud": False}
+            options["verify_aud"] = False
+        decode_kwargs["options"] = options
         claims = jwt.decode(
             token,
             signing_key.key,
@@ -134,6 +152,12 @@ async def resolve_user_id(request: Request) -> str:
         # Cache full claims for resolve_org_id
         request.state._jwt_claims = claims
         return user_id
+    except jwt.PyJWKClientConnectionError as e:
+        logger.error("JWKS endpoint unreachable: %s", e)
+        raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
+    except jwt.PyJWKClientError as e:
+        logger.error("JWKS client error: %s", e)
+        raise HTTPException(status_code=503, detail="Authentication service error")
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError as e:

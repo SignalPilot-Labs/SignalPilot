@@ -240,9 +240,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.general_rpm = general_rpm
         self.expensive_rpm = expensive_rpm
         self.auth_rpm = auth_rpm
+        self.per_key_rpm: int = int(os.environ.get("SP_PER_KEY_RPM", "1000"))
+        self.per_org_rpm: int = int(os.environ.get("SP_PER_ORG_RPM", "5000"))
         self._general_hits: dict[str, list[float]] = defaultdict(list)
         self._expensive_hits: dict[str, list[float]] = defaultdict(list)
         self._auth_hits: dict[str, list[float]] = defaultdict(list)
+        self._key_hits: dict[str, list[float]] = defaultdict(list)
+        self._org_hits: dict[str, list[float]] = defaultdict(list)
 
     def _is_auth(self, request: Request) -> bool:
         return request.url.path in self.AUTH_PATHS and request.method == "POST"
@@ -268,7 +272,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _cleanup_stale_ips(self) -> None:
         now = time.monotonic()
         window = now - 120
-        for store_dict in (self._general_hits, self._expensive_hits, self._auth_hits):
+        for store_dict in (self._general_hits, self._expensive_hits, self._auth_hits, self._key_hits, self._org_hits):
             stale_ips = [ip for ip, hits in store_dict.items() if not hits or hits[-1] < window]
             for ip in stale_ips:
                 del store_dict[ip]
@@ -285,7 +289,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        total_tracked = len(self._general_hits) + len(self._expensive_hits) + len(self._auth_hits)
+        total_tracked = len(self._general_hits) + len(self._expensive_hits) + len(self._auth_hits) + len(self._key_hits) + len(self._org_hits)
         if total_tracked > 100:
             self._cleanup_stale_ips()
 
@@ -319,6 +323,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
                 headers={"Retry-After": "60"},
             )
+
+        # Tier 4: per-key and per-org rate limits (checked after auth is resolved)
+        auth = getattr(request.state, "auth", None) or {}
+        key_id = auth.get("key_id")
+        org_id = auth.get("org_id")
+
+        if key_id:
+            if not self._check_rate(self._key_hits[str(key_id)], self.per_key_rpm):
+                return Response(
+                    content='{"detail":"Per-key rate limit exceeded."}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "60"},
+                )
+        if org_id and org_id != "local":
+            if not self._check_rate(self._org_hits[str(org_id)], self.per_org_rpm):
+                return Response(
+                    content='{"detail":"Per-org rate limit exceeded."}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "60"},
+                )
 
         return await call_next(request)
 

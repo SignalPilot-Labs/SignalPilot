@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-_CACHE_TTL_SECONDS: int = 300  # 5 minutes
+_CACHE_TTL_SECONDS: int = 30  # 30 seconds — limits revocation window
 _CACHE_MAX_ENTRIES: int = 256
 _HTTP_TIMEOUT_SECONDS: float = 5.0
 _VALIDATE_PATH: str = "/api/v1/keys/validate"
@@ -91,6 +91,26 @@ class _KeyCache:
 
 
 _cache = _KeyCache()
+
+
+# ─── Auth failure brute-force limiter ─────────────────────────────────────────
+
+_auth_failures: dict[str, list[float]] = {}
+_AUTH_FAILURE_RPM: int = 60  # max 60 failed auth attempts per IP per minute
+
+
+def _check_auth_rate(client_ip: str) -> bool:
+    """Return True if under the auth failure rate limit."""
+    now = time.monotonic()
+    hits = _auth_failures.setdefault(client_ip, [])
+    # Prune old entries
+    cutoff = now - 60.0
+    _auth_failures[client_ip] = [t for t in hits if t > cutoff]
+    hits = _auth_failures[client_ip]
+    if len(hits) >= _AUTH_FAILURE_RPM:
+        return False
+    hits.append(now)
+    return True
 
 
 # ─── Key validation ───────────────────────────────────────────────────────────
@@ -233,6 +253,10 @@ class MCPAuthMiddleware:
 
                 matched = await store.validate_stored_api_key(raw_key)
                 if matched is None:
+                    client_ip = _extract_client_ip(scope)
+                    if not _check_auth_rate(client_ip or "unknown"):
+                        await _send_429(send, "Too many authentication attempts. Try again later.")
+                        return
                     await _send_401(send, "Invalid API key.")
                     return
 
@@ -324,6 +348,24 @@ async def _send_401(send: Callable, message: str) -> None:
     await send({
         "type": "http.response.start",
         "status": 401,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({
+        "type": "http.response.body",
+        "body": body,
+        "more_body": False,
+    })
+
+
+async def _send_429(send: Callable, message: str) -> None:
+    """Send a minimal 429 JSON response through the ASGI send callable."""
+    body = json.dumps({"detail": message}).encode()
+    await send({
+        "type": "http.response.start",
+        "status": 429,
         "headers": [
             (b"content-type", b"application/json"),
             (b"content-length", str(len(body)).encode()),

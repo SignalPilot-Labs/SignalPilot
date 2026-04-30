@@ -18,7 +18,7 @@ from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..models import ConnectionCreate, ConnectionUpdate
-from ..network_validation import validate_connection_params
+from ..network_validation import validate_connection_params, resolve_and_validate, validate_cloud_warehouse_params
 from ..scope_guard import RequireScope, require_scopes
 from ..store import (
     CredentialEncryptionError,
@@ -84,12 +84,22 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
             errors.append("Snowflake requires an account identifier")
         if not conn.username:
             errors.append("Snowflake requires a username")
+        # SSRF: validate account identifier format
+        try:
+            validate_cloud_warehouse_params("snowflake", account=conn.account)
+        except ValueError as e:
+            errors.append(str(e))
 
     if db == "bigquery":
         if not conn.project:
             errors.append("BigQuery requires a GCP project ID")
         if not conn.credentials_json:
             errors.append("BigQuery requires service account credentials JSON")
+        # SSRF: validate project ID format
+        try:
+            validate_cloud_warehouse_params("bigquery", project_id=conn.project)
+        except ValueError as e:
+            errors.append(str(e))
 
     if db == "databricks":
         if not conn.host:
@@ -98,6 +108,11 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
             errors.append("Databricks requires an HTTP path (SQL warehouse endpoint)")
         if not conn.access_token:
             errors.append("Databricks requires a personal access token")
+        # SSRF: validate Databricks host format
+        try:
+            validate_cloud_warehouse_params("databricks", host=conn.host)
+        except ValueError as e:
+            errors.append(str(e))
 
     if db in ("duckdb", "sqlite"):
         if not conn.database:
@@ -845,10 +860,23 @@ async def test_credentials(_: UserID, request: Request):
             host = parsed.hostname or conn.host or "localhost"
             port = parsed.port or conn.port or 5432
 
+            # Resolve DNS and validate IPs in one step, then connect to the
+            # validated IP directly. This prevents DNS rebinding TOCTOU attacks
+            # where the hostname could resolve to a different (internal) IP
+            # between the SSRF check and the actual socket connect.
+            try:
+                validated_ips = resolve_and_validate(host, int(port), db_type)
+            except ValueError:
+                # If resolve_and_validate fails (e.g. non-TCP type or
+                # cloud mode disabled), fall back to the hostname.
+                validated_ips = [host]
+
+            connect_ip = validated_ips[0]
+
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             try:
-                sock.connect((host, int(port)))
+                sock.connect((connect_ip, int(port)))
                 sock.close()
                 phases.append({
                     "phase": "network", "status": "ok",

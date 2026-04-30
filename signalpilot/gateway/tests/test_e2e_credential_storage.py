@@ -266,6 +266,7 @@ class TestCredentialStorageRoundTrip:
 
         retrieved = await store.get_connection_string(conn_name)
         assert retrieved is not None
-        # The extras must preserve the raw password for drivers that need it
+        # Password should NOT be stored in extras (Issue #22) — it lives only
+        # in the encrypted connection string to avoid double-storage of secrets.
         extras = await store.get_credential_extras(conn_name)
-        assert extras.get("password") == password
+        assert "password" not in extras

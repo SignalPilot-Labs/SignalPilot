@@ -145,7 +145,10 @@ async def get_byok_key(
 ) -> BYOKKeyResponse:
     """Get a single BYOK key by ID, scoped to the org derived from JWT."""
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -163,7 +166,10 @@ async def update_byok_key(
 ) -> BYOKKeyResponse:
     """Update a BYOK key's alias or status, scoped to the org derived from JWT."""
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -196,7 +202,10 @@ async def delete_byok_key(
     then deletes the key. This is the "revoke access" path.
     """
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -255,7 +264,10 @@ async def validate_byok_key(
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
 
     result = await db.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
@@ -299,6 +311,7 @@ async def migrate_credentials_to_byok(
     result = await store.session.execute(
         select(GatewayBYOKKey).where(
             GatewayBYOKKey.id == body.key_id,
+            GatewayBYOKKey.org_id == org_id,
             GatewayBYOKKey.status == "active",
         )
     )
@@ -370,14 +383,20 @@ async def rotate_byok_key_endpoint(
         raise HTTPException(status_code=400, detail="new_key_id must differ from key_id")
 
     old_key_result = await store.session.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     old_key = old_key_result.scalar_one_or_none()
     if old_key is None or old_key.org_id != org_id or old_key.status not in ("active", "rotating"):
         raise HTTPException(status_code=404, detail="Key not found")
 
     new_key_result = await store.session.execute(
-        select(GatewayBYOKKey).where(GatewayBYOKKey.id == body.new_key_id)
+        select(GatewayBYOKKey).where(
+            GatewayBYOKKey.id == body.new_key_id,
+            GatewayBYOKKey.org_id == org_id,
+        )
     )
     new_key = new_key_result.scalar_one_or_none()
     if new_key is None or new_key.org_id != org_id or new_key.status != "active":

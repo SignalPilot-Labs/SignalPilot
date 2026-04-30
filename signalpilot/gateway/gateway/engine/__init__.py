@@ -178,6 +178,16 @@ def _strip_sql_comments(sql: str) -> str:
     return result
 
 
+# Strip string literals to prevent false positives in regex-based checks
+# (e.g. semicolons inside 'hello;world' should not trigger stacking detection).
+_STRING_LITERAL = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", re.DOTALL)
+
+
+def _strip_sql_literals(sql: str) -> str:
+    """Replace string literals with empty placeholder to prevent false positives in regex checks."""
+    return _STRING_LITERAL.sub("''", sql)
+
+
 @dataclass
 class ValidationResult:
     ok: bool
@@ -203,8 +213,9 @@ def validate_sql(
     if len(sql) > 100_000:
         return ValidationResult(ok=False, blocked_reason="Query exceeds maximum length (100KB)")
 
-    # Strip comments before stacking check (HIGH-04 fix)
+    # Strip comments and string literals before stacking check (HIGH-04 fix + Issue #20)
     stripped = _strip_sql_comments(sql)
+    stripped = _strip_sql_literals(stripped)
     if _STACKING_PATTERN.search(stripped.rstrip(";")):
         return ValidationResult(
             ok=False,
@@ -271,6 +282,27 @@ def validate_sql(
                 )
 
     return ValidationResult(ok=True, tables=tables, columns=columns)
+
+
+def redact_sql_literals(sql: str, dialect: str = "postgres") -> str:
+    """Replace string literals with '<REDACTED>' for audit logging.
+
+    Preserves query structure and numeric literals (useful for query analysis).
+    Falls back to truncation if parsing fails — never stores full PII on error.
+    """
+    if not HAS_SQLGLOT or not sql:
+        return sql
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+        if tree is None:
+            return sql
+        for node in tree.walk():
+            if isinstance(node, exp.Literal) and node.is_string:
+                node.set("this", "<REDACTED>")
+        return tree.sql(dialect=dialect)
+    except Exception:
+        # If redaction fails, truncate the SQL rather than storing full PII
+        return sql[:50] + "... <REDACTED ON PARSE ERROR>" if len(sql) > 50 else sql
 
 
 def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") -> str:

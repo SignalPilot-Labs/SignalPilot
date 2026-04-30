@@ -37,6 +37,7 @@ from .db.models import (
     GatewayProject,
     GatewaySetting,
 )
+from .engine import redact_sql_literals
 from .models import (
     AuditEntry,
     ApiKeyRecord,
@@ -57,6 +58,11 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot")))
+
+# Legacy bare SHA-256 derivation is disabled by default. Existing deployments
+# that still have rows encrypted with the old key can temporarily set
+# SP_ALLOW_LEGACY_CRYPTO=true while migrating, then disable it again.
+_ALLOW_LEGACY_CRYPTO = os.environ.get("SP_ALLOW_LEGACY_CRYPTO", "false").lower() == "true"
 
 PBKDF2_ITERATIONS = 600_000
 PBKDF2_KEY_LENGTH = 32
@@ -321,17 +327,21 @@ def _decrypt_with_migration(encrypted: bytes) -> tuple[str, bool]:
             pass
 
         # Try legacy SHA-256 derivation (no KDF at all).
-        legacy_key = _derive_key_legacy_sha256(key_str)
-        try:
-            f_legacy = Fernet(legacy_key)
-            plaintext = f_legacy.decrypt(encrypted).decode()
-            logger.warning(
-                "Credential decrypted with legacy SHA-256 key derivation. "
-                "This is deprecated — row will be re-encrypted with PBKDF2 key."
-            )
-            return plaintext, True
-        except InvalidToken:
-            pass
+        if _ALLOW_LEGACY_CRYPTO:
+            legacy_key = _derive_key_legacy_sha256(key_str)
+            try:
+                f_legacy = Fernet(legacy_key)
+                plaintext = f_legacy.decrypt(encrypted).decode()
+                logger.warning(
+                    "Credential decrypted with DEPRECATED legacy SHA-256 key derivation. "
+                    "Re-encrypt credentials to remove this dependency. "
+                    "Set SP_ALLOW_LEGACY_CRYPTO=false after migration."
+                )
+                return plaintext, True  # needs_migration=True
+            except InvalidToken:
+                pass
+        else:
+            logger.debug("Legacy SHA-256 crypto disabled (SP_ALLOW_LEGACY_CRYPTO=false)")
 
     raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
 
@@ -492,10 +502,13 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
                 extras[attr] = val
     if conn.access_token:
         extras["access_token"] = conn.access_token
-    if conn.password:
-        extras["password"] = conn.password
+    # NOTE: password is intentionally excluded from extras — it is already
+    # embedded in the encrypted connection string.  Storing it twice doubles
+    # the blast radius of a credential leak.  Consumers that need the raw
+    # password (e.g. dbt profiles.yml generation) should extract it from
+    # the connection string at use-time.
     if conn.db_type == DBType.snowflake:
-        for attr in ("account", "warehouse", "schema_name", "role", "username", "password"):
+        for attr in ("account", "warehouse", "schema_name", "role", "username"):
             extras[attr] = getattr(conn, attr, None)
         if conn.private_key:
             extras["private_key"] = conn.private_key
@@ -1268,6 +1281,8 @@ class Store:
 
     async def append_audit(self, entry: AuditEntry):
         oid = self._require_org_id()
+        # Redact string literals from SQL to avoid storing PII (Issue #45)
+        redacted_sql = redact_sql_literals(entry.sql) if entry.sql else None
         self.session.add(GatewayAuditLog(
             id=entry.id or str(uuid.uuid4()),
             org_id=oid,
@@ -1276,7 +1291,7 @@ class Store:
             event_type=entry.event_type,
             connection_name=entry.connection_name,
             sandbox_id=entry.sandbox_id,
-            sql_text=entry.sql,
+            sql_text=redacted_sql,
             tables=entry.tables,
             rows_returned=entry.rows_returned,
             cost_usd=entry.cost_usd,
@@ -1437,14 +1452,14 @@ class Store:
         now = datetime.now(timezone.utc).isoformat()
 
         db_key = GatewayApiKey(
-            id=key_id, org_id=oid, user_id=self.user_id, name=name, prefix=raw_key[:7],
+            id=key_id, org_id=oid, user_id=self.user_id, name=name, prefix=raw_key[:11],
             key_hash=key_hash, scopes=scopes, created_at=now, expires_at=expires_at,
         )
         self.session.add(db_key)
         await self.session.commit()
 
         record = ApiKeyRecord(
-            id=key_id, name=name, prefix=raw_key[:7], key_hash=key_hash,
+            id=key_id, name=name, prefix=raw_key[:11], key_hash=key_hash,
             scopes=scopes, created_at=now, last_used_at=None,
             expires_at=expires_at, user_id=self.user_id, org_id=oid,
         )

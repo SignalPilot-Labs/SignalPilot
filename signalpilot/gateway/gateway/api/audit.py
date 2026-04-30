@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func as sa_func
+
+MAX_EXPORT_ROWS = int(os.environ.get("SP_MAX_EXPORT_ROWS", "50000"))
 
 from ..scope_guard import RequireScope
 from ..db.models import GatewayAuditLog
@@ -38,7 +41,7 @@ async def get_audit(
 async def get_audit_stats(store: StoreD):
     """Lightweight aggregate stats — single query, no row scanning."""
     from sqlalchemy import case, Integer
-    oid = store.org_id or "local"
+    oid = store._require_org_id()
     q = (
         select(
             GatewayAuditLog.event_type,
@@ -70,6 +73,7 @@ async def get_audit_stats(store: StoreD):
 @router.get("/audit/export", dependencies=[RequireScope("admin")])
 async def export_audit(
     store: StoreD,
+    limit: int | None = Query(default=None, ge=1),
     connection_name: str | None = Query(default=None, max_length=64),
     event_type: str | None = Query(default=None, max_length=64),
     format: str = Query(default="json", pattern=r"^(json|csv)$"),
@@ -78,13 +82,21 @@ async def export_audit(
 
     Returns a downloadable JSON or CSV file with all audit entries
     matching the filter criteria. Suitable for SOC 2, HIPAA, or EU AI Act reporting.
+    Capped at SP_MAX_EXPORT_ROWS (default 50 000) to prevent OOM.
     """
+    capped_limit = min(limit or MAX_EXPORT_ROWS, MAX_EXPORT_ROWS)
     entries = await store.read_audit(
-        limit=1_000_000,
+        limit=capped_limit,
         offset=0,
         connection_name=connection_name,
         event_type=event_type,
     )
+
+    truncated = len(entries) >= capped_limit
+    extra_headers: dict[str, str] = {}
+    if truncated:
+        extra_headers["X-Truncated"] = "true"
+        extra_headers["X-Max-Rows"] = str(MAX_EXPORT_ROWS)
 
     if format == "csv":
         import csv
@@ -116,7 +128,7 @@ async def export_audit(
         return StreamingResponse(
             iter([content]),
             media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=signalpilot-audit-export.csv"},
+            headers={"Content-Disposition": "attachment; filename=signalpilot-audit-export.csv", **extra_headers},
         )
 
     # JSON format
@@ -133,5 +145,5 @@ async def export_audit(
     return StreamingResponse(
         iter([json.dumps(export_data, indent=2, default=str)]),
         media_type="application/json",
-        headers={"Content-Disposition": "attachment; filename=signalpilot-audit-export.json"},
+        headers={"Content-Disposition": "attachment; filename=signalpilot-audit-export.json", **extra_headers},
     )

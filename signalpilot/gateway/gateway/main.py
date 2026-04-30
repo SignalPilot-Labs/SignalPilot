@@ -331,7 +331,8 @@ try:
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
-    app.mount("/", _mcp_http_app)
-    logger.info("MCP streamable-http endpoint mounted at /mcp")
+    app.mount("/mcp", _mcp_http_app)  # New canonical path
+    app.mount("/", _mcp_http_app)     # Backward compat — remove after client migration
+    logger.info("MCP streamable-http endpoint mounted at /mcp (also / for backward compat)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

@@ -1,0 +1,80 @@
+---
+sidebar_position: 4
+---
+
+# Authentication
+
+## Local self-hosted (no auth required by default)
+
+A local Docker Compose deployment has no auth enforced by default — the gateway trusts all requests from localhost. This is intentional for fast local development.
+
+To enable API key enforcement locally, set `SP_REQUIRE_API_KEY=true` in your `.env`.
+
+## API keys
+
+API keys are the primary auth mechanism for both self-hosted and cloud deployments.
+
+**Format**: `sk_` prefix followed by a random string. Keys are stored hashed (AES-GCM encrypted secret) in the gateway's database.
+
+**Create a key** via the web UI at `http://localhost:3200` → Settings → API Keys, or via the REST API:
+
+```bash
+curl -X POST http://localhost:3300/api/keys \
+  -H "Content-Type: application/json" \
+  -d '{"name": "claude-code-local"}'
+```
+
+**Use the key** as a bearer token:
+
+```
+Authorization: Bearer sk_your_key_here
+```
+
+## Bearer token header
+
+Pass the API key in every MCP request:
+
+```bash
+# Claude Code
+claude mcp add --transport http signalpilot http://localhost:3300/mcp \
+  --header "Authorization: Bearer sk_your_key_here"
+
+# JSON config
+{
+  "headers": {
+    "Authorization": "Bearer sk_your_key_here"
+  }
+}
+```
+
+## Clerk JWT (cloud mode)
+
+SignalPilot Cloud uses [Clerk](https://clerk.com) for SSO. When a user authenticates through the web UI, Clerk issues a short-lived JWT. The gateway validates:
+
+- Signature against the Clerk JWKS endpoint
+- `exp` claim with a configurable clock leeway (`SP_CLERK_JWT_LEEWAY`, default 5s)
+- Required claims: `org_id`, `sub`
+- Org role for admin endpoints: `org:admin`
+
+The JWT is not needed for MCP tool calls — those use API keys, which are org-scoped and tied to the authenticated org.
+
+## Rotating keys
+
+Old keys can be revoked in the web UI or via the REST API. Revocation is immediate — in-flight requests with the old key will fail on the next auth check.
+
+```bash
+curl -X DELETE http://localhost:3300/api/keys/KEY_ID \
+  -H "Authorization: Bearer sk_admin_key"
+```
+
+## Scoping by org (cloud)
+
+In SignalPilot Cloud, each API key is tied to an org. A key can only access connections owned by that org. Cross-org access is blocked at the data layer — not just at the API layer.
+
+## Rate limits
+
+- **60 requests/min/IP** — brute-force protection on auth endpoints
+- **120 tool calls/min/key** — per API key
+- **300 tool calls/min/org** — per org (cloud)
+
+See [Configuration](/docs/setup/configuration) to adjust these defaults.

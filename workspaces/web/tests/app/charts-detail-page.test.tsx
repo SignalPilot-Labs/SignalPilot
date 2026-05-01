@@ -7,6 +7,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+vi.mock("@/components/charts/EChart", () => ({
+  EChart: ({ option, ariaLabel }: { option: unknown; ariaLabel: string }) => (
+    <div data-testid="echart-stub" data-option={JSON.stringify(option)} aria-label={ariaLabel} />
+  ),
+}));
+
 const mockDefinition = {
   schemaVersion: 1 as const,
   id: "aabbccdd-1234-4abc-8def-aabbccddeeff",
@@ -48,6 +54,35 @@ describe("ChartDetailPage", () => {
     const sqlNode = screen.getByText("SELECT 1 FROM dual");
     const preEl = sqlNode.closest("pre");
     expect(preEl).not.toBeNull();
+  });
+
+  it("renders Preview heading and sample data disclaimer", async () => {
+    vi.doMock("@/lib/env", () => ({
+      getServerEnv: vi.fn(() => ({
+        mode: "local",
+        apiUrl: "http://localhost:3400",
+        localApiKey: "test-key",
+        localWorkspaceIds: [],
+        localChartsDir: "/tmp/test-charts",
+      })),
+    }));
+
+    vi.doMock("@/lib/charts/load-charts", () => ({
+      loadChartDefinition: vi.fn(async () => mockDefinition),
+    }));
+
+    vi.doMock("next/navigation", () => ({
+      notFound: () => {
+        throw new Error("NEXT_NOT_FOUND");
+      },
+    }));
+
+    vi.resetModules();
+    const { default: Page } = await import("@/app/charts/[id]/page");
+    render(await Page({ params: Promise.resolve({ id: mockDefinition.id }) }));
+
+    expect(screen.getByRole("heading", { name: "Preview" })).toBeDefined();
+    expect(screen.getByText("Sample data — query execution not yet wired")).toBeDefined();
   });
 
   it("calls notFound() when loadChartDefinition returns null", async () => {

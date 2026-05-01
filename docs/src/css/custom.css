@@ -293,6 +293,11 @@ pre,
   background: var(--ifm-color-emphasis-500);
 }
 
+/* ── External link icon ── */
+[class^="iconExternalLink"] {
+  display: none;
+}
+
 /* ── Focus visible ── */
 :focus-visible {
   outline: 2px solid var(--ifm-color-primary);

@@ -10,6 +10,9 @@ export function TopNav() {
         <Link href="/dashboards" className="text-sm text-muted hover:text-fg transition-colors">
           Dashboards
         </Link>
+        <Link href="/charts/new" className="text-sm text-muted hover:text-fg transition-colors">
+          New chart
+        </Link>
       </nav>
     </header>
   );

@@ -3,7 +3,13 @@ import "server-only";
 export type Mode = "local" | "cloud";
 
 export type ServerEnv =
-  | { mode: "local"; apiUrl: string; localApiKey: string; localWorkspaceIds: string[] }
+  | {
+      mode: "local";
+      apiUrl: string;
+      localApiKey: string;
+      localWorkspaceIds: string[];
+      localChartsDir: string;
+    }
   | { mode: "cloud"; apiUrl: string; clerkPublishableKey: string; clerkSecretKey: string };
 
 export function getServerEnv(): ServerEnv {
@@ -18,6 +24,7 @@ export function getServerEnv(): ServerEnv {
       apiUrl,
       localApiKey: required("SP_LOCAL_API_KEY"),
       localWorkspaceIds: parseCsv(process.env["WORKSPACES_LOCAL_IDS"] ?? ""),
+      localChartsDir: required("WORKSPACES_LOCAL_CHARTS_DIR"),
     };
   }
   return {

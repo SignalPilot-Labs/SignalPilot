@@ -6,3 +6,4 @@ import { vi } from "vitest";
 vi.stubEnv("WORKSPACES_MODE", "local");
 vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
 vi.stubEnv("SP_LOCAL_API_KEY", "test-api-key");
+vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", "/tmp/wsp-charts-test");

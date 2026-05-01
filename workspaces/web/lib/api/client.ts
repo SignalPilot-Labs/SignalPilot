@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getServerEnv } from "@/lib/env";
+import { getCloudJwt } from "@/lib/auth/get-token";
 import { ApiError, ChartListResponse, ChartResponse, ChartRunResponse } from "@/lib/api/types";
 
 interface ChartRunBody {
@@ -9,11 +10,17 @@ interface ChartRunBody {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { apiUrl, localApiKey } = getServerEnv();
-
-  const url = `${apiUrl}${path}`;
+  const env = getServerEnv();
+  const url = `${env.apiUrl}${path}`;
   const headers = new Headers(init?.headers);
-  headers.set("Authorization", `Bearer ${localApiKey}`);
+
+  let token: string;
+  if (env.mode === "cloud") {
+    token = await getCloudJwt();
+  } else {
+    token = env.localApiKey;
+  }
+  headers.set("Authorization", `Bearer ${token}`);
   headers.set("Content-Type", "application/json");
 
   const response = await fetch(url, {

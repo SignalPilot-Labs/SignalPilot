@@ -1,24 +1,30 @@
 import "server-only";
 
-export interface ServerEnv {
-  apiUrl: string;
-  localApiKey: string;
-}
+export type Mode = "local" | "cloud";
+
+export type ServerEnv =
+  | { mode: "local"; apiUrl: string; localApiKey: string }
+  | { mode: "cloud"; apiUrl: string; clerkPublishableKey: string; clerkSecretKey: string };
 
 export function getServerEnv(): ServerEnv {
-  const apiUrl = process.env["WORKSPACES_API_URL"];
-  if (!apiUrl) {
-    throw new Error(
-      "Missing required environment variable: WORKSPACES_API_URL"
-    );
+  const apiUrl = required("WORKSPACES_API_URL");
+  const raw = process.env["WORKSPACES_MODE"] ?? "local";
+  if (raw !== "local" && raw !== "cloud") {
+    throw new Error(`Invalid WORKSPACES_MODE: ${raw} (expected "local" | "cloud")`);
   }
-
-  const localApiKey = process.env["SP_LOCAL_API_KEY"];
-  if (!localApiKey) {
-    throw new Error(
-      "Missing required environment variable: SP_LOCAL_API_KEY"
-    );
+  if (raw === "local") {
+    return { mode: "local", apiUrl, localApiKey: required("SP_LOCAL_API_KEY") };
   }
+  return {
+    mode: "cloud",
+    apiUrl,
+    clerkPublishableKey: required("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"),
+    clerkSecretKey: required("CLERK_SECRET_KEY"),
+  };
+}
 
-  return { apiUrl, localApiKey };
+function required(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing required environment variable: ${name}`);
+  return v;
 }

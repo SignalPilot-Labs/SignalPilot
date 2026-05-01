@@ -9,6 +9,7 @@ export type ServerEnv =
       localApiKey: string;
       localWorkspaceIds: string[];
       localChartsDir: string;
+      localDbtLinksDir: string;
     }
   | { mode: "cloud"; apiUrl: string; clerkPublishableKey: string; clerkSecretKey: string };
 
@@ -25,6 +26,7 @@ export function getServerEnv(): ServerEnv {
       localApiKey: required("SP_LOCAL_API_KEY"),
       localWorkspaceIds: parseCsv(process.env["WORKSPACES_LOCAL_IDS"] ?? ""),
       localChartsDir: required("WORKSPACES_LOCAL_CHARTS_DIR"),
+      localDbtLinksDir: required("WORKSPACES_LOCAL_DBT_LINKS_DIR"),
     };
   }
   return {

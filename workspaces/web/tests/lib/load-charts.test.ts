@@ -25,6 +25,7 @@ describe("loadChartDefinitions", () => {
   it("returns [] when the directory does not exist", async () => {
     const nonExistentDir = join(tmpdir(), "wsp-charts-nonexistent-" + Date.now());
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", nonExistentDir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -39,6 +40,7 @@ describe("loadChartDefinitions", () => {
   it("returns entries sorted by createdAt descending", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -69,6 +71,7 @@ describe("loadChartDefinitions", () => {
   it("skips malformed and schemaVersion:2 files, warns, and returns only valid entries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -102,6 +105,7 @@ describe("loadChartDefinition", () => {
   it("returns null for non-uuid id without touching disk", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -120,6 +124,7 @@ describe("loadChartDefinition", () => {
   it("returns null for a missing file (ENOENT)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -134,6 +139,7 @@ describe("loadChartDefinition", () => {
   it("returns null for a file with wrong shape", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -151,6 +157,7 @@ describe("loadChartDefinition", () => {
   it("returns the definition for a valid file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");

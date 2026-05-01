@@ -13,6 +13,7 @@ describe("saveChartDefinition", () => {
   it("happy path: writes a valid ChartDefinitionV1 JSON file on disk", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -50,6 +51,7 @@ describe("saveChartDefinition", () => {
   it("rejects empty/whitespace name without writing a file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
@@ -71,6 +73,7 @@ describe("saveChartDefinition", () => {
   it("rejects an unknown chart type (cast bypass)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wsp-charts-"));
     vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", dir);
+    vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", "/tmp/dbt-links");
     vi.stubEnv("WORKSPACES_MODE", "local");
     vi.stubEnv("WORKSPACES_API_URL", "http://localhost:3400");
     vi.stubEnv("SP_LOCAL_API_KEY", "test-key");

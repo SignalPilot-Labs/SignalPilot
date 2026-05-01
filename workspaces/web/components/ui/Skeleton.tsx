@@ -7,7 +7,7 @@ interface SkeletonProps {
 export function Skeleton({ className }: SkeletonProps) {
   return (
     <div
-      className={clsx("animate-pulse bg-muted/30 rounded", className)}
+      className={clsx("animate-pulse bg-border rounded-control", className)}
       aria-hidden="true"
     />
   );

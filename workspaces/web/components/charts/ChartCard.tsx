@@ -20,9 +20,17 @@ function isRunError(run: ChartRunResponse | ChartCardRunError): run is ChartCard
 }
 
 export function ChartCard({ chart, runResult }: ChartCardProps) {
+  if (chart.chart_type === "number") {
+    return (
+      <article className="rounded-card border border-border bg-surface p-4 shadow-card">
+        <ChartCardBody chart={chart} runResult={runResult} />
+      </article>
+    );
+  }
+
   return (
-    <article className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
-      <h2 className="mb-3 text-sm font-semibold text-fg">{chart.title}</h2>
+    <article className="rounded-card border border-border bg-surface p-4 shadow-card">
+      <h2 className="mb-4 text-base font-semibold text-fg">{chart.title}</h2>
       <ChartCardBody chart={chart} runResult={runResult} />
     </article>
   );
@@ -43,11 +51,11 @@ function ChartCardBody({
 
   if (chart_type === "line" || chart_type === "bar") {
     const option = mapToEChartsOption(chart, runResult);
-    return <EChart option={option} />;
+    return <EChart option={option} ariaLabel={chart.title} />;
   }
 
   if (chart_type === "table") {
-    return <DataTable run={runResult} />;
+    return <DataTable run={runResult} caption={chart.title} />;
   }
 
   if (chart_type === "number") {

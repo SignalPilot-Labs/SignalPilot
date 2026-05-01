@@ -44,7 +44,7 @@ export default async function DashboardPage({ params }: PageProps) {
 
   return (
     <main className="p-6">
-      <h1 className="text-2xl font-semibold text-fg mb-6">Workspace charts</h1>
+      <h1 className="text-2xl font-semibold text-fg mb-4">Workspace charts</h1>
       <DashboardGrid>
         {items.map((chart, i) => {
           const run = runResults[i];

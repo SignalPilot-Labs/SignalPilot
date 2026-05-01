@@ -35,10 +35,11 @@ function ensureTheme() {
 
 interface EChartProps {
   option: Record<string, unknown>;
+  ariaLabel: string;
   height?: number;
 }
 
-export function EChart({ option, height = 320 }: EChartProps) {
+export function EChart({ option, ariaLabel, height = 320 }: EChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<echarts.ECharts | null>(null);
 
@@ -71,5 +72,5 @@ export function EChart({ option, height = 320 }: EChartProps) {
     }
   }, [option]);
 
-  return <div ref={containerRef} style={{ width: "100%", height }} />;
+  return <div ref={containerRef} role="img" aria-label={ariaLabel} style={{ width: "100%", height }} />;
 }

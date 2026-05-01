@@ -2,17 +2,19 @@ import type { ChartRunResponse } from "@/lib/api/types";
 
 interface DataTableProps {
   run: ChartRunResponse;
+  caption: string;
 }
 
 const MAX_ROWS = 200;
 
-export function DataTable({ run }: DataTableProps) {
+export function DataTable({ run, caption }: DataTableProps) {
   const displayRows = run.rows.slice(0, MAX_ROWS);
   const truncated = run.truncated || run.rows.length > MAX_ROWS;
 
   return (
-    <div className="max-h-80 overflow-auto rounded border border-border">
+    <div className="max-h-80 overflow-auto rounded-control border border-border">
       <table className="min-w-full text-sm">
+        <caption className="sr-only">{caption}</caption>
         <thead className="sticky top-0 z-10 bg-surface">
           <tr>
             {run.columns.map((col) => (
@@ -27,11 +29,11 @@ export function DataTable({ run }: DataTableProps) {
         </thead>
         <tbody>
           {displayRows.map((row, rowIdx) => (
-            <tr key={rowIdx} className="hover:bg-surface transition-colors">
+            <tr key={rowIdx} className="hover:bg-hover transition-colors">
               {row.map((cell, cellIdx) => (
                 <td
                   key={cellIdx}
-                  className="px-3 py-1.5 text-fg border-b border-border/50 whitespace-nowrap"
+                  className="px-3 py-1.5 text-fg border-b border-border whitespace-nowrap"
                 >
                   {cell == null ? <span className="text-muted">—</span> : String(cell)}
                 </td>

@@ -9,6 +9,8 @@ without the map. Alembic is NOT run in unit tests.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -16,6 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from workspaces_api.agent.spawner import StubSpawner
 from workspaces_api.config import Settings, get_settings
+from workspaces_api.dashboards.models import Chart, ChartQuery
 from workspaces_api.db import Base, make_sessionmaker
 from workspaces_api.events.bus import EventBus
 from workspaces_api.main import create_app
@@ -115,3 +118,42 @@ async def client(app):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as c:
         yield c
+
+
+@pytest_asyncio.fixture
+async def chart_factory(db_session, session_factory):
+    """Factory for creating Chart + ChartQuery ORM objects in tests."""
+
+    async def _make_chart(
+        workspace_id: str = "ws-test",
+        title: str = "Test Chart",
+        chart_type: str = "line",
+        connector_name: str = "my_conn",
+        sql: str = "SELECT 1",
+        params: dict | None = None,
+        refresh_interval_seconds: int = 3600,
+    ) -> tuple[Chart, ChartQuery]:
+        chart = Chart(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            title=title,
+            chart_type=chart_type,
+            echarts_option={},
+        )
+        db_session.add(chart)
+        await db_session.flush()
+
+        cq = ChartQuery(
+            id=uuid.uuid4(),
+            chart_id=chart.id,
+            connector_name=connector_name,
+            sql=sql,
+            params=params or {},
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
+        db_session.add(cq)
+        await db_session.flush()
+        await db_session.commit()
+        return chart, cq
+
+    return _make_chart

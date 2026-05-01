@@ -50,6 +50,18 @@ class ApprovalNotFound(WorkspacesError):
     error_code = "approval_not_found"
 
 
+class ChartNotFound(WorkspacesError):
+    """Raised when a chart cannot be found by ID."""
+
+    error_code = "chart_not_found"
+
+
+class ChartCacheCorrupt(WorkspacesError):
+    """Raised when the chart cache row contains unparseable JSON."""
+
+    error_code = "chart_cache_corrupt"
+
+
 def _error_body(exc: WorkspacesError) -> dict[str, str]:
     return {"error_code": exc.error_code, "message": exc.message}
 
@@ -87,3 +99,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: ApprovalNotFound
     ) -> JSONResponse:
         return JSONResponse(status_code=404, content=_error_body(exc))
+
+    @app.exception_handler(ChartNotFound)
+    async def _chart_not_found(request: Request, exc: ChartNotFound) -> JSONResponse:
+        return JSONResponse(status_code=404, content=_error_body(exc))
+
+    @app.exception_handler(ChartCacheCorrupt)
+    async def _chart_cache_corrupt(request: Request, exc: ChartCacheCorrupt) -> JSONResponse:
+        logger.error("chart_cache_corrupt: %s", exc.message)
+        return JSONResponse(status_code=500, content=_error_body(exc))

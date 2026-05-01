@@ -53,6 +53,10 @@ signalpilot-mcp = "gateway.mcp:main"
 [tool.hatch.build.targets.wheel]
 packages = ["gateway"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

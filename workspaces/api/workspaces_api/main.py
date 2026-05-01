@@ -21,6 +21,7 @@ from workspaces_api.config import get_settings
 from workspaces_api.db import make_engine, make_sessionmaker
 from workspaces_api.errors import register_exception_handlers
 from workspaces_api.events.bus import EventBus
+from workspaces_api.dashboards import router as dashboards_router
 from workspaces_api.routes import health_router, runs_router
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(runs_router)
+    app.include_router(dashboards_router)
 
     return app
 

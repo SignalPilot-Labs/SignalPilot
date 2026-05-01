@@ -1,26 +1,15 @@
-"""Optional sqlglot dependency guard.
+"""sqlglot import — hard dependency for SQL validation.
 
-Centralises the try/except so that the RuntimeWarning fires exactly once
-per process, regardless of how many engine sub-modules are imported.
+sqlglot is required for AST-based governance in dbt_validation.py. If it is
+absent, import fails loudly (fail closed — do not skip validation).
 """
 
 from __future__ import annotations
 
-import warnings
+import sqlglot
+import sqlglot.expressions as exp
 
-try:
-    import sqlglot
-    import sqlglot.expressions as exp
-
-    HAS_SQLGLOT: bool = True
-except ImportError:
-    sqlglot = None  # type: ignore[assignment]
-    exp = None  # type: ignore[assignment]
-    HAS_SQLGLOT = False
-    warnings.warn(
-        "sqlglot is not installed — SQL validation is DISABLED. Install it with: pip install sqlglot>=25.0.0",
-        RuntimeWarning,
-        stacklevel=2,
-    )
+# Re-export for callers that previously used the conditional-import pattern.
+HAS_SQLGLOT: bool = True
 
 __all__ = ["HAS_SQLGLOT", "exp", "sqlglot"]

@@ -21,7 +21,7 @@ export function AgentRunDetail({ run }: AgentRunDetailProps) {
           <dt className="text-muted">Created</dt>
           <dd className="text-fg">{new Date(run.createdAt).toLocaleString()}</dd>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-1">
           <dt className="text-muted">Prompt</dt>
           <dd className="text-fg">
             <pre className="whitespace-pre-wrap font-mono text-sm">{run.prompt}</pre>

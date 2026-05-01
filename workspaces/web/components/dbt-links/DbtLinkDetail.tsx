@@ -17,7 +17,7 @@ export function DbtLinkDetail({ link }: DbtLinkDetailProps) {
         </div>
         <div className="flex gap-2">
           <dt className="text-muted">Created</dt>
-          <dd className="text-fg">{link.createdAt}</dd>
+          <dd className="text-fg">{new Date(link.createdAt).toLocaleString()}</dd>
         </div>
         <div className="flex gap-2">
           <dt className="text-muted">Path</dt>

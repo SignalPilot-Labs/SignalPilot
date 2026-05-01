@@ -23,6 +23,7 @@ vi.mock("next/link", () => ({
 let mockPathname = "/dashboards";
 vi.mock("next/navigation", () => ({
   usePathname: () => mockPathname,
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 // Mock lucide-react icons to avoid SVG rendering issues

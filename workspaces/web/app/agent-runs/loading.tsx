@@ -1,12 +1,13 @@
-import { Skeleton } from "@/components/ui/Skeleton";
+import { PageHeaderSkeleton, TerminalBarSkeleton, Skeleton } from "@/components/ui/Skeleton";
 
 export default function AgentRunsLoading() {
   return (
-    <div className="p-6">
-      <Skeleton className="h-8 w-56 mb-4" />
-      <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-6 flex flex-col gap-2">
+    <div className="p-8 max-w-[1400px]">
+      <PageHeaderSkeleton />
+      <TerminalBarSkeleton />
+      <div className="flex flex-col gap-2">
         {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} className="h-14" />
+          <Skeleton key={i} className="h-16 border border-[var(--color-border)]" />
         ))}
       </div>
     </div>

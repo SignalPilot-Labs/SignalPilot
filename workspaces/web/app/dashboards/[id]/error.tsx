@@ -32,7 +32,7 @@ export default function DashboardError({ error, reset }: ErrorPageProps) {
         )}
         <button
           onClick={reset}
-          className={PRIMARY_BTN_CLASS}
+          className={`${PRIMARY_BTN_CLASS} w-full`}
         >
           Try again
         </button>

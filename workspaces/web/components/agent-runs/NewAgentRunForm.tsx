@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import { saveAgentRun } from "@/lib/agent-runs/save-run";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
 } from "@/components/ui/button-classes";
+import { PendingButton } from "@/components/ui/PendingButton";
 
 type SaveResult = { ok: false; error: string } | null;
 
@@ -74,14 +74,14 @@ export function NewAgentRunForm() {
         )}
       </div>
 
-      <button
+      <PendingButton
         type="submit"
-        disabled={isPending}
-        aria-busy={isPending}
-        className={PRIMARY_BTN_CLASS}
+        pending={isPending}
+        pendingLabel="Starting…"
+        className="w-full"
       >
-        {isPending ? "Starting…" : "Start run"}
-      </button>
+        Start run
+      </PendingButton>
     </form>
   );
 }

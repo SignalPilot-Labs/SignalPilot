@@ -105,7 +105,7 @@ export function ChartBuilderForm() {
         type="submit"
         disabled={isPending}
         aria-busy={isPending}
-        className={PRIMARY_BTN_CLASS}
+        className={`${PRIMARY_BTN_CLASS} w-full`}
       >
         {isPending ? "Saving…" : "Save"}
       </button>

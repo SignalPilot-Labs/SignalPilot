@@ -1,4 +1,4 @@
-"""Text-grep tests for the dashboards and R6 Alembic migrations."""
+"""Text-grep tests for the dashboards and R6/R7 Alembic migrations."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ _MIGRATIONS_DIR = (
 _MIGRATION_DASHBOARDS = _MIGRATIONS_DIR / "20260501_0002_dashboards.py"
 _MIGRATION_DECISION = _MIGRATIONS_DIR / "20260501_0003_approval_decision_past_tense.py"
 _MIGRATION_USER_ID = _MIGRATIONS_DIR / "20260501_0004_run_user_id.py"
+_MIGRATION_CHART_IDX = _MIGRATIONS_DIR / "20260501_0005_chart_created_by_idx.py"
 
 
 class TestDashboardsMigration:
@@ -100,3 +101,55 @@ class TestRunUserIdMigration:
     def test_no_backfill_documented(self) -> None:
         text = _MIGRATION_USER_ID.read_text()
         assert "No backfill" in text or "backfill" in text.lower()
+
+
+class TestChartCreatedByIdxMigration:
+    def test_migration_file_exists(self) -> None:
+        assert _MIGRATION_CHART_IDX.exists(), f"Migration not found: {_MIGRATION_CHART_IDX}"
+
+    def test_revision_and_down_revision(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        assert 'revision = "20260501_0005"' in text
+        assert 'down_revision = "20260501_0004"' in text
+
+    def test_upgrade_creates_chart_created_by_idx(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        assert "chart_created_by_idx" in text
+        assert "create_index" in text
+
+    def test_index_columns_include_created_by_first(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        # Leading column must be created_by for cloud-mode equality filter.
+        # Column names appear as unquoted strings in the list passed to create_index.
+        assert "created_by" in text
+        # Confirm it appears before workspace_id in the index definition
+        idx_created_by = text.find('"created_by"') if '"created_by"' in text else text.find("'created_by'")
+        if idx_created_by == -1:
+            # unquoted — find first occurrence after the index name
+            idx_name = text.find("chart_created_by_idx")
+            assert idx_name != -1
+            segment = text[idx_name : idx_name + 400]
+            assert segment.index("created_by") < segment.index("workspace_id")
+        else:
+            idx_ws = text.find('"workspace_id"') if '"workspace_id"' in text else text.find("'workspace_id'")
+            assert idx_created_by < idx_ws
+
+    def test_index_includes_all_four_columns(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        assert "workspace_id" in text
+        assert "created_at" in text
+        assert "created_by" in text
+
+    def test_downgrade_drops_chart_created_by_idx(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        assert "def downgrade" in text
+        assert "drop_index" in text
+        assert "chart_created_by_idx" in text
+
+    def test_uses_workspaces_schema(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        assert 'schema="workspaces"' in text
+
+    def test_no_column_add(self) -> None:
+        text = _MIGRATION_CHART_IDX.read_text()
+        assert "add_column" not in text

@@ -1,10 +1,14 @@
 """Dashboard chart routes.
 
-auth (R6): Routes now require the current_user_id dependency.
+auth (R7): Routes enforce cloud-mode Workspace→User ACL on all chart endpoints.
+  In cloud mode, charts are scoped to the authenticated user via Chart.created_by.
+  NULL created_by rows are local-mode rows (sentinel); they are invisible to cloud
+  callers because SQL NULL comparisons return NULL (falsy), not true.
+  Cross-tenant requests receive 404 (never 403) to avoid leaking existence.
+
+auth (R6): Routes require the current_user_id dependency.
   In local mode the dependency is a no-op (returns None, no header required).
   In cloud mode the dependency validates the Clerk JWT and raises 401/503 on failure.
-  Per-user chart filtering is deferred to a later round when Workspace→User ACL exists.
-  For R6, the dependency only enforces auth presence on chart routes.
 
 Routes:
   POST  /v1/charts                      Create chart + chart_query
@@ -22,6 +26,7 @@ Cursor encoding (deterministic, stable):
 
 Error matrix:
   chart not found              → 404  chart_not_found
+  cross-tenant access          → 404  chart_not_found  (never 403)
   no executor configured       → 503  chart_execute_disabled
   connector not found          → 422  connector_not_found (validation time — R3 skips)
   sql > 50000 chars            → 422  sql_too_long
@@ -37,14 +42,15 @@ import base64
 import json
 import logging
 import uuid
-from datetime import timezone
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from workspaces_api.auth.dependency import CurrentUserId
+from workspaces_api.config import Settings, get_settings
 from workspaces_api.errors import ChartCacheCorrupt, ChartNotFound
 from .cache import compute_cache_key, fetch_cached
 from .models import Chart, ChartCache, ChartQuery
@@ -111,6 +117,10 @@ async def create_chart(
 ) -> ChartResponse:
     """Create a chart and its associated chart_query.
 
+    Stamps created_by=user_id on the Chart row. In local mode user_id is None,
+    leaving the column NULL (the local-mode sentinel). In cloud mode user_id is
+    the JWT sub, establishing ownership for subsequent ACL checks.
+
     Validation errors (sql_too_long, invalid_chart_type) are raised by Pydantic
     and mapped to 422 by FastAPI. connector_not_found validation is deferred to R4.
     """
@@ -122,6 +132,7 @@ async def create_chart(
             title=body.title,
             chart_type=body.chart_type,
             echarts_option=body.echarts_option_json,
+            created_by=user_id,
         )
         session.add(chart)
         await session.flush()
@@ -152,11 +163,14 @@ async def get_chart(
     chart_id: uuid.UUID,
     request: Request,
     user_id: CurrentUserId,
+    settings: Settings = Depends(get_settings),
 ) -> ChartResponse:
-    """Fetch a chart by ID. Returns 404 if not found."""
+    """Fetch a chart by ID. Returns 404 if not found or cross-tenant in cloud mode."""
     session_factory = _get_session_factory(request)
     async with session_factory() as session:
         chart = await _load_chart(session, chart_id)
+    if settings.sp_deployment_mode == "cloud" and chart.created_by != user_id:
+        raise ChartNotFound(f"chart_id={chart_id}")
     return _build_chart_response(chart)
 
 
@@ -164,11 +178,18 @@ async def get_chart(
 async def list_charts(
     request: Request,
     user_id: CurrentUserId,
+    settings: Settings = Depends(get_settings),
     workspace: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
 ) -> ChartListResponse:
     """List charts for a workspace, paginated by created_at DESC.
+
+    In cloud mode, only charts owned by the authenticated user are returned.
+    The ownership filter is applied BEFORE cursor clauses so the cursor can
+    never re-expose cross-tenant rows.
+    NULL created_by rows (local-mode rows) are invisible to cloud callers
+    via SQL NULL comparison semantics.
 
     Cursor encodes (created_at_iso, chart_id) for stable keyset pagination.
     """
@@ -182,13 +203,14 @@ async def list_charts(
             .limit(limit + 1)
         )
 
+        if settings.sp_deployment_mode == "cloud":
+            q = q.where(Chart.created_by == user_id)
+
         if cursor is not None:
             try:
                 cursor_created_at, cursor_id = _decode_cursor(cursor)
             except Exception:
                 raise HTTPException(status_code=422, detail="invalid_cursor")
-            from sqlalchemy import or_, and_
-            from datetime import datetime
 
             cursor_dt = datetime.fromisoformat(cursor_created_at)
             q = q.where(
@@ -222,8 +244,12 @@ async def run_chart(
     body: ChartRunRequest,
     request: Request,
     user_id: CurrentUserId,
+    settings: Settings = Depends(get_settings),
 ) -> ChartRunResponse:
     """Return cached query result, or execute via dbt-proxy on cache MISS.
+
+    Ownership check fires BEFORE cache lookup so a cross-tenant caller cannot
+    probe cache state via timing (timing oracle prevention).
 
     R5 behavior:
       - cache HIT → 200 ChartRunResponse (cached=True)
@@ -240,6 +266,9 @@ async def run_chart(
     session_factory = _get_session_factory(request)
     async with session_factory() as session:
         chart = await _load_chart(session, chart_id)
+
+        if settings.sp_deployment_mode == "cloud" and chart.created_by != user_id:
+            raise ChartNotFound(f"chart_id={chart_id}")
 
         if chart.query is None:
             raise HTTPException(status_code=503, detail="chart_execute_disabled")

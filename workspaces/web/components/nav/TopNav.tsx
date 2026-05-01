@@ -19,6 +19,12 @@ export function TopNav() {
         <Link href="/dbt-links/new" className="text-sm text-muted hover:text-fg transition-colors">
           New dbt link
         </Link>
+        <Link href="/agent-runs" className="text-sm text-muted hover:text-fg transition-colors">
+          Agent runs
+        </Link>
+        <Link href="/agent-runs/new" className="text-sm text-muted hover:text-fg transition-colors">
+          New agent run
+        </Link>
         <Link href="/charts/new" className="text-sm text-muted hover:text-fg transition-colors">
           New chart
         </Link>

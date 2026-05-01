@@ -10,6 +10,7 @@ export type ServerEnv =
       localWorkspaceIds: string[];
       localChartsDir: string;
       localDbtLinksDir: string;
+      localAgentRunsDir: string;
     }
   | { mode: "cloud"; apiUrl: string; clerkPublishableKey: string; clerkSecretKey: string };
 
@@ -27,6 +28,7 @@ export function getServerEnv(): ServerEnv {
       localWorkspaceIds: parseCsv(process.env["WORKSPACES_LOCAL_IDS"] ?? ""),
       localChartsDir: required("WORKSPACES_LOCAL_CHARTS_DIR"),
       localDbtLinksDir: required("WORKSPACES_LOCAL_DBT_LINKS_DIR"),
+      localAgentRunsDir: required("WORKSPACES_LOCAL_AGENT_RUNS_DIR"),
     };
   }
   return {

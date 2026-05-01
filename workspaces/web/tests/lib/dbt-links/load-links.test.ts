@@ -27,6 +27,7 @@ function stubLocalEnv(dir: string) {
   vi.stubEnv("SP_LOCAL_API_KEY", "test-key");
   vi.stubEnv("WORKSPACES_LOCAL_CHARTS_DIR", "/tmp/charts");
   vi.stubEnv("WORKSPACES_LOCAL_DBT_LINKS_DIR", dir);
+  vi.stubEnv("WORKSPACES_LOCAL_AGENT_RUNS_DIR", "/tmp/agent-runs");
 }
 
 describe("loadDbtLinks", () => {

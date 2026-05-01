@@ -2,6 +2,8 @@
 sidebar_position: 2
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Query Intelligence Tools
 
 11 tools for writing, validating, and executing SQL queries with governance.
@@ -32,10 +34,11 @@ Execute governed, read-only SQL against a registered connection.
 
 **Example:**
 
-```
-Use query_database with connection="my-postgres" to run:
-SELECT order_date, COUNT(*) as orders FROM orders GROUP BY 1 ORDER BY 1
-```
+<MiniCopyBlock
+  label="query_database example"
+  plain
+  code={`Use query_database with connection="my-postgres" to run:\nSELECT order_date, COUNT(*) as orders FROM orders GROUP BY 1 ORDER BY 1`}
+/>
 
 ---
 

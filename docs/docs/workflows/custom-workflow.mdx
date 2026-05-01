@@ -2,6 +2,8 @@
 sidebar_position: 3
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Custom Workflows
 
 SignalPilot's 32 MCP tools work in any orchestration — not just the bundled skills. This guide shows how to build your own workflows.
@@ -32,11 +34,11 @@ Or pin this in `CLAUDE.md` so you don't repeat it every session — see [CLAUDE.
 
 Always validate before executing on production warehouses:
 
-```
-validate_sql → confirm syntax is clean
-estimate_query_cost → confirm cost is acceptable (BigQuery/Snowflake)
-query_database → execute with governance
-```
+<MiniCopyBlock
+  label="validation sequence"
+  plain
+  code={`validate_sql → confirm syntax is clean\nestimate_query_cost → confirm cost is acceptable (BigQuery/Snowflake)\nquery_database → execute with governance`}
+/>
 
 For DuckDB/SQLite/PostgreSQL where cost isn't an issue, you can skip `estimate_query_cost` and go straight to `validate_sql` → `query_database`.
 
@@ -44,39 +46,21 @@ For DuckDB/SQLite/PostgreSQL where cost isn't an issue, you can skip `estimate_q
 
 If you want custom skill behavior for your specific project, add skill files to `.claude/skills/` in your project root:
 
-```
-your-project/
-└── .claude/
-    └── skills/
-        └── my-custom-skill.md
-```
+<MiniCopyBlock
+  label="skill directory"
+  plain
+  code={`your-project/\n└── .claude/\n    └── skills/\n        └── my-custom-skill.md`}
+/>
 
 Claude Code auto-loads files from `.claude/skills/` when present. Structure them like SignalPilot's built-in skills: trigger conditions at the top, step-by-step instructions, tool call sequences.
 
 Example `.claude/skills/my-custom-skill.md`:
 
-```markdown
----
-name: my-etl-workflow
-description: "Load when building ETL pipelines for our Snowflake warehouse."
-type: skill
----
-
-# ETL Workflow
-
-## When this applies
-- User asks to build or update an ETL pipeline
-- Snowflake destination is mentioned
-
-## Step 1 — Check source schema
-Call `describe_table` on the source table first.
-
-## Step 2 — Validate SQL
-Always call `validate_sql` before `query_database`.
-
-## Step 3 — Check cost
-Call `estimate_query_cost` before any full-table scan.
-```
+<MiniCopyBlock
+  label="custom skill example"
+  plain
+  code={`---\nname: my-etl-workflow\ndescription: "Load when building ETL pipelines for our Snowflake warehouse."\ntype: skill\n---\n\n# ETL Workflow\n\n## When this applies\n- User asks to build or update an ETL pipeline\n- Snowflake destination is mentioned\n\n## Step 1 — Check source schema\nCall \`describe_table\` on the source table first.\n\n## Step 2 — Validate SQL\nAlways call \`validate_sql\` before \`query_database\`.\n\n## Step 3 — Check cost\nCall \`estimate_query_cost\` before any full-table scan.`}
+/>
 
 ## Using SignalPilot tools in custom agents
 
@@ -92,14 +76,10 @@ The 32 tools are the same regardless of which client calls them. Only the skill 
 
 A robust pattern for ad-hoc analysis:
 
-```
-1. list_database_connections     # confirm which DB is active
-2. schema_overview               # understand the shape
-3. find_join_path (if joining)   # discover the join path
-4. validate_sql                  # check syntax
-5. estimate_query_cost           # check cost (Snowflake/BigQuery)
-6. query_database                # execute
-7. explore_columns (on result)   # profile the output
-```
+<MiniCopyBlock
+  label="multi-step query pattern"
+  plain
+  code={`1. list_database_connections     # confirm which DB is active\n2. schema_overview               # understand the shape\n3. find_join_path (if joining)   # discover the join path\n4. validate_sql                  # check syntax\n5. estimate_query_cost           # check cost (Snowflake/BigQuery)\n6. query_database                # execute\n7. explore_columns (on result)   # profile the output`}
+/>
 
 Wire this into your `CLAUDE.md` or a project-local skill for consistent behavior across sessions.

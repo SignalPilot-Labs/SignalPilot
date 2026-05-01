@@ -2,6 +2,8 @@
 sidebar_position: 7
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Plugin Overview
 
 The [SignalPilot Claude Code plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds battle-tested dbt and SQL skills to Claude Code — the same skills that power the Spider 2.0-DBT SOTA (51.56%, #1 Apr 2026).
@@ -15,10 +17,10 @@ The plugin is **Claude Code-specific**. Skills and the verifier agent don't run 
 
 ## Install
 
-```bash
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
+<MiniCopyBlock
+  label="install the plugin"
+  code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+/>
 
 ## What a skill is
 
@@ -60,6 +62,7 @@ See [Skills overview](/docs/plugin/skills-overview) and [Skills reference](/docs
 
 ## Updating
 
-```bash
-claude plugin update signalpilot-dbt@signalpilot
-```
+<MiniCopyBlock
+  label="update the plugin"
+  code="claude plugin update signalpilot-dbt@signalpilot"
+/>

@@ -2,31 +2,17 @@
 sidebar_position: 2
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Architecture
 
 ## System diagram
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Your AI Agent (Claude Code, Agent SDK, any MCP client)     │
-└────────────────────────────┬────────────────────────────────┘
-                             │ MCP Protocol (streamable-http)
-┌────────────────────────────▼────────────────────────────────┐
-│  SignalPilot Gateway                                         │
-│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │
-│  │ Governance │ │ Schema       │ │ dbt Project           │ │
-│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │
-│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │
-│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │
-│  └────────────┘ └──────────────┘ └───────────────────────┘ │
-└────────────────────────────┬────────────────────────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        ▼                    ▼                    ▼
-   ┌─────────┐        ┌──────────┐        ┌──────────┐
-   │ DuckDB  │        │ Postgres │        │Snowflake │
-   └─────────┘        └──────────┘        └──────────┘
-```
+<MiniCopyBlock
+  label="architecture"
+  plain
+  code={`┌─────────────────────────────────────────────────────────────┐\n│  Your AI Agent (Claude Code, Agent SDK, any MCP client)     │\n└────────────────────────────┬────────────────────────────────┘\n                             │ MCP Protocol (streamable-http)\n┌────────────────────────────▼────────────────────────────────┐\n│  SignalPilot Gateway                                         │\n│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │\n│  │ Governance │ │ Schema       │ │ dbt Project           │ │\n│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │\n│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │\n│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │\n│  └────────────┘ └──────────────┘ └───────────────────────┘ │\n└────────────────────────────┬────────────────────────────────┘\n                             │\n        ┌────────────────────┼────────────────────┐\n        ▼                    ▼                    ▼\n   ┌─────────┐        ┌──────────┐        ┌──────────┐\n   │ DuckDB  │        │ Postgres │        │Snowflake │\n   └─────────┘        └──────────┘        └──────────┘`}
+/>
 
 ## Component table
 
@@ -67,31 +53,28 @@ The protocol is stateless per request. The gateway does not maintain websocket c
 
 ### Self-hosted (Docker Compose)
 
-```
-docker compose up -d
-# Web UI:   http://localhost:3200
-# Gateway:  http://localhost:3300
-```
+<MiniCopyBlock
+  label="self-hosted"
+  code={`docker compose up -d\n# Web UI:   http://localhost:3200\n# Gateway:  http://localhost:3300`}
+/>
 
 Single `docker-compose.yml` brings up the gateway, web UI, PostgreSQL internal DB, and sandbox. Auth is API-key based. No Clerk required.
 
 **Architecture:**
 
-```
-Docker Compose
-  ├── web (Next.js, port 3200)
-  ├── gateway (FastAPI, port 3300)
-  ├── postgres (internal DB for gateway)
-  └── sp-sandbox (gVisor, optional)
-```
+<MiniCopyBlock
+  label="docker compose stack"
+  plain
+  code={`Docker Compose\n  ├── web (Next.js, port 3200)\n  ├── gateway (FastAPI, port 3300)\n  ├── postgres (internal DB for gateway)\n  └── sp-sandbox (gVisor, optional)`}
+/>
 
 ### Cloud mode
 
-```
-Clerk Auth  →  Next.js Frontend  →  Gateway  →  Cloud warehouses
-                                        |
-                                  API Key Auth (org-scoped)
-```
+<MiniCopyBlock
+  label="cloud mode"
+  plain
+  code={`Clerk Auth  →  Next.js Frontend  →  Gateway  →  Cloud warehouses\n                                        |\n                                  API Key Auth (org-scoped)`}
+/>
 
 Multi-tenant. Clerk JWT for SSO. Org-scoped API keys. Managed history, dashboards, encrypted credential storage.
 

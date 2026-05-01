@@ -3,27 +3,28 @@ sidebar_position: 1
 slug: /
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Quickstart
 
 **SignalPilot** is a governed MCP server for AI agents — Snowflake, BigQuery, Postgres, dbt with enterprise guardrails. One entrypoint, three pieces of infrastructure: plugin (skills + tools), MCP server, and an observability platform.
 
 ## Three commands to a working setup
 
-```bash
-# 1. Clone and start the stack
-git clone https://github.com/SignalPilot-Labs/signalpilot.git
-cd signalpilot
-docker compose up -d
-# Web UI:    http://localhost:3200
-# Gateway:   http://localhost:3300
-
-# 2. Connect the MCP server to Claude Code
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-
-# 3. (Optional) Install the plugin for skills + verifier agent
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
+<div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+  <MiniCopyBlock
+    label="1 · clone and start the stack"
+    code={`git clone https://github.com/SignalPilot-Labs/signalpilot.git\ncd signalpilot\ndocker compose up -d`}
+  />
+  <MiniCopyBlock
+    label="2 · connect the mcp server to claude code"
+    code="claude mcp add --transport http signalpilot http://localhost:3300/mcp"
+  />
+  <MiniCopyBlock
+    label="3 · install the plugin for skills + verifier agent"
+    code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+  />
+</div>
 
 That's it. Claude Code now has governed access to your databases.
 

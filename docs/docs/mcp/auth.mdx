@@ -2,6 +2,8 @@
 sidebar_position: 4
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Authentication
 
 ## Local self-hosted (no auth required by default)
@@ -18,34 +20,29 @@ API keys are the primary auth mechanism for both self-hosted and cloud deploymen
 
 **Create a key** via the web UI at `http://localhost:3200` → Settings → API Keys, or via the REST API:
 
-```bash
-curl -X POST http://localhost:3300/api/keys \
-  -H "Content-Type: application/json" \
-  -d '{"name": "claude-code-local"}'
-```
+<MiniCopyBlock
+  label="create an api key"
+  code={`curl -X POST http://localhost:3300/api/keys \\\n  -H "Content-Type: application/json" \\\n  -d '{"name": "claude-code-local"}'`}
+/>
 
 **Use the key** as a bearer token:
 
-```
-Authorization: Bearer sk_your_key_here
-```
+<MiniCopyBlock label="bearer token" plain code="Authorization: Bearer sk_your_key_here" />
 
 ## Bearer token header
 
 Pass the API key in every MCP request:
 
-```bash
-# Claude Code
-claude mcp add --transport http signalpilot http://localhost:3300/mcp \
-  --header "Authorization: Bearer sk_your_key_here"
+<MiniCopyBlock
+  label="claude code"
+  code={`claude mcp add --transport http signalpilot http://localhost:3300/mcp \\\n  --header "Authorization: Bearer sk_your_key_here"`}
+/>
 
-# JSON config
-{
-  "headers": {
-    "Authorization": "Bearer sk_your_key_here"
-  }
-}
-```
+<MiniCopyBlock
+  label="json config"
+  plain
+  code={`{\n  "headers": {\n    "Authorization": "Bearer sk_your_key_here"\n  }\n}`}
+/>
 
 ## Clerk JWT (cloud mode)
 
@@ -62,10 +59,10 @@ The JWT is not needed for MCP tool calls — those use API keys, which are org-s
 
 Old keys can be revoked in the web UI or via the REST API. Revocation is immediate — in-flight requests with the old key will fail on the next auth check.
 
-```bash
-curl -X DELETE http://localhost:3300/api/keys/KEY_ID \
-  -H "Authorization: Bearer sk_admin_key"
-```
+<MiniCopyBlock
+  label="revoke an api key"
+  code={`curl -X DELETE http://localhost:3300/api/keys/KEY_ID \\\n  -H "Authorization: Bearer sk_admin_key"`}
+/>
 
 ## Scoping by org (cloud)
 

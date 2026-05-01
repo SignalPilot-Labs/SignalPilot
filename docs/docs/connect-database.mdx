@@ -1,0 +1,129 @@
+---
+sidebar_position: 5
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Connect a Database
+
+SignalPilot supports 7 SQL dialects. Connections are encrypted at rest with AES-GCM.
+
+## Supported databases
+
+| Database | Dialect | Cloud support | Tier |
+|----------|---------|---------------|------|
+| PostgreSQL | `postgresql` | Yes | 1 |
+| DuckDB | `duckdb` | Local | 1 |
+| Snowflake | `snowflake` | Yes | 1 |
+| BigQuery | `bigquery` | Yes | 1 |
+| MySQL | `mysql` | Yes | 2 |
+| SQLite | `sqlite` | Local only | 2 |
+| SQL Server | `mssql` | Yes | 2 |
+| Databricks | `databricks` | Yes | 3 |
+
+## Add a connection via the web UI
+
+Go to `http://localhost:3200` → Connections → Add Connection. Fill in the connection details for your database type.
+
+## Add a connection via API
+
+<MiniCopyBlock
+  label="add a connection via api"
+  code={`curl -X POST http://localhost:3300/api/connections \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name": "my-warehouse",\n    "db_type": "duckdb",\n    "database": "/path/to/warehouse.duckdb"\n  }'`}
+/>
+
+## Connection examples by dialect
+
+### PostgreSQL
+
+<MiniCopyBlock
+  label="postgresql"
+  plain
+  code={`{\n  "name": "prod-postgres",\n  "db_type": "postgresql",\n  "host": "db.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+**Recommended:** Create a read-only PostgreSQL user — the gateway enforces read-only at the SQL level, but defense-in-depth is good practice.
+
+### MySQL
+
+<MiniCopyBlock
+  label="mysql"
+  plain
+  code={`{\n  "name": "prod-mysql",\n  "db_type": "mysql",\n  "host": "db.example.com",\n  "port": 3306,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+### SQLite
+
+<MiniCopyBlock
+  label="sqlite"
+  plain
+  code={`{\n  "name": "local-sqlite",\n  "db_type": "sqlite",\n  "database": "/data/analytics.db"\n}`}
+/>
+
+SQLite connections are local-only (the gateway must have filesystem access to the `.db` file).
+
+### SQL Server
+
+<MiniCopyBlock
+  label="sql server"
+  plain
+  code={`{\n  "name": "prod-mssql",\n  "db_type": "mssql",\n  "host": "sqlserver.example.com",\n  "port": 1433,\n  "database": "Analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+### Snowflake
+
+<MiniCopyBlock
+  label="snowflake"
+  plain
+  code={`{\n  "name": "prod-snowflake",\n  "db_type": "snowflake",\n  "account": "xy12345.us-east-1",\n  "database": "ANALYTICS",\n  "warehouse": "COMPUTE_WH",\n  "role": "ANALYST",\n  "username": "...",\n  "password": "..."\n}`}
+/>
+
+### Databricks
+
+<MiniCopyBlock
+  label="databricks"
+  plain
+  code={`{\n  "name": "prod-databricks",\n  "db_type": "databricks",\n  "host": "adb-1234567890.azuredatabricks.net",\n  "http_path": "/sql/1.0/warehouses/abcdef123456",\n  "access_token": "..."\n}`}
+/>
+
+### BigQuery
+
+<MiniCopyBlock
+  label="bigquery"
+  plain
+  code={`{\n  "name": "prod-bigquery",\n  "db_type": "bigquery",\n  "project": "my-gcp-project",\n  "dataset": "analytics",\n  "credentials_json": "{...service account JSON...}"\n}`}
+/>
+
+## Environment variables for connections
+
+For self-hosted deployments, you can pre-configure connections via environment variables instead of the API. See [Configuration](/docs/setup/configuration) for the variable names.
+
+## SSH tunneling
+
+For databases that are not directly reachable from the gateway container, SSH tunneling is supported:
+
+<MiniCopyBlock
+  label="ssh tunnel config"
+  plain
+  code={`{\n  "name": "tunneled-postgres",\n  "db_type": "postgresql",\n  "host": "db.internal.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ec2-user",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----..."\n  }\n}`}
+/>
+
+## SSRF allow-list (cloud mode)
+
+In cloud mode, cloud warehouse connection parameters are validated against an allow-list of known hostnames to prevent SSRF attacks. The default allow-list covers:
+
+- `*.snowflakecomputing.com`
+- `*.databricks.com` / `*.azuredatabricks.net`
+- `bigquery.googleapis.com`
+
+Self-hosted deployments can extend this list via `SP_SSRF_ALLOW_LIST`.
+
+## Connection health
+
+<MiniCopyBlock
+  label="connection health"
+  plain
+  code={`Tool: connection_health\n→ prod-snowflake: p50=42ms, p95=180ms, p99=450ms, error_rate=0.1%\n→ dev-duckdb: p50=2ms, p95=8ms, p99=15ms, error_rate=0.0%`}
+/>
+
+Use `connection_health` to verify all connections are reachable and responding within acceptable latency.

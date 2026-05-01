@@ -16,6 +16,9 @@ export function TopNav() {
         <Link href="/dbt-links" className="text-sm text-muted hover:text-fg transition-colors">
           dbt links
         </Link>
+        <Link href="/dbt-links/new" className="text-sm text-muted hover:text-fg transition-colors">
+          New dbt link
+        </Link>
         <Link href="/charts/new" className="text-sm text-muted hover:text-fg transition-colors">
           New chart
         </Link>

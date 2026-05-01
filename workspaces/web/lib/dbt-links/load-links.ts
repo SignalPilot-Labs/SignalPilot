@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { getServerEnv } from "@/lib/env";
 import { LINK_KINDS, type DbtLinkV1 } from "@/lib/dbt-links/types";
 
+const UUID_V4_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function isDbtLinkV1(v: unknown): v is DbtLinkV1 {
   if (typeof v !== "object" || v === null) return false;
   const obj = v as Record<string, unknown>;
@@ -62,4 +65,40 @@ export async function loadDbtLinks(): Promise<DbtLinkV1[]> {
 
   // ISO 8601 strings lex-sort correctly; descending = b before a
   return links.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function loadDbtLink(id: string): Promise<DbtLinkV1 | null> {
+  const env = getServerEnv();
+  if (env.mode !== "local") {
+    throw new Error("loadDbtLink is only available in local mode");
+  }
+
+  if (!UUID_V4_REGEX.test(id)) {
+    return null;
+  }
+
+  const filepath = join(env.localDbtLinksDir, `${id}.json`);
+
+  let raw: string;
+  try {
+    raw = await readFile(filepath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (!isDbtLinkV1(parsed)) {
+    return null;
+  }
+
+  return parsed;
 }

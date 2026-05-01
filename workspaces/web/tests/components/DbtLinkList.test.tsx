@@ -1,7 +1,25 @@
-import { describe, it, expect, afterEach } from "vitest";
+import React from "react";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { DbtLinkList } from "@/components/dbt-links/DbtLinkList";
 import type { DbtLinkV1 } from "@/lib/dbt-links/types";
+
+// Mock next/link so it renders as a plain <a> in jsdom
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+    className,
+  }: {
+    href: string;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  ),
+}));
 
 afterEach(() => {
   cleanup();
@@ -62,5 +80,17 @@ describe("DbtLinkList", () => {
     });
     render(<DbtLinkList items={[cloudItem]} />);
     expect(screen.getAllByText(/dbt Cloud/)).toHaveLength(1);
+  });
+
+  it("each card is wrapped in an <a> link pointing to /dbt-links/<id>", () => {
+    const item = makeLink({
+      id: "44444444-4444-4444-8444-444444444444",
+      name: "Linked Project",
+    });
+    render(<DbtLinkList items={[item]} />);
+
+    const link = screen.getByRole("link", { name: /Linked Project/ });
+    expect(link).toBeDefined();
+    expect(link.getAttribute("href")).toBe(`/dbt-links/${item.id}`);
   });
 });

@@ -160,3 +160,74 @@ describe("loadDbtLinks", () => {
     await expect(loadDbtLinks()).rejects.toThrow("local mode");
   });
 });
+
+describe("loadDbtLink", () => {
+  it("returns null for a non-UUID id (path-traversal guard)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wsp-dbt-links-"));
+    stubLocalEnv(dir);
+    vi.resetModules();
+    const { loadDbtLink } = await import("@/lib/dbt-links/load-links");
+
+    expect(await loadDbtLink("../etc/passwd")).toBeNull();
+    expect(await loadDbtLink("not-a-uuid")).toBeNull();
+    expect(await loadDbtLink("")).toBeNull();
+  });
+
+  it("returns null for a missing file (ENOENT)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wsp-dbt-links-"));
+    stubLocalEnv(dir);
+    vi.resetModules();
+    const { loadDbtLink } = await import("@/lib/dbt-links/load-links");
+
+    const result = await loadDbtLink("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    expect(result).toBeNull();
+  });
+
+  it("returns the parsed link on happy path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wsp-dbt-links-"));
+    stubLocalEnv(dir);
+
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const link = makeLink({ id, name: "My Link" });
+    await writeFile(join(dir, `${id}.json`), JSON.stringify(link), "utf-8");
+
+    vi.resetModules();
+    const { loadDbtLink } = await import("@/lib/dbt-links/load-links");
+    const result = await loadDbtLink(id);
+
+    expect(result).not.toBeNull();
+    expect(result?.id).toBe(id);
+    expect(result?.name).toBe("My Link");
+    expect(result?.kind).toBe("native_upload");
+  });
+
+  it("returns null when shape check fails (schemaVersion: 2)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wsp-dbt-links-"));
+    stubLocalEnv(dir);
+
+    const id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    await writeFile(
+      join(dir, `${id}.json`),
+      JSON.stringify({ schemaVersion: 2, id, name: "Bad" }),
+      "utf-8",
+    );
+
+    vi.resetModules();
+    const { loadDbtLink } = await import("@/lib/dbt-links/load-links");
+    const result = await loadDbtLink(id);
+    expect(result).toBeNull();
+  });
+
+  it("throws when mode is cloud", async () => {
+    vi.stubEnv("WORKSPACES_MODE", "cloud");
+    vi.stubEnv("WORKSPACES_API_URL", "http://api");
+    vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "pk_test_xxx");
+    vi.stubEnv("CLERK_SECRET_KEY", "sk_test_xxx");
+
+    vi.resetModules();
+    const { loadDbtLink } = await import("@/lib/dbt-links/load-links");
+    await expect(loadDbtLink("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).rejects.toThrow(
+      "local mode",
+    );
+  });
+});

@@ -3,6 +3,15 @@
   background: #121212;
   text-align: left;
   overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.block:has(+ .block) {
+  margin-bottom: 0;
+}
+
+.block + .block {
+  margin-bottom: 0;
 }
 
 .header {

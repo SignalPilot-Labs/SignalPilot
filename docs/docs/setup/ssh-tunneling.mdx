@@ -3,6 +3,8 @@ sidebar_position: 5
 sidebar_label: "SSH Tunneling"
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # SSH Tunneling
 
 ## The problem
@@ -13,10 +15,11 @@ Your database is on a private network. Maybe it's behind a VPN, on Tailscale, in
 
 SSH tunneling uses a "jump box" — a machine that **can** see both sides. The gateway connects to the jump box over SSH, and the jump box forwards traffic to your database.
 
-```
-SignalPilot Gateway                Jump box                  Your database
-(can reach the internet)  --SSH-->  (has access to both)  -->  (private network)
-```
+<MiniCopyBlock
+  label="ssh tunnel flow"
+  plain
+  code={`SignalPilot Gateway                Jump box                  Your database\n(can reach the internet)  --SSH-->  (has access to both)  -->  (private network)`}
+/>
 
 You already do this conceptually every time you VPN into a network to access something. SSH tunneling just automates it at the connection level.
 
@@ -40,25 +43,11 @@ You have a PostgreSQL database running on a machine with Tailscale IP `100.64.1.
 
 If you have any machine on your Tailscale network that also has a public IP (like a cloud VM), use it:
 
-```json
-{
-  "name": "my-staging-db",
-  "db_type": "postgres",
-  "host": "100.64.1.50",
-  "port": 5432,
-  "database": "myapp",
-  "username": "readonly",
-  "password": "db-password-here",
-  "ssh_tunnel": {
-    "enabled": true,
-    "host": "203.0.113.10",
-    "port": 22,
-    "username": "ubuntu",
-    "auth_method": "key",
-    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
-  }
-}
-```
+<MiniCopyBlock
+  label="tailscale tunnel config"
+  plain
+  code={`{\n  "name": "my-staging-db",\n  "db_type": "postgres",\n  "host": "100.64.1.50",\n  "port": 5432,\n  "database": "myapp",\n  "username": "readonly",\n  "password": "db-password-here",\n  "ssh_tunnel": {\n    "enabled": true,\n    "host": "203.0.113.10",\n    "port": 22,\n    "username": "ubuntu",\n    "auth_method": "key",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n..."\n  }\n}`}
+/>
 
 What happens: Gateway SSHs into `203.0.113.10` (public IP), then connects to `100.64.1.50:5432` through it (Tailscale IP, reachable from the jump box).
 
@@ -66,10 +55,10 @@ What happens: Gateway SSHs into `203.0.113.10` (public IP), then connects to `10
 
 If none of your Tailscale machines have a public IP, you can use [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) to temporarily expose SSH on one of them:
 
-```bash
-# On any machine in your Tailscale network
-tailscale funnel --bg 22
-```
+<MiniCopyBlock
+  label="expose ssh with tailscale funnel"
+  code={`# On any machine in your Tailscale network\ntailscale funnel --bg 22`}
+/>
 
 This gives you a public hostname like `your-machine.tail1234.ts.net`. Use that as the SSH tunnel host.
 
@@ -81,25 +70,11 @@ If you're self-hosting (not using SignalPilot Cloud), the simplest option is to 
 
 Your database is in a private subnet (`10.0.2.x`). You have a bastion host in the public subnet.
 
-```json
-{
-  "name": "prod-analytics",
-  "db_type": "postgres",
-  "host": "10.0.2.45",
-  "port": 5432,
-  "database": "analytics",
-  "username": "readonly",
-  "password": "...",
-  "ssh_tunnel": {
-    "enabled": true,
-    "host": "bastion.example.com",
-    "port": 22,
-    "username": "ec2-user",
-    "auth_method": "key",
-    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
-  }
-}
-```
+<MiniCopyBlock
+  label="aws vpc tunnel config"
+  plain
+  code={`{\n  "name": "prod-analytics",\n  "db_type": "postgres",\n  "host": "10.0.2.45",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "enabled": true,\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ec2-user",\n    "auth_method": "key",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n..."\n  }\n}`}
+/>
 
 ## SSH tunnel fields
 
@@ -118,10 +93,10 @@ Your database is in a private subnet (`10.0.2.x`). You have a bastion host in th
 
 If you normally SSH into your jump box with `ssh -i mykey.pem user@host`, the contents of `mykey.pem` is what goes in the `private_key` field.
 
-```bash
-# Copy the key contents (paste into the private_key field)
-cat ~/.ssh/mykey.pem
-```
+<MiniCopyBlock
+  label="copy the key contents"
+  code={`# Copy the key contents (paste into the private_key field)\ncat ~/.ssh/mykey.pem`}
+/>
 
 The key starts with `-----BEGIN OPENSSH PRIVATE KEY-----` or `-----BEGIN RSA PRIVATE KEY-----`.
 

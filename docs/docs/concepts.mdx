@@ -2,18 +2,19 @@
 sidebar_position: 2
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Concepts
 
 ## The mental model
 
 SignalPilot sits between your AI agent and your databases. Every query passes through the gateway — it never runs directly against the database.
 
-```
-Claude Code  →  MCP tools  →  SignalPilot Gateway  →  Your databases
-                                      |
-                               Governance layer
-                               (parse, block, limit, audit)
-```
+<MiniCopyBlock
+  label="mental model"
+  plain
+  code={`Claude Code  →  MCP tools  →  SignalPilot Gateway  →  Your databases\n                                      |\n                               Governance layer\n                               (parse, block, limit, audit)`}
+/>
 
 ### Gateway
 

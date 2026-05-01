@@ -2,6 +2,8 @@
 sidebar_position: 4
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # How It Works
 
 Five stages, every task: **plan → scan → govern → build → report**.
@@ -57,13 +59,11 @@ Five stages, every task: **plan → scan → govern → build → report**.
 
 Every `query_database` call follows this path:
 
-```
-Agent  →  MCP request  →  Gateway  →  SQL Governance  →  Database
-                              |
-                        Auth + Rate Limit
-                              |
-                        Audit Log (PII-redacted)
-```
+<MiniCopyBlock
+  label="query lifecycle"
+  plain
+  code={`Agent  →  MCP request  →  Gateway  →  SQL Governance  →  Database\n                              |\n                        Auth + Rate Limit\n                              |\n                        Audit Log (PII-redacted)`}
+/>
 
 1. Agent sends a tool call via MCP (e.g. `query_database`)
 2. Auth layer validates the API key or Clerk JWT, resolves the org/tenant

@@ -2,6 +2,8 @@
 sidebar_position: 4
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Verifier Agent
 
 The SignalPilot verifier agent is a 7-check post-build quality protocol that runs automatically after `dbt run` completes. It returns a structured receipt — not just pass/fail.
@@ -26,31 +28,19 @@ The verifier agent runs after the build step in the `dbt-workflow` skill lifecyc
 
 The verifier returns a structured receipt:
 
-```
-Verifier receipt:
-  duration:          12.3s
-  agent turns:       4
-  governed queries:  9
-  queries blocked:   0
-  models built:      1
-  columns validated: 23
-
-  Check results:
-  ✓ column_alignment  — 23/23 columns match YML
-  ✓ row_count         — 48,291 rows (expected: >0)
-  ✓ fan_out           — max ratio 1.0x (threshold: 1.5x)
-  ✓ null_scan         — 0 NULLs in required columns
-  ✓ source_counts     — orders: 48,291 (stable)
-  ✓ schema_diff       — no schema changes
-  ✓ grain             — 1.00 rows per order_id (perfect grain)
-```
+<MiniCopyBlock
+  label="verifier receipt"
+  plain
+  code={`Verifier receipt:\n  duration:          12.3s\n  agent turns:       4\n  governed queries:  9\n  queries blocked:   0\n  models built:      1\n  columns validated: 23\n\n  Check results:\n  ✓ column_alignment  — 23/23 columns match YML\n  ✓ row_count         — 48,291 rows (expected: >0)\n  ✓ fan_out           — max ratio 1.0x (threshold: 1.5x)\n  ✓ null_scan         — 0 NULLs in required columns\n  ✓ source_counts     — orders: 48,291 (stable)\n  ✓ schema_diff       — no schema changes\n  ✓ grain             — 1.00 rows per order_id (perfect grain)`}
+/>
 
 A failed check includes the specific discrepancy:
 
-```
-  ✗ fan_out — ratio 3.2x on order_id (threshold: 1.5x)
-              Probable cause: missing JOIN condition on date key
-```
+<MiniCopyBlock
+  label="failed check example"
+  plain
+  code={`  ✗ fan_out — ratio 3.2x on order_id (threshold: 1.5x)\n              Probable cause: missing JOIN condition on date key`}
+/>
 
 ## What to do when a check fails
 

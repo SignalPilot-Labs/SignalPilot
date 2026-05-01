@@ -2,6 +2,8 @@
 sidebar_position: 6
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Governance Reference
 
 Authoritative reference for SignalPilot's SQL governance rules. All rules apply at parse time — before any query reaches the database.
@@ -10,17 +12,21 @@ Authoritative reference for SignalPilot's SQL governance rules. All rules apply 
 
 The following statement types are blocked regardless of dialect:
 
-```
-CREATE    DROP    ALTER    TRUNCATE    RENAME
-```
+<MiniCopyBlock
+  label="blocked ddl"
+  plain
+  code="CREATE    DROP    ALTER    TRUNCATE    RENAME"
+/>
 
 If a query contains any of these at the top level or inside a subquery, it is rejected with a governance error.
 
 ## DML block list
 
-```
-INSERT    UPDATE    DELETE    MERGE    UPSERT    REPLACE
-```
+<MiniCopyBlock
+  label="blocked dml"
+  plain
+  code="INSERT    UPDATE    DELETE    MERGE    UPSERT    REPLACE"
+/>
 
 SignalPilot enforces read-only access. No data-modification statements are allowed.
 

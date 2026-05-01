@@ -2,30 +2,35 @@
 sidebar_position: 1
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Connect Claude Code
 
 Claude Code is the recommended client for SignalPilot. It supports the plugin (skills + verifier agent) and has native `streamable-http` MCP support.
 
 ## One-liner
 
-```bash
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-```
+<div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+  <MiniCopyBlock
+    label="add signalpilot mcp server"
+    code="claude mcp add --transport http signalpilot http://localhost:3300/mcp"
+  />
+</div>
 
 For SignalPilot Cloud:
 
-```bash
-claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
-  --header "Authorization: Bearer YOUR_API_KEY"
-```
+<div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+  <MiniCopyBlock
+    label="add signalpilot cloud mcp server"
+    code={`claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"`}
+  />
+</div>
 
 ## Verify tools loaded
 
 After adding the server, start a Claude Code session and run:
 
-```
-/mcp
-```
+<MiniCopyBlock label="verify tools" plain code="/mcp" />
 
 You should see `signalpilot` listed with status `connected` and 32 tools available. Or ask Claude directly:
 
@@ -37,10 +42,10 @@ Claude should enumerate tools like `query_database`, `list_tables`, `dbt_error_p
 
 **Gateway not reachable**
 
-```bash
-curl http://localhost:3300/health
-# Should return {"status":"ok"}
-```
+<MiniCopyBlock
+  label="check gateway health"
+  code={`curl http://localhost:3300/health\n# Should return {"status":"ok"}`}
+/>
 
 If this fails, check that the stack is running: `docker compose ps`
 
@@ -48,18 +53,19 @@ If this fails, check that the stack is running: `docker compose ps`
 
 The gateway runs on `:3300`, not `:8081` (old default). If you have a stale `claude mcp` entry, remove and re-add:
 
-```bash
-claude mcp remove signalpilot
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-```
+<MiniCopyBlock
+  label="remove and re-add mcp server"
+  code={`claude mcp remove signalpilot\nclaude mcp add --transport http signalpilot http://localhost:3300/mcp`}
+/>
 
 **Tools not appearing**
 
 Try restarting Claude Code's MCP connection:
 
-```bash
-claude mcp restart signalpilot
-```
+<MiniCopyBlock
+  label="restart mcp connection"
+  code="claude mcp restart signalpilot"
+/>
 
 **Auth error (cloud)**
 
@@ -69,9 +75,9 @@ Verify your API key is set and not expired. Keys are shown once on creation in t
 
 Install the plugin to get skills and the verifier agent:
 
-```bash
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
+<MiniCopyBlock
+  label="install the plugin"
+  code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+/>
 
 See [Plugin overview](/docs/plugin) for details.

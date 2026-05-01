@@ -2,6 +2,8 @@
 sidebar_position: 1
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Install the Plugin
 
 ## Prerequisites
@@ -11,10 +13,10 @@ sidebar_position: 1
 
 ## Install
 
-```bash
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
+<MiniCopyBlock
+  label="install the plugin"
+  code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+/>
 
 The first command registers the plugin marketplace source. The second installs the `signalpilot-dbt` skill set from the SignalPilot plugin.
 
@@ -22,9 +24,7 @@ The first command registers the plugin marketplace source. The second installs t
 
 Start a Claude Code session and run:
 
-```
-/skills
-```
+<MiniCopyBlock label="check skills" plain code="/skills" />
 
 You should see the SignalPilot skills listed:
 
@@ -50,15 +50,16 @@ Claude should automatically load the `dbt-workflow` skill and follow the 5-step 
 
 ## Update
 
-```bash
-claude plugin update signalpilot-dbt@signalpilot
-```
+<MiniCopyBlock
+  label="update the plugin"
+  code="claude plugin update signalpilot-dbt@signalpilot"
+/>
 
 Updates pull the latest skill definitions from the plugin repository. No MCP server restart needed.
 
 ## Uninstall
 
-```bash
-claude plugin uninstall signalpilot-dbt@signalpilot
-claude plugin marketplace remove SignalPilot-Labs/signalpilot-plugin
-```
+<MiniCopyBlock
+  label="uninstall the plugin"
+  code={`claude plugin uninstall signalpilot-dbt@signalpilot\nclaude plugin marketplace remove SignalPilot-Labs/signalpilot-plugin`}
+/>

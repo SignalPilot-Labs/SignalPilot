@@ -1,0 +1,146 @@
+.block {
+  border: 1px solid #222;
+  background: #121212;
+  text-align: left;
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.block:has(+ .block) {
+  margin-bottom: 0;
+}
+
+.block + .block {
+  margin-bottom: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #222;
+}
+
+.label {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: #666;
+}
+
+.copyBtn {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  padding: 0.25rem 0.625rem;
+  border: 1px solid #222;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+
+.copyBtn:hover {
+  color: #eee;
+  border-color: #333;
+}
+
+.pre {
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+  margin: 0;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 13px;
+  line-height: 1.625;
+  color: #eee;
+  letter-spacing: 0.05em;
+  background: transparent;
+  border: none;
+}
+
+.prompt {
+  color: #00ff88;
+  user-select: none;
+}
+
+.comment {
+  color: #666;
+}
+
+.emptyLine {
+  height: 0.5em;
+}
+
+:root .block {
+  border-color: #d4d4d4;
+  background: #eaeaea;
+}
+
+:root .header {
+  border-bottom-color: #d4d4d4;
+}
+
+:root .label {
+  color: #999;
+}
+
+:root .copyBtn {
+  border-color: #d4d4d4;
+  color: #666;
+}
+
+:root .copyBtn:hover {
+  color: #1a1a1a;
+  border-color: #b0b0b0;
+}
+
+:root .pre {
+  color: #1a1a1a;
+}
+
+:root .prompt {
+  color: #00a85a;
+}
+
+:root .comment {
+  color: #999;
+}
+
+[data-theme='dark'] .block {
+  border-color: #222;
+  background: #121212;
+}
+
+[data-theme='dark'] .header {
+  border-bottom-color: #222;
+}
+
+[data-theme='dark'] .label {
+  color: #666;
+}
+
+[data-theme='dark'] .copyBtn {
+  border-color: #222;
+  color: #999;
+}
+
+[data-theme='dark'] .copyBtn:hover {
+  color: #eee;
+  border-color: #333;
+}
+
+[data-theme='dark'] .pre {
+  color: #eee;
+}
+
+[data-theme='dark'] .prompt {
+  color: #00ff88;
+}
+
+[data-theme='dark'] .comment {
+  color: #666;
+}

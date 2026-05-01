@@ -2,6 +2,8 @@
 sidebar_position: 3
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Running Multiple MCP Servers
 
 Claude Code and other MCP clients support multiple servers simultaneously. SignalPilot works alongside other MCP servers — filesystem, GitHub, browser, etc.
@@ -10,36 +12,18 @@ Claude Code and other MCP clients support multiple servers simultaneously. Signa
 
 A project using SignalPilot + a filesystem MCP + a GitHub MCP:
 
-```json
-{
-  "mcpServers": {
-    "signalpilot": {
-      "type": "http",
-      "url": "http://localhost:3300/mcp"
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
-    },
-    "github": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_token"
-      }
-    }
-  }
-}
-```
+<MiniCopyBlock
+  label="example .mcp.json"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "http://localhost:3300/mcp"\n    },\n    "filesystem": {\n      "type": "stdio",\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]\n    },\n    "github": {\n      "type": "stdio",\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-github"],\n      "env": {\n        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_token"\n      }\n    }\n  }\n}`}
+/>
 
 For Claude Code, you can also add servers individually and they combine:
 
-```bash
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-claude mcp add --transport stdio filesystem npx -y @modelcontextprotocol/server-filesystem /path/to/project
-```
+<MiniCopyBlock
+  label="add servers individually"
+  code={`claude mcp add --transport http signalpilot http://localhost:3300/mcp\nclaude mcp add --transport stdio filesystem npx -y @modelcontextprotocol/server-filesystem /path/to/project`}
+/>
 
 ## Tool namespace conflicts
 
@@ -51,10 +35,11 @@ To avoid confusion, SignalPilot tool names are intentionally specific (`query_da
 
 Claude Code presents all available tools to the model. The model chooses which tool to call based on the task. If you want to steer Claude toward SignalPilot tools for data tasks, mention it in your `CLAUDE.md`:
 
-```
-For any database or dbt task, use the SignalPilot MCP tools (signalpilot server).
-Always call list_database_connections before querying to confirm the right connection is active.
-```
+<MiniCopyBlock
+  label="claude.md example"
+  plain
+  code={`For any database or dbt task, use the SignalPilot MCP tools (signalpilot server).\nAlways call list_database_connections before querying to confirm the right connection is active.`}
+/>
 
 See [CLAUDE.md recipes](/docs/workflows/claude-md-recipes) for more templates.
 

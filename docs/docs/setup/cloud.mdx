@@ -2,6 +2,8 @@
 sidebar_position: 2
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # SignalPilot Cloud
 
 [SignalPilot Cloud](https://app.signalpilot.ai) is a hosted version of the gateway — no Docker, no self-managed infrastructure.
@@ -15,28 +17,20 @@ sidebar_position: 2
 
 ## Connect Claude Code to the cloud
 
-```bash
-claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
-  --header "Authorization: Bearer YOUR_API_KEY"
-```
+<MiniCopyBlock
+  label="connect claude code to the cloud"
+  code={`claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"`}
+/>
 
 Replace `YOUR_API_KEY` with the key from step 2.
 
 ## MCP config for other clients
 
-```json
-{
-  "mcpServers": {
-    "signalpilot": {
-      "type": "http",
-      "url": "https://gateway.signalpilot.ai/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY"
-      }
-    }
-  }
-}
-```
+<MiniCopyBlock
+  label="mcp config for other clients"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "https://gateway.signalpilot.ai/mcp",\n      "headers": {\n        "Authorization": "Bearer YOUR_API_KEY"\n      }\n    }\n  }\n}`}
+/>
 
 ## What cloud adds over self-host
 
@@ -52,7 +46,7 @@ Replace `YOUR_API_KEY` with the key from step 2.
 
 The Claude Code plugin works with the cloud gateway without modification — the skills are local to Claude Code and the MCP tools call the cloud endpoint using your API key.
 
-```bash
-claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin
-claude plugin install signalpilot-dbt@signalpilot
-```
+<MiniCopyBlock
+  label="install the plugin"
+  code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+/>

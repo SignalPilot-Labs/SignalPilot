@@ -2,6 +2,8 @@
 sidebar_position: 1
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # dbt Model Build Walk-through
 
 An end-to-end example of building a dbt model with SignalPilot.
@@ -26,13 +28,11 @@ The `dbt-workflow` skill auto-loads. Claude reads the YML description to infer o
 
 Claude calls `get_project` to find the dbt project, then `list_tables` to enumerate the available sources:
 
-```
-Tool: list_tables
-→ shopify.orders (48,291 rows)
-→ shopify.order_items (182,044 rows)
-→ shopify.checkouts (61,203 rows)
-→ shopify.fulfillments (45,882 rows)
-```
+<MiniCopyBlock
+  label="list tables"
+  plain
+  code={`Tool: list_tables\n→ shopify.orders (48,291 rows)\n→ shopify.order_items (182,044 rows)\n→ shopify.checkouts (61,203 rows)\n→ shopify.fulfillments (45,882 rows)`}
+/>
 
 Then `describe_table` on each relevant source to understand column types and nullability. Claude checks for date hazards — any model using `current_date` or `now()` will be flagged by the `dbt-date-spines` skill.
 
@@ -40,29 +40,27 @@ Then `describe_table` on each relevant source to understand column types and nul
 
 Before running any query against the warehouse, Claude calls `validate_sql`:
 
-```
-Tool: validate_sql
-SQL: SELECT order_date, COUNT(*) as order_count FROM shopify.orders GROUP BY 1
-→ valid: true
-→ estimated rows: 365
-```
+<MiniCopyBlock
+  label="validate sql"
+  plain
+  code={`Tool: validate_sql\nSQL: SELECT order_date, COUNT(*) as order_count FROM shopify.orders GROUP BY 1\n→ valid: true\n→ estimated rows: 365`}
+/>
 
 For expensive Snowflake or BigQuery queries, `estimate_query_cost` runs first:
 
-```
-Tool: estimate_query_cost
-→ estimated_cost: $0.003
-→ bytes_processed: 12.4 MB
-```
+<MiniCopyBlock
+  label="estimate query cost"
+  plain
+  code={`Tool: estimate_query_cost\n→ estimated_cost: $0.003\n→ bytes_processed: 12.4 MB`}
+/>
 
 ## Step 4 — Generate the SQL skeleton
 
-```
-Tool: generate_sql_skeleton
-project: shopify
-model: shopify__daily_shop
-→ Returns a SQL template with CTEs for each declared column in the YML
-```
+<MiniCopyBlock
+  label="generate sql skeleton"
+  plain
+  code={`Tool: generate_sql_skeleton\nproject: shopify\nmodel: shopify__daily_shop\n→ Returns a SQL template with CTEs for each declared column in the YML`}
+/>
 
 Claude fills in the CTE logic using the schema information from Step 2. The `dbt-write` skill enforces:
 
@@ -74,23 +72,19 @@ Claude fills in the CTE logic using the schema information from Step 2. The `dbt
 
 Claude runs `dbt run` (via the terminal, not MCP — dbt CLI runs locally). Then the verifier agent kicks in:
 
-```
-Tool: check_model_schema    → 12/12 columns match YML
-Tool: validate_model_output → 365 rows, no fan-out
-Tool: audit_model_sources   → sources stable
-Tool: analyze_grain         → 1.00 rows per order_date
-```
+<MiniCopyBlock
+  label="verifier checks"
+  plain
+  code={`Tool: check_model_schema    → 12/12 columns match YML\nTool: validate_model_output → 365 rows, no fan-out\nTool: audit_model_sources   → sources stable\nTool: analyze_grain         → 1.00 rows per order_date`}
+/>
 
 **Verifier receipt:**
 
-```
-duration:          18.2s
-agent turns:       6
-governed queries:  12
-queries blocked:   0
-models built:      1
-columns validated: 12
-```
+<MiniCopyBlock
+  label="verifier receipt"
+  plain
+  code={`duration:          18.2s\nagent turns:       6\ngoverned queries:  12\nqueries blocked:   0\nmodels built:      1\ncolumns validated: 12`}
+/>
 
 ## Cross-links
 

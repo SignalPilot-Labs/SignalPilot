@@ -2,6 +2,8 @@
 sidebar_position: 1
 ---
 
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
 # Self-Host with Docker Compose
 
 ## Prerequisites
@@ -12,22 +14,19 @@ sidebar_position: 1
 
 ## Install
 
-```bash
-git clone https://github.com/SignalPilot-Labs/signalpilot.git
-cd signalpilot
-docker compose up -d
-```
+<MiniCopyBlock
+  label="clone and start the stack"
+  code={`git clone https://github.com/SignalPilot-Labs/signalpilot.git\ncd signalpilot\ndocker compose up -d`}
+/>
 
 The stack starts in the background. On first run Docker pulls the images (~500 MB total).
 
 ## Verify
 
-```bash
-# Web UI
-curl http://localhost:3200
-# Gateway health
-curl http://localhost:3300/health
-```
+<MiniCopyBlock
+  label="verify the stack"
+  code={`# Web UI\ncurl http://localhost:3200\n# Gateway health\ncurl http://localhost:3300/health`}
+/>
 
 Web UI: `http://localhost:3200`
 Gateway MCP endpoint: `http://localhost:3300/mcp`
@@ -43,33 +42,33 @@ Gateway MCP endpoint: `http://localhost:3300/mcp`
 
 Copy `.env.example` to `.env` and set your overrides before first boot:
 
-```bash
-cp .env.example .env
-```
+<MiniCopyBlock
+  label="create environment file"
+  code="cp .env.example .env"
+/>
 
 Key variables — see [Configuration](/docs/setup/configuration) for the full list.
 
 ## Tail logs
 
-```bash
-docker compose logs -f gateway
-docker compose logs -f web
-```
+<MiniCopyBlock
+  label="tail logs"
+  code={`docker compose logs -f gateway\ndocker compose logs -f web`}
+/>
 
 ## Healthcheck
 
-```bash
-docker compose ps
-# All services should show "healthy" or "running"
-```
+<MiniCopyBlock
+  label="healthcheck"
+  code={`docker compose ps\n# All services should show "healthy" or "running"`}
+/>
 
 ## Upgrade
 
-```bash
-git pull
-docker compose pull
-docker compose up -d
-```
+<MiniCopyBlock
+  label="upgrade"
+  code={`git pull\ndocker compose pull\ndocker compose up -d`}
+/>
 
 Running containers are replaced with zero-downtime rolling restart. The SQLite audit DB and credential store are in a named Docker volume and persist across upgrades.
 
@@ -77,8 +76,9 @@ Running containers are replaced with zero-downtime rolling restart. The SQLite a
 
 After the stack is running:
 
-```bash
-claude mcp add --transport http signalpilot http://localhost:3300/mcp
-```
+<MiniCopyBlock
+  label="connect claude code"
+  code="claude mcp add --transport http signalpilot http://localhost:3300/mcp"
+/>
 
 See [Connect Claude Code](/docs/mcp/connect-claude-code) for verification steps.

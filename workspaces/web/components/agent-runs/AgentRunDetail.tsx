@@ -6,11 +6,11 @@ interface AgentRunDetailProps {
 }
 
 export function AgentRunDetail({ run }: AgentRunDetailProps) {
-  const heading = run.prompt.split("\n")[0].slice(0, 80);
+  const heading = run.prompt.split("\n")[0];
 
   return (
     <article className="rounded-card border border-border bg-surface p-6 shadow-card">
-      <h1 className="text-2xl font-semibold text-fg mb-4">{heading}</h1>
+      <h1 className="text-2xl font-semibold text-fg mb-4 line-clamp-1">{heading}</h1>
 
       <dl className="flex flex-col gap-1 text-sm">
         <div className="flex gap-2">

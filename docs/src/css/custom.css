@@ -49,6 +49,7 @@
   --sp-heading-3: #000000;
   --sp-heading-4: #000000;
   --sp-text-dim: #999999;
+  --doc-sidebar-width: 270px;
 }
 
 /* ── Dark theme (canonical) ── */
@@ -93,6 +94,7 @@
   --sp-heading-3: #ffffff;
   --sp-heading-4: #ffffff;
   --sp-text-dim: #666666;
+  --doc-sidebar-width: 270px;
 }
 
 /* ── Typography hierarchy ── */

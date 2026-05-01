@@ -108,6 +108,7 @@ async def app(settings_local, session_factory, stub_spawner, event_bus):
     application.state.session_factory = session_factory
     application.state.spawner = stub_spawner
     application.state.bus = event_bus
+    application.state.chart_executor = None
 
     yield application
 

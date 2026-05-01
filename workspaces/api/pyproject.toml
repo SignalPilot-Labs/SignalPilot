@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2",
     "alembic>=1.13",
     "sse-starlette>=2",
+    "psycopg[binary]>=3",
 ]
 
 [project.optional-dependencies]

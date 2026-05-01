@@ -146,12 +146,27 @@ async def submit_run(
 
         try:
             await spawner.spawn(spawn_req)
-        except (SpawnFailed, ProxyTokenMintFailed):
-            # Mark run failed before surfacing the error
+        except (SpawnFailed, ProxyTokenMintFailed) as exc:
+            # Mark run failed, emit run.failed event, then re-raise
             run.state = RunState.failed.value
             run.updated_at = _now_utc()
             run.finished_at = _now_utc()
-            await session.commit()
+            try:
+                ev = await _insert_run_event(
+                    session,
+                    run.id,
+                    "run.failed",
+                    payload={
+                        "error_code": exc.error_code,
+                        "correlation_id": exc.correlation_id,
+                    },
+                )
+                await session.commit()
+                await bus.publish(run.id, _event_to_out(ev))
+            except Exception as emit_exc:
+                logger.error(
+                    "run.failed event emit error run_id=%s: %r", run.id, emit_exc
+                )
             raise
 
         transition(RunState(run.state), RunState.running)

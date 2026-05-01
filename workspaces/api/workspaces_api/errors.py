@@ -1,8 +1,20 @@
-"""Typed exceptions and FastAPI error handlers for the Workspaces API."""
+"""Typed exceptions and FastAPI error handlers for the Workspaces API.
+
+H1 error contract (R5):
+  WorkspacesError subclasses emit {error_code, correlation_id} bodies only.
+  No message field is included in any WorkspacesError handler response.
+  Full detail is written to structured logs only.
+
+Carve-out: HTTPException(detail=...)-based 4xx responses (e.g. approval
+  illegal_transition via routes/runs.py) use FastAPI's default handler and
+  retain their existing {error_code, message} shape. These don't carry
+  credential-bearing reprs so H1 hardening is out-of-scope for them.
+"""
 
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -15,9 +27,10 @@ class WorkspacesError(Exception):
 
     error_code: str = "workspaces_error"
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, correlation_id: str | None = None) -> None:
         super().__init__(message)
         self.message = message
+        self.correlation_id = correlation_id
 
 
 class InferenceNotConfigured(WorkspacesError):
@@ -83,8 +96,15 @@ class SandboxBinaryNotFound(WorkspacesError):
     error_code = "sandbox_binary_not_found"
 
 
-def _error_body(exc: WorkspacesError) -> dict[str, str]:
-    return {"error_code": exc.error_code, "message": exc.message}
+def _resolve_correlation_id(exc: WorkspacesError) -> str:
+    """Return exc.correlation_id, or generate one if absent."""
+    if exc.correlation_id is not None:
+        return exc.correlation_id
+    return uuid.uuid4().hex[:16]
+
+
+def _error_body(exc: WorkspacesError, correlation_id: str) -> dict[str, str]:
+    return {"error_code": exc.error_code, "correlation_id": correlation_id}
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -94,57 +114,111 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _inference_not_configured(
         request: Request, exc: InferenceNotConfigured
     ) -> JSONResponse:
-        logger.warning("inference_not_configured: %s", exc.message)
-        return JSONResponse(status_code=422, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        logger.warning(
+            "inference_not_configured cid=%s detail=%s", cid, exc.message
+        )
+        return JSONResponse(status_code=422, content=_error_body(exc, cid))
 
     @app.exception_handler(MeteredNotImplemented)
     async def _metered_not_implemented(
         request: Request, exc: MeteredNotImplemented
     ) -> JSONResponse:
-        logger.warning("metered_not_implemented: %s", exc.message)
-        return JSONResponse(status_code=501, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        logger.warning(
+            "metered_not_implemented cid=%s detail=%s", cid, exc.message
+        )
+        return JSONResponse(status_code=501, content=_error_body(exc, cid))
 
     @app.exception_handler(IllegalTransition)
     async def _illegal_transition(
         request: Request, exc: IllegalTransition
     ) -> JSONResponse:
-        logger.warning("illegal_transition: %s", exc.message)
-        return JSONResponse(status_code=409, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        logger.warning("illegal_transition cid=%s detail=%s", cid, exc.message)
+        return JSONResponse(status_code=409, content=_error_body(exc, cid))
 
     @app.exception_handler(RunNotFound)
     async def _run_not_found(request: Request, exc: RunNotFound) -> JSONResponse:
-        return JSONResponse(status_code=404, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        return JSONResponse(status_code=404, content=_error_body(exc, cid))
 
     @app.exception_handler(ApprovalNotFound)
     async def _approval_not_found(
         request: Request, exc: ApprovalNotFound
     ) -> JSONResponse:
-        return JSONResponse(status_code=404, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        return JSONResponse(status_code=404, content=_error_body(exc, cid))
 
     @app.exception_handler(ChartNotFound)
     async def _chart_not_found(request: Request, exc: ChartNotFound) -> JSONResponse:
-        return JSONResponse(status_code=404, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        return JSONResponse(status_code=404, content=_error_body(exc, cid))
 
     @app.exception_handler(ChartCacheCorrupt)
-    async def _chart_cache_corrupt(request: Request, exc: ChartCacheCorrupt) -> JSONResponse:
-        logger.error("chart_cache_corrupt: %s", exc.message)
-        return JSONResponse(status_code=500, content=_error_body(exc))
+    async def _chart_cache_corrupt(
+        request: Request, exc: ChartCacheCorrupt
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "chart_cache_corrupt cid=%s detail=%s", cid, exc.message
+        )
+        return JSONResponse(status_code=500, content=_error_body(exc, cid))
 
     @app.exception_handler(SpawnFailed)
     async def _spawn_failed(request: Request, exc: SpawnFailed) -> JSONResponse:
-        logger.error("spawn_failed: %s", exc.message)
-        return JSONResponse(status_code=500, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "spawn_failed cid=%s detail=%s", cid, exc.message,
+            extra={"correlation_id": cid, "detail": exc.message},
+        )
+        return JSONResponse(status_code=500, content=_error_body(exc, cid))
 
     @app.exception_handler(ProxyTokenMintFailed)
     async def _proxy_token_mint_failed(
         request: Request, exc: ProxyTokenMintFailed
     ) -> JSONResponse:
-        logger.error("proxy_token_mint_failed: %s", exc.message)
-        return JSONResponse(status_code=502, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "proxy_token_mint_failed cid=%s detail=%s", cid, exc.message,
+            extra={"correlation_id": cid, "detail": exc.message},
+        )
+        return JSONResponse(status_code=502, content=_error_body(exc, cid))
 
     @app.exception_handler(SandboxBinaryNotFound)
     async def _sandbox_binary_not_found(
         request: Request, exc: SandboxBinaryNotFound
     ) -> JSONResponse:
-        logger.error("sandbox_binary_not_found: %s", exc.message)
-        return JSONResponse(status_code=503, content=_error_body(exc))
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "sandbox_binary_not_found cid=%s detail=%s", cid, exc.message
+        )
+        return JSONResponse(status_code=503, content=_error_body(exc, cid))
+
+    # R5: chart execution error handlers
+    from workspaces_api.dashboards.errors import (
+        ChartExecutionFailed,
+        ChartExecutionTimeout,
+    )
+
+    @app.exception_handler(ChartExecutionFailed)
+    async def _chart_execution_failed(
+        request: Request, exc: ChartExecutionFailed
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "chart_execution_failed cid=%s detail=%s", cid, exc.message,
+            extra={"correlation_id": cid, "detail": exc.message},
+        )
+        return JSONResponse(status_code=502, content=_error_body(exc, cid))
+
+    @app.exception_handler(ChartExecutionTimeout)
+    async def _chart_execution_timeout(
+        request: Request, exc: ChartExecutionTimeout
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "chart_execution_timeout cid=%s detail=%s", cid, exc.message,
+            extra={"correlation_id": cid, "detail": exc.message},
+        )
+        return JSONResponse(status_code=504, content=_error_body(exc, cid))

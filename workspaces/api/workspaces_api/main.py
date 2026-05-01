@@ -91,9 +91,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             static_md_text=static_md_text,
         )
         app.state.spawner = spawner
+
+        if token_client is not None:
+            from workspaces_api.dashboards.executor import DbtProxyExecutor
+
+            app.state.chart_executor = DbtProxyExecutor(
+                settings=settings,
+                token_client=token_client,
+            )
+        else:
+            app.state.chart_executor = None
     else:
         http_client = None  # type: ignore[assignment]
         app.state.spawner = StubSpawner()
+        app.state.chart_executor = None
 
     logger.info(
         "workspaces_api starting mode=%s spawner=%s",

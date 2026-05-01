@@ -87,10 +87,26 @@ class ProxyTokenClient:
         try:
             resp = await self._client.post(url, json=payload, headers=self._auth_headers())
         except httpx.RequestError as exc:
-            raise ProxyTokenMintFailed(f"network error minting token: {type(exc).__name__}") from exc
+            cid = uuid.uuid4().hex[:16]
+            logger.error(
+                "proxy_token_mint_failed cid=%s reason=network exc=%r",
+                cid,
+                exc,
+                extra={"correlation_id": cid},
+            )
+            raise ProxyTokenMintFailed(
+                f"network error minting token: {type(exc).__name__}",
+                correlation_id=cid,
+            ) from exc
 
         if resp.status_code == 401:
-            raise ProxyTokenMintFailed("auth")
+            cid = uuid.uuid4().hex[:16]
+            logger.error(
+                "proxy_token_mint_failed cid=%s reason=auth",
+                cid,
+                extra={"correlation_id": cid},
+            )
+            raise ProxyTokenMintFailed("auth", correlation_id=cid)
 
         if resp.status_code == 409:
             # Attempt revoke + retry once
@@ -100,18 +116,50 @@ class ProxyTokenClient:
                     url, json=payload, headers=self._auth_headers()
                 )
             except httpx.RequestError as exc:
+                cid = uuid.uuid4().hex[:16]
+                logger.error(
+                    "proxy_token_mint_failed cid=%s reason=network_retry exc=%r",
+                    cid,
+                    exc,
+                    extra={"correlation_id": cid},
+                )
                 raise ProxyTokenMintFailed(
-                    f"network error on retry minting token: {type(exc).__name__}"
+                    f"network error on retry minting token: {type(exc).__name__}",
+                    correlation_id=cid,
                 ) from exc
             if resp.status_code == 409:
-                raise ProxyTokenMintFailed("conflict")
+                cid = uuid.uuid4().hex[:16]
+                logger.error(
+                    "proxy_token_mint_failed cid=%s reason=conflict",
+                    cid,
+                    extra={"correlation_id": cid},
+                )
+                raise ProxyTokenMintFailed("conflict", correlation_id=cid)
             if not resp.is_success:
+                cid = uuid.uuid4().hex[:16]
+                logger.error(
+                    "proxy_token_mint_failed cid=%s reason=status_%s",
+                    cid,
+                    resp.status_code,
+                    extra={"correlation_id": cid},
+                )
                 raise ProxyTokenMintFailed(
-                    f"mint retry failed with status {resp.status_code}"
+                    f"mint retry failed with status {resp.status_code}",
+                    correlation_id=cid,
                 )
 
         elif not resp.is_success:
-            raise ProxyTokenMintFailed(f"mint failed with status {resp.status_code}")
+            cid = uuid.uuid4().hex[:16]
+            logger.error(
+                "proxy_token_mint_failed cid=%s reason=status_%s",
+                cid,
+                resp.status_code,
+                extra={"correlation_id": cid},
+            )
+            raise ProxyTokenMintFailed(
+                f"mint failed with status {resp.status_code}",
+                correlation_id=cid,
+            )
 
         data = resp.json()
         expires_at = datetime.fromisoformat(data["expires_at"])

@@ -16,6 +16,14 @@ Optional environment variables:
 - SP_SANDBOX_PYTHON: Python executable to run sandbox server.py
 - SP_SANDBOX_SERVER_PATH: path to the sandbox server.py entrypoint
 - SP_USE_SUBPROCESS_SPAWNER: use real subprocess spawner (true) or stub (false)
+
+Chart-execute settings (R5):
+- SP_CHART_EXECUTE_TOKEN_TTL_SECONDS: TTL for chart-execute proxy tokens (default 60)
+- SP_CHART_STATEMENT_TIMEOUT_MS: statement timeout passed to proxy (default 30000)
+- SP_CHART_CONNECT_TIMEOUT_SECONDS: libpq connect timeout (default 5)
+- SP_CHART_TOTAL_DEADLINE_SECONDS: asyncio.timeout for full chart execute (default 45)
+- SP_CHART_MAX_ROWS: row cap before truncation (default 10000)
+- SP_CHART_MAX_CELL_BYTES: cell size cap in bytes before truncation (default 32768)
 """
 
 from __future__ import annotations
@@ -74,6 +82,26 @@ class Settings(BaseSettings):
     )
     sp_use_subprocess_spawner: bool = Field(
         default=True, validation_alias="SP_USE_SUBPROCESS_SPAWNER"
+    )
+
+    # R5: chart-execute settings
+    sp_chart_execute_token_ttl_seconds: int = Field(
+        default=60, validation_alias="SP_CHART_EXECUTE_TOKEN_TTL_SECONDS"
+    )
+    sp_chart_statement_timeout_ms: int = Field(
+        default=30_000, validation_alias="SP_CHART_STATEMENT_TIMEOUT_MS"
+    )
+    sp_chart_connect_timeout_seconds: int = Field(
+        default=5, validation_alias="SP_CHART_CONNECT_TIMEOUT_SECONDS"
+    )
+    sp_chart_total_deadline_seconds: int = Field(
+        default=45, validation_alias="SP_CHART_TOTAL_DEADLINE_SECONDS"
+    )
+    sp_chart_max_rows: int = Field(
+        default=10_000, validation_alias="SP_CHART_MAX_ROWS"
+    )
+    sp_chart_max_cell_bytes: int = Field(
+        default=32_768, validation_alias="SP_CHART_MAX_CELL_BYTES"
     )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -96,22 +96,12 @@ class ChartRunRequest(BaseModel):
 
 
 class ChartRunResponse(BaseModel):
-    """Returned on cache HIT."""
+    """Returned on cache HIT or MISS (after execution)."""
 
     chart_id: uuid.UUID
     cache_key: str
-    cached: Literal[True]
+    cached: bool
     computed_at: datetime
     columns: list[dict[str, str]]
     rows: list[list[Any]]
-
-
-class ChartRunQueued(BaseModel):
-    """Returned on cache MISS (202). Execution is not wired until R4."""
-
-    status: Literal["queued"]
-    reason: Literal["execution_not_wired"]
-    error_code: Literal["execution_not_wired"]
-    chart_id: uuid.UUID
-    cache_key: str
-    computed_at: None
+    truncated: bool = False

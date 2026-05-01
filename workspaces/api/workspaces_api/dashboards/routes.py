@@ -1,16 +1,16 @@
 """Dashboard chart routes.
 
-auth: TODO(round-5) — routes are currently open (no JWT/Clerk auth).
+auth: TODO(round-6) — routes are currently open (no JWT/Clerk auth).
 
 Routes:
   POST  /v1/charts                      Create chart + chart_query
   GET   /v1/charts/{id}                 Fetch chart by ID
   GET   /v1/charts?workspace=<id>&...   List charts with cursor pagination
-  POST  /v1/charts/{id}/run             Return cached result or 202 queued
+  POST  /v1/charts/{id}/run             Return cached result or execute via dbt-proxy
 
-Cache MISS behavior (R3):
-  Returns 202 ChartRunQueued with error_code="execution_not_wired". No executor
-  runs; no gateway HTTP call. The route shape is final; execution wires in R4.
+Cache MISS behavior (R5):
+  Calls DbtProxyExecutor.execute() to run the SQL via the dbt-proxy gateway.
+  If chart_executor is None (no gateway_url configured), returns 503.
 
 Cursor encoding (deterministic, stable):
   base64.urlsafe_b64encode(json.dumps([created_at_iso, str(id)], separators=(',',':')).encode()).decode().rstrip('=')
@@ -18,12 +18,13 @@ Cursor encoding (deterministic, stable):
 
 Error matrix:
   chart not found              → 404  chart_not_found
+  no executor configured       → 503  chart_execute_disabled
   connector not found          → 422  connector_not_found (validation time — R3 skips)
   sql > 50000 chars            → 422  sql_too_long
   chart_type not in enum       → 422  invalid_chart_type
   cache row JSON corrupt       → 500  chart_cache_corrupt
-  cache MISS                   → 202  execution_not_wired
-  force=true and no executor   → 202  execution_not_wired
+  execution error              → 502  chart_execution_failed
+  execution timeout            → 504  chart_execution_timeout
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ import json
 import logging
 import uuid
 from datetime import timezone
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select
@@ -47,7 +47,6 @@ from .schemas import (
     ChartCreateRequest,
     ChartListResponse,
     ChartResponse,
-    ChartRunQueued,
     ChartRunRequest,
     ChartRunResponse,
 )
@@ -209,47 +208,37 @@ async def list_charts(
     )
 
 
-@router.post("/{chart_id}/run")
+@router.post("/{chart_id}/run", response_model=ChartRunResponse)
 async def run_chart(
     chart_id: uuid.UUID,
     body: ChartRunRequest,
     request: Request,
-) -> Any:
-    """Return cached query result or 202 queued on cache MISS.
+) -> ChartRunResponse:
+    """Return cached query result, or execute via dbt-proxy on cache MISS.
 
-    R3 behavior:
-      - cache HIT → 200 ChartRunResponse
-      - cache MISS → 202 ChartRunQueued (execution_not_wired)
-      - force=True → 202 ChartRunQueued (no executor available in R3)
+    R5 behavior:
+      - cache HIT → 200 ChartRunResponse (cached=True)
+      - cache MISS → execute SQL via DbtProxyExecutor → 200 ChartRunResponse (cached=False)
+      - force=True → skip cache, execute via DbtProxyExecutor
+      - no executor configured (no gateway_url) → 503 chart_execute_disabled
 
-    Real execution wires in R4 alongside spawn and DbtProxyExecutor.
+    On execution errors:
+      - psycopg error → 502 chart_execution_failed
+      - timeout → 504 chart_execution_timeout
     """
-    from fastapi.responses import JSONResponse
+    executor = getattr(request.app.state, "chart_executor", None)
 
     session_factory = _get_session_factory(request)
     async with session_factory() as session:
         chart = await _load_chart(session, chart_id)
 
         if chart.query is None:
-            # No query attached yet — always MISS
-            cache_key = ""
-            return JSONResponse(
-                status_code=202,
-                content=ChartRunQueued(
-                    status="queued",
-                    reason="execution_not_wired",
-                    error_code="execution_not_wired",
-                    chart_id=chart_id,
-                    cache_key=cache_key,
-                    computed_at=None,
-                ).model_dump(mode="json"),
-            )
+            raise HTTPException(status_code=503, detail="chart_execute_disabled")
 
         q = chart.query
         effective_params = body.params if body.params is not None else q.params
         cache_key = compute_cache_key(q.connector_name, q.sql, effective_params)
 
-        # force=True skips cache (but R3 has no executor, so always MISS)
         if not body.force:
             cached: ChartCache | None = await fetch_cached(session, cache_key)
             if cached is not None:
@@ -267,19 +256,23 @@ async def run_chart(
                     computed_at=cached.computed_at,
                     columns=columns,
                     rows=rows,
+                    truncated=False,
                 )
 
-    # Cache MISS (or force=True) — R3 returns 202
-    return JSONResponse(
-        status_code=202,
-        content=ChartRunQueued(
-            status="queued",
-            reason="execution_not_wired",
-            error_code="execution_not_wired",
-            chart_id=chart_id,
-            cache_key=cache_key,
-            computed_at=None,
-        ).model_dump(mode="json"),
+        # Cache MISS or force=True — execute via dbt-proxy
+        if executor is None:
+            raise HTTPException(status_code=503, detail="chart_execute_disabled")
+
+        result = await executor.execute(chart, q, effective_params, session)
+
+    return ChartRunResponse(
+        chart_id=chart_id,
+        cache_key=result.cache_key,
+        cached=False,
+        computed_at=result.computed_at,
+        columns=result.columns,
+        rows=result.rows,
+        truncated=result.truncated,
     )
 
 

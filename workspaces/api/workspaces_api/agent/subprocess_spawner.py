@@ -117,8 +117,11 @@ class SubprocessSpawner:
         lease: ProxyTokenLease | None = None
         if request.connector_name:
             if self._token_client is None:
+                cid = uuid.uuid4().hex[:16]
+                logger.error("spawn_failed cid=%s exc=no_token_client run_id=%s", cid, run_id)
                 raise SpawnFailed(
-                    f"connector_name set but no token client available for run_id={run_id}"
+                    "connector_name set but no token client available",
+                    correlation_id=cid,
                 )
             lease = await self._token_client.mint(
                 run_id=run_id,
@@ -148,7 +151,11 @@ class SubprocessSpawner:
         except Exception as exc:
             if lease is not None and self._token_client is not None:
                 await self._token_client.revoke(run_id)
-            raise SpawnFailed(f"workdir setup failed: {exc}") from exc
+            cid = uuid.uuid4().hex[:16]
+            logger.error("spawn_failed cid=%s exc=%r", cid, exc)
+            raise SpawnFailed(
+                f"workdir setup failed: {type(exc).__name__}", correlation_id=cid
+            ) from exc
 
         # Step 5: Build env from explicit allowlist
         sandbox_internal_secret = secrets.token_hex(_INTERNAL_SECRET_BYTES)
@@ -179,7 +186,11 @@ class SubprocessSpawner:
             if lease is not None and self._token_client is not None:
                 await self._token_client.revoke(run_id)
             cleanup_run_workdir(workdir)
-            raise SpawnFailed(f"subprocess exec failed: {exc}") from exc
+            cid = uuid.uuid4().hex[:16]
+            logger.error("spawn_failed cid=%s exc=%r", cid, exc)
+            raise SpawnFailed(
+                f"subprocess exec failed: {type(exc).__name__}", correlation_id=cid
+            ) from exc
 
         # Step 7: Register handle and start background tasks
         started_at = _now_utc()

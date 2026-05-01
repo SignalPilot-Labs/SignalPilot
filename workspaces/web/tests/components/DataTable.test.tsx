@@ -28,18 +28,18 @@ describe("DataTable", () => {
     expect(caption.className).toContain("sr-only");
   });
 
-  it("outer wrapper has rounded-control class", () => {
+  it("outer wrapper uses new dark border token", () => {
     const { container } = render(<DataTable run={makeRun()} caption="Test" />);
     const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.className).toContain("rounded-control");
+    expect(wrapper.className).toContain("border-[var(--color-border)]");
   });
 
-  it("table rows have hover:bg-hover transition-colors class", () => {
+  it("table rows have table-row-hover class", () => {
     const { container } = render(<DataTable run={makeRun()} caption="Test" />);
     const rows = container.querySelectorAll("tbody tr");
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
-      expect((row as HTMLElement).className).toContain("hover:bg-hover");
+      expect((row as HTMLElement).className).toContain("table-row-hover");
     }
   });
 

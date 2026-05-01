@@ -4,6 +4,8 @@ import { EmptyState } from "@/components/dashboard/EmptyState";
 import { AgentRunDetail } from "@/components/agent-runs/AgentRunDetail";
 import { loadAgentRun } from "@/lib/agent-runs/load-runs";
 import { CLOUD_DEFERRED_BODY } from "@/app/agent-runs/_consts";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { TerminalBar } from "@/components/ui/PageHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +18,11 @@ export default async function AgentRunDetailPage({
 
   if (env.mode === "cloud") {
     return (
-      <main className="p-6">
-        <EmptyState title="Agent run" body={CLOUD_DEFERRED_BODY} />
-      </main>
+      <div className="p-8 max-w-[1400px] animate-fade-in">
+        <PageHeader title="agent run" subtitle="detail" description="Agent run execution detail." />
+        <TerminalBar path="agent-runs/…" />
+        <EmptyState title="agent run" body={CLOUD_DEFERRED_BODY} />
+      </div>
     );
   }
 
@@ -27,8 +31,10 @@ export default async function AgentRunDetailPage({
   if (!run) notFound();
 
   return (
-    <main className="p-6">
+    <div className="p-8 max-w-[1400px] animate-fade-in">
+      <PageHeader title="agent run" subtitle="detail" description={`Run ${id}`} />
+      <TerminalBar path={`agent-runs/${id}`} />
       <AgentRunDetail run={run} />
-    </main>
+    </div>
   );
 }

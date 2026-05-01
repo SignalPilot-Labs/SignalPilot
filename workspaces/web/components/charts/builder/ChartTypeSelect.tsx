@@ -1,6 +1,7 @@
 "use client";
 
 import { CHART_TYPES, type ChartType } from "@/lib/charts/types";
+import { FIELD_INPUT_CLASS } from "@/components/ui/button-classes";
 
 interface ChartTypeSelectProps {
   value: ChartType;
@@ -22,7 +23,7 @@ export function ChartTypeSelect({ value, onChange, disabled }: ChartTypeSelectPr
       value={value}
       onChange={(e) => onChange(e.target.value as ChartType)}
       disabled={disabled}
-      className="w-full rounded-control border border-border bg-bg px-3 py-2 text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+      className={FIELD_INPUT_CLASS}
     >
       {CHART_TYPES.map((t) => (
         <option key={t} value={t}>

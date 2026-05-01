@@ -14,8 +14,8 @@ export function NumberKpi({ chart, run }: NumberKpiProps) {
   // Screen readers still associate them as a dl group per HTML5 semantics.
   return (
     <dl className="flex flex-col items-center justify-center py-8">
-      <dd className="text-4xl font-bold text-fg tabular-nums">{value != null ? formatNumber(value) : "—"}</dd>
-      <dt className="mt-2 text-sm text-muted">{chart.title}</dt>
+      <dd className="font-mono tabular-nums text-3xl text-[var(--color-text)]">{value != null ? formatNumber(value) : "—"}</dd>
+      <dt className="mt-2 text-[var(--color-text-muted)] uppercase tracking-[0.15em] text-[10px]">{chart.title}</dt>
     </dl>
   );
 }

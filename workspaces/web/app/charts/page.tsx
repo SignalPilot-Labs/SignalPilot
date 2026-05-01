@@ -3,6 +3,9 @@ import { EmptyState } from "@/components/dashboard/EmptyState";
 import { ChartList } from "@/components/charts/ChartList";
 import { loadChartDefinitions } from "@/lib/charts/load-charts";
 import { CLOUD_DEFERRED_BODY } from "@/app/charts/_consts";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { TerminalBar } from "@/components/ui/PageHeader";
+import { LinkButton } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
 
@@ -13,23 +16,35 @@ export default async function ChartsPage() {
 
   if (env.mode === "cloud") {
     return (
-      <main className="p-6">
-        <h1 className="text-2xl font-semibold text-fg mb-4">Charts</h1>
-        <EmptyState title="Charts" body={CLOUD_DEFERRED_BODY} />
-      </main>
+      <div className="p-8 max-w-[1400px] animate-fade-in">
+        <PageHeader
+          title="charts"
+          subtitle="library"
+          description="Your saved chart definitions."
+          actions={<LinkButton href="/charts/new" size="sm">+ new chart</LinkButton>}
+        />
+        <TerminalBar path="charts" />
+        <EmptyState title="charts" body={CLOUD_DEFERRED_BODY} />
+      </div>
     );
   }
 
   const definitions = await loadChartDefinitions();
 
   return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold text-fg mb-4">Charts</h1>
+    <div className="p-8 max-w-[1400px] animate-fade-in">
+      <PageHeader
+        title="charts"
+        subtitle="library"
+        description="Your saved chart definitions."
+        actions={<LinkButton href="/charts/new" size="sm">+ new chart</LinkButton>}
+      />
+      <TerminalBar path="charts" />
       {definitions.length === 0 ? (
-        <EmptyState title="Charts" body={EMPTY_LOCAL_BODY} />
+        <EmptyState title="charts" body={EMPTY_LOCAL_BODY} />
       ) : (
         <ChartList items={definitions} />
       )}
-    </main>
+    </div>
   );
 }

@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import { getServerEnv } from "@/lib/env";
-import { TopNav } from "@/components/nav/TopNav";
+import Sidebar from "@/components/layout/Sidebar";
+import { MainContent } from "@/components/layout/MainContent";
+import { GridBackground } from "@/components/ui/GridBackground";
+import { ToastProvider } from "@/components/ui/Toast";
 
 export const metadata: Metadata = {
   title: "Workspaces",
@@ -16,9 +19,12 @@ export default function RootLayout({
 }) {
   const env = getServerEnv();
   const body = (
-    <body className="antialiased">
-      <TopNav />
-      <div className="min-h-screen">{children}</div>
+    <body className="antialiased bg-noise font-mono">
+      <ToastProvider>
+        <Sidebar />
+        <GridBackground />
+        <MainContent>{children}</MainContent>
+      </ToastProvider>
     </body>
   );
   if (env.mode === "cloud") {

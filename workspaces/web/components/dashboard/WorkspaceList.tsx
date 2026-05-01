@@ -11,9 +11,9 @@ export function WorkspaceList({ items }: WorkspaceListProps) {
         <li key={id}>
           <Link
             href={`/dashboards/${id}`}
-            className="block rounded-control border border-border bg-surface p-4 hover:bg-hover transition-colors"
+            className="block border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 hover:bg-[var(--color-bg-hover)] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-success)]"
           >
-            <span className="font-mono text-sm text-fg">{id}</span>
+            <span className="font-mono text-sm text-[var(--color-text)]">{id}</span>
           </Link>
         </li>
       ))}

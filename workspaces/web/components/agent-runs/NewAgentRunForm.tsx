@@ -3,6 +3,12 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveAgentRun } from "@/lib/agent-runs/save-run";
+import {
+  FIELD_INPUT_CLASS,
+  PRIMARY_BTN_CLASS,
+  LABEL_CLASS,
+  ERROR_CLASS,
+} from "@/components/ui/button-classes";
 
 type SaveResult = { ok: false; error: string } | null;
 
@@ -44,12 +50,10 @@ export function NewAgentRunForm() {
   return (
     <form
       onSubmit={handleSubmit}
-      className="rounded-card border border-border bg-surface p-6 shadow-card flex flex-col gap-5 max-w-2xl"
+      className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-6 flex flex-col gap-5 max-w-2xl"
     >
-      <h1 className="text-2xl font-semibold text-fg">New agent run</h1>
-
       <div className="flex flex-col gap-1">
-        <label htmlFor="agent-run-prompt" className="text-sm font-medium text-fg">
+        <label htmlFor="agent-run-prompt" className={LABEL_CLASS}>
           Prompt
         </label>
         <textarea
@@ -58,13 +62,13 @@ export function NewAgentRunForm() {
           rows={6}
           maxLength={4000}
           disabled={isPending}
-          className="rounded-control border border-border bg-bg px-3 py-2 text-sm text-fg placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50 resize-y"
+          className={`${FIELD_INPUT_CLASS} resize-y`}
           aria-describedby={result && !result.ok ? "agent-run-prompt-error" : undefined}
           aria-invalid={result && !result.ok ? true : undefined}
           placeholder="Describe the task for the agent…"
         />
         {result && !result.ok && (
-          <p id="agent-run-prompt-error" role="alert" className="text-sm text-danger-fg">
+          <p id="agent-run-prompt-error" role="alert" className={ERROR_CLASS}>
             {result.error}
           </p>
         )}
@@ -73,7 +77,8 @@ export function NewAgentRunForm() {
       <button
         type="submit"
         disabled={isPending}
-        className="self-start rounded-control bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+        aria-busy={isPending}
+        className={PRIMARY_BTN_CLASS}
       >
         {isPending ? "Starting…" : "Start run"}
       </button>

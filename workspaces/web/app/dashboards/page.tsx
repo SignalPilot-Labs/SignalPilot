@@ -1,6 +1,9 @@
 import { getServerEnv } from "@/lib/env";
 import { EmptyState } from "@/components/dashboard/EmptyState";
 import { WorkspaceList } from "@/components/dashboard/WorkspaceList";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { TerminalBar } from "@/components/ui/PageHeader";
+import { LinkButton } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
 
@@ -13,21 +16,31 @@ export default function DashboardsPage() {
 
   if (env.mode === "cloud") {
     return (
-      <main className="p-6">
-        <h1 className="text-2xl font-semibold text-fg mb-4">Dashboards</h1>
-        <EmptyState title="Workspaces" body={CLOUD_DEFERRED_BODY} />
-      </main>
+      <div className="p-8 max-w-[1400px] animate-fade-in">
+        <PageHeader
+          title="dashboards"
+          subtitle="workspaces"
+          description="Select a workspace to view its charts."
+        />
+        <TerminalBar path="dashboards" />
+        <EmptyState title="workspaces" body={CLOUD_DEFERRED_BODY} />
+      </div>
     );
   }
 
   return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold text-fg mb-4">Dashboards</h1>
+    <div className="p-8 max-w-[1400px] animate-fade-in">
+      <PageHeader
+        title="dashboards"
+        subtitle="workspaces"
+        description="Select a workspace to view its charts."
+      />
+      <TerminalBar path="dashboards" />
       {env.localWorkspaceIds.length === 0 ? (
-        <EmptyState title="Workspaces" body={EMPTY_LOCAL_BODY} />
+        <EmptyState title="workspaces" body={EMPTY_LOCAL_BODY} />
       ) : (
         <WorkspaceList items={env.localWorkspaceIds} />
       )}
-    </main>
+    </div>
   );
 }

@@ -3,6 +3,12 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { saveDbtLinkNativeUpload } from "@/lib/dbt-links/save-link";
+import {
+  FIELD_INPUT_CLASS,
+  PRIMARY_BTN_CLASS,
+  LABEL_CLASS,
+  ERROR_CLASS,
+} from "@/components/ui/button-classes";
 
 type SaveResult = { ok: false; error: string } | null;
 
@@ -49,12 +55,10 @@ export function NewDbtLinkForm() {
   return (
     <form
       onSubmit={handleSubmit}
-      className="rounded-card border border-border bg-surface p-6 shadow-card flex flex-col gap-5 max-w-2xl"
+      className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-6 flex flex-col gap-5 max-w-2xl"
     >
-      <h1 className="text-2xl font-semibold text-fg">New dbt link</h1>
-
       <div className="flex flex-col gap-1">
-        <label htmlFor="dbt-link-name" className="text-sm font-medium text-fg">
+        <label htmlFor="dbt-link-name" className={LABEL_CLASS}>
           Name
         </label>
         <input
@@ -65,19 +69,19 @@ export function NewDbtLinkForm() {
           placeholder="e.g. My dbt project"
           maxLength={120}
           disabled={isPending}
-          className="rounded-control border border-border bg-bg px-3 py-2 text-sm text-fg placeholder:text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+          className={FIELD_INPUT_CLASS}
           aria-describedby={nameError ? "dbt-link-name-error" : undefined}
           aria-invalid={nameError ? true : undefined}
         />
         {nameError && (
-          <p id="dbt-link-name-error" role="alert" className="text-xs text-danger-fg">
+          <p id="dbt-link-name-error" role="alert" className={ERROR_CLASS}>
             {nameError}
           </p>
         )}
       </div>
 
       <div className="flex flex-col gap-1">
-        <label htmlFor="dbt-link-file" className="text-sm font-medium text-fg">
+        <label htmlFor="dbt-link-file" className={LABEL_CLASS}>
           dbt project archive (.tar.gz)
         </label>
         <input
@@ -86,19 +90,19 @@ export function NewDbtLinkForm() {
           accept=".tar.gz,.tgz,application/gzip"
           disabled={isPending}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="rounded-control border border-border bg-bg px-3 py-2 text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+          className={FIELD_INPUT_CLASS}
           aria-describedby={fileError ? "dbt-link-file-error" : undefined}
           aria-invalid={fileError ? true : undefined}
         />
         {fileError && (
-          <p id="dbt-link-file-error" role="alert" className="text-xs text-danger-fg">
+          <p id="dbt-link-file-error" role="alert" className={ERROR_CLASS}>
             {fileError}
           </p>
         )}
       </div>
 
       {result && !result.ok && (
-        <p role="alert" className="text-sm text-danger-fg">
+        <p role="alert" className={ERROR_CLASS}>
           {result.error}
         </p>
       )}
@@ -106,7 +110,8 @@ export function NewDbtLinkForm() {
       <button
         type="submit"
         disabled={isPending}
-        className="self-start rounded-control bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+        aria-busy={isPending}
+        className={PRIMARY_BTN_CLASS}
       >
         {isPending ? "Uploading…" : "Upload"}
       </button>

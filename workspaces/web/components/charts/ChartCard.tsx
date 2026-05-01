@@ -22,15 +22,15 @@ function isRunError(run: ChartRunResponse | ChartCardRunError): run is ChartCard
 export function ChartCard({ chart, runResult }: ChartCardProps) {
   if (chart.chart_type === "number") {
     return (
-      <article className="rounded-card border border-border bg-surface p-4 shadow-card">
+      <article className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-4">
         <ChartCardBody chart={chart} runResult={runResult} />
       </article>
     );
   }
 
   return (
-    <article className="rounded-card border border-border bg-surface p-4 shadow-card">
-      <h2 className="mb-4 text-base font-semibold text-fg">{chart.title}</h2>
+    <article className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-4">
+      <h2 className="mb-4 text-base font-semibold text-[var(--color-text)]">{chart.title}</h2>
       <ChartCardBody chart={chart} runResult={runResult} />
     </article>
   );

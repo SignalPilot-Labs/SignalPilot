@@ -2,6 +2,8 @@ import { getServerEnv } from "@/lib/env";
 import { EmptyState } from "@/components/dashboard/EmptyState";
 import { NewDbtLinkForm } from "@/components/dbt-links/NewDbtLinkForm";
 import { CLOUD_DEFERRED_BODY } from "@/app/dbt-links/_consts";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { TerminalBar } from "@/components/ui/PageHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -10,15 +12,19 @@ export default function DbtLinksNewPage() {
 
   if (env.mode === "cloud") {
     return (
-      <main className="p-6">
-        <EmptyState title="New dbt link" body={CLOUD_DEFERRED_BODY} />
-      </main>
+      <div className="p-8 max-w-[1400px] animate-fade-in">
+        <PageHeader title="new dbt link" subtitle="upload" description="Upload a dbt project archive." />
+        <TerminalBar path="dbt-links/new" />
+        <EmptyState title="new dbt link" body={CLOUD_DEFERRED_BODY} />
+      </div>
     );
   }
 
   return (
-    <main className="p-6">
+    <div className="p-8 max-w-[1400px] animate-fade-in">
+      <PageHeader title="new dbt link" subtitle="upload" description="Upload a dbt project archive." />
+      <TerminalBar path="dbt-links/new" />
       <NewDbtLinkForm />
-    </main>
+    </div>
   );
 }

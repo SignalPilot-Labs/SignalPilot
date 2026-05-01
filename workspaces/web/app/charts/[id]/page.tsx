@@ -4,6 +4,8 @@ import { EmptyState } from "@/components/dashboard/EmptyState";
 import { ChartDetail } from "@/components/charts/ChartDetail";
 import { loadChartDefinition } from "@/lib/charts/load-charts";
 import { CLOUD_DEFERRED_BODY } from "@/app/charts/_consts";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { TerminalBar } from "@/components/ui/PageHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +14,11 @@ export default async function ChartDetailPage({ params }: { params: Promise<{ id
 
   if (env.mode === "cloud") {
     return (
-      <main className="p-6">
-        <EmptyState title="Chart" body={CLOUD_DEFERRED_BODY} />
-      </main>
+      <div className="p-8 max-w-[1400px] animate-fade-in">
+        <PageHeader title="chart" subtitle="detail" description="Chart definition and preview." />
+        <TerminalBar path="charts" />
+        <EmptyState title="chart" body={CLOUD_DEFERRED_BODY} />
+      </div>
     );
   }
 
@@ -23,8 +27,10 @@ export default async function ChartDetailPage({ params }: { params: Promise<{ id
   if (!def) notFound();
 
   return (
-    <main className="p-6">
+    <div className="p-8 max-w-[1400px] animate-fade-in">
+      <PageHeader title="chart" subtitle="detail" description={def.name} />
+      <TerminalBar path={`charts/${id}`} />
       <ChartDetail definition={def} />
-    </main>
+    </div>
   );
 }

@@ -13,10 +13,10 @@ export function AgentRunList({ items }: AgentRunListProps) {
         <li key={item.id}>
           <Link
             href={`/agent-runs/${item.id}`}
-            className="block rounded-card border border-border bg-surface p-4 shadow-card hover:bg-hover transition-colors focus-visible:ring-2 focus-visible:ring-accent"
+            className="block border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 hover:bg-[var(--color-bg-hover)] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-success)]"
           >
-            <h2 className="text-base font-semibold text-fg line-clamp-1">{item.prompt}</h2>
-            <p className="text-sm text-muted mt-1">
+            <h2 className="text-base font-semibold text-[var(--color-text)] line-clamp-1">{item.prompt}</h2>
+            <p className="text-sm text-[var(--color-text-dim)] mt-1">
               {STATUS_LABEL[item.status]} &middot; {new Date(item.createdAt).toLocaleString()}
             </p>
           </Link>

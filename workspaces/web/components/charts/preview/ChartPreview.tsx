@@ -13,8 +13,8 @@ export function ChartPreview({ definition }: ChartPreviewProps) {
   const preview = buildSamplePreview(definition);
 
   return (
-    <section className="rounded-card border border-border bg-surface p-6 shadow-card">
-      <h2 className="text-base font-semibold text-fg mb-3">Preview</h2>
+    <section className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-6">
+      <h2 className="text-base font-semibold text-[var(--color-text)] mb-3">Preview</h2>
 
       {preview.kind === "echart" && (
         <EChart option={preview.option} ariaLabel={preview.ariaLabel} height={320} />
@@ -57,7 +57,7 @@ export function ChartPreview({ definition }: ChartPreviewProps) {
         return <NumberKpi chart={chart} run={run} />;
       })()}
 
-      <p className="text-xs text-muted mt-3">Sample data — query execution not yet wired</p>
+      <p className="text-xs text-[var(--color-text-dim)] mt-3">Sample data — query execution not yet wired</p>
     </section>
   );
 }

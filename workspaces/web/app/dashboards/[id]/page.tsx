@@ -3,6 +3,9 @@ import { ChartRunResponse } from "@/lib/api/types";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { ChartCard } from "@/components/charts/ChartCard";
 import { ChartError } from "@/components/charts/ChartError";
+import { EmptyState } from "@/components/dashboard/EmptyState";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { TerminalBar } from "@/components/ui/PageHeader";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -17,9 +20,14 @@ export default async function DashboardPage({ params }: PageProps) {
 
   if (items.length === 0) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center p-8">
-        <p className="text-muted">No charts in this workspace yet.</p>
-      </main>
+      <div className="p-8 max-w-[1400px] animate-fade-in">
+        <PageHeader title="dashboard" subtitle="canvas" description={`Workspace ${id}`} />
+        <TerminalBar path={`dashboards/${id}`} />
+        <EmptyState
+          title="no charts yet"
+          body="This workspace has no charts. Create one to populate the dashboard."
+        />
+      </div>
     );
   }
 
@@ -43,8 +51,9 @@ export default async function DashboardPage({ params }: PageProps) {
   );
 
   return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold text-fg mb-4">Workspace charts</h1>
+    <div className="p-8 max-w-[1400px] animate-fade-in">
+      <PageHeader title="dashboard" subtitle="canvas" description={`Workspace ${id}`} />
+      <TerminalBar path={`dashboards/${id}`} />
       <DashboardGrid>
         {items.map((chart, i) => {
           const run = runResults[i];
@@ -64,6 +73,6 @@ export default async function DashboardPage({ params }: PageProps) {
           );
         })}
       </DashboardGrid>
-    </main>
+    </div>
   );
 }

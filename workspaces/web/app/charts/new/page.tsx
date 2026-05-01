@@ -1,5 +1,5 @@
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyChart } from "@/components/ui/EmptyState";
 import { ChartBuilderForm } from "@/components/charts/builder/ChartBuilderForm";
 import { CLOUD_DEFERRED_BODY } from "@/app/charts/_consts";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -15,7 +15,7 @@ export default function ChartsNewPage() {
       <div className="p-8 max-w-[1400px] animate-fade-in">
         <PageHeader title="new chart" subtitle="builder" description="Define a new chart with SQL." />
         <TerminalBar path="charts/new" />
-        <EmptyState title="new chart" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyChart />} title="new chart" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }

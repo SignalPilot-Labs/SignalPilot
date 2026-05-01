@@ -5,12 +5,15 @@ import { useRouter } from "next/navigation";
 import { saveDbtLinkNativeUpload } from "@/lib/dbt-links/save-link";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
 } from "@/components/ui/button-classes";
+import { PendingButton } from "@/components/ui/PendingButton";
 
 type SaveResult = { ok: false; error: string } | null;
+
+const FILE_INPUT_EXTRA_CLASS =
+  "file:mr-3 file:py-1 file:px-3 file:border-0 file:bg-[var(--color-bg-hover)] file:text-[var(--color-text)] file:text-[11px] file:tracking-[0.15em] file:uppercase file:cursor-pointer hover:file:bg-[var(--color-border)] file:transition-colors cursor-pointer";
 
 export function NewDbtLinkForm() {
   const router = useRouter();
@@ -90,7 +93,7 @@ export function NewDbtLinkForm() {
           accept=".tar.gz,.tgz,application/gzip"
           disabled={isPending}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className={FIELD_INPUT_CLASS}
+          className={`${FIELD_INPUT_CLASS} ${FILE_INPUT_EXTRA_CLASS}`}
           aria-describedby={fileError ? "dbt-link-file-error" : undefined}
           aria-invalid={fileError ? true : undefined}
         />
@@ -107,14 +110,16 @@ export function NewDbtLinkForm() {
         </p>
       )}
 
-      <button
+      <PendingButton
         type="submit"
-        disabled={isPending}
-        aria-busy={isPending}
-        className={`${PRIMARY_BTN_CLASS} w-full`}
+        variant="primary"
+        size="md"
+        pending={isPending}
+        pendingLabel="Uploading…"
+        className="w-full"
       >
-        {isPending ? "Uploading…" : "Upload"}
-      </button>
+        Upload
+      </PendingButton>
     </form>
   );
 }

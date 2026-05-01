@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyDatabase } from "@/components/ui/EmptyState";
 import { DbtLinkDetail } from "@/components/dbt-links/DbtLinkDetail";
 import { loadDbtLink } from "@/lib/dbt-links/load-links";
 import { CLOUD_DEFERRED_BODY } from "@/app/dbt-links/_consts";
@@ -21,7 +21,7 @@ export default async function DbtLinkDetailPage({
       <div className="p-8 max-w-[1400px] animate-fade-in">
         <PageHeader title="dbt link" subtitle="detail" description="dbt project link detail." />
         <TerminalBar path="dbt-links/…" />
-        <EmptyState title="dbt link" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyDatabase />} title="dbt link" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }

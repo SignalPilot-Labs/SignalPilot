@@ -3,7 +3,7 @@ import { ChartRunResponse } from "@/lib/api/types";
 import { DashboardGrid } from "@/components/dashboard/DashboardGrid";
 import { ChartCard } from "@/components/charts/ChartCard";
 import { ChartError } from "@/components/charts/ChartError";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyList } from "@/components/ui/EmptyState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { TerminalBar } from "@/components/ui/PageHeader";
 
@@ -24,6 +24,7 @@ export default async function DashboardPage({ params }: PageProps) {
         <PageHeader title="dashboard" subtitle="canvas" description={`Workspace ${id}`} />
         <TerminalBar path={`dashboards/${id}`} />
         <EmptyState
+          icon={<EmptyList />}
           title="no charts yet"
           body="This workspace has no charts. Create one to populate the dashboard."
         />

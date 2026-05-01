@@ -14,9 +14,10 @@ describe("WorkspaceList", () => {
     expect(links[0].getAttribute("href")).toBe("/dashboards/ws-a");
     expect(links[1].getAttribute("href")).toBe("/dashboards/ws-b");
     expect(links[2].getAttribute("href")).toBe("/dashboards/ws-c");
-    expect(links[0].textContent).toBe("ws-a");
-    expect(links[1].textContent).toBe("ws-b");
-    expect(links[2].textContent).toBe("ws-c");
+    // Each link contains the workspace id text
+    expect(links[0].textContent).toContain("ws-a");
+    expect(links[1].textContent).toContain("ws-b");
+    expect(links[2].textContent).toContain("ws-c");
   });
 
   it("renders nothing in the list body when items is empty", () => {

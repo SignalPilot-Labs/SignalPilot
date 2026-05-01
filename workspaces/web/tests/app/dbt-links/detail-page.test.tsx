@@ -97,10 +97,11 @@ describe("DbtLinkDetailPage", () => {
     render(await Page({ params: Promise.resolve({ id: mockLink.id }) }));
 
     expect(screen.getByRole("heading", { level: 1, name: "My dbt Project" })).toBeDefined();
-    expect(screen.getByText("Native upload")).toBeDefined();
+    // Kind label appears in the StatusPill
+    expect(screen.getAllByText("Native upload").length).toBeGreaterThan(0);
 
-    // relativePath rendered in <code>
-    const codeEl = screen.getByText(mockLink.relativePath);
-    expect(codeEl.tagName.toLowerCase()).toBe("code");
+    // relativePath rendered in <pre>
+    const pathEl = screen.getByText(mockLink.relativePath);
+    expect(pathEl.tagName.toLowerCase()).toBe("pre");
   });
 });

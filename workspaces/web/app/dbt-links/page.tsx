@@ -1,5 +1,5 @@
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyDatabase } from "@/components/ui/EmptyState";
 import { DbtLinkList } from "@/components/dbt-links/DbtLinkList";
 import { loadDbtLinks } from "@/lib/dbt-links/load-links";
 import { CLOUD_DEFERRED_BODY } from "@/app/dbt-links/_consts";
@@ -24,7 +24,7 @@ export default async function DbtLinksPage() {
           actions={<LinkButton href="/dbt-links/new" size="sm">+ new link</LinkButton>}
         />
         <TerminalBar path="dbt-links" />
-        <EmptyState title="dbt links" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyDatabase />} title="dbt links" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }
@@ -41,7 +41,7 @@ export default async function DbtLinksPage() {
       />
       <TerminalBar path="dbt-links" />
       {links.length === 0 ? (
-        <EmptyState title="dbt links" body={EMPTY_LOCAL_BODY} />
+        <EmptyState icon={<EmptyDatabase />} title="dbt links" body={EMPTY_LOCAL_BODY} />
       ) : (
         <DbtLinkList items={links} />
       )}

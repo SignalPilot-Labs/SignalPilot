@@ -1,5 +1,5 @@
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyDatabase } from "@/components/ui/EmptyState";
 import { NewDbtLinkForm } from "@/components/dbt-links/NewDbtLinkForm";
 import { CLOUD_DEFERRED_BODY } from "@/app/dbt-links/_consts";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -15,7 +15,7 @@ export default function DbtLinksNewPage() {
       <div className="p-8 max-w-[1400px] animate-fade-in">
         <PageHeader title="new dbt link" subtitle="upload" description="Upload a dbt project archive." />
         <TerminalBar path="dbt-links/new" />
-        <EmptyState title="new dbt link" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyDatabase />} title="new dbt link" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }

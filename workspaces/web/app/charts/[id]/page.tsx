@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyChart } from "@/components/ui/EmptyState";
 import { ChartDetail } from "@/components/charts/ChartDetail";
 import { loadChartDefinition } from "@/lib/charts/load-charts";
 import { CLOUD_DEFERRED_BODY } from "@/app/charts/_consts";
@@ -17,7 +17,7 @@ export default async function ChartDetailPage({ params }: { params: Promise<{ id
       <div className="p-8 max-w-[1400px] animate-fade-in">
         <PageHeader title="chart" subtitle="detail" description="Chart definition and preview." />
         <TerminalBar path="charts" />
-        <EmptyState title="chart" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyChart />} title="chart" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }

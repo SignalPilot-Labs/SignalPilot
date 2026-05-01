@@ -7,10 +7,10 @@ import { ChartTypeSelect } from "@/components/charts/builder/ChartTypeSelect";
 import { saveChartDefinition } from "@/lib/charts/save-chart";
 import {
   FIELD_INPUT_CLASS,
-  PRIMARY_BTN_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
 } from "@/components/ui/button-classes";
+import { PendingButton } from "@/components/ui/PendingButton";
 
 type SaveResult = { ok: false; error: string } | null;
 
@@ -101,14 +101,16 @@ export function ChartBuilderForm() {
         </p>
       )}
 
-      <button
+      <PendingButton
         type="submit"
-        disabled={isPending}
-        aria-busy={isPending}
-        className={`${PRIMARY_BTN_CLASS} w-full`}
+        variant="primary"
+        size="md"
+        pending={isPending}
+        pendingLabel="Saving…"
+        className="w-full"
       >
-        {isPending ? "Saving…" : "Save"}
-      </button>
+        Save
+      </PendingButton>
     </form>
   );
 }

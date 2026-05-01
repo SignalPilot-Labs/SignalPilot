@@ -1,5 +1,5 @@
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyChart } from "@/components/ui/EmptyState";
 import { ChartList } from "@/components/charts/ChartList";
 import { loadChartDefinitions } from "@/lib/charts/load-charts";
 import { CLOUD_DEFERRED_BODY } from "@/app/charts/_consts";
@@ -24,7 +24,7 @@ export default async function ChartsPage() {
           actions={<LinkButton href="/charts/new" size="sm">+ new chart</LinkButton>}
         />
         <TerminalBar path="charts" />
-        <EmptyState title="charts" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyChart />} title="charts" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }
@@ -41,7 +41,7 @@ export default async function ChartsPage() {
       />
       <TerminalBar path="charts" />
       {definitions.length === 0 ? (
-        <EmptyState title="charts" body={EMPTY_LOCAL_BODY} />
+        <EmptyState icon={<EmptyChart />} title="charts" body={EMPTY_LOCAL_BODY} />
       ) : (
         <ChartList items={definitions} />
       )}

@@ -1,5 +1,5 @@
 import { getServerEnv } from "@/lib/env";
-import { EmptyState, EmptyTerminal } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyTerminal } from "@/components/ui/EmptyState";
 import { AgentRunList } from "@/components/agent-runs/AgentRunList";
 import { loadAgentRuns } from "@/lib/agent-runs/load-runs";
 import { CLOUD_DEFERRED_BODY, EMPTY_LOCAL_BODY } from "@/app/agent-runs/_consts";

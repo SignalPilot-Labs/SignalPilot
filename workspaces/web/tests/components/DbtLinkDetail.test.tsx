@@ -25,21 +25,22 @@ describe("DbtLinkDetail", () => {
     render(<DbtLinkDetail link={link} />);
 
     expect(screen.getByRole("heading", { level: 1, name: "My dbt Project" })).toBeDefined();
-    expect(screen.getByText("Native upload")).toBeDefined();
+    // Kind label appears in the StatusPill (heading row)
+    expect(screen.getAllByText("Native upload").length).toBeGreaterThan(0);
     expect(screen.getByText(link.relativePath)).toBeDefined();
   });
 
-  it("renders relativePath inside a <code> element", () => {
+  it("renders relativePath inside a <pre> element", () => {
     const link = makeLink();
     render(<DbtLinkDetail link={link} />);
 
     const pathEl = screen.getByText(link.relativePath);
-    expect(pathEl.tagName.toLowerCase()).toBe("code");
+    expect(pathEl.tagName.toLowerCase()).toBe("pre");
   });
 
   it("renders the correct kind label for github kind", () => {
     const link = makeLink({ kind: "github" });
     render(<DbtLinkDetail link={link} />);
-    expect(screen.getByText("GitHub")).toBeDefined();
+    expect(screen.getAllByText("GitHub").length).toBeGreaterThan(0);
   });
 });

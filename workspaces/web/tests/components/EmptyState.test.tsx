@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 afterEach(() => {
   cleanup();

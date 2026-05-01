@@ -3,31 +3,10 @@ import type { AgentRunV1 } from "@/lib/agent-runs/types";
 import { STATUS_LABEL } from "@/components/agent-runs/_status-label";
 import { StatusPill, statusToneFor } from "@/components/ui/StatusPill";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { FieldRow } from "@/components/ui/FieldRow";
 
 interface AgentRunDetailProps {
   run: AgentRunV1;
-}
-
-const DT_CLASS =
-  "text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-muted)] self-start pt-0.5";
-
-interface FieldRowProps {
-  label: string;
-  first?: boolean;
-  children: React.ReactNode;
-}
-
-function FieldRow({ label, first = false, children }: FieldRowProps) {
-  return (
-    <div
-      className={`grid grid-cols-[140px_1fr] gap-4 py-2.5 text-[13px] ${
-        first ? "" : "border-t border-[var(--color-border)]"
-      }`}
-    >
-      <dt className={DT_CLASS}>{label}</dt>
-      <dd>{children}</dd>
-    </div>
-  );
 }
 
 export function AgentRunDetail({ run }: AgentRunDetailProps) {

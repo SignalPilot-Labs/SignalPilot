@@ -1,5 +1,5 @@
 import { getServerEnv } from "@/lib/env";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState, EmptyList } from "@/components/ui/EmptyState";
 import { WorkspaceList } from "@/components/dashboard/WorkspaceList";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { TerminalBar } from "@/components/ui/PageHeader";
@@ -23,7 +23,7 @@ export default function DashboardsPage() {
           description="Select a workspace to view its charts."
         />
         <TerminalBar path="dashboards" />
-        <EmptyState title="workspaces" body={CLOUD_DEFERRED_BODY} />
+        <EmptyState icon={<EmptyList />} title="workspaces" body={CLOUD_DEFERRED_BODY} />
       </div>
     );
   }
@@ -37,7 +37,7 @@ export default function DashboardsPage() {
       />
       <TerminalBar path="dashboards" />
       {env.localWorkspaceIds.length === 0 ? (
-        <EmptyState title="workspaces" body={EMPTY_LOCAL_BODY} />
+        <EmptyState icon={<EmptyList />} title="workspaces" body={EMPTY_LOCAL_BODY} />
       ) : (
         <WorkspaceList items={env.localWorkspaceIds} />
       )}

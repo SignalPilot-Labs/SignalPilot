@@ -69,7 +69,7 @@
   --ifm-color-emphasis-300: #222222;
   --ifm-color-emphasis-500: #333333;
   --ifm-navbar-background-color: #0e0e0e;
-  --ifm-footer-background-color: #0e0e0e;
+  --ifm-footer-background-color: #121212;
   --ifm-code-background: #121212;
   --ifm-pre-background: #0e0e0e;
   --ifm-toc-border-color: #222222;
@@ -270,9 +270,6 @@ pre,
 }
 
 /* ── Footer ── */
-.footer--dark {
-  --ifm-footer-background-color: #0e0e0e;
-}
 
 .footer__title {
   font-size: 11px;

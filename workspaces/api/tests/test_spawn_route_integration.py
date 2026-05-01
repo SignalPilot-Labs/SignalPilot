@@ -17,8 +17,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from unittest.mock import AsyncMock
+
 from workspaces_api.agent.proxy_token_client import ProxyTokenClient
 from workspaces_api.agent.subprocess_spawner import SubprocessSpawner
+from workspaces_api.auth.clerk import JwksClient
 from workspaces_api.config import Settings, get_settings
 from workspaces_api.events.bus import EventBus
 from workspaces_api.main import create_app
@@ -88,6 +91,11 @@ class TestSpawnRouteIntegration:
         app.state.session_factory = session_factory
         app.state.spawner = spawner
         app.state.bus = bus
+        app.state.jwks_client = JwksClient(
+            jwks_url="http://unused.local/.well-known/jwks.json",
+            http_client=AsyncMock(),
+            ttl_seconds=600,
+        )
 
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -171,6 +179,11 @@ class TestSpawnRouteIntegration:
         app.state.session_factory = session_factory
         app.state.spawner = spawner
         app.state.bus = bus
+        app.state.jwks_client = JwksClient(
+            jwks_url="http://unused.local/.well-known/jwks.json",
+            http_client=AsyncMock(),
+            ttl_seconds=600,
+        )
 
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

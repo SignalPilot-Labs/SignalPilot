@@ -19,10 +19,15 @@ import httpx
 from fastapi import FastAPI
 
 from workspaces_api.agent.spawner import StubSpawner
+from workspaces_api.auth.clerk import JwksClient
 from workspaces_api.config import get_settings
 from workspaces_api.dashboards import router as dashboards_router
 from workspaces_api.db import make_engine, make_sessionmaker
-from workspaces_api.errors import SandboxBinaryNotFound, register_exception_handlers
+from workspaces_api.errors import (
+    ClerkConfigMissing,
+    SandboxBinaryNotFound,
+    register_exception_handlers,
+)
 from workspaces_api.events.bus import EventBus
 from workspaces_api.routes import health_router, runs_router
 
@@ -37,6 +42,21 @@ _HTTP_CLIENT_TIMEOUT = httpx.Timeout(connect=2, read=5, write=5, pool=2)
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+
+    # Fail fast: cloud mode requires Clerk JWKS URL and issuer configured.
+    if settings.sp_deployment_mode == "cloud":
+        if not settings.clerk_jwks_url:
+            raise ClerkConfigMissing(
+                "SP_CLERK_JWKS_URL is required in cloud mode"
+            )
+        if not settings.clerk_jwks_url.startswith("https://"):
+            raise ClerkConfigMissing(
+                "SP_CLERK_JWKS_URL must use https:// scheme to prevent JWKS MITM"
+            )
+        if not settings.clerk_issuer:
+            raise ClerkConfigMissing(
+                "SP_CLERK_ISSUER is required in cloud mode"
+            )
 
     # Validate sandbox binary early
     if settings.sp_use_subprocess_spawner:
@@ -105,6 +125,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         http_client = None  # type: ignore[assignment]
         app.state.spawner = StubSpawner()
         app.state.chart_executor = None
+
+    # Build JWKS client (always — constructor is cheap, fetches lazily).
+    # In local mode the client is constructed but never queried.
+    jwks_url = settings.clerk_jwks_url or ""
+    if http_client is None:
+        http_client = httpx.AsyncClient(timeout=_HTTP_CLIENT_TIMEOUT)
+    app.state.jwks_client = JwksClient(
+        jwks_url=jwks_url,
+        http_client=http_client,
+        ttl_seconds=settings.clerk_jwks_cache_ttl_seconds,
+    )
 
     logger.info(
         "workspaces_api starting mode=%s spawner=%s",

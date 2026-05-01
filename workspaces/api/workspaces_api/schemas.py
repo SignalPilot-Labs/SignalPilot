@@ -58,6 +58,11 @@ class ApprovalResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RunListResponse(BaseModel):
+    items: list[RunResponse]
+    next_cursor: str | None
+
+
 class HealthResponse(BaseModel):
     status: str
     deployment_mode: str

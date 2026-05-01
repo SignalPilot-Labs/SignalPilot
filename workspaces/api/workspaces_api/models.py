@@ -46,6 +46,10 @@ class Run(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # NULL in local-mode rows; cloud-mode rows carry the verified Clerk sub.
+    # Cloud-mode queries always filter on a non-NULL user_id (SQL NULL semantics
+    # ensure NULL rows are invisible to cloud callers without explicit IS NULL checks).
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     events: Mapped[list[RunEvent]] = relationship(
         "RunEvent", back_populates="run", cascade="all, delete-orphan"
@@ -57,6 +61,7 @@ class Run(Base):
     __table_args__ = (
         Index("run_workspace_idx", "workspace_id", "created_at"),
         Index("run_state_idx", "state"),
+        Index("run_user_id_idx", "user_id", "created_at", "id"),
     )
 
 
@@ -93,6 +98,9 @@ class Approval(Base):
     decided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Past-tense vocabulary: "approved" or "rejected".
+    # Matches the on-disk resume-marker decision field (see agent/resume_marker.py).
+    # Wire verbs "approve"/"reject" are mapped to past tense at the route boundary.
     decision: Mapped[str | None] = mapped_column(Text, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -10,6 +10,7 @@ without the map. Alembic is NOT run in unit tests.
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -17,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from workspaces_api.agent.spawner import StubSpawner
+from workspaces_api.auth.clerk import JwksClient
 from workspaces_api.config import Settings, get_settings
 from workspaces_api.dashboards.models import Chart, ChartQuery
 from workspaces_api.db import Base, make_sessionmaker
@@ -96,8 +98,19 @@ def event_bus() -> EventBus:
     return EventBus()
 
 
+@pytest.fixture
+def stub_jwks_client() -> JwksClient:
+    """A JwksClient that is never queried (local mode)."""
+    mock_http = AsyncMock()
+    return JwksClient(
+        jwks_url="http://unused.local/.well-known/jwks.json",
+        http_client=mock_http,
+        ttl_seconds=600,
+    )
+
+
 @pytest_asyncio.fixture
-async def app(settings_local, session_factory, stub_spawner, event_bus):
+async def app(settings_local, session_factory, stub_spawner, event_bus, stub_jwks_client):
     application = create_app()
 
     application.dependency_overrides[get_settings] = lambda: settings_local
@@ -109,6 +122,7 @@ async def app(settings_local, session_factory, stub_spawner, event_bus):
     application.state.spawner = stub_spawner
     application.state.bus = event_bus
     application.state.chart_executor = None
+    application.state.jwks_client = stub_jwks_client
 
     yield application
 
@@ -158,3 +172,65 @@ async def chart_factory(db_session, session_factory):
         return chart, cq
 
     return _make_chart
+
+
+# ─── Cloud-mode fixtures ───────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def settings_cloud_with_clerk() -> Settings:
+    """Cloud-mode settings with Clerk configuration for tests."""
+    return Settings.model_validate({
+        "SP_DEPLOYMENT_MODE": "cloud",
+        "ANTHROPIC_API_KEY": "sk-ant-test-key",
+        "WORKSPACES_DATABASE_URL": _SQLITE_URL,
+        "SP_CLERK_JWKS_URL": "http://fake-clerk.local/.well-known/jwks.json",
+        "SP_CLERK_ISSUER": "https://fake-clerk.local",
+    })
+
+
+@pytest_asyncio.fixture
+async def app_cloud(
+    settings_cloud_with_clerk, session_factory, stub_spawner, event_bus
+):
+    """A cloud-mode app with a fake JwksClient injected via dependency override."""
+    from tests.fixtures.jwks import _factory
+
+    application = create_app()
+
+    jwks_dict = _factory.jwks_dict()
+
+    # Create a real JwksClient but override current_user_id at dependency level
+    mock_http = AsyncMock()
+    jwks_client = JwksClient(
+        jwks_url="http://fake-clerk.local/.well-known/jwks.json",
+        http_client=mock_http,
+        ttl_seconds=600,
+    )
+    # Pre-populate cache so no real network call is made
+    jwks_client._cached_keys = {
+        jwk["kid"]: jwk for jwk in jwks_dict["keys"]
+    }
+    import time
+    jwks_client._fetched_at = time.monotonic()
+
+    application.dependency_overrides[get_settings] = lambda: settings_cloud_with_clerk
+    application.dependency_overrides[_get_session_factory] = lambda: session_factory
+    application.dependency_overrides[_get_spawner] = lambda: stub_spawner
+    application.dependency_overrides[_get_bus] = lambda: event_bus
+
+    application.state.session_factory = session_factory
+    application.state.spawner = stub_spawner
+    application.state.bus = event_bus
+    application.state.chart_executor = None
+    application.state.jwks_client = jwks_client
+
+    yield application
+
+
+@pytest_asyncio.fixture
+async def client_cloud(app_cloud):
+    async with AsyncClient(
+        transport=ASGITransport(app=app_cloud), base_url="http://test"
+    ) as c:
+        yield c

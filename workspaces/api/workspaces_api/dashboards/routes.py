@@ -1,6 +1,10 @@
 """Dashboard chart routes.
 
-auth: TODO(round-6) — routes are currently open (no JWT/Clerk auth).
+auth (R6): Routes now require the current_user_id dependency.
+  In local mode the dependency is a no-op (returns None, no header required).
+  In cloud mode the dependency validates the Clerk JWT and raises 401/503 on failure.
+  Per-user chart filtering is deferred to a later round when Workspace→User ACL exists.
+  For R6, the dependency only enforces auth presence on chart routes.
 
 Routes:
   POST  /v1/charts                      Create chart + chart_query
@@ -40,6 +44,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from workspaces_api.auth.dependency import CurrentUserId
 from workspaces_api.errors import ChartCacheCorrupt, ChartNotFound
 from .cache import compute_cache_key, fetch_cached
 from .models import Chart, ChartCache, ChartQuery
@@ -102,6 +107,7 @@ def _build_chart_response(chart: Chart) -> ChartResponse:
 async def create_chart(
     body: ChartCreateRequest,
     request: Request,
+    user_id: CurrentUserId,
 ) -> ChartResponse:
     """Create a chart and its associated chart_query.
 
@@ -145,6 +151,7 @@ async def create_chart(
 async def get_chart(
     chart_id: uuid.UUID,
     request: Request,
+    user_id: CurrentUserId,
 ) -> ChartResponse:
     """Fetch a chart by ID. Returns 404 if not found."""
     session_factory = _get_session_factory(request)
@@ -156,6 +163,7 @@ async def get_chart(
 @router.get("", response_model=ChartListResponse)
 async def list_charts(
     request: Request,
+    user_id: CurrentUserId,
     workspace: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
@@ -213,6 +221,7 @@ async def run_chart(
     chart_id: uuid.UUID,
     body: ChartRunRequest,
     request: Request,
+    user_id: CurrentUserId,
 ) -> ChartRunResponse:
     """Return cached query result, or execute via dbt-proxy on cache MISS.
 

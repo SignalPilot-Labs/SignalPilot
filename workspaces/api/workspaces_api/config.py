@@ -84,6 +84,20 @@ class Settings(BaseSettings):
         default=True, validation_alias="SP_USE_SUBPROCESS_SPAWNER"
     )
 
+    # R6: Clerk JWT auth settings
+    clerk_jwks_url: str | None = Field(
+        default=None, validation_alias="SP_CLERK_JWKS_URL"
+    )
+    clerk_issuer: str | None = Field(
+        default=None, validation_alias="SP_CLERK_ISSUER"
+    )
+    clerk_audience: str | None = Field(
+        default=None, validation_alias="SP_CLERK_AUDIENCE"
+    )
+    clerk_jwks_cache_ttl_seconds: int = Field(
+        default=600, validation_alias="SP_CLERK_JWKS_CACHE_TTL_SECONDS"
+    )
+
     # R5: chart-execute settings
     sp_chart_execute_token_ttl_seconds: int = Field(
         default=60, validation_alias="SP_CHART_EXECUTE_TOKEN_TTL_SECONDS"

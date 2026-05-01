@@ -96,6 +96,40 @@ class SandboxBinaryNotFound(WorkspacesError):
     error_code = "sandbox_binary_not_found"
 
 
+class AuthMissingToken(WorkspacesError):
+    """Raised when the Authorization header is absent or malformed."""
+
+    error_code = "auth_missing_token"
+
+
+class AuthInvalidToken(WorkspacesError):
+    """Raised when JWT verification fails (bad signature, expired, wrong issuer/audience,
+    unknown kid, kty/alg mismatch).
+
+    The agent-facing response body contains only error_code + correlation_id.
+    Full failure details are logged with correlation_id only.
+    """
+
+    error_code = "auth_invalid_token"
+
+
+class ClerkJWKSUnavailable(WorkspacesError):
+    """Raised when the Clerk JWKS endpoint is unreachable or returns non-2xx.
+
+    Mapped to 503 — do not return 401 for upstream JWKS outages.
+    The distinction matters: 401 tells the client "your token is bad",
+    503 tells the client "our gateway is temporarily down".
+    """
+
+    error_code = "clerk_jwks_unavailable"
+
+
+class ClerkConfigMissing(WorkspacesError):
+    """Raised at startup when cloud mode is enabled but Clerk settings are absent."""
+
+    error_code = "clerk_config_missing"
+
+
 def _resolve_correlation_id(exc: WorkspacesError) -> str:
     """Return exc.correlation_id, or generate one if absent."""
     if exc.correlation_id is not None:
@@ -193,6 +227,40 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.error(
             "sandbox_binary_not_found cid=%s detail=%s", cid, exc.message
         )
+        return JSONResponse(status_code=503, content=_error_body(exc, cid))
+
+    # R6: auth error handlers
+    @app.exception_handler(AuthMissingToken)
+    async def _auth_missing_token(
+        request: Request, exc: AuthMissingToken
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.warning("auth_missing_token cid=%s", cid)
+        return JSONResponse(status_code=401, content=_error_body(exc, cid))
+
+    @app.exception_handler(AuthInvalidToken)
+    async def _auth_invalid_token(
+        request: Request, exc: AuthInvalidToken
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        # Log full detail (reason for rejection) but return only generic body.
+        logger.warning("auth_invalid_token cid=%s detail=%s", cid, exc.message)
+        return JSONResponse(status_code=401, content=_error_body(exc, cid))
+
+    @app.exception_handler(ClerkJWKSUnavailable)
+    async def _clerk_jwks_unavailable(
+        request: Request, exc: ClerkJWKSUnavailable
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.error("clerk_jwks_unavailable cid=%s detail=%s", cid, exc.message)
+        return JSONResponse(status_code=503, content=_error_body(exc, cid))
+
+    @app.exception_handler(ClerkConfigMissing)
+    async def _clerk_config_missing(
+        request: Request, exc: ClerkConfigMissing
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.error("clerk_config_missing cid=%s detail=%s", cid, exc.message)
         return JSONResponse(status_code=503, content=_error_body(exc, cid))
 
     # R5: chart execution error handlers

@@ -17,6 +17,7 @@ dependencies = [
     "alembic>=1.13",
     "sse-starlette>=2",
     "psycopg[binary]>=3",
+    "pyjwt[crypto]>=2.8",
 ]
 
 [project.optional-dependencies]

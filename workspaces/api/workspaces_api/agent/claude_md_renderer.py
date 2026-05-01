@@ -44,9 +44,14 @@ When you reach an action that requires approval:
 
 1. Emit a single JSON line on stdout (exactly as shown — no extra text):
    `{{"signalpilot_event":"approval_request","run_id":"{run_id}","tool_name":"<tool>","input":{{...}}}}`
-2. Then wait for the file `~/.signalpilot/resume` to appear before proceeding.
-3. If the file is NOT created within your wait budget, stop and report the timeout.
-4. After resuming, remove `~/.signalpilot/resume` so the next gate is clean.
+2. Then watch the directory `~/.signalpilot/resume/` for a new file named
+   `<approval_id>.json` (where `<approval_id>` is the UUID from the approval
+   request acknowledgement).
+3. Each file contains:
+   `{{"approval_id":"…","decision":"approved"|"rejected","decided_at":"…","comment":"…"|null}}`
+4. On read, act on the `decision` field. You may delete the file after reading;
+   it is idempotent — the orchestrator does not require deletion.
+5. If no file appears within your wait budget, stop and report the timeout.
 
 ## Refusal Patterns
 

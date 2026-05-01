@@ -94,3 +94,24 @@ class TestRenderRunClaudeMd:
         r1 = render_run_claude_md(ctx)
         r2 = render_run_claude_md(ctx)
         assert r1 == r2
+
+    def test_approval_flow_uses_directory_convention(self) -> None:
+        """Approval flow section should describe watching the .signalpilot/resume/ dir."""
+        ctx = self._make_ctx()
+        result = render_run_claude_md(ctx)
+        assert "~/.signalpilot/resume/" in result
+
+    def test_approval_flow_describes_per_approval_json_files(self) -> None:
+        """Each approval produces an <approval_id>.json file, not a single resume file."""
+        ctx = self._make_ctx()
+        result = render_run_claude_md(ctx)
+        assert "approval_id" in result
+        # New convention uses .json extension per approval
+        assert ".json" in result
+
+    def test_approval_flow_decision_vocabulary_past_tense(self) -> None:
+        """The template describes 'approved' and 'rejected' (past tense)."""
+        ctx = self._make_ctx()
+        result = render_run_claude_md(ctx)
+        assert '"approved"' in result
+        assert '"rejected"' in result

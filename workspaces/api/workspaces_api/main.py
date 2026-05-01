@@ -11,37 +11,103 @@ Usage (programmatic):
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 
 from workspaces_api.agent.spawner import StubSpawner
 from workspaces_api.config import get_settings
-from workspaces_api.db import make_engine, make_sessionmaker
-from workspaces_api.errors import register_exception_handlers
-from workspaces_api.events.bus import EventBus
 from workspaces_api.dashboards import router as dashboards_router
+from workspaces_api.db import make_engine, make_sessionmaker
+from workspaces_api.errors import SandboxBinaryNotFound, register_exception_handlers
+from workspaces_api.events.bus import EventBus
 from workspaces_api.routes import health_router, runs_router
 
 logger = logging.getLogger(__name__)
+
+_STATIC_CLAUDE_MD_PATH = (
+    Path(__file__).parent.parent.parent / "agent" / "CLAUDE.md"
+)
+_HTTP_CLIENT_TIMEOUT = httpx.Timeout(connect=2, read=5, write=5, pool=2)
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+
+    # Validate sandbox binary early
+    if settings.sp_use_subprocess_spawner:
+        if not settings.sp_sandbox_server_path.exists():
+            raise SandboxBinaryNotFound(
+                f"Sandbox server.py not found at {settings.sp_sandbox_server_path}. "
+                "Set SP_SANDBOX_SERVER_PATH or SP_USE_SUBPROCESS_SPAWNER=false."
+            )
+
+    # Ensure workdir root exists
+    settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+
     engine = make_engine(settings.database_url)
+    session_factory = make_sessionmaker(engine)
     app.state.engine = engine
-    app.state.session_factory = make_sessionmaker(engine)
-    app.state.spawner = StubSpawner()
+    app.state.session_factory = session_factory
     app.state.bus = EventBus()
+
+    if settings.sp_use_subprocess_spawner:
+        from workspaces_api.agent.proxy_token_client import ProxyTokenClient
+        from workspaces_api.agent.subprocess_spawner import SubprocessSpawner
+
+        http_client = httpx.AsyncClient(timeout=_HTTP_CLIENT_TIMEOUT)
+
+        token_client: ProxyTokenClient | None = None
+        if settings.gateway_url:
+            api_key = (
+                settings.sp_api_key.get_secret_value()
+                if settings.sp_api_key is not None
+                else None
+            )
+            token_client = ProxyTokenClient(
+                gateway_url=settings.gateway_url,
+                http_client=http_client,
+                api_key=api_key,
+            )
+
+        static_md_text = ""
+        if _STATIC_CLAUDE_MD_PATH.exists():
+            static_md_text = _STATIC_CLAUDE_MD_PATH.read_text(encoding="utf-8")
+        else:
+            logger.warning(
+                "static CLAUDE.md not found at %s — sandbox will have empty static instructions",
+                _STATIC_CLAUDE_MD_PATH,
+            )
+
+        spawner = SubprocessSpawner(
+            settings=settings,
+            session_factory=session_factory,
+            bus=app.state.bus,
+            token_client=token_client,
+            static_md_text=static_md_text,
+        )
+        app.state.spawner = spawner
+    else:
+        http_client = None  # type: ignore[assignment]
+        app.state.spawner = StubSpawner()
+
     logger.info(
-        "workspaces_api starting mode=%s", settings.sp_deployment_mode
+        "workspaces_api starting mode=%s spawner=%s",
+        settings.sp_deployment_mode,
+        type(app.state.spawner).__name__,
     )
+
     try:
         yield
     finally:
+        await app.state.spawner.shutdown()
         await engine.dispose()
+        if http_client is not None:
+            await http_client.aclose()
         logger.info("workspaces_api stopped")
 
 

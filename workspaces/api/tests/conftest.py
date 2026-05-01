@@ -53,37 +53,37 @@ async def db_session(session_factory):
 
 @pytest.fixture
 def settings_local() -> Settings:
-    return Settings(
-        SP_DEPLOYMENT_MODE="local",
-        CLAUDE_CODE_OAUTH_TOKEN="test-token",
-        WORKSPACES_DATABASE_URL=_SQLITE_URL,
-    )
+    return Settings.model_validate({
+        "SP_DEPLOYMENT_MODE": "local",
+        "CLAUDE_CODE_OAUTH_TOKEN": "test-token",
+        "WORKSPACES_DATABASE_URL": _SQLITE_URL,
+    })
 
 
 @pytest.fixture
 def settings_cloud_byo() -> Settings:
-    return Settings(
-        SP_DEPLOYMENT_MODE="cloud",
-        ANTHROPIC_API_KEY="sk-ant-test-key",
-        WORKSPACES_DATABASE_URL=_SQLITE_URL,
-    )
+    return Settings.model_validate({
+        "SP_DEPLOYMENT_MODE": "cloud",
+        "ANTHROPIC_API_KEY": "sk-ant-test-key",
+        "WORKSPACES_DATABASE_URL": _SQLITE_URL,
+    })
 
 
 @pytest.fixture
 def settings_cloud_no_key() -> Settings:
-    return Settings(
-        SP_DEPLOYMENT_MODE="cloud",
-        WORKSPACES_DATABASE_URL=_SQLITE_URL,
-    )
+    return Settings.model_validate({
+        "SP_DEPLOYMENT_MODE": "cloud",
+        "WORKSPACES_DATABASE_URL": _SQLITE_URL,
+    })
 
 
 @pytest.fixture
 def settings_cloud_metered() -> Settings:
-    return Settings(
-        SP_DEPLOYMENT_MODE="cloud",
-        ANTHROPIC_API_KEY="sk-ant-test-key",
-        WORKSPACES_DATABASE_URL=_SQLITE_URL,
-    )
+    return Settings.model_validate({
+        "SP_DEPLOYMENT_MODE": "cloud",
+        "ANTHROPIC_API_KEY": "sk-ant-test-key",
+        "WORKSPACES_DATABASE_URL": _SQLITE_URL,
+    })
 
 
 @pytest.fixture

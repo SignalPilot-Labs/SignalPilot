@@ -32,6 +32,8 @@ def _make_request(bundle: InferenceBundle) -> SpawnRequest:
         inference=bundle,
         gateway_run_token=None,
         dbt_proxy_host_port=None,
+        connector_name=None,
+        sandbox_internal_secret="deadbeef" * 8,
     )
 
 
@@ -84,3 +86,34 @@ class TestStubSpawner:
         bundle = _make_bundle(api_key=secret)
         assert secret not in repr(bundle)
         assert "***" in repr(bundle)
+
+    def test_spawn_request_repr_masks_sandbox_internal_secret(self) -> None:
+        secret = "cafebabe" * 8
+        bundle = _make_bundle(oauth_token="tok")
+        req = SpawnRequest(
+            run_id=uuid.uuid4(),
+            workspace_id="ws-001",
+            prompt="test",
+            inference=bundle,
+            gateway_run_token=None,
+            dbt_proxy_host_port=None,
+            connector_name=None,
+            sandbox_internal_secret=secret,
+        )
+        assert secret not in repr(req)
+        assert "***" in repr(req)
+
+    def test_spawn_request_repr_masks_gateway_run_token(self) -> None:
+        bundle = _make_bundle(oauth_token="tok")
+        req = SpawnRequest(
+            run_id=uuid.uuid4(),
+            workspace_id="ws-001",
+            prompt="test",
+            inference=bundle,
+            gateway_run_token="gateway-secret-token",
+            dbt_proxy_host_port=None,
+            connector_name=None,
+            sandbox_internal_secret="deadbeef" * 8,
+        )
+        assert "gateway-secret-token" not in repr(req)
+        assert "***" in repr(req)

@@ -66,10 +66,10 @@ class TestSubmitRun:
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         # Override settings to have no token
-        no_token_settings = Settings(
-            SP_DEPLOYMENT_MODE="local",
-            WORKSPACES_DATABASE_URL="sqlite+aiosqlite:///:memory:",
-        )
+        no_token_settings = Settings.model_validate({
+            "SP_DEPLOYMENT_MODE": "local",
+            "WORKSPACES_DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+        })
         app.dependency_overrides[get_settings] = lambda: no_token_settings
 
         response = await client.post(
@@ -128,10 +128,10 @@ class TestSubmitRun:
         settings_local: Settings,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        no_token_settings = Settings(
-            SP_DEPLOYMENT_MODE="local",
-            WORKSPACES_DATABASE_URL="sqlite+aiosqlite:///:memory:",
-        )
+        no_token_settings = Settings.model_validate({
+            "SP_DEPLOYMENT_MODE": "local",
+            "WORKSPACES_DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+        })
         app.dependency_overrides[get_settings] = lambda: no_token_settings
 
         await client.post(
@@ -308,6 +308,7 @@ class TestApproveRun:
 
         async with session_factory() as session:
             updated_run = await session.get(Run, run.id)
+            assert updated_run is not None
             assert updated_run.state == RunState.running.value
 
             from sqlalchemy import select
@@ -335,6 +336,7 @@ class TestApproveRun:
 
         async with session_factory() as session:
             updated_run = await session.get(Run, run.id)
+            assert updated_run is not None
             assert updated_run.state == RunState.cancelled.value
 
     async def test_approve_when_not_awaiting_returns_409(

@@ -62,6 +62,27 @@ class ChartCacheCorrupt(WorkspacesError):
     error_code = "chart_cache_corrupt"
 
 
+class SpawnFailed(WorkspacesError):
+    """Raised when subprocess spawn or workdir setup fails unexpectedly."""
+
+    error_code = "spawn_failed"
+
+
+class ProxyTokenMintFailed(WorkspacesError):
+    """Raised when minting a gateway dbt-proxy run-token fails.
+
+    error_code sub-codes: "auth", "conflict", "missing_api_key".
+    """
+
+    error_code = "proxy_token_mint_failed"
+
+
+class SandboxBinaryNotFound(WorkspacesError):
+    """Raised at startup when the sandbox server.py path does not exist."""
+
+    error_code = "sandbox_binary_not_found"
+
+
 def _error_body(exc: WorkspacesError) -> dict[str, str]:
     return {"error_code": exc.error_code, "message": exc.message}
 
@@ -108,3 +129,22 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _chart_cache_corrupt(request: Request, exc: ChartCacheCorrupt) -> JSONResponse:
         logger.error("chart_cache_corrupt: %s", exc.message)
         return JSONResponse(status_code=500, content=_error_body(exc))
+
+    @app.exception_handler(SpawnFailed)
+    async def _spawn_failed(request: Request, exc: SpawnFailed) -> JSONResponse:
+        logger.error("spawn_failed: %s", exc.message)
+        return JSONResponse(status_code=500, content=_error_body(exc))
+
+    @app.exception_handler(ProxyTokenMintFailed)
+    async def _proxy_token_mint_failed(
+        request: Request, exc: ProxyTokenMintFailed
+    ) -> JSONResponse:
+        logger.error("proxy_token_mint_failed: %s", exc.message)
+        return JSONResponse(status_code=502, content=_error_body(exc))
+
+    @app.exception_handler(SandboxBinaryNotFound)
+    async def _sandbox_binary_not_found(
+        request: Request, exc: SandboxBinaryNotFound
+    ) -> JSONResponse:
+        logger.error("sandbox_binary_not_found: %s", exc.message)
+        return JSONResponse(status_code=503, content=_error_body(exc))

@@ -23,6 +23,7 @@ If this file grows past ~250 lines, split SSE into routes/runs_events.py.
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ from sse_starlette.sse import EventSourceResponse
 from workspaces_api.agent.inference import resolve_inference_source
 from workspaces_api.agent.spawner import SpawnRequest, Spawner
 from workspaces_api.config import Settings, get_settings
+from workspaces_api.errors import ProxyTokenMintFailed, SpawnFailed
 from workspaces_api.events.bus import EventBus
 from workspaces_api.models import Approval, Run, RunEvent
 from workspaces_api.schemas import (
@@ -138,8 +140,19 @@ async def submit_run(
             inference=bundle,
             gateway_run_token=None,
             dbt_proxy_host_port=body.dbt_proxy_host_port,
+            connector_name=body.connector_name,
+            sandbox_internal_secret=secrets.token_hex(32),
         )
-        await spawner.spawn(spawn_req)
+
+        try:
+            await spawner.spawn(spawn_req)
+        except (SpawnFailed, ProxyTokenMintFailed):
+            # Mark run failed before surfacing the error
+            run.state = RunState.failed.value
+            run.updated_at = _now_utc()
+            run.finished_at = _now_utc()
+            await session.commit()
+            raise
 
         transition(RunState(run.state), RunState.running)
         run.state = RunState.running.value

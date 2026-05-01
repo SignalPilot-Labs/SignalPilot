@@ -14,6 +14,7 @@ class RunCreateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=16000)
     dbt_proxy_host_port: int | None = None
     requested_inference: Literal["local", "byo", "metered"] | None = None
+    connector_name: str | None = None
 
 
 class RunResponse(BaseModel):

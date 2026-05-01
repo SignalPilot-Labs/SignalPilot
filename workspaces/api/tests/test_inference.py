@@ -25,10 +25,10 @@ class TestInference:
         assert bundle.mode == "local"
 
     def test_local_without_token_raises(self) -> None:
-        s = Settings(
-            SP_DEPLOYMENT_MODE="local",
-            WORKSPACES_DATABASE_URL="sqlite+aiosqlite:///:memory:",
-        )
+        s = Settings.model_validate({
+            "SP_DEPLOYMENT_MODE": "local",
+            "WORKSPACES_DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+        })
         with pytest.raises(InferenceNotConfigured):
             resolve_inference_source(s, requested=None)
 

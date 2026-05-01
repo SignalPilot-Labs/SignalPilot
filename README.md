@@ -8,7 +8,7 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
 
-**[☁️ Try SignalPilot Cloud — free](https://app.signalpilot.ai/)**
+**[☁️ Try SignalPilot Cloud — free](https://app.signalpilot.ai/sign-in)**
 
 [🚀 Self-host](#try-signalpilot-data-agent) · [📖 Docs](https://SignalPilot-Labs.github.io/SignalPilot/) · [⭐ Star the repo](https://github.com/SignalPilot-Labs/signalpilot/stargazers) · [📊 See benchmarks](https://www.signalpilot.ai/benchmark) · [🌐 signalpilot.ai](https://www.signalpilot.ai/) · [⚙️ Try AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn) · [📅 Book a demo](https://cal.com/fahimaziz/autofyn-intro)
 
@@ -35,7 +35,7 @@ Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code
 
 1. **Plugin (skill + tool)** — [`plugin/`](plugin/) adds 10 dbt/SQL skills + a verifier agent + 32 MCP tools to your Claude Code session. This is the recommended way to use SignalPilot.
 2. **MCP server** — standard `streamable-http`, the layer the plugin talks to. *Experimental for non-Claude clients*: Cursor / Codex / custom Agent SDK builds can connect and call the 32 MCP tools, but the **skills are Claude Code-specific** and don't run there. Use at your own risk until other platforms ship a skill-equivalent surface.
-3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://app.signalpilot.ai) for SSO and hosted history.
+3. **Observability platform** — `docker compose up -d` brings up the gateway, web UI (`:3200`), audit log, query history, latency/error dashboards, encrypted credential storage. Or use [SignalPilot Cloud](https://app.signalpilot.ai/sign-in) for SSO and hosted history.
 
 ---
 

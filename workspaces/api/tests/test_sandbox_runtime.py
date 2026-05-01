@@ -42,11 +42,10 @@ class TestSandboxRuntimeFactory:
         assert isinstance(rt, RunscRuntime)
         assert rt.name == "runsc"
 
-    def test_runc_returns_runsc_runtime_with_runc_name(self) -> None:
+    def test_runc_raises_sandbox_runtime_unavailable(self) -> None:
         s = _settings(SP_SANDBOX_RUNTIME="runc")
-        rt = build_runtime(s)
-        assert isinstance(rt, RunscRuntime)
-        assert rt.name == "runc"
+        with pytest.raises(SandboxRuntimeUnavailable, match="unknown SP_SANDBOX_RUNTIME"):
+            build_runtime(s)
 
     def test_runsc_binary_from_settings(self) -> None:
         s = _settings(SP_SANDBOX_RUNTIME="runsc", SP_RUNSC_BINARY="/custom/runsc")
@@ -90,12 +89,12 @@ class TestNoneRuntime:
 class TestRunscRuntime:
     @pytest.mark.asyncio
     async def test_validate_available_succeeds_with_bin_true(self) -> None:
-        rt = RunscRuntime(binary=Path("/bin/true"), name="runsc")
+        rt = RunscRuntime(binary=Path("/bin/true"))
         await rt.validate_available()  # /bin/true exits 0
 
     @pytest.mark.asyncio
     async def test_validate_available_raises_when_binary_missing(self) -> None:
-        rt = RunscRuntime(binary=Path("/nonexistent/runsc"), name="runsc")
+        rt = RunscRuntime(binary=Path("/nonexistent/runsc"))
         with pytest.raises(SandboxRuntimeUnavailable, match="not found"):
             await rt.validate_available()
 
@@ -109,7 +108,7 @@ class TestRunscRuntime:
             mock_proc = AsyncMock()
             return mock_proc
 
-        rt = RunscRuntime(binary=Path("/usr/local/bin/runsc"), name="runsc", _exec_fn=fake_exec)
+        rt = RunscRuntime(binary=Path("/usr/local/bin/runsc"), _exec_fn=fake_exec)
         await rt.exec(
             argv=["python3", "server.py"],
             env={},
@@ -137,7 +136,7 @@ class TestRunscRuntime:
             mock_proc = AsyncMock()
             return mock_proc
 
-        rt = RunscRuntime(binary=Path("/usr/local/bin/runsc"), name="runsc", _exec_fn=fake_exec)
+        rt = RunscRuntime(binary=Path("/usr/local/bin/runsc"), _exec_fn=fake_exec)
         mounts = [
             Mount(
                 source=Path("/tmp/run123/home/.signalpilot/resume"),
@@ -173,7 +172,7 @@ class TestRunscRuntime:
             mock_proc = AsyncMock()
             return mock_proc
 
-        rt = RunscRuntime(binary=Path("/runsc"), name="runsc", _exec_fn=fake_exec)
+        rt = RunscRuntime(binary=Path("/runsc"), _exec_fn=fake_exec)
         mount = Mount(
             source=Path("/src"),
             target=PurePosixPath("/dst"),
@@ -206,7 +205,7 @@ class TestRunscRuntime:
             mock_proc = AsyncMock()
             return mock_proc
 
-        rt = RunscRuntime(binary=Path("/runsc"), name="runsc", _exec_fn=fake_exec)
+        rt = RunscRuntime(binary=Path("/runsc"), _exec_fn=fake_exec)
         test_env = {"FOO": "bar", "AGENT_SECRET": "xyz"}
         await rt.exec(
             argv=["python3"],
@@ -218,3 +217,8 @@ class TestRunscRuntime:
         )
 
         assert received_env == test_env
+
+    def test_runsc_runtime_name_is_runsc_constant(self) -> None:
+        """RunscRuntime.name must always be 'runsc' regardless of constructor args."""
+        rt = RunscRuntime(binary=Path("/x"))
+        assert rt.name == "runsc"

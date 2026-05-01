@@ -1,8 +1,8 @@
-"""Tests for main.py lifespan — R8 sandbox runtime gate."""
+"""Tests for main.py lifespan — R8/R9 sandbox runtime gate."""
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -49,11 +49,15 @@ class TestLifespanRuntimeGate:
             WORKSPACES_DATABASE_URL=_BAD_DB_URL,
         )
         app = create_app()
+        mock_make_engine = MagicMock()
 
         with patch("workspaces_api.main.get_settings", return_value=settings):
-            with pytest.raises(SandboxRuntimeUnavailable, match="cloud mode requires"):
-                async with app.router.lifespan_context(app):
-                    pass
+            with patch("workspaces_api.main.make_engine", mock_make_engine):
+                with pytest.raises(SandboxRuntimeUnavailable, match="cloud mode requires"):
+                    async with app.router.lifespan_context(app):
+                        pass
+
+        mock_make_engine.assert_not_called()
 
     async def test_local_mode_none_runtime_starts_normally(self) -> None:
         """local + SP_SANDBOX_RUNTIME=none (default) must start without runsc."""
@@ -88,3 +92,35 @@ class TestLifespanRuntimeGate:
         with patch("workspaces_api.main.get_settings", return_value=settings):
             async with app.router.lifespan_context(app):
                 assert hasattr(app.state, "spawner")
+
+    async def test_cloud_mode_runc_runtime_raises_at_build_runtime(self) -> None:
+        """cloud + SP_SANDBOX_RUNTIME=runc raises SandboxRuntimeUnavailable from
+        build_runtime (before the cloud-gate and before engine construction).
+        """
+        settings = _cloud_settings(
+            SP_SANDBOX_RUNTIME="runc",
+            WORKSPACES_DATABASE_URL=_BAD_DB_URL,
+        )
+        app = create_app()
+        mock_make_engine = MagicMock()
+
+        with patch("workspaces_api.main.get_settings", return_value=settings):
+            with patch("workspaces_api.main.make_engine", mock_make_engine):
+                with pytest.raises(SandboxRuntimeUnavailable, match="unknown SP_SANDBOX_RUNTIME"):
+                    async with app.router.lifespan_context(app):
+                        pass
+
+        mock_make_engine.assert_not_called()
+
+    async def test_cloud_gate_message_includes_received_name(self) -> None:
+        """The cloud-gate SandboxRuntimeUnavailable message must include the actual runtime name."""
+        settings = _cloud_settings(
+            SP_SANDBOX_RUNTIME="none",
+            WORKSPACES_DATABASE_URL=_BAD_DB_URL,
+        )
+        app = create_app()
+
+        with patch("workspaces_api.main.get_settings", return_value=settings):
+            with pytest.raises(SandboxRuntimeUnavailable, match="'none'"):
+                async with app.router.lifespan_context(app):
+                    pass

@@ -30,7 +30,8 @@ _DIR_MODE = 0o700
 
 
 def prepare_resume_dir(run_root: Path) -> Path:
-    """Create the resume-marker directory for a run.
+    """Recreates the directory atomically: any pre-existing resume dir for this
+    run is removed first, then the dir is created with mode 0o700 (exist_ok=False).
 
     Creates {run_root}/home/.signalpilot/resume with mode 0o700.
     Called from prepare_run_workdir so the bind-mount target exists before spawn.
@@ -38,7 +39,16 @@ def prepare_resume_dir(run_root: Path) -> Path:
     Returns the created path.
     """
     resume_dir = run_root / "home" / _RESUME_DIR
-    resume_dir.mkdir(parents=True, mode=_DIR_MODE, exist_ok=True)
+    # Today's only caller is prepare_run_workdir, which has already created a
+    # fresh home/ via claude_dir.mkdir(exist_ok=False) — so this branch is
+    # currently unreachable. The rmtree is retained as defense-in-depth for
+    # future retry paths (e.g., resume-on-retry where the run-id is reused)
+    # so that this helper remains safe to call directly without a stale dir
+    # bypassing the exist_ok=False invariant below.
+    if resume_dir.exists():
+        shutil.rmtree(resume_dir)  # defense-in-depth
+    resume_dir.parent.mkdir(parents=True, mode=_DIR_MODE, exist_ok=True)
+    resume_dir.mkdir(mode=_DIR_MODE, exist_ok=False)
     return resume_dir
 
 

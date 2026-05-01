@@ -68,12 +68,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "Set SP_SANDBOX_SERVER_PATH or SP_USE_SUBPROCESS_SPAWNER=false."
             )
 
-    # R8: sandbox runtime gate — runs BEFORE make_engine so broken deploys
+    # R8/R9: sandbox runtime gate — runs BEFORE make_engine so broken deploys
     # never open DB pools.
     runtime = build_runtime(settings)
-    if settings.sp_deployment_mode == "cloud" and runtime.name == "none":
+    if settings.sp_deployment_mode == "cloud" and runtime.name != "runsc":
         raise SandboxRuntimeUnavailable(
-            "cloud mode requires SP_SANDBOX_RUNTIME=runsc (got 'none')"
+            f"cloud mode requires SP_SANDBOX_RUNTIME=runsc (got {runtime.name!r})"
         )
     await runtime.validate_available()
 

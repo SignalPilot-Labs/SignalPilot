@@ -71,9 +71,29 @@ class TestPrepareResumeDir:
         assert result.is_dir()
         assert stat.S_IMODE(result.stat().st_mode) == 0o700
 
-    def test_idempotent(self, tmp_path: Path) -> None:
-        prepare_resume_dir(tmp_path)
-        prepare_resume_dir(tmp_path)  # Should not raise
+    def test_recreates_when_already_exists(self, tmp_path: Path) -> None:
+        """Pre-cleanup removes stale content; returned dir has mode 0o700."""
+        result = prepare_resume_dir(tmp_path)
+        sentinel = result / "old_marker.txt"
+        sentinel.write_text("stale", encoding="utf-8")
+        # Call again — sentinel must be gone
+        result2 = prepare_resume_dir(tmp_path)
+        assert result2 == result
+        assert not sentinel.exists(), "pre-cleanup must remove stale sentinel"
+        assert stat.S_IMODE(result2.stat().st_mode) == 0o700
+
+    def test_pre_cleanup_handles_dirty_dir(self, tmp_path: Path) -> None:
+        """Stale marker file (mode 0o644) is removed and dir is recreated clean."""
+        result = prepare_resume_dir(tmp_path)
+        stale = result / "stale_marker"
+        stale.write_text("pollution", encoding="utf-8")
+        stale.chmod(0o644)
+        # Recreate
+        result2 = prepare_resume_dir(tmp_path)
+        assert result2 == result
+        assert not stale.exists(), "stale_marker must be gone after pre-cleanup"
+        assert stat.S_IMODE(result2.stat().st_mode) == 0o700
+        assert list(result2.iterdir()) == [], "dir must be empty after recreation"
 
     def test_returns_correct_path(self, tmp_path: Path) -> None:
         result = prepare_resume_dir(tmp_path)

@@ -7,7 +7,7 @@ Public surface:
   - RunscRuntime — wraps argv under `runsc do` (gVisor)
   - build_runtime(settings) — factory, no I/O
 
-Design notes (R8):
+Design notes (R8/R9):
   - RunscRuntime uses `runsc do` (unprivileged, no OCI bundle required).
   - runsc do flag shape (gvisor 20260323.0):
       -volume SRC[:DST]  (repeated per mount; no :ro suffix in this version)
@@ -20,6 +20,8 @@ Design notes (R8):
     deployments that use runsc must disable connector runs until R9.
   - Constructor accepts an optional _exec_fn for DI in tests.
     Default: asyncio.create_subprocess_exec. Never monkeypatched.
+  - Only "runsc" is supported as a non-none runtime. "runc" is rejected at
+    runtime via SandboxRuntimeUnavailable (config-shape is unchanged).
 """
 
 from __future__ import annotations
@@ -123,9 +125,7 @@ class NoneRuntime(SandboxRuntime):
 class RunscRuntime(SandboxRuntime):
     """gVisor runsc do runtime adapter.
 
-    Builds the `runsc do` argv for each spawn call. Supports parameterization
-    of binary path and name to cover both "runsc" and "runc" config values
-    (runc OCI rootfs work is deferred; for now it shares the same code path).
+    Builds the `runsc do` argv for each spawn call.
 
     Flag shape for gvisor 20260323.0:
         runsc do [-volume SRC[:DST]] [other flags] -- <cmd> [args...]
@@ -143,14 +143,14 @@ class RunscRuntime(SandboxRuntime):
     on veth-accessible address).
     """
 
+    name = "runsc"
+
     def __init__(
         self,
         binary: Path,
-        name: str,
         _exec_fn: _ExecFn | None = None,
     ) -> None:
         self._binary = binary
-        self.name = name  # type: ignore[misc]
         self._exec_fn: _ExecFn = _exec_fn or asyncio.create_subprocess_exec
 
     async def exec(
@@ -208,17 +208,17 @@ def build_runtime(settings: "Settings") -> SandboxRuntime:
 
     Pure function — no I/O. Validation (binary availability) happens
     separately via runtime.validate_available() in the lifespan gate.
+
+    Only "none" and "runsc" are valid at runtime. "runc" is rejected with
+    SandboxRuntimeUnavailable so the lifespan handler surfaces a clear
+    startup-crash log (consistent failure mode for "runtime cannot be used").
     """
     runtime_name = settings.sp_sandbox_runtime
     if runtime_name == "none":
         return NoneRuntime()
-    if runtime_name in ("runsc", "runc"):
-        return RunscRuntime(
-            binary=settings.sp_runsc_binary,
-            name=runtime_name,
-        )
-    # Exhaustive match — Literal type guarantees no other value at runtime
-    # but be defensive for misconfigured environments.
+    if runtime_name == "runsc":
+        return RunscRuntime(binary=settings.sp_runsc_binary)
+    # Any other value (including "runc") is misconfiguration — reject loudly.
     raise SandboxRuntimeUnavailable(
-        f"unknown SP_SANDBOX_RUNTIME value: {runtime_name!r}"
+        f"unknown SP_SANDBOX_RUNTIME: {runtime_name!r}"
     )

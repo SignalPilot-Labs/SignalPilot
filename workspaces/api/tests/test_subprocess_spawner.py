@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -104,7 +104,7 @@ def _make_default_lease() -> ProxyTokenLease:
 
 
 def _make_recording_runtime(tmp_path: Path, settings: Settings) -> tuple[NoneRuntime, list]:
-    """Build a NoneRuntime that records exec calls and runs real fake_sandbox.
+    """Build a NoneRuntime subclass that records exec calls and runs real fake_sandbox.
 
     Returns (runtime, calls_list). Each call appended as dict with keys:
     argv, env, cwd, mounts.
@@ -112,11 +112,21 @@ def _make_recording_runtime(tmp_path: Path, settings: Settings) -> tuple[NoneRun
     calls: list[dict] = []
     original_exec = asyncio.create_subprocess_exec
 
-    async def recording_exec(*args, env=None, cwd=None, stdout=None, stderr=None, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append({"args": list(args), "env": env, "cwd": cwd})
-        return await original_exec(*args, env=env, cwd=cwd, stdout=stdout, stderr=stderr)
+    class _RecordingNoneRuntime(NoneRuntime):
+        async def exec(  # type: ignore[override]
+            self,
+            *,
+            argv: list[str],
+            env: dict[str, str],
+            cwd: Path,
+            mounts: list[Mount],
+            stdout: int,
+            stderr: int,
+        ) -> asyncio.subprocess.Process:
+            calls.append({"args": list(argv), "env": env, "cwd": str(cwd), "mounts": list(mounts)})
+            return await original_exec(*argv, env=env, cwd=str(cwd), stdout=stdout, stderr=stderr)
 
-    runtime = NoneRuntime(_exec_fn=recording_exec)
+    runtime = _RecordingNoneRuntime()
     return runtime, calls
 
 
@@ -533,7 +543,7 @@ class TestSubprocessSpawnerRuntimeIntegration:
         resume_mount = mounts[0]
         assert resume_mount.readonly is False
         assert resume_mount.source.name == "resume"
-        assert str(resume_mount.target) == "/home/agentuser/.signalpilot/resume"
+        assert str(resume_mount.target) == "/workspace/.signalpilot/resume"
 
         # env passed to runtime must be the allowlist (not os.environ)
         env = call["env"]
@@ -719,3 +729,74 @@ class TestConnectorSpawnGuard:
         await spawner.shutdown()
 
         assert exec_called, "exec should have been called when no connector"
+
+
+class TestSubprocessSpawnerSandboxHome:
+    """R9: child HOME must be _SANDBOX_HOME and resume mount target must derive from it."""
+
+    @pytest.mark.asyncio
+    async def test_home_env_is_workspace_constant(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Child env HOME must equal '/workspace', not a host workdir path."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=None, static_md_text="# static", runtime=runtime,
+        )
+
+        await spawner.spawn(_make_spawn_request(run_id, connector_name=None))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
+
+        assert len(calls) == 1
+        captured_env = calls[0]["env"]
+        assert captured_env["HOME"] == "/workspace"
+
+    @pytest.mark.asyncio
+    async def test_resume_mount_target_under_sandbox_home(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Resume mount target must be /workspace/.signalpilot/resume."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=None, static_md_text="# static", runtime=runtime,
+        )
+
+        await spawner.spawn(_make_spawn_request(run_id, connector_name=None))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
+
+        assert len(calls) == 1
+        mounts = calls[0]["mounts"]
+        assert len(mounts) == 1
+        assert mounts[0].target == PurePosixPath("/workspace/.signalpilot/resume")

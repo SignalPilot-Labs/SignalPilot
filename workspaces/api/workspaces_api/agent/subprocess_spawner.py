@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 _USER_PREFIX = "run-"
 _INTERNAL_SECRET_BYTES = 32
+# Stable in-sandbox path; resume-dir mount target derives from this.
+_SANDBOX_HOME = "/workspace"
 
 
 def _now_utc() -> datetime:
@@ -439,7 +441,7 @@ def _build_mounts(workdir: Path, settings: "Settings") -> list[Mount]:
     TODO(round-9): resolve networking for connector-bearing sandbox runs.
     """
     resume_source = workdir / "home" / ".signalpilot" / "resume"
-    resume_target = PurePosixPath("/home/agentuser/.signalpilot/resume")
+    resume_target = PurePosixPath(_SANDBOX_HOME) / ".signalpilot" / "resume"
     return [
         Mount(source=resume_source, target=resume_target, readonly=False),
     ]
@@ -466,7 +468,7 @@ def _build_child_env(
     env["AGENT_INTERNAL_SECRET"] = sandbox_internal_secret
     env["SP_MODE"] = settings.sp_deployment_mode
     env["SP_GATEWAY_URL"] = settings.gateway_url or ""
-    env["HOME"] = str(settings.sp_run_workdir_root / str(run_id) / "home")
+    env["HOME"] = _SANDBOX_HOME
     env["PATH"] = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
 
     # Inference: exactly one of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY

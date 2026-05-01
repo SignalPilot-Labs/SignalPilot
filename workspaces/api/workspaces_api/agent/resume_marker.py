@@ -58,7 +58,11 @@ def write_approval_marker(
     they should emit a run.approval_marker_failed event instead.
     """
     resume_dir = workdir_root / str(run_id) / "home" / _RESUME_DIR
-    resume_dir.mkdir(parents=True, mode=_DIR_MODE, exist_ok=True)
+    if not resume_dir.exists():
+        raise FileNotFoundError(
+            f"resume dir missing: {resume_dir} — "
+            "prepare_run_workdir must be called before write_approval_marker"
+        )
 
     final_path = resume_dir / f"{approval_id}.json"
     payload = {

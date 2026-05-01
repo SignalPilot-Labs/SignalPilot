@@ -84,6 +84,15 @@ class Settings(BaseSettings):
         default=True, validation_alias="SP_USE_SUBPROCESS_SPAWNER"
     )
 
+    # R8: sandbox runtime selection
+    sp_sandbox_runtime: Literal["none", "runsc", "runc"] = Field(
+        default="none", validation_alias="SP_SANDBOX_RUNTIME"
+    )
+    sp_runsc_binary: Path = Field(
+        default=Path("/usr/local/bin/runsc"),
+        validation_alias="SP_RUNSC_BINARY",
+    )
+
     # R6: Clerk JWT auth settings
     clerk_jwks_url: str | None = Field(
         default=None, validation_alias="SP_CLERK_JWKS_URL"

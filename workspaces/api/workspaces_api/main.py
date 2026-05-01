@@ -23,9 +23,11 @@ from workspaces_api.auth.clerk import JwksClient
 from workspaces_api.config import get_settings
 from workspaces_api.dashboards import router as dashboards_router
 from workspaces_api.db import make_engine, make_sessionmaker
+from workspaces_api.agent.sandbox_runtime import build_runtime
 from workspaces_api.errors import (
     ClerkConfigMissing,
     SandboxBinaryNotFound,
+    SandboxRuntimeUnavailable,
     register_exception_handlers,
 )
 from workspaces_api.events.bus import EventBus
@@ -65,6 +67,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 f"Sandbox server.py not found at {settings.sp_sandbox_server_path}. "
                 "Set SP_SANDBOX_SERVER_PATH or SP_USE_SUBPROCESS_SPAWNER=false."
             )
+
+    # R8: sandbox runtime gate — runs BEFORE make_engine so broken deploys
+    # never open DB pools.
+    runtime = build_runtime(settings)
+    if settings.sp_deployment_mode == "cloud" and runtime.name == "none":
+        raise SandboxRuntimeUnavailable(
+            "cloud mode requires SP_SANDBOX_RUNTIME=runsc (got 'none')"
+        )
+    await runtime.validate_available()
 
     # Ensure workdir root exists
     settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
@@ -109,6 +120,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             bus=app.state.bus,
             token_client=token_client,
             static_md_text=static_md_text,
+            runtime=runtime,
         )
         app.state.spawner = spawner
 

@@ -7,6 +7,8 @@ Layout created by prepare_run_workdir:
             .claude/
                 CLAUDE.md          ← per-run rendered instructions
                 CLAUDE_static.md   ← verbatim copy of workspaces/agent/CLAUDE.md
+            .signalpilot/
+                resume/            ← approval resume-marker dir (mode 0o700)
 
 Directory mode is 0o700 (owner-only). Cleanup is idempotent (safe for missing dir).
 """
@@ -23,7 +25,21 @@ logger = logging.getLogger(__name__)
 _CLAUDE_DIR = Path(".claude")
 _CLAUDE_MD_NAME = "CLAUDE.md"
 _CLAUDE_STATIC_MD_NAME = "CLAUDE_static.md"
+_RESUME_DIR = Path(".signalpilot") / "resume"
 _DIR_MODE = 0o700
+
+
+def prepare_resume_dir(run_root: Path) -> Path:
+    """Create the resume-marker directory for a run.
+
+    Creates {run_root}/home/.signalpilot/resume with mode 0o700.
+    Called from prepare_run_workdir so the bind-mount target exists before spawn.
+
+    Returns the created path.
+    """
+    resume_dir = run_root / "home" / _RESUME_DIR
+    resume_dir.mkdir(parents=True, mode=_DIR_MODE, exist_ok=True)
+    return resume_dir
 
 
 def prepare_run_workdir(
@@ -57,6 +73,8 @@ def prepare_run_workdir(
 
     (claude_dir / _CLAUDE_MD_NAME).write_text(claude_md_text, encoding="utf-8")
     (claude_dir / _CLAUDE_STATIC_MD_NAME).write_text(static_md_text, encoding="utf-8")
+
+    prepare_resume_dir(run_dir)
 
     logger.debug("workdir created run_id=%s path=%s", run_id, run_dir)
     return run_dir

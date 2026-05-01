@@ -81,6 +81,19 @@ class SpawnFailed(WorkspacesError):
     error_code = "spawn_failed"
 
 
+class ConnectorRequiresHostNet(SpawnFailed):
+    """Raised when a connector spawn is requested under a sandbox runtime.
+
+    Connector runs need loopback TCP access to the dbt-proxy (127.0.0.1),
+    which is not available inside the gVisor netns. This guard fires at spawn
+    time instead of letting the run silently fail at DB-connect time.
+
+    R9 will lift this guard once --net=host (or socket-passing) lands.
+    """
+
+    error_code = "connector_requires_host_net"
+
+
 class ProxyTokenMintFailed(WorkspacesError):
     """Raised when minting a gateway dbt-proxy run-token fails.
 
@@ -94,6 +107,13 @@ class SandboxBinaryNotFound(WorkspacesError):
     """Raised at startup when the sandbox server.py path does not exist."""
 
     error_code = "sandbox_binary_not_found"
+
+
+class SandboxRuntimeUnavailable(WorkspacesError):
+    """Raised at startup when the configured sandbox runtime binary is missing or broken,
+    or when cloud mode is configured without a sandbox runtime."""
+
+    error_code = "sandbox_runtime_unavailable"
 
 
 class AuthMissingToken(WorkspacesError):
@@ -199,6 +219,16 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
         return JSONResponse(status_code=500, content=_error_body(exc, cid))
 
+    @app.exception_handler(ConnectorRequiresHostNet)
+    async def _connector_requires_host_net(
+        request: Request, exc: ConnectorRequiresHostNet
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.warning(
+            "connector_requires_host_net cid=%s detail=%s", cid, exc.message
+        )
+        return JSONResponse(status_code=409, content=_error_body(exc, cid))
+
     @app.exception_handler(SpawnFailed)
     async def _spawn_failed(request: Request, exc: SpawnFailed) -> JSONResponse:
         cid = _resolve_correlation_id(exc)
@@ -226,6 +256,16 @@ def register_exception_handlers(app: FastAPI) -> None:
         cid = _resolve_correlation_id(exc)
         logger.error(
             "sandbox_binary_not_found cid=%s detail=%s", cid, exc.message
+        )
+        return JSONResponse(status_code=503, content=_error_body(exc, cid))
+
+    @app.exception_handler(SandboxRuntimeUnavailable)
+    async def _sandbox_runtime_unavailable(
+        request: Request, exc: SandboxRuntimeUnavailable
+    ) -> JSONResponse:
+        cid = _resolve_correlation_id(exc)
+        logger.error(
+            "sandbox_runtime_unavailable cid=%s detail=%s", cid, exc.message
         )
         return JSONResponse(status_code=503, content=_error_body(exc, cid))
 

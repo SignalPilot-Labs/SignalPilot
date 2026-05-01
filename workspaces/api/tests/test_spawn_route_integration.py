@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from unittest.mock import AsyncMock
 
 from workspaces_api.agent.proxy_token_client import ProxyTokenClient
+from workspaces_api.agent.sandbox_runtime import NoneRuntime
 from workspaces_api.agent.subprocess_spawner import SubprocessSpawner
 from workspaces_api.auth.clerk import JwksClient
 from workspaces_api.config import Settings, get_settings
@@ -81,6 +82,7 @@ class TestSpawnRouteIntegration:
             bus=bus,
             token_client=token_client,
             static_md_text=static_md,
+            runtime=NoneRuntime(),
         )
 
         app = create_app()
@@ -169,6 +171,7 @@ class TestSpawnRouteIntegration:
             bus=bus,
             token_client=token_client,
             static_md_text="# static",
+            runtime=NoneRuntime(),
         )
 
         app = create_app()

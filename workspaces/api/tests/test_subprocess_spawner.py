@@ -13,10 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workspaces_api.agent.inference import InferenceBundle
 from workspaces_api.agent.proxy_token_client import ProxyTokenClient, ProxyTokenLease
+from workspaces_api.agent.sandbox_runtime import Mount, NoneRuntime, SandboxRuntime
 from workspaces_api.agent.spawner import SpawnRequest
 from workspaces_api.agent.subprocess_spawner import SubprocessSpawner
 from workspaces_api.config import Settings
-from workspaces_api.errors import ProxyTokenMintFailed
+from workspaces_api.errors import ConnectorRequiresHostNet, ProxyTokenMintFailed
 from workspaces_api.events.bus import EventBus
 from workspaces_api.models import Run
 from workspaces_api.states import RunState
@@ -102,6 +103,23 @@ def _make_default_lease() -> ProxyTokenLease:
     )
 
 
+def _make_recording_runtime(tmp_path: Path, settings: Settings) -> tuple[NoneRuntime, list]:
+    """Build a NoneRuntime that records exec calls and runs real fake_sandbox.
+
+    Returns (runtime, calls_list). Each call appended as dict with keys:
+    argv, env, cwd, mounts.
+    """
+    calls: list[dict] = []
+    original_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*args, env=None, cwd=None, stdout=None, stderr=None, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"args": list(args), "env": env, "cwd": cwd})
+        return await original_exec(*args, env=env, cwd=cwd, stdout=stdout, stderr=stderr)
+
+    runtime = NoneRuntime(_exec_fn=recording_exec)
+    return runtime, calls
+
+
 class TestSubprocessSpawnerEnv:
     """Verify env vars injected into child process."""
 
@@ -128,35 +146,23 @@ class TestSubprocessSpawnerEnv:
             await session.commit()
 
         bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
         spawner = SubprocessSpawner(
             settings=settings,
             session_factory=session_factory,
             bus=bus,
             token_client=None,
             static_md_text="# static",
+            runtime=runtime,
         )
 
-        captured_env: dict = {}
-        original_exec = asyncio.create_subprocess_exec
+        req = _make_spawn_request(run_id, connector_name=None)
+        await spawner.spawn(req)
+        await asyncio.sleep(1.5)  # Let fake_sandbox finish
+        await spawner.shutdown()
 
-        async def capture_exec(*args, env=None, **kwargs):  # type: ignore[no-untyped-def]
-            if env:
-                captured_env.update(env)
-            # Use actual args but point at fake sandbox
-            return await original_exec(*args, env=env, **kwargs)
-
-        import workspaces_api.agent.subprocess_spawner as ss_mod
-        orig = ss_mod.asyncio.create_subprocess_exec
-        ss_mod.asyncio.create_subprocess_exec = capture_exec  # type: ignore[attr-defined]
-
-        try:
-            req = _make_spawn_request(run_id, connector_name=None)
-            await spawner.spawn(req)
-            await asyncio.sleep(1.5)  # Let fake_sandbox finish
-        finally:
-            ss_mod.asyncio.create_subprocess_exec = orig  # type: ignore[attr-defined]
-            await spawner.shutdown()
-
+        assert len(calls) == 1
+        captured_env = calls[0]["env"]
         assert "AGENT_INTERNAL_SECRET" in captured_env
         assert "SP_MODE" in captured_env
         assert captured_env["SP_MODE"] == "local"
@@ -186,34 +192,23 @@ class TestSubprocessSpawnerEnv:
             session.add(run)
             await session.commit()
 
-        captured_env: dict = {}
         bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
         spawner = SubprocessSpawner(
             settings=settings,
             session_factory=session_factory,
             bus=bus,
             token_client=None,
             static_md_text="# static",
+            runtime=runtime,
         )
 
-        import workspaces_api.agent.subprocess_spawner as ss_mod
-        orig = ss_mod.asyncio.create_subprocess_exec
+        req = _make_spawn_request(run_id, connector_name=None)
+        await spawner.spawn(req)
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
 
-        async def capture_exec(*args, env=None, **kwargs):  # type: ignore[no-untyped-def]
-            if env:
-                captured_env.update(env)
-            return await orig(*args, env=env, **kwargs)
-
-        ss_mod.asyncio.create_subprocess_exec = capture_exec  # type: ignore[attr-defined]
-
-        try:
-            req = _make_spawn_request(run_id, connector_name=None)
-            await spawner.spawn(req)
-            await asyncio.sleep(1.5)
-        finally:
-            ss_mod.asyncio.create_subprocess_exec = orig  # type: ignore[attr-defined]
-            await spawner.shutdown()
-
+        captured_env = calls[0]["env"]
         assert "WORKSPACES_DATABASE_URL" not in captured_env
         # No PG vars when no connector
         assert "PGHOST" not in captured_env
@@ -236,31 +231,18 @@ class TestSubprocessSpawnerEnv:
             session.add(run)
             await session.commit()
 
-        captured_env: dict = {}
         bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
         spawner = SubprocessSpawner(
             settings=settings, session_factory=session_factory, bus=bus,
-            token_client=None, static_md_text="# static",
+            token_client=None, static_md_text="# static", runtime=runtime,
         )
 
-        import workspaces_api.agent.subprocess_spawner as ss_mod
-        orig = ss_mod.asyncio.create_subprocess_exec
+        await spawner.spawn(_make_spawn_request(run_id, connector_name=None))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
 
-        async def capture_exec(*args, env=None, **kwargs):  # type: ignore[no-untyped-def]
-            if env:
-                captured_env.update(env)
-            return await orig(*args, env=env, **kwargs)
-
-        ss_mod.asyncio.create_subprocess_exec = capture_exec  # type: ignore[attr-defined]
-
-        try:
-            await spawner.spawn(_make_spawn_request(run_id, connector_name=None))
-            await asyncio.sleep(1.5)
-        finally:
-            ss_mod.asyncio.create_subprocess_exec = orig  # type: ignore[attr-defined]
-            await spawner.shutdown()
-
-        pg_vars = {k for k in captured_env if k.startswith("PG")}
+        pg_vars = {k for k in calls[0]["env"] if k.startswith("PG")}
         assert pg_vars == set()
 
     @pytest.mark.asyncio
@@ -282,30 +264,18 @@ class TestSubprocessSpawnerEnv:
 
         lease = _make_default_lease()
         token_client = _make_mock_token_client(lease=lease)
-        captured_env: dict = {}
         bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
         spawner = SubprocessSpawner(
             settings=settings, session_factory=session_factory, bus=bus,
-            token_client=token_client, static_md_text="# static",
+            token_client=token_client, static_md_text="# static", runtime=runtime,
         )
 
-        import workspaces_api.agent.subprocess_spawner as ss_mod
-        orig = ss_mod.asyncio.create_subprocess_exec
+        await spawner.spawn(_make_spawn_request(run_id, connector_name="my_conn"))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
 
-        async def capture_exec(*args, env=None, **kwargs):  # type: ignore[no-untyped-def]
-            if env:
-                captured_env.update(env)
-            return await orig(*args, env=env, **kwargs)
-
-        ss_mod.asyncio.create_subprocess_exec = capture_exec  # type: ignore[attr-defined]
-
-        try:
-            await spawner.spawn(_make_spawn_request(run_id, connector_name="my_conn"))
-            await asyncio.sleep(1.5)
-        finally:
-            ss_mod.asyncio.create_subprocess_exec = orig  # type: ignore[attr-defined]
-            await spawner.shutdown()
-
+        captured_env = calls[0]["env"]
         assert captured_env.get("PGUSER") == f"run-{run_id}"
         assert captured_env.get("PGPASSWORD") == "minted-proxy-token-xyz"
         assert captured_env.get("PGHOST") == "127.0.0.1"
@@ -336,6 +306,7 @@ class TestSubprocessSpawnerFailures:
         spawner = SubprocessSpawner(
             settings=settings, session_factory=session_factory, bus=bus,
             token_client=token_client, static_md_text="# static",
+            runtime=NoneRuntime(),
         )
 
         with pytest.raises(ProxyTokenMintFailed):
@@ -370,6 +341,7 @@ class TestSubprocessSpawnerFailures:
         spawner = SubprocessSpawner(
             settings=settings, session_factory=session_factory, bus=bus,
             token_client=token_client, static_md_text="# static",
+            runtime=NoneRuntime(),
         )
 
         req = SpawnRequest(
@@ -415,6 +387,7 @@ class TestSubprocessSpawnerStreaming:
         spawner = SubprocessSpawner(
             settings=settings, session_factory=session_factory, bus=bus,
             token_client=None, static_md_text="# static",
+            runtime=NoneRuntime(),
         )
 
         received_events: list = []
@@ -472,6 +445,7 @@ class TestSubprocessSpawnerShutdown:
         spawner = SubprocessSpawner(
             settings=settings, session_factory=session_factory, bus=bus,
             token_client=None, static_md_text="# static",
+            runtime=NoneRuntime(),
         )
 
         await spawner.spawn(_make_spawn_request(run_id))
@@ -483,3 +457,265 @@ class TestSubprocessSpawnerShutdown:
 
         # After shutdown, process should be dead
         assert child.proc.returncode is not None
+
+
+class TestSubprocessSpawnerRuntimeIntegration:
+    """Assert that spawn routes exec through the runtime and builds the correct mount list."""
+
+    @pytest.mark.asyncio
+    async def test_runtime_exec_called_with_correct_mounts(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Spawn must call runtime.exec with exactly one mount: resume dir (rw)."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        # Recording fake runtime
+        captured_exec_calls: list[dict] = []
+
+        class _RecordingRuntime(SandboxRuntime):
+            name = "recording"
+
+            async def exec(
+                self,
+                *,
+                argv: list[str],
+                env: dict[str, str],
+                cwd: Path,
+                mounts: list[Mount],
+                stdout: int,
+                stderr: int,
+            ) -> asyncio.subprocess.Process:
+                captured_exec_calls.append(
+                    {"argv": argv, "env": env, "cwd": cwd, "mounts": list(mounts)}
+                )
+                # Still run the real fake_sandbox so spawner bookkeeping works
+                return await asyncio.create_subprocess_exec(
+                    *argv, env=env, cwd=str(cwd), stdout=stdout, stderr=stderr
+                )
+
+            async def validate_available(self) -> None:
+                pass
+
+        bus = EventBus()
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=None, static_md_text="# static",
+            runtime=_RecordingRuntime(),
+        )
+
+        await spawner.spawn(_make_spawn_request(run_id, connector_name=None))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
+
+        assert len(captured_exec_calls) == 1
+        call = captured_exec_calls[0]
+
+        # argv must be [sp_sandbox_python, str(sp_sandbox_server_path)]
+        assert call["argv"] == [
+            settings.sp_sandbox_python,
+            str(settings.sp_sandbox_server_path),
+        ]
+
+        # Exactly one mount: the resume dir, writable
+        mounts = call["mounts"]
+        assert len(mounts) == 1, f"expected 1 mount, got {len(mounts)}: {mounts}"
+        resume_mount = mounts[0]
+        assert resume_mount.readonly is False
+        assert resume_mount.source.name == "resume"
+        assert str(resume_mount.target) == "/home/agentuser/.signalpilot/resume"
+
+        # env passed to runtime must be the allowlist (not os.environ)
+        env = call["env"]
+        assert "WORKSPACES_DATABASE_URL" not in env
+        assert "AGENT_INTERNAL_SECRET" in env
+
+    @pytest.mark.asyncio
+    async def test_connector_spawn_still_produces_single_mount(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Connector-bearing spawns must NOT add any extra mounts (proxy is TCP loopback)."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        captured_mounts: list[list[Mount]] = []
+
+        class _MountCapture(SandboxRuntime):
+            name = "none"  # must be "none" so the connector-runtime guard does not fire
+
+            async def exec(self, *, argv, env, cwd, mounts, stdout, stderr):  # type: ignore[override]
+                captured_mounts.append(list(mounts))
+                return await asyncio.create_subprocess_exec(
+                    *argv, env=env, cwd=str(cwd), stdout=stdout, stderr=stderr
+                )
+
+            async def validate_available(self) -> None:
+                pass
+
+        lease = _make_default_lease()
+        token_client = _make_mock_token_client(lease=lease)
+        bus = EventBus()
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=token_client, static_md_text="# static",
+            runtime=_MountCapture(),
+        )
+
+        await spawner.spawn(_make_spawn_request(run_id, connector_name="my_conn"))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
+
+        assert len(captured_mounts) == 1
+        assert len(captured_mounts[0]) == 1, (
+            f"expected 1 mount (resume only), got {len(captured_mounts[0])}: {captured_mounts[0]}"
+        )
+
+
+class TestConnectorSpawnGuard:
+    """Addendum R8: connector spawn guard fires for non-none runtimes."""
+
+    @pytest.mark.asyncio
+    async def test_none_runtime_with_connector_succeeds(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """NoneRuntime + connector_name → guard does NOT fire; spawn proceeds."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        lease = _make_default_lease()
+        token_client = _make_mock_token_client(lease=lease)
+        bus = EventBus()
+        runtime, calls = _make_recording_runtime(tmp_path, settings)
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=token_client, static_md_text="# static", runtime=runtime,
+        )
+
+        # Should not raise ConnectorRequiresHostNet
+        await spawner.spawn(_make_spawn_request(run_id, connector_name="my_conn"))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
+
+        assert len(calls) == 1, "spawn should have proceeded to exec"
+
+    @pytest.mark.asyncio
+    async def test_runsc_runtime_with_connector_raises(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """RunscRuntime + connector_name → ConnectorRequiresHostNet, no subprocess started."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        exec_called = False
+
+        class _RunscStub(SandboxRuntime):
+            name = "runsc"
+
+            async def exec(self, *, argv, env, cwd, mounts, stdout, stderr):  # type: ignore[override]
+                nonlocal exec_called
+                exec_called = True
+                raise AssertionError("exec must not be called when guard fires")
+
+            async def validate_available(self) -> None:
+                pass
+
+        lease = _make_default_lease()
+        token_client = _make_mock_token_client(lease=lease)
+        bus = EventBus()
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=token_client, static_md_text="# static",
+            runtime=_RunscStub(),
+        )
+
+        with pytest.raises(ConnectorRequiresHostNet):
+            await spawner.spawn(_make_spawn_request(run_id, connector_name="my_conn"))
+
+        assert not exec_called, "exec must not be called when guard fires"
+        assert len(spawner._children) == 0
+
+    @pytest.mark.asyncio
+    async def test_runsc_runtime_without_connector_succeeds(
+        self, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """RunscRuntime + no connector_name → guard does NOT fire; spawn proceeds."""
+        settings = _local_settings(tmp_path)
+        settings.sp_run_workdir_root.mkdir(parents=True, exist_ok=True)
+        run_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            run = Run(
+                id=run_id, workspace_id="ws-test", prompt="test",
+                state=RunState.queued.value, inference_mode="local",
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(run)
+            await session.commit()
+
+        exec_called = False
+
+        class _RunscFake(SandboxRuntime):
+            name = "runsc"
+
+            async def exec(self, *, argv, env, cwd, mounts, stdout, stderr):  # type: ignore[override]
+                nonlocal exec_called
+                exec_called = True
+                return await asyncio.create_subprocess_exec(
+                    *argv, env=env, cwd=str(cwd), stdout=stdout, stderr=stderr
+                )
+
+            async def validate_available(self) -> None:
+                pass
+
+        bus = EventBus()
+        spawner = SubprocessSpawner(
+            settings=settings, session_factory=session_factory, bus=bus,
+            token_client=None, static_md_text="# static",
+            runtime=_RunscFake(),
+        )
+
+        await spawner.spawn(_make_spawn_request(run_id, connector_name=None))
+        await asyncio.sleep(1.5)
+        await spawner.shutdown()
+
+        assert exec_called, "exec should have been called when no connector"

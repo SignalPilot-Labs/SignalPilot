@@ -22,7 +22,7 @@ import os
 import secrets
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,10 +31,11 @@ from workspaces_api.agent.child_handle import _ChildHandle
 from workspaces_api.agent.claude_md_renderer import RunRenderContext, render_run_claude_md
 from workspaces_api.agent.inference import resolve_inference_source
 from workspaces_api.agent.proxy_token_client import ProxyTokenClient, ProxyTokenLease
+from workspaces_api.agent.sandbox_runtime import Mount, SandboxRuntime
 from workspaces_api.agent.spawner import SpawnRequest
 from workspaces_api.agent.stream_pump import pump_stream
 from workspaces_api.agent.workdir import cleanup_run_workdir, prepare_run_workdir
-from workspaces_api.errors import ProxyTokenMintFailed, SpawnFailed
+from workspaces_api.errors import ConnectorRequiresHostNet, ProxyTokenMintFailed, SpawnFailed
 from workspaces_api.events.bus import EventBus
 from workspaces_api.models import Run, RunEvent
 from workspaces_api.schemas import RunEventOut
@@ -66,12 +67,14 @@ class SubprocessSpawner:
         bus: EventBus,
         token_client: ProxyTokenClient | None,
         static_md_text: str,
+        runtime: SandboxRuntime,
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
         self._bus = bus
         self._token_client = token_client
         self._static_md_text = static_md_text
+        self._runtime = runtime
         self._children: dict[uuid.UUID, _ChildHandle] = {}
 
     async def spawn(self, request: SpawnRequest) -> None:
@@ -100,6 +103,19 @@ class SubprocessSpawner:
             and not settings.sp_api_key
         ):
             raise ProxyTokenMintFailed("missing_api_key")
+
+        # Step 1b: Connector-runtime guard
+        # Connector runs need loopback TCP to the dbt-proxy (127.0.0.1), which is
+        # unreachable from within the gVisor netns. Fail loudly at spawn time rather
+        # than letting the run silently fail at DB-connect time.
+        # TODO(round-9): lift this guard once --net=host / socket-passing lands.
+        if self._runtime.name != "none" and request.connector_name:
+            raise ConnectorRequiresHostNet(
+                f"Connector runs are not yet supported under the gvisor sandbox "
+                f"(pending R9 host-net plumbing). "
+                f"connector={request.connector_name!r} runtime={self._runtime.name!r}. "
+                f"Use runtime=none locally or omit connector_name."
+            )
 
         # Step 2: Resolve inference creds
         bundle = resolve_inference_source(settings, requested=None)
@@ -172,13 +188,13 @@ class SubprocessSpawner:
             sorted(env.keys()),
         )
 
-        # Step 6: Start subprocess
+        # Step 6: Start subprocess via runtime adapter
         try:
-            proc = await asyncio.create_subprocess_exec(
-                settings.sp_sandbox_python,
-                str(settings.sp_sandbox_server_path),
+            proc = await self._runtime.exec(
+                argv=[settings.sp_sandbox_python, str(settings.sp_sandbox_server_path)],
                 env=env,
-                cwd=str(workdir / "home"),
+                cwd=workdir / "home",
+                mounts=_build_mounts(workdir, settings),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -399,6 +415,34 @@ class SubprocessSpawner:
                 logger.warning("subprocess_spawner shutdown: watcher tasks did not complete in time")
                 for task in watcher_tasks:
                     task.cancel()
+
+
+def _build_mounts(workdir: Path, settings: "Settings") -> list[Mount]:
+    """Build the mount list for a sandbox spawn.
+
+    Only project-specific mounts are returned. The sandbox runtime handles
+    the base filesystem (runsc do mounts host FS readonly with overlay).
+
+    Mounts:
+      - resume dir (read-write): the approval resume-marker dir must be
+        writable so the API process can drop marker files that the sandboxed
+        agent can read. The writable overlay in runsc do would otherwise hide
+        writes from the host-side producer.
+
+    NOT mounted (already visible via runsc do readonly host FS overlay):
+      - .claude dir: CLAUDE.md + CLAUDE_static.md are on the host path;
+        the readonly host overlay makes them visible in the sandbox.
+
+    Network note: runsc do puts the sandbox in its own netns. There is no
+    --net=host equivalent. The dbt-proxy at 127.0.0.1 is unreachable from
+    within the sandbox when using runsc.
+    TODO(round-9): resolve networking for connector-bearing sandbox runs.
+    """
+    resume_source = workdir / "home" / ".signalpilot" / "resume"
+    resume_target = PurePosixPath("/home/agentuser/.signalpilot/resume")
+    return [
+        Mount(source=resume_source, target=resume_target, readonly=False),
+    ]
 
 
 def _build_child_env(

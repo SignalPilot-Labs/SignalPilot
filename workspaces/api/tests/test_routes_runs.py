@@ -14,9 +14,10 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from workspaces_api.agent.spawner import StubSpawner
+from workspaces_api.agent.spawner import SpawnRequest, StubSpawner
 from workspaces_api.auth.dependency import current_user_id
 from workspaces_api.config import Settings, get_settings
+from workspaces_api.errors import ConnectorRequiresHostNet
 from workspaces_api.events.bus import EventBus
 from workspaces_api.models import Approval, Run, RunEvent
 from workspaces_api.states import RunState
@@ -406,6 +407,11 @@ class TestApproveRun:
 class TestApprovalMarker:
     """Tests for the approval resume-marker writer wired into _handle_approval_decision."""
 
+    def _ensure_resume_dir(self, workdir_root: Path, run_id: uuid.UUID) -> None:
+        """Pre-create the resume dir (R8: write_approval_marker no longer creates it)."""
+        resume_dir = workdir_root / str(run_id) / "home" / ".signalpilot" / "resume"
+        resume_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+
     async def _create_run_awaiting_approval(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> tuple[Run, Approval]:
@@ -450,6 +456,7 @@ class TestApprovalMarker:
         app.dependency_overrides[get_settings] = lambda: custom_settings
 
         run, approval = await self._create_run_awaiting_approval(session_factory)
+        self._ensure_resume_dir(tmp_path, run.id)
 
         response = await client.post(
             f"/v1/runs/{run.id}/approve",
@@ -491,6 +498,7 @@ class TestApprovalMarker:
         app.dependency_overrides[get_settings] = lambda: custom_settings
 
         run, approval = await self._create_run_awaiting_approval(session_factory)
+        self._ensure_resume_dir(tmp_path, run.id)
         response = await client.post(
             f"/v1/runs/{run.id}/approve",
             json={"approval_id": str(approval.id)},
@@ -524,6 +532,7 @@ class TestApprovalMarker:
         app.dependency_overrides[get_settings] = lambda: custom_settings
 
         run, approval = await self._create_run_awaiting_approval(session_factory)
+        self._ensure_resume_dir(tmp_path, run.id)
         response = await client.post(
             f"/v1/runs/{run.id}/reject",
             json={"approval_id": str(approval.id), "reason": "too risky"},
@@ -638,3 +647,48 @@ class TestApprovalMarker:
         assert thread_ids[0] != threading.main_thread().ident
 
         app.dependency_overrides[get_settings] = lambda: settings_local
+
+
+class TestConnectorRunscGuardAPI:
+    """Addendum R8: connector spawn guard returns 409 at the API boundary."""
+
+    async def test_runsc_connector_spawn_returns_409(
+        self,
+        client: AsyncClient,
+        app,
+        stub_spawner: StubSpawner,
+    ) -> None:
+        """POST /v1/runs with connector_name when runtime=runsc → 409 connector_requires_host_net."""
+
+        class _RaisingSpawner:
+            async def spawn(self, request: SpawnRequest) -> None:
+                if request.connector_name:
+                    raise ConnectorRequiresHostNet(
+                        "Connector runs are not yet supported under the gvisor sandbox "
+                        "(pending R9 host-net plumbing). "
+                        f"connector={request.connector_name!r} runtime='runsc'. "
+                        "Use runtime=none locally or omit connector_name."
+                    )
+
+            async def shutdown(self) -> None:
+                pass
+
+        from workspaces_api.routes.runs import _get_spawner
+
+        app.dependency_overrides[_get_spawner] = lambda: _RaisingSpawner()
+
+        response = await client.post(
+            "/v1/runs",
+            json={
+                "workspace_id": "ws-001",
+                "prompt": "analyse my sales data",
+                "connector_name": "my_conn",
+                "requested_inference": "local",
+            },
+        )
+
+        del app.dependency_overrides[_get_spawner]
+
+        assert response.status_code == 409
+        body = response.json()
+        assert body["error_code"] == "connector_requires_host_net"

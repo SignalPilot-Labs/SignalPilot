@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from workspaces_api.agent.workdir import cleanup_run_workdir, prepare_run_workdir
+from workspaces_api.agent.workdir import (
+    cleanup_run_workdir,
+    prepare_resume_dir,
+    prepare_run_workdir,
+)
 
 _STATIC_MD = "# Static CLAUDE.md for testing\n\nSome static instructions."
 _PER_RUN_MD = "# Per-run CLAUDE.md\n\nRun-specific content."
@@ -42,6 +46,13 @@ class TestPrepareRunWorkdir:
         home_mode = stat.S_IMODE((workdir / "home").stat().st_mode)
         assert home_mode == 0o700
 
+    def test_resume_dir_created_with_mode_0o700(self, tmp_path: Path) -> None:
+        run_id = uuid.uuid4()
+        workdir = prepare_run_workdir(tmp_path, run_id, _PER_RUN_MD, _STATIC_MD)
+        resume_dir = workdir / "home" / ".signalpilot" / "resume"
+        assert resume_dir.is_dir()
+        assert stat.S_IMODE(resume_dir.stat().st_mode) == 0o700
+
     def test_run_dir_named_by_run_id(self, tmp_path: Path) -> None:
         run_id = uuid.uuid4()
         workdir = prepare_run_workdir(tmp_path, run_id, _PER_RUN_MD, _STATIC_MD)
@@ -52,6 +63,21 @@ class TestPrepareRunWorkdir:
         prepare_run_workdir(tmp_path, run_id, _PER_RUN_MD, _STATIC_MD)
         with pytest.raises(FileExistsError):
             prepare_run_workdir(tmp_path, run_id, _PER_RUN_MD, _STATIC_MD)
+
+
+class TestPrepareResumeDir:
+    def test_creates_dir_with_mode_0o700(self, tmp_path: Path) -> None:
+        result = prepare_resume_dir(tmp_path)
+        assert result.is_dir()
+        assert stat.S_IMODE(result.stat().st_mode) == 0o700
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        prepare_resume_dir(tmp_path)
+        prepare_resume_dir(tmp_path)  # Should not raise
+
+    def test_returns_correct_path(self, tmp_path: Path) -> None:
+        result = prepare_resume_dir(tmp_path)
+        assert result == tmp_path / "home" / ".signalpilot" / "resume"
 
 
 class TestCleanupRunWorkdir:

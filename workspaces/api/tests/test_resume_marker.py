@@ -20,7 +20,17 @@ _DECIDED_AT = datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
 _DECISION: Literal["approved", "rejected"] = "approved"
 
 
+def _ensure_resume_dir(tmp_path: Path, run_id: uuid.UUID = _RUN_ID) -> None:
+    """Pre-create the resume dir (now required before write_approval_marker)."""
+    resume_dir = tmp_path / str(run_id) / "home" / ".signalpilot" / "resume"
+    resume_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+
+
 def _call(tmp_path: Path, **overrides) -> Path:
+    workdir_root = overrides.get("workdir_root", tmp_path)
+    run_id = overrides.get("run_id", _RUN_ID)
+    # Ensure resume dir exists (prepare_run_workdir responsibility in production)
+    _ensure_resume_dir(workdir_root, run_id)
     kwargs = dict(
         workdir_root=tmp_path,
         run_id=_RUN_ID,
@@ -47,13 +57,21 @@ class TestWriteApprovalMarker:
         assert path == expected
         assert path.exists()
 
-    def test_creates_resume_directory_with_mode_0o700(self, tmp_path: Path) -> None:
-        _call(tmp_path)
-        resume_dir = tmp_path / str(_RUN_ID) / "home" / ".signalpilot" / "resume"
-        assert resume_dir.is_dir()
-        dir_stat = resume_dir.stat()
-        # Check permissions bits
-        assert stat.S_IMODE(dir_stat.st_mode) == 0o700
+    def test_resume_directory_must_exist_before_call(self, tmp_path: Path) -> None:
+        """write_approval_marker raises FileNotFoundError if resume dir is absent.
+
+        R8: lazy mkdir was removed; prepare_run_workdir must be called first.
+        """
+        # Do NOT pre-create the dir — call write_approval_marker directly.
+        with pytest.raises(FileNotFoundError, match="resume dir missing"):
+            write_approval_marker(
+                workdir_root=tmp_path,
+                run_id=_RUN_ID,
+                approval_id=_APPROVAL_ID,
+                decision=_DECISION,
+                decided_at=_DECIDED_AT,
+                comment=None,
+            )
 
     def test_payload_shape(self, tmp_path: Path) -> None:
         path = _call(tmp_path, comment="looks good")
@@ -93,13 +111,21 @@ class TestWriteApprovalMarker:
         file_stat = path.stat()
         assert stat.S_IMODE(file_stat.st_mode) == 0o600
 
-    def test_raises_oserror_when_workdir_root_unwritable(
+    def test_raises_oserror_when_resume_dir_unwritable(
         self, tmp_path: Path
     ) -> None:
-        unwritable = tmp_path / "no_write"
-        unwritable.mkdir(mode=0o555)
+        """If the resume dir exists but is unwritable, mkstemp raises OSError."""
+        resume_dir = tmp_path / str(_RUN_ID) / "home" / ".signalpilot" / "resume"
+        resume_dir.mkdir(parents=True, mode=0o555)
         with pytest.raises(OSError):
-            _call(unwritable)
+            write_approval_marker(
+                workdir_root=tmp_path,
+                run_id=_RUN_ID,
+                approval_id=_APPROVAL_ID,
+                decision=_DECISION,
+                decided_at=_DECIDED_AT,
+                comment=None,
+            )
 
     def test_no_partial_file_on_concurrent_write(self, tmp_path: Path) -> None:
         """Multiple threads writing the same approval_id produce a valid final file."""

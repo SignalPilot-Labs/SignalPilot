@@ -275,9 +275,15 @@ SignalPilot/
 ## Star History
 
 If SignalPilot is useful, please ⭐ — it helps a ton.
+[![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
 
-[![Star History Chart](https://api.star-history.com/svg?repos=SignalPilot-Labs/signalpilot&type=Date)](https://star-history.com/#SignalPilot-Labs/signalpilot&Date)
-
+<a href="https://www.star-history.com/?type=date&repos=SignalPilot-Labs%2Fsignalpilot">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=SignalPilot-Labs/signalpilot&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=SignalPilot-Labs/signalpilot&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=SignalPilot-Labs/signalpilot&type=date&legend=top-left" />
+ </picture>
+</a>
 ---
 
 ## License

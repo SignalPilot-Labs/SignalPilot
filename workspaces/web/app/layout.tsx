@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import { getServerEnv } from "@/lib/env";
+import { TopNav } from "@/components/nav/TopNav";
 
 export const metadata: Metadata = {
   title: "Workspaces",
@@ -14,7 +15,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const env = getServerEnv();
-  const body = <body className="antialiased">{children}</body>;
+  const body = (
+    <body className="antialiased">
+      <TopNav />
+      <div className="min-h-screen">{children}</div>
+    </body>
+  );
   if (env.mode === "cloud") {
     return (
       <html lang="en">

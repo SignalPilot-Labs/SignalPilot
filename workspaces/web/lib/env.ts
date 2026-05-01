@@ -3,7 +3,7 @@ import "server-only";
 export type Mode = "local" | "cloud";
 
 export type ServerEnv =
-  | { mode: "local"; apiUrl: string; localApiKey: string }
+  | { mode: "local"; apiUrl: string; localApiKey: string; localWorkspaceIds: string[] }
   | { mode: "cloud"; apiUrl: string; clerkPublishableKey: string; clerkSecretKey: string };
 
 export function getServerEnv(): ServerEnv {
@@ -13,7 +13,12 @@ export function getServerEnv(): ServerEnv {
     throw new Error(`Invalid WORKSPACES_MODE: ${raw} (expected "local" | "cloud")`);
   }
   if (raw === "local") {
-    return { mode: "local", apiUrl, localApiKey: required("SP_LOCAL_API_KEY") };
+    return {
+      mode: "local",
+      apiUrl,
+      localApiKey: required("SP_LOCAL_API_KEY"),
+      localWorkspaceIds: parseCsv(process.env["WORKSPACES_LOCAL_IDS"] ?? ""),
+    };
   }
   return {
     mode: "cloud",
@@ -27,4 +32,16 @@ function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required environment variable: ${name}`);
   return v;
+}
+
+/**
+ * Parses a comma-separated list of workspace ids.
+ * Each entry is trimmed; empty entries (from leading/trailing commas or double commas) are dropped.
+ * Example: "ws-a, ws-b, ws-c" → ["ws-a", "ws-b", "ws-c"]
+ */
+function parseCsv(s: string): string[] {
+  return s
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }

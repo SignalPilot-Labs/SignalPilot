@@ -103,6 +103,20 @@ services:
         condition: service_healthy
     restart: on-failure
 
+  workspaces-web:
+    build:
+      context: .
+      dockerfile: workspaces/web/Dockerfile
+    ports:
+      - "3500:3500"
+    environment:
+      WORKSPACES_API_URL: http://workspaces-api:3400
+    volumes:
+      - signalpilot-shared:/shared:ro
+    depends_on:
+      - workspaces-api
+    restart: unless-stopped
+
 volumes:
   signalpilot-pg-data:
   signalpilot-data:

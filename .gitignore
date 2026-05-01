@@ -79,3 +79,9 @@ build/
 .gstack/
 autocode-auth/.next/
 autocode-auth/node_modules/
+
+# Workspaces web
+workspaces/web/.next/
+workspaces/web/node_modules/
+workspaces/web/next-env.d.ts
+workspaces/web/tsconfig.tsbuildinfo

@@ -24,4 +24,12 @@ describe("TopNav", () => {
     expect(hrefs).toContain("/charts/new");
     expect(screen.getByText("New chart")).toBeDefined();
   });
+
+  it("renders Charts link pointing to /charts", () => {
+    render(<TopNav />);
+    const links = screen.getAllByRole("link");
+    const hrefs = links.map((l) => l.getAttribute("href"));
+    expect(hrefs).toContain("/charts");
+    expect(screen.getByText("Charts")).toBeDefined();
+  });
 });

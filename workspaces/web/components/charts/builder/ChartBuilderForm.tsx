@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { CHART_TYPES, type ChartType } from "@/lib/charts/types";
 import { ChartTypeSelect } from "@/components/charts/builder/ChartTypeSelect";
 import { saveChartDefinition } from "@/lib/charts/save-chart";
 
-type SaveResult = { ok: true; id: string } | { ok: false; error: string } | null;
+type SaveResult = { ok: false; error: string } | null;
 
 export function ChartBuilderForm() {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [type, setType] = useState<ChartType>(CHART_TYPES[0]);
   const [sql, setSql] = useState("");
@@ -28,7 +30,11 @@ export function ChartBuilderForm() {
 
     startTransition(async () => {
       const res = await saveChartDefinition({ name: trimmedName, type, sql: sql.trim() });
-      setResult(res);
+      if (res.ok) {
+        router.push(`/charts/${res.id}`);
+      } else {
+        setResult(res);
+      }
     });
   }
 
@@ -88,12 +94,6 @@ export function ChartBuilderForm() {
       {result && !result.ok && (
         <p role="alert" className="text-sm text-danger-fg">
           {result.error}
-        </p>
-      )}
-
-      {result && result.ok && (
-        <p role="status" className="text-sm text-fg">
-          Saved as {result.id}
         </p>
       )}
 

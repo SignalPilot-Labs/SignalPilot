@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
+const pushMock = vi.fn();
+
+// Mock next/navigation before importing the form
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: pushMock }),
+}));
+
 // Mock the server action module before importing the form
 vi.mock("@/lib/charts/save-chart", () => ({
   saveChartDefinition: vi.fn(),
@@ -24,7 +31,7 @@ describe("ChartBuilderForm", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
   });
 
-  it("shows inline error and does NOT call the action when name is empty", async () => {
+  it("shows inline error and does NOT call the action or router.push when name is empty", async () => {
     render(<ChartBuilderForm />);
 
     // Leave name empty, submit
@@ -36,9 +43,10 @@ describe("ChartBuilderForm", () => {
     });
 
     expect(saveChartDefinition).not.toHaveBeenCalled();
+    expect(pushMock).not.toHaveBeenCalled();
   });
 
-  it("calls the action once with correct input and renders success copy with id", async () => {
+  it("calls the action with correct input and calls router.push with the new chart id on success", async () => {
     const mockId = "aabbccdd-1234-4abc-8def-aabbccddeeff";
     vi.mocked(saveChartDefinition).mockResolvedValueOnce({ ok: true, id: mockId });
 
@@ -49,10 +57,10 @@ describe("ChartBuilderForm", () => {
     fireEvent.submit(screen.getByRole("button", { name: "Save" }).closest("form")!);
 
     await waitFor(() => {
-      expect(screen.getByRole("status")).toBeDefined();
-      expect(screen.getByText(`Saved as ${mockId}`)).toBeDefined();
+      expect(pushMock).toHaveBeenCalledOnce();
     });
 
+    expect(pushMock).toHaveBeenCalledWith(`/charts/${mockId}`);
     expect(saveChartDefinition).toHaveBeenCalledOnce();
     expect(saveChartDefinition).toHaveBeenCalledWith({
       name: "Revenue Chart",

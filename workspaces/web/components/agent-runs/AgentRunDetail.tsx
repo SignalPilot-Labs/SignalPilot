@@ -45,7 +45,7 @@ export function AgentRunDetail({ run }: AgentRunDetailProps) {
             {run.errorMessage !== undefined && (
               <div className="flex gap-2">
                 <dt className="text-muted">Error</dt>
-                <dd className="text-fg">{run.errorMessage}</dd>
+                <dd className="text-danger-fg">{run.errorMessage}</dd>
               </div>
             )}
             {run.summary !== undefined && (

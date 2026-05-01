@@ -85,17 +85,12 @@ const config: Config = {
       title: 'SignalPilot',
       logo: {
         alt: 'SignalPilot',
-        src: 'img/logo.svg',
-        width: 22,
-        height: 22,
+        src: 'img/logo-light.svg',
+        srcDark: 'img/logo.svg',
+        width: 32,
+        height: 32,
       },
       items: [
-        {
-          type: 'docSidebar',
-          sidebarId: 'docsSidebar',
-          position: 'left',
-          label: 'Docs',
-        },
         {
           to: '/docs/plugin',
           position: 'left',

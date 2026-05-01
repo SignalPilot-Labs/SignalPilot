@@ -13,6 +13,9 @@ dependencies = [
     "asyncpg",
     "httpx",
     "pydantic>=2",
+    "pydantic-settings>=2",
+    "alembic>=1.13",
+    "sse-starlette>=2",
 ]
 
 [project.optional-dependencies]
@@ -21,4 +24,9 @@ dev = [
     "pytest-asyncio",
     "ruff",
     "mypy",
+    "aiosqlite",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

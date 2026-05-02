@@ -141,9 +141,16 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     "missed deadlines", "shipped within N days" —
     the agent's SQL must encode that qualifier with a verified column-value match,
     not a guess. FLAG IT if any of the following is true:
-    a) The qualifier uses a status value the agent did not look up via explore_column
-       (e.g., assumed status='delivered' when actual values might be 'DELIVERED',
-       'shipped', 'completed', or a numeric code).
+    a) The predicate compares against a literal value, identifier, or string pattern
+       that the agent did NOT verify against the actual column. This includes:
+       - status / category values ('delivered' vs 'DELIVERED' vs numeric code),
+       - named entities, locations, or organization strings (which may have casing
+         variants, abbreviations, or borough/sub-entity rows),
+       - identifier strings (which may be stored at a different granularity
+         — e.g., shorter prefixes vs full-length keys).
+       Verification means: an explore_column call, a SELECT DISTINCT … LIMIT N,
+       or a COUNT(*) WHERE <pattern> confirming the predicate selects > 0 rows
+       AND covers the intended scope.
     b) "Most frequent" or "highest" was implemented via ORDER BY ... LIMIT 1 without
        handling ties (the question might expect a deterministic tie-breaker).
     c) "Most recent" or "latest" was anchored to system-clock time instead of

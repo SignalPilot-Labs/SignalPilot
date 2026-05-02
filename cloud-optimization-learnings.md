@@ -86,3 +86,67 @@ analogs). No schema/table/db names; phrased as question→action.
   (already-passing SF cases that exercise output formatting).
 - If `wrong_filter_predicate` (bq090, sf_bq295) repeats, propose rule 14
   refinement in round 3.
+
+## Round 2 — Rule 15 active, registry round=9
+**Branch:** `loop/cloud-round-2`
+**Sample (n=20):** 11 BQ + 9 SF + 0 GA (per-DB cap; same as round 1)
+
+**Result:** 11 PASS / 6 FAIL / 3 ERROR
+- Pass rate excl. ERROR: **64.7%** (vs 66.7% round 1 — within stochastic noise)
+- Pass rate raw: **55.0%**
+- BQ: 6/10 = 60.0% (vs 77.8%)
+- SF (`sf_bq*` + `sf*`): 5/8 = 62.5% (vs 55.6%)
+- GA4: 0 again
+
+**ERROR breakdown:** bq115 (401 retry burst at start, eval re-ran clean → judge says spurious_pass);
+bq002 (evaluator delta from runtime — workdir present); sf_bq460 (Snowflake compute
+on word-vector tokenization, killed parent at 24min, seeded as `timeout_15min_no_save`).
+
+**Cost:** ~$11 Claude API + cloud compute (sf_bq325 ate ~$1.65 alone in iterative debugging;
+sf_bq052 reached $1.57 before timing out without final write).
+
+**Rule 15 verdict — EFFECTIVE, KEEP:**
+- `wrong_value_calc`: 2 → **0**
+- No regressions on round-1 PASS cases that exercised raw output (bq030, bq103, sf_bq091,
+  sf_bq349 all PASSed again).
+- Adjacent fail bq002 (DATE_TRUNC week-start vs ISOWEEK) is conceptually similar but the
+  judge categorized it as `wrong_aggregation`. Rule 15 (b) covers calendar *extraction*
+  (EXTRACT, DAYOFWEEK); bucketing/truncation isn't covered. Candidate for round 4 if the
+  pattern repeats.
+
+**Judge fail-category tally:**
+- `wrong_filter_predicate` (4): sf012 (community name exact-match — borough variants),
+  sf013 (quadkey exact-match — finer-grained stored), sf_bq325 (DENSE_RANK pre-filter
+  pruned the true minima), bq008 (filter scope + unit conversion mixed).
+- `wrong_aggregation` (1): bq002 (default WEEK = Sunday-start vs gold's ISOWEEK).
+- `missing_column` (1): bq425 (dropped MOLECULE_ID/COMPANY_NAME).
+- `wrong_join_or_fanout` (1): sf_bq052 (citation direction reversed —
+  `patent_id = pa.patent_id` instead of `citation_id = pa.patent_id`).
+- `result_truncated` (1): bq360 (LIMIT 1 instead of 10-row + flag column).
+
+**Proposal applied — rule 14(a) extension:**
+Broadens 14(a) from "status value not looked up" to "any literal value, identifier, or
+string pattern not verified against the actual column". Generalization gate PASSED.
+Targets sf012 + sf013 (2 of 4 wrong_filter_predicate). bq008 + sf_bq325 are structurally
+different and not addressed by this round.
+
+**Why this over alternatives:**
+- vs. new rule for granularity-of-stored-keys (sf013): too narrow, would not generalize.
+- vs. rule 15(e) for bucketing/truncation (bq002): only n=1 evidence in round 2;
+  defer to round 4 if it repeats.
+- vs. rule on directional-relationship verification (sf_bq052 citation direction):
+  also n=1; defer.
+- Per "≤1 generalizable change per round" discipline.
+
+**Run-flow note:** Killing the parent process when 1 task hangs past 22min and seeding
+the registry manually is becoming routine. If this happens 1 more time on cloud (round
+3 or 4), worth adding a per-task wall-clock kill in the runner instead of the cooperative
+timeout banner.
+
+**Watch for round 3:**
+- `wrong_filter_predicate` should drop from 4 → ≤2 if rule 14(a) refinement fires.
+- Regressions to monitor: round-2 PASS tasks that used direct equality filters
+  (sf_bq091, sf_bq349, bq103, bq030) — should not start over-probing trivial filters.
+- If `wrong_aggregation` (bq002) or `wrong_join_or_fanout` (sf_bq052) recurs,
+  those are next round's candidates.
+- If GA still n=0 across rounds 3–4, lift per-DB cap from 2 → 3 for GA stratum only.

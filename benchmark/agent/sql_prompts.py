@@ -172,11 +172,11 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
        "by day", or otherwise specify a date-shaped output. Many such columns
        are intended to flow through as integers/strings unchanged.
     b) A calendar component is extracted (e.g. day-of-week, week-of-year)
-       without the agent having verified which numbering convention is
-       expected. Different dialects default to different conventions
-       (e.g. Sunday=1 vs Monday=1 vs ISO Monday=1); since the question rarely
-       specifies, the agent should probe the data or pick a stable convention
-       and double-check against a sample row before committing.
+       without the agent having verified which numbering convention applies
+       in this dialect/dataset. Since the question rarely specifies, the agent
+       should probe the data or pick a stable convention and double-check
+       against a sample row before committing. (Dialect-specific defaults are
+       documented in the loaded dialect skill — consult it.)
     c) A unit conversion is applied (smaller→larger or vice versa: cents→dollars,
        milliseconds→seconds, bytes→MB, Kelvin→Celsius, Fahrenheit→Celsius)
        without an explicit "in <unit>" cue in the question.
@@ -198,9 +198,11 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
        relations).
     b) The join uses the wrong direction of the edge (e.g., for "X cites Y", the
        agent put X on the cited side and Y on the citing side, or vice versa).
-    c) The agent picked a near-name table that captures a precursor or alternate
-       version of the entity (e.g., a draft/pre-publication table) when the
-       question asks about the granted/final/canonical version.
+    c) The agent picked a similarly-named table that captures an alternate
+       version of the entity (a precursor / draft / sample / staging variant)
+       when the question asks about the canonical/granted/final version.
+       (Dataset-specific table-version conventions are documented in the
+       loaded dialect skill — consult it.)
     The fix is always: "FIX: probe the schema graph (information_schema, foreign-key
     listings, or a sample SELECT joining candidate tables) to identify the relation
     table; route the join through that edge in the direction the question asks."
@@ -211,24 +213,24 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     the convention against a known sample row before committing. Different conventions
     silently produce values that differ by 1, by an off-by-one window, or by a
     miscategorized boundary case. FLAG IT if any of the following is true:
-    a) DATE_DIFF / DATEDIFF / DATEADD-style elapsed counting was used without the
-       agent verifying whether the gold-style convention counts both endpoints,
-       only one endpoint, or neither. (Example: months between Jan-15 and Mar-15
-       can be 2, 3, or "2 active months including both" depending on definition.)
-    b) DATE_TRUNC, calendar bucketing, or week-of-year was used without verifying
-       which calendar convention applies (Sunday-start vs Monday-start vs
-       ISO Monday). Many dialects default differently; the question rarely says.
-    c) Fixed-time bucketing via DIV(seconds, N), FLOOR(time/N), or similar
-       integer-division was used to identify "events within N seconds/minutes
-       of each other". This silently misses cross-boundary groups: a window that
-       starts at T=N-1 and another at T=N+1 land in different buckets despite
-       being only 2 apart. Use a self-join with ABS(diff) <= N instead.
+    a) Date-arithmetic elapsed counting was used without the agent verifying
+       whether the convention counts both endpoints, only one endpoint, or
+       neither. (Example: months between Jan-15 and Mar-15 can be 2, 3, or
+       "2 active months including both" depending on definition.)
+    b) Calendar bucketing or week-of-year was used without verifying which
+       calendar convention applies. (Dialect-specific defaults are documented
+       in the loaded dialect skill — consult it.)
+    c) Fixed-time bucketing via integer-division (e.g. dividing seconds by N)
+       was used to identify "events within N seconds/minutes of each other".
+       This silently misses cross-boundary groups: a window that starts at
+       T=N-1 and another at T=N+1 land in different buckets despite being
+       only 2 apart. Use a self-join with ABS(diff) <= N instead.
     d) Window functions (ROW_NUMBER, RANK, DENSE_RANK, NTILE, percentile) were
        applied with a partition or order-by that the agent did not verify — in
        particular, ranking on a column whose distribution has heavy ties or
-       whose ordering convention (NULLS FIRST/LAST) differs by dialect.
+       whose NULL-ordering convention differs by dialect.
     e) Percentile / median was computed via a function whose continuous-vs-discrete
-       behavior was not verified (PERCENTILE_CONT vs PERCENTILE_DISC produce
+       behavior was not verified (continuous and discrete percentile produce
        different values when the percentile lands between two data points).
     The fix is always: "FIX: run a small probe SELECT on a row whose answer the
     agent can verify by hand, confirm the computed value matches, then port the

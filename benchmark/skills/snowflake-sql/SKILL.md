@@ -116,3 +116,60 @@ SELECT * FROM my_table AT (TIMESTAMP => '2024-01-01'::TIMESTAMP);
 - **LISTAGG**: Use `LISTAGG(col, ',') WITHIN GROUP (ORDER BY col)` for string aggregation (not GROUP_CONCAT).
 - **TRY_CAST / TRY_TO_NUMBER**: Use for safe type conversion that returns NULL instead of error.
 - **OBJECT_KEYS / ARRAY_SIZE**: Useful for introspecting semi-structured data before querying.
+
+## 10. Convention Gotchas
+
+These are Snowflake defaults that have silently produced wrong values in
+past runs. Probe a sample row and verify before committing.
+
+### Don't wrap raw values in transformations
+- A column stored as a raw integer (e.g., a microsecond epoch) or an
+  opaque code should flow through unchanged unless the question explicitly
+  asks for date/string output. Wrapping with `TO_DATE(TO_TIMESTAMP(col))`
+  silently converts a numeric to a date and breaks value-vector matching.
+  Return raw values by default.
+
+### Date arithmetic — argument order
+- `DATEDIFF(unit, start, end)` — note the unit is FIRST in Snowflake, opposite
+  of BigQuery's `DATE_DIFF(end, start, unit)`. Months between Jan-15 and Mar-15:
+  `DATEDIFF(MONTH, '2024-01-15', '2024-03-15')` = 2. As with BigQuery, this
+  counts boundaries crossed, not active months — gold may expect +1 if
+  counting both endpoint months.
+
+### Calendar conventions
+- `DATE_TRUNC('WEEK', date)` truncates to **Monday-start** weeks (ISO),
+  unlike BigQuery's Sunday-start default. If the question implies a
+  different week-start, use `DATE_TRUNC('DAY', date)` and a custom offset.
+- `DAYOFWEEK(date)` returns **0=Sunday, 6=Saturday** (configurable via
+  `WEEK_START` session parameter — assume default unless told otherwise).
+  `DAYOFWEEKISO(date)` returns 1=Monday, 7=Sunday.
+
+### NULL ordering
+- Default `ORDER BY col ASC` puts **NULLS LAST**; `ORDER BY col DESC` puts
+  **NULLS FIRST**. If gold expects the opposite (e.g., a min-aggregation
+  ranking that should put NULLs at top of a DESC sort), specify
+  `NULLS LAST` / `NULLS FIRST` explicitly.
+
+### Percentile / median
+- `PERCENTILE_CONT(0.5)` interpolates linearly between two values when the
+  median lands between rows; `PERCENTILE_DISC(0.5)` returns the lower
+  ranked value. Different functions for different gold conventions.
+  Verify which one the question expects.
+
+### LATERAL FLATTEN granularity
+- Each row from `LATERAL FLATTEN(input => col)` multiplies the parent row,
+  producing one output per array element. If the question asks for a
+  per-parent aggregate, you must `GROUP BY` the parent key after FLATTEN,
+  or flatten only inside a subquery before re-aggregating.
+
+### Sample vs full tables
+- Some Snowflake-port datasets (e.g., `PATENTSVIEW`) contain `SAMPLE_*`
+  test tables alongside full production tables. Always use the full
+  table unless the question explicitly says "sample" — `SAMPLE_USPC` etc.
+  produce wrong row counts and miss values.
+
+### Identifier case
+- Snowflake upper-cases identifiers by default. Source tables ported from
+  BigQuery often have lowercase column names; access these with
+  double-quotes: `"lower_case_col"`. `describe_table` reveals the actual
+  storage case.

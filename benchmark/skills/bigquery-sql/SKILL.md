@@ -145,3 +145,50 @@ FORMAT('%s-%d', str_col, int_col)        -- printf-style formatting
   ```
 - **Date columns**: Many BQ tables store dates as TIMESTAMP or DATE. Always check the actual type with describe_table.
 - **Large tables**: Use partition filters and LIMIT during exploration. Avoid SELECT * on tables with >1M rows.
+
+## 13. Convention Gotchas
+
+These are BigQuery defaults that have silently produced wrong values in
+past runs. Probe a sample row and verify before committing.
+
+### Calendar conventions
+- `EXTRACT(DAYOFWEEK FROM date)` returns **1=Sunday, 7=Saturday** by default.
+  If the question implies Monday-start, use `EXTRACT(ISODOW FROM date)`
+  (1=Monday, 7=Sunday) or map explicitly.
+- `DATE_TRUNC(date, WEEK)` truncates to **Sunday-start** weeks. For
+  Monday-start / ISO weeks, use `DATE_TRUNC(date, ISOWEEK)`. Different
+  conventions shift weekly aggregation totals at boundaries.
+- `EXTRACT(WEEK FROM date)` returns Sunday-Saturday week number;
+  `EXTRACT(ISOWEEK FROM date)` returns ISO 8601 week number — they differ
+  near year boundaries.
+
+### Date arithmetic
+- `DATE_DIFF(end, start, MONTH)` counts whole-month boundaries crossed, not
+  active months. Months between Jan-15 and Mar-15 = 2, but "for how many
+  months was this customer active" usually expects 3 (counting both
+  endpoint months). Probe with two known dates before committing.
+
+### GA / hits-time
+- In `bigquery-public-data.google_analytics_sample`, `hits.time` is
+  **milliseconds** from session start. Divide by 1000 for seconds. Do not
+  confuse with `visitStartTime` (seconds, epoch).
+
+### Patent dataset table choice
+- The `patents-public-data` dataset contains BOTH pre-grant publication
+  tables (`pgpub_*`) AND granted-patent tables (`patents`, `publications`).
+  Questions about "the patent" or "granted patent" use the granted tables;
+  pgpub captures earlier draft state. Probe schema before joining.
+
+### Identifier granularity
+- Hierarchical identifiers (quadkeys, geohashes, taxonomy codes) may be
+  stored at finer granularity than the question's literal. An exact match
+  like `quadkey = '12020210'` returns zero rows if the table stores
+  18-character quadkeys. Use `STARTS_WITH(quadkey, '12020210')` or
+  `quadkey LIKE '12020210%'`, and probe `SELECT DISTINCT LENGTH(quadkey)
+  LIMIT 5` first.
+
+### Numeric precision
+- BigQuery FLOAT64 geodesic functions (`ST_DISTANCE`, `ST_GEOGPOINT`) can
+  produce sub-1e-3 differences from gold for identical inputs. The
+  evaluator's tolerance is 1e-2 so this is not usually a SQL bug — don't
+  restructure in response.

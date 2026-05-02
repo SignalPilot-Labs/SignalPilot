@@ -236,6 +236,31 @@ WORKFLOW — follow these steps in order:
    d. mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly, 1-2 calls max)
    Do NOT call schema_overview — it is slow. Do NOT spend more than 3 tool calls on discovery.
 
+1.5. WRITE THE OUTPUT COLUMN SPEC — MANDATORY, BEFORE ANY SQL:
+   This is the single most important step. Skipping it is the #1 cause of failure.
+   Before writing ANY SQL, write this comment block and commit to the columns:
+
+   -- ========== OUTPUT COLUMN SPEC ==========
+   -- 1. <col_name>  : <semantic — what value/type/grain>
+   -- 2. <col_name>  : <semantic>
+   -- ...
+   -- ========================================
+
+   Walk through the question word by word and add a column for EACH of:
+   • Each entity the question names → BOTH the natural id column AND the name column
+   • Each metric/aggregate adjective ("average", "total", "share", "count", "rate",
+     "highest/lowest", "first/last/Nth") → a column for that computed value
+   • Each modifier-bound metric ("missed X", "delivered X", "active X") → the column
+     must compute that subset; do NOT use a generic version
+   • Each compared period if the question pairs periods → one column per period plus
+     a delta column
+   • Each ranking word ("top N", "ranked", "1st/2nd/3rd") → an explicit rank column
+   • Each classification ("grade", "tier", "quintile") → BOTH the numeric score AND
+     the label column
+   • Any "overall/total" alongside "for each X" → a roll-up column or row
+   You may also load the /output-column-spec skill for the full procedure. Either way,
+   you MUST produce the OUTPUT COLUMN SPEC block before SQL writing.
+
 2. PLAN THE QUERY (before writing SQL):
    - Read the question for cardinality clues: "for each X" = GROUP BY, "top N" = LIMIT/QUALIFY,
      "total/sum" = 1-row aggregate, "how many" = COUNT (1 row result)

@@ -1,0 +1,10 @@
+product_id,product_name,page_views,cart_adds,abandoned,purchases
+1.0,Salmon,1559,938,227,711
+2.0,Kingfish,1559,920,213,707
+3.0,Tuna,1515,931,234,697
+4.0,Russian Caviar,1563,946,249,697
+5.0,Black Truffle,1469,924,217,707
+6.0,Abalone,1525,932,233,699
+7.0,Lobster,1547,968,214,754
+8.0,Crab,1564,949,230,719
+9.0,Oyster,1568,943,217,726

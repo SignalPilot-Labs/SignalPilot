@@ -1,0 +1,75 @@
+year,driver_id,driver_name,driver_points,constructor_id,constructor_name,constructor_points
+1950,642,Nino Farina,30.0,,,
+1951,579,Juan Fangio,31.0,,,
+1952,647,Alberto Ascari,36.0,,,
+1953,647,Alberto Ascari,34.5,,,
+1954,579,Juan Fangio,42.0,,,
+1955,579,Juan Fangio,40.0,,,
+1956,579,Juan Fangio,30.0,,,
+1957,579,Juan Fangio,40.0,,,
+1958,578,Mike Hawthorn,42.0,118,Vanwall,48.0
+1959,356,Jack Brabham,31.0,170,Cooper-Climax,40.0
+1960,356,Jack Brabham,43.0,170,Cooper-Climax,48.0
+1961,403,Phil Hill,34.0,6,Ferrari,45.0
+1962,289,Graham Hill,42.0,66,BRM,42.0
+1963,373,Jim Clark,54.0,172,Lotus-Climax,54.0
+1964,341,John Surtees,40.0,6,Ferrari,45.0
+1965,373,Jim Clark,54.0,172,Lotus-Climax,54.0
+1966,356,Jack Brabham,42.0,191,Brabham-Repco,42.0
+1967,304,Denny Hulme,51.0,191,Brabham-Repco,63.0
+1968,289,Graham Hill,48.0,180,Lotus-Ford,62.0
+1969,328,Jackie Stewart,63.0,196,Matra-Ford,66.0
+1970,358,Jochen Rindt,45.0,32,Team Lotus,59.0
+1971,328,Jackie Stewart,62.0,25,Tyrrell,73.0
+1972,224,Emerson Fittipaldi,61.0,32,Team Lotus,61.0
+1973,328,Jackie Stewart,71.0,32,Team Lotus,92.0
+1974,224,Emerson Fittipaldi,55.0,1,McLaren,73.0
+1975,182,Niki Lauda,64.5,6,Ferrari,72.5
+1976,231,James Hunt,69.0,6,Ferrari,83.0
+1977,182,Niki Lauda,72.0,6,Ferrari,95.0
+1978,207,Mario Andretti,64.0,32,Team Lotus,86.0
+1979,222,Jody Scheckter,51.0,6,Ferrari,113.0
+1980,178,Alan Jones,67.0,3,Williams,120.0
+1981,137,Nelson Piquet,50.0,3,Williams,95.0
+1982,177,Keke Rosberg,44.0,6,Ferrari,74.0
+1983,137,Nelson Piquet,59.0,6,Ferrari,89.0
+1984,182,Niki Lauda,72.0,1,McLaren,143.5
+1985,117,Alain Prost,73.0,1,McLaren,90.0
+1986,117,Alain Prost,72.0,3,Williams,141.0
+1987,137,Nelson Piquet,73.0,3,Williams,137.0
+1988,102,Ayrton Senna,90.0,1,McLaren,199.0
+1989,117,Alain Prost,76.0,1,McLaren,141.0
+1990,102,Ayrton Senna,78.0,1,McLaren,121.0
+1991,102,Ayrton Senna,96.0,1,McLaren,139.0
+1992,95,Nigel Mansell,108.0,3,Williams,164.0
+1993,117,Alain Prost,99.0,3,Williams,168.0
+1994,30,Michael Schumacher,92.0,3,Williams,118.0
+1995,30,Michael Schumacher,102.0,22,Benetton,147.0
+1996,71,Damon Hill,97.0,3,Williams,175.0
+1997,35,Jacques Villeneuve,81.0,3,Williams,123.0
+1998,57,Mika Häkkinen,100.0,1,McLaren,156.0
+1999,57,Mika Häkkinen,76.0,6,Ferrari,128.0
+2000,30,Michael Schumacher,108.0,6,Ferrari,170.0
+2001,30,Michael Schumacher,123.0,6,Ferrari,179.0
+2002,30,Michael Schumacher,144.0,6,Ferrari,221.0
+2003,30,Michael Schumacher,93.0,6,Ferrari,158.0
+2004,30,Michael Schumacher,148.0,6,Ferrari,262.0
+2005,4,Fernando Alonso,133.0,4,Renault,191.0
+2006,4,Fernando Alonso,134.0,4,Renault,206.0
+2007,8,Kimi Räikkönen,110.0,6,Ferrari,204.0
+2008,1,Lewis Hamilton,98.0,6,Ferrari,172.0
+2009,18,Jenson Button,95.0,23,Brawn,172.0
+2010,20,Sebastian Vettel,256.0,9,Red Bull,498.0
+2011,20,Sebastian Vettel,392.0,9,Red Bull,650.0
+2012,20,Sebastian Vettel,281.0,9,Red Bull,460.0
+2013,20,Sebastian Vettel,397.0,9,Red Bull,596.0
+2014,1,Lewis Hamilton,384.0,131,Mercedes,701.0
+2015,1,Lewis Hamilton,381.0,131,Mercedes,703.0
+2016,3,Nico Rosberg,385.0,131,Mercedes,765.0
+2017,1,Lewis Hamilton,363.0,131,Mercedes,668.0
+2018,1,Lewis Hamilton,408.0,131,Mercedes,655.0
+2019,1,Lewis Hamilton,413.0,131,Mercedes,739.0
+2020,1,Lewis Hamilton,347.0,131,Mercedes,573.0
+2021,830,Max Verstappen,395.5,131,Mercedes,613.5
+2022,830,Max Verstappen,454.0,9,Red Bull,759.0
+2023,830,Max Verstappen,575.0,9,Red Bull,860.0

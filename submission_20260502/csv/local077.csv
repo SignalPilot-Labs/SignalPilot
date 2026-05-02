@@ -1,0 +1,13 @@
+month_year,interest_name,max_index_composition,3_month_rolling_avg,1_month_ago,max_index_composition_1_month_ago,2_months_ago,max_index_composition_2_months_ago
+09-2018,Work Comes First Travelers,8.263636363636364,8.263636363636364,,,,
+10-2018,Work Comes First Travelers,9.135135135135135,8.69938574938575,Work Comes First Travelers,8.263636363636364,,
+11-2018,Work Comes First Travelers,8.27659574468085,8.55845574781745,Work Comes First Travelers,9.135135135135135,Work Comes First Travelers,8.263636363636364
+12-2018,Work Comes First Travelers,8.313725490196079,8.575152123337356,Work Comes First Travelers,8.27659574468085,Work Comes First Travelers,9.135135135135135
+01-2019,Work Comes First Travelers,7.657258064516128,8.08252643313102,Work Comes First Travelers,8.313725490196079,Work Comes First Travelers,8.27659574468085
+02-2019,Work Comes First Travelers,7.6625000000000005,7.877827851570736,Work Comes First Travelers,7.657258064516128,Work Comes First Travelers,8.313725490196079
+03-2019,Alabama Trip Planners,6.543046357615895,7.287601474044007,Work Comes First Travelers,7.6625000000000005,Work Comes First Travelers,7.657258064516128
+04-2019,Solar Energy Researchers,6.275862068965518,6.827136142193805,Alabama Trip Planners,6.543046357615895,Work Comes First Travelers,7.6625000000000005
+05-2019,Readers of Honduran Content,4.409090909090909,5.742666445224107,Solar Energy Researchers,6.275862068965518,Alabama Trip Planners,6.543046357615895
+06-2019,Las Vegas Trip Planners,2.7650602409638556,4.483337739673428,Readers of Honduran Content,4.409090909090909,Solar Energy Researchers,6.275862068965518
+07-2019,Las Vegas Trip Planners,2.8175675675675675,3.3305729058741105,Las Vegas Trip Planners,2.7650602409638556,Readers of Honduran Content,4.409090909090909
+08-2019,Cosmetics and Beauty Shoppers,2.728476821192053,2.7703682099078257,Las Vegas Trip Planners,2.8175675675675675,Las Vegas Trip Planners,2.7650602409638556

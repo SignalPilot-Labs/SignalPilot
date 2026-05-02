@@ -48,6 +48,7 @@ SKILL_TOOL_NAMES = (
     "entity-with-metrics",
     "ranking-with-position",
     "classification-with-score",
+    "output-column-spec",
 )
 
 
@@ -74,7 +75,7 @@ async def run_sdk_agent(
         "cwd": str(work_dir),
         "mcp_servers": load_mcp_servers(),
         "debug_stderr": True,
-        "thinking": {"type": "enabled", "budget_tokens": 32_000},
+        "thinking": {"type": "enabled", "budget_tokens": 64_000},
         "effort": "medium",
     }
     if system_prompt is not None:

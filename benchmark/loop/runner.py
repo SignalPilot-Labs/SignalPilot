@@ -108,8 +108,50 @@ async def run_round(
     log(f"  Pass rate (excl. SKIP): {pass_rate*100:.1f}%")
     if regs_this_round:
         log(f"  REGRESSIONS this round ({len(regs_this_round)}):", "WARN")
+        regressions_log_path = config.work_dir.parent.parent / "results" / f"round_{next_round}" / "regressions.jsonl"
+        regressions_log_path.parent.mkdir(parents=True, exist_ok=True)
         for task, was_pass, now_fail in regs_this_round:
-            log(f"    {task}: passed in round {was_pass}, failed in round {now_fail}", "WARN")
+            work_dir = config.work_dir / task
+            # Pull authoritative failure detail
+            try:
+                _, details = evaluate_sql(work_dir, task, config)
+            except Exception as e:
+                details = f"evaluator exception: {e}"
+            # Pull layer-1 check fires
+            fired: list[dict] = []
+            checks_path = work_dir / "harness_checks.json"
+            if checks_path.exists():
+                try:
+                    fired = json.loads(checks_path.read_text()).get("failures", [])
+                except Exception:
+                    pass
+            # Pull SQL + first 5 lines of result for context
+            sql_text = ""
+            if (work_dir / "result.sql").exists():
+                sql_text = (work_dir / "result.sql").read_text()
+            result_head = ""
+            try:
+                import pandas as _pd
+                result_head = _pd.read_csv(work_dir / "result.csv").head(5).to_csv(index=False)
+            except Exception:
+                pass
+            entry = {
+                "round": next_round,
+                "task": task,
+                "passed_in_round": was_pass,
+                "failed_in_round": now_fail,
+                "evaluator_detail": details,
+                "fired_layer1_checks": fired,
+                "sql_first_2000_chars": sql_text[:2000],
+                "result_first_5_rows": result_head,
+            }
+            with regressions_log_path.open("a") as f:
+                f.write(json.dumps(entry) + "\n")
+            log(f"    {task}: passed round {was_pass} → failed round {now_fail}", "WARN")
+            log(f"      detail: {details[:200]}", "WARN")
+            if fired:
+                log(f"      layer1: {[f['check'] for f in fired]}", "WARN")
+        log(f"  Full regression details: {regressions_log_path}", "WARN")
     else:
         log("  No regressions this round.")
 

@@ -111,6 +111,7 @@ def _get_skill_names(suite: BenchmarkSuite, backend: DBBackend) -> tuple[str, ..
     # Pattern skills (description-triggered) — always loaded so the agent can
     # invoke them via /<skill-name> when the question matches.
     pattern_skills: tuple[str, ...] = (
+        "output-column-spec",
         "temporal-comparison",
         "entity-with-metrics",
         "ranking-with-position",

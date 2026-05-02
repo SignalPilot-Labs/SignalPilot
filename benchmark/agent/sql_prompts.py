@@ -101,14 +101,25 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     "rate of Z", "score", "grade", "rating", "count of occurrences", "total revenue"),
     the result MUST have an explicit column for that computed value — not just the entity
     columns. Examples:
-    - "average rating per director" → must have an AVG_RATING column
-    - "share of sales in each quarter" → must have a share/pct column
-    - "grade or quintile for each student" → must have the numeric grade AND the label
-    - "count of missed rounds" → column must reflect "missed" rounds, not all rounds
+    - "average <metric> per <entity>" → must have an avg_<metric> column
+    - "share of X in each Y" → must have a share/pct column
+    - "grade or quintile for each X" → must have the numeric grade AND the label
+    - "count of missed X" → column must reflect "missed" X, not all X
     - "occurrences of each category" → must have a count/occurrences column
     If the question uses a specific adjective like "missed" or "first" or "net", the
     column must compute THAT specific subset, not the generic version. FLAG IT if the
     column is absent or if it computes a different subset than asked.
+
+11a. SINGLE-CELL RESULT vs MULTI-COMPONENT QUESTION:
+    If the result is a single row with a single column (shape (1,1)), but the question
+    mentions MORE THAN ONE quantity that would help interpret the answer, FLAG IT.
+    Example: "What percentage of customers grew?" — the bare number 36.4 is incomplete;
+    a reviewer needs the numerator (growing customers), denominator (total customers),
+    AND the percentage to verify. Single-cell answers are correct ONLY when the question
+    asks ONLY ONE thing ("how many X", "what is the average Y"). If the question chains
+    "and", "with", "showing", "out of", or names two cardinalities, the result must have
+    columns for each. The fix is: "FIX: include columns for <numerator>, <denominator>,
+    AND the computed quantity, not just the percentage/ratio alone."
 
 12. TEMPORAL COMPARISON COLUMNS:
     If the question asks to compare across two or more time periods (e.g., "2019 vs 2020",

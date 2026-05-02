@@ -123,6 +123,25 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     - If the question asks for one row per entity but there are N rows for some entities
     FLAG IT with: "FIX: add DISTINCT or fix GROUP BY to eliminate duplicate <entity> rows"
 
+14. DOMAIN-TERM SPOT-CHECK — VERIFY QUALIFIER MAPPINGS BEFORE TRUSTING THE AGGREGATE:
+    If the question contains a domain-specific qualifier that filters the computation —
+    "delivered orders", "active users", "completed transactions", "most recent X",
+    "top-tier customers", "most frequent X", "highest <unit>", "successful trials",
+    "missed deadlines", "shipped within N days" —
+    the agent's SQL must encode that qualifier with a verified column-value match,
+    not a guess. FLAG IT if any of the following is true:
+    a) The qualifier uses a status value the agent did not look up via explore_column
+       (e.g., assumed status='delivered' when actual values might be 'DELIVERED',
+       'shipped', 'completed', or a numeric code).
+    b) "Most frequent" or "highest" was implemented via ORDER BY ... LIMIT 1 without
+       handling ties (the question might expect a deterministic tie-breaker).
+    c) "Most recent" or "latest" was anchored to system-clock time instead of
+       MAX(<date_col>) from the data.
+    d) A binary filter ("active", "completed") was guessed without inspecting the
+       distinct values of the relevant column.
+    The fix is always: "FIX: run mcp__signalpilot__explore_column on <column> to
+    verify what value(s) actually represent <qualifier>, then update the WHERE clause."
+
 Respond with EXACTLY ONE of these formats:
 
   OK

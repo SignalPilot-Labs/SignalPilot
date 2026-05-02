@@ -197,16 +197,23 @@ def _register_connection(
         return register_sqlite_connection(instance_id, db_path)
 
     if backend == DBBackend.BIGQUERY:
-        project: str = task.get("project_id", task.get("project", ""))
-        dataset: str = task.get("dataset", task.get("schema", ""))
-        if not project:
-            # Spider2-Lite BQ tasks use spider2-public-data project by default
-            project = "spider2-public-data"
-            log(f"Task '{instance_id}' missing project_id, using default: {project}")
-        if not dataset:
-            # Use the db field as the dataset name
-            dataset = task.get("db", "")
-        return register_bigquery_connection(instance_id, project, dataset)
+        # Spider2-Lite BQ gold SQL fully-qualifies table refs (e.g.
+        # `bigquery-public-data.<ds>.<tbl>`), so the connection only needs a
+        # BILLING project (where jobs.create runs). Read the project from the
+        # service-account JSON so it matches where the SA has permissions.
+        # Empty dataset → driver does not set default_dataset, avoiding a
+        # spurious `<billing>.<ds>` default that would break public-data refs.
+        billing_project: str = ""
+        try:
+            import json as _json
+            from ..core.paths import BIGQUERY_SA_FILE
+            if BIGQUERY_SA_FILE.exists():
+                billing_project = _json.loads(BIGQUERY_SA_FILE.read_text()).get("project_id", "")
+        except Exception as e:
+            log(f"Could not read SA project_id: {e}", "WARN")
+        if not billing_project:
+            log(f"Task '{instance_id}': no SA project_id available; BQ jobs will fail", "WARN")
+        return register_bigquery_connection(instance_id, billing_project, "")
 
     log(f"Unsupported backend '{backend}' — cannot register connection", "ERROR")
     return False

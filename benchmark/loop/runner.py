@@ -50,10 +50,19 @@ async def run_round(
     model: str,
     max_turns: int | None,
     note: str | None = None,
+    cloud: bool = False,
 ) -> dict:
     config = get_suite_config(suite)
 
-    composition = sample_round(suite=suite, n_total=n_total)
+    if cloud:
+        composition = sample_round(
+            suite=suite,
+            n_total=n_total,
+            task_filter="",
+            task_filters=["sf", "bq", "ga"],
+        )
+    else:
+        composition = sample_round(suite=suite, n_total=n_total)
     next_round = reg.current_round(reg.load_all())
 
     log_separator(f"ROUND {next_round}  n={len(composition.all_tasks)}  model={model}")
@@ -184,6 +193,8 @@ def main() -> None:
     parser.add_argument("--model", default="claude-sonnet-4-6")
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--note", default=None, help="Note to record for this round (what changed)")
+    parser.add_argument("--cloud", action="store_true",
+                        help="Sample from cloud subset (sf*+bq*+ga*) using the cloud holdout (n=30).")
     args = parser.parse_args()
 
     suite = BenchmarkSuite(args.suite)
@@ -194,6 +205,7 @@ def main() -> None:
         model=args.model,
         max_turns=args.max_turns,
         note=args.note,
+        cloud=args.cloud,
     ))
     sys.exit(0 if result.get("summary", {}).get("ERROR", 0) == 0 else 1)
 

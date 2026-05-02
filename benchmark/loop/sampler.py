@@ -80,19 +80,50 @@ def task_db(suite: BenchmarkSuite, task_id: str) -> str:
     return task.get("db") or task.get("db_id") or "unknown"
 
 
-def held_out_set(suite: BenchmarkSuite, n: int = 20, seed: int = 42, task_filter: str = "local") -> set[str]:
+def _matches_filters(task_id: str, task_filter: str | None, task_filters: list[str] | None) -> bool:
+    """Return True if task_id matches any of task_filters (preferred) or task_filter (fallback)."""
+    if task_filters:
+        return any(task_id.startswith(p) for p in task_filters)
+    if task_filter:
+        return task_id.startswith(task_filter)
+    return True
+
+
+def held_out_set(
+    suite: BenchmarkSuite,
+    n: int = 20,
+    seed: int = 42,
+    task_filter: str = "local",
+    task_filters: list[str] | None = None,
+) -> set[str]:
     """Deterministic held-out set — never used in sampling.
 
-    Filtered by task_filter (default "local") so the holdout is meaningful for
-    runnable tasks on this machine. Same seed → same holdout across runs.
+    If task_filters is provided it wins over task_filter; a task matches if any
+    prefix in task_filters matches. Same seed → same holdout across runs.
     """
     rng = random.Random(seed)
     tasks = list_all_tasks(suite)
-    if task_filter:
-        tasks = [t for t in tasks if t.startswith(task_filter)]
+    tasks = [t for t in tasks if _matches_filters(t, task_filter, task_filters)]
     if len(tasks) <= n:
         return set(tasks)
     return set(rng.sample(tasks, n))
+
+
+def cloud_held_out_set(suite: BenchmarkSuite, seed: int = 42) -> set[str]:
+    """Stratified n=30 cloud holdout: 14 sf + 13 bq + 3 ga (seed=42).
+
+    Sacred — never re-roll. See AUTOFYN_CLOUD_PROMPT.md §3.2.
+    """
+    rng = random.Random(seed)
+    pool = list_all_tasks(suite)
+    sf = sorted(t for t in pool if t.startswith("sf"))
+    bq = sorted(t for t in pool if t.startswith("bq"))
+    ga = sorted(t for t in pool if t.startswith("ga"))
+    return set(
+        rng.sample(sf, min(14, len(sf)))
+        + rng.sample(bq, min(13, len(bq)))
+        + rng.sample(ga, min(3, len(ga)))
+    )
 
 
 def sample_round(
@@ -107,21 +138,35 @@ def sample_round(
     holdout_seed: int = 42,
     seed: int | None = None,
     task_filter: str = "local",
+    task_filters: list[str] | None = None,
 ) -> SampleComposition:
     """Build one round's sample. seed=None uses the registry round number for reproducibility.
 
     task_filter="local" restricts to spider2-lite SQLite tasks (the runnable subset
-    on this machine). Use "" or None to include all tasks in the JSONL.
+    on this machine). Use "" or None to include all tasks in the JSONL. If
+    task_filters is provided (e.g. ["sf","bq","ga"] for cloud), it overrides
+    task_filter and a task matches if any prefix matches.
     """
     records = reg.load_all()
     next_round = reg.current_round(records)
     rng = random.Random(seed if seed is not None else next_round * 1000 + 7)
 
     pool = list_all_tasks(suite)
-    if task_filter:
-        pool = [t for t in pool if t.startswith(task_filter)]
+    pool = [t for t in pool if _matches_filters(t, task_filter, task_filters)]
 
-    holdout = held_out_set(suite, n=holdout_size, seed=holdout_seed, task_filter=task_filter)
+    # When task_filters is set (cloud mode), use the dedicated cloud holdout
+    # (n=30, stratified across sf/bq/ga). Otherwise fall back to the legacy
+    # single-prefix holdout.
+    if task_filters and set(task_filters) >= {"sf", "bq", "ga"}:
+        holdout = cloud_held_out_set(suite, seed=holdout_seed)
+    else:
+        holdout = held_out_set(
+            suite,
+            n=holdout_size,
+            seed=holdout_seed,
+            task_filter=task_filter,
+            task_filters=task_filters,
+        )
     all_tasks = [t for t in pool if t not in holdout]
 
     recent = reg.recently_run(records, cooldown_rounds)
@@ -164,9 +209,14 @@ def sample_round(
             break
 
     # ── targeted: previously-FAIL tasks not run in cooldown ────────────────────
-    # CRITICAL: must exclude holdout (registry can contain holdout tasks from
-    # round 0 seeding; the sampler must never include them in any future round).
-    target_candidates = [t for t in failing if t not in recent and t not in fresh and t not in holdout]
+    # CRITICAL: must exclude holdout AND respect the active filter (registry
+    # may contain tasks from a different filter scope, e.g. local* records when
+    # we're now sampling cloud).
+    target_candidates = [
+        t for t in failing
+        if t not in recent and t not in fresh and t not in holdout
+        and _matches_filters(t, task_filter, task_filters)
+    ]
     rng.shuffle(target_candidates)
     targeted = target_candidates[:n_target]
 
@@ -174,6 +224,7 @@ def sample_round(
     reg_candidates = [
         t for t in passing
         if t not in recent and t not in fresh and t not in targeted and t not in holdout
+        and _matches_filters(t, task_filter, task_filters)
     ]
     rng.shuffle(reg_candidates)
     regression = reg_candidates[:n_reg]

@@ -137,12 +137,29 @@ def _get_max_turns(backend: DBBackend, task: dict, default: int) -> int:
     return _LARGE_DB_MAX_TURNS.get(db_id, default)
 
 
-def _determine_backend(suite: BenchmarkSuite, task: dict, config: SuiteConfig) -> DBBackend:
-    """Determine the DB backend for a task."""
+def _determine_backend(
+    suite: BenchmarkSuite,
+    task: dict,
+    config: SuiteConfig,
+    instance_id: str | None = None,
+) -> DBBackend:
+    """Determine the DB backend for a task.
+
+    Priority:
+      1. suite-level override (snowflake-only suite)
+      2. explicit task["type"]
+      3. instance_id prefix — Spider2-Lite convention:
+           bq*, ga*  → BigQuery
+           sf*       → Snowflake (incl. sf_bq* Snowflake-port tasks)
+           local*    → SQLite
+         This is needed because some db names (e.g. "noaa_data") exist under
+         both resource/databases/snowflake/ AND bigquery/, so directory
+         inference is ambiguous.
+      4. directory inference (fallback when prefix is unrecognized)
+    """
     if suite == BenchmarkSuite.SNOWFLAKE:
         return DBBackend.SNOWFLAKE
 
-    # If the task has an explicit type field, use it
     task_type = task.get("type")
     if task_type:
         mapping: dict[str, DBBackend] = {
@@ -155,7 +172,14 @@ def _determine_backend(suite: BenchmarkSuite, task: dict, config: SuiteConfig) -
             raise ValueError(f"Unknown task type '{task_type}' — expected sqlite/snowflake/bigquery")
         return backend
 
-    # Infer from which resource/databases/<type>/ directory contains the db name
+    iid = instance_id or task.get("instance_id") or ""
+    if iid.startswith("sf"):
+        return DBBackend.SNOWFLAKE
+    if iid.startswith(("bq", "ga")):
+        return DBBackend.BIGQUERY
+    if iid.startswith("local"):
+        return DBBackend.SQLITE
+
     db_name = task.get("db", "")
     resource_dir = config.data_dir / "resource" / "databases"
     for db_type, backend in [
@@ -167,8 +191,7 @@ def _determine_backend(suite: BenchmarkSuite, task: dict, config: SuiteConfig) -
         if type_dir.exists() and (type_dir / db_name).exists():
             return backend
 
-    # Default to sqlite for backwards compat
-    log(f"Could not infer backend for db='{db_name}', defaulting to sqlite", "WARN")
+    log(f"Could not infer backend for db='{db_name}' (id={iid}), defaulting to sqlite", "WARN")
     return DBBackend.SQLITE
 
 
@@ -364,7 +387,7 @@ async def execute_sql_task(
         return False, {"success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0, "cost_usd": None, "usage": None, "started_at": ""}
     log(f"Task loaded in {time.monotonic()-t0:.2f}s")
 
-    backend = _determine_backend(suite, task, config)
+    backend = _determine_backend(suite, task, config, instance_id=instance_id)
     log(f"DB backend: {backend.value}")
 
     resolved_max_turns: int = (
@@ -554,7 +577,7 @@ def main(suite: BenchmarkSuite) -> None:
     log(f"Instruction: {instruction}")
 
     # ── Determine DB backend ───────────────────────────────────────────────────
-    backend = _determine_backend(suite, task, config)
+    backend = _determine_backend(suite, task, config, instance_id=instance_id)
     log(f"DB backend: {backend.value}")
 
     # ── Resolve max_turns (after task loaded so db_id is available) ───────────

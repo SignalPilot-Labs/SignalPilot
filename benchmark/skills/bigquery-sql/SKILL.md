@@ -189,6 +189,30 @@ past runs. Probe a sample row and verify before committing.
 
 ### Numeric precision
 - BigQuery FLOAT64 geodesic functions (`ST_DISTANCE`, `ST_GEOGPOINT`) can
-  produce sub-1e-3 differences from gold for identical inputs. The
-  evaluator's tolerance is 1e-2 so this is not usually a SQL bug — don't
-  restructure in response.
+  produce sub-1e-3 differences for identical inputs across runs or engines.
+  This is a known floating-point characteristic — small deltas at this
+  magnitude are not a SQL correctness issue and don't warrant restructuring
+  the query.
+
+### Window-frame defaults for rolling aggregates
+- When `ORDER BY` is present in an `OVER (...)` clause without an explicit
+  `ROWS`/`RANGE` clause, BigQuery's default frame is `RANGE BETWEEN
+  UNBOUNDED PRECEDING AND CURRENT ROW` — a **cumulative** aggregate, NOT a
+  trailing N-row window. A rolling/moving average written as
+  `AVG(metric) OVER (ORDER BY date)` returns a running mean over all prior
+  rows, not the trailing N.
+- For an N-period trailing rolling aggregate, write the frame explicitly
+  and remember `N-1 PRECEDING + CURRENT ROW = N rows total`:
+  ```sql
+  AVG(metric) OVER (
+    ORDER BY date
+    ROWS BETWEEN <N-1> PRECEDING AND CURRENT ROW
+  ) AS rolling_avg
+  ```
+  Off-by-one (using `N PRECEDING` instead of `N-1 PRECEDING` for an N-row
+  window) is a common silent error.
+- For a centered window: `ROWS BETWEEN k PRECEDING AND k FOLLOWING`
+  (window size = 2k+1).
+- `RANGE` interprets the bound in ORDER BY units (date-days, numeric
+  intervals); `ROWS` always counts physical rows. For dense, regularly
+  spaced data they coincide; for sparse or irregular data they diverge.

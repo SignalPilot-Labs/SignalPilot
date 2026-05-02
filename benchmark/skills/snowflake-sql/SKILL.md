@@ -133,8 +133,8 @@ past runs. Probe a sample row and verify before committing.
 - `DATEDIFF(unit, start, end)` — note the unit is FIRST in Snowflake, opposite
   of BigQuery's `DATE_DIFF(end, start, unit)`. Months between Jan-15 and Mar-15:
   `DATEDIFF(MONTH, '2024-01-15', '2024-03-15')` = 2. As with BigQuery, this
-  counts boundaries crossed, not active months — gold may expect +1 if
-  counting both endpoint months.
+  counts boundaries crossed, not active months — analysts often expect +1
+  when counting both endpoint months as "active".
 
 ### Calendar conventions
 - `DATE_TRUNC('WEEK', date)` truncates to **Monday-start** weeks (ISO),
@@ -146,15 +146,15 @@ past runs. Probe a sample row and verify before committing.
 
 ### NULL ordering
 - Default `ORDER BY col ASC` puts **NULLS LAST**; `ORDER BY col DESC` puts
-  **NULLS FIRST**. If gold expects the opposite (e.g., a min-aggregation
-  ranking that should put NULLs at top of a DESC sort), specify
-  `NULLS LAST` / `NULLS FIRST` explicitly.
+  **NULLS FIRST**. When the desired ordering needs the opposite (e.g., a
+  min-aggregation ranking that should put NULLs at top of a DESC sort),
+  specify `NULLS LAST` / `NULLS FIRST` explicitly.
 
 ### Percentile / median
 - `PERCENTILE_CONT(0.5)` interpolates linearly between two values when the
   median lands between rows; `PERCENTILE_DISC(0.5)` returns the lower
-  ranked value. Different functions for different gold conventions.
-  Verify which one the question expects.
+  ranked value. Different statistical conventions choose different
+  functions — verify which the question intends before picking one.
 
 ### LATERAL FLATTEN granularity
 - Each row from `LATERAL FLATTEN(input => col)` multiplies the parent row,
@@ -173,3 +173,21 @@ past runs. Probe a sample row and verify before committing.
   BigQuery often have lowercase column names; access these with
   double-quotes: `"lower_case_col"`. `describe_table` reveals the actual
   storage case.
+
+### Output alias casing
+- The same upper-casing applies to **output aliases**, not just source
+  identifiers. `SELECT x AS my_col` produces a result-set column literally
+  named `MY_COL`. Downstream code, dashboards, joins, or any consumer that
+  matches column names case-sensitively will see the upper-case form.
+- When a downstream contract specifies a column name in a particular case
+  (lowercase, snake_case, mixed-case), wrap the alias in double-quotes to
+  preserve the exact literal:
+  ```sql
+  SELECT MIN(value) AS "lower_case_alias"
+  ```
+- Aliases that collide with SQL keyword-adjacent tokens (e.g. data-type
+  names, reserved words) should also be double-quoted so they remain
+  treated as plain identifiers.
+- Default policy: when the requested output schema phrases a column name
+  in a specific case, alias with double-quotes in that exact case rather
+  than relying on Snowflake's default identifier folding.

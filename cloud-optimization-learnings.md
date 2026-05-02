@@ -222,3 +222,50 @@ gold-token leak.
 - If `wrong_value_calc` arithmetic-shift sub-pattern continues at 2+, propose
   rule 17 in R5.
 - GA still 0: lift per-DB cap from 2 → 3 for GA stratum only in R4.
+
+---
+
+## Round 4 (2026-05-02)
+
+**Composition:** 12 fresh + 6 targeted + 2 regression; main run conc=10 produced 8 startup-wave ERRORs, all recovered via conc=3 retry.
+
+**Outcome (post-retry):** 7 PASS / 13 FAIL / 0 ERROR = **35.0%** raw.
+Trajectory: 67% → 65% → 58% → 35%. Adjusted for past-fail oversampling, fresh-equivalent ≈ 50–55%.
+
+**Judge category distribution (n=14 real fails):**
+| Category | n | Sub-patterns |
+|---|---|---|
+| `wrong_value_calc` | 3 | DOW base convention, sign direction, Celsius/Fahrenheit unit |
+| `wrong_filter_predicate` | 3 | missing AND-conjunction filter, numeric-vs-DATE type, missing range filter |
+| `interpretation_drift` | 2 | long-vs-wide format, self-invented business logic |
+| `numeric_precision` | 2 | repr drift (microsec vs date), rolling-avg ±0.1 |
+| `wrong_join_or_fanout` | 2 | INNER vs OUTER, wrong join key |
+| `missing_column` | 1 | extra column in pred |
+| `result_excess` | 1 | over-restrictive NULL filter |
+
+**Rule changes this round:** ZERO new verifier-prompt rules. Per the architectural directive that dialect-specific guidance must live in dialect skill files (so SQLite local eval is not polluted), R4 added two **dialect-skill subsections** instead:
+
+1. `benchmark/skills/snowflake-sql/SKILL.md` → "Output alias casing": Snowflake folds output aliases to upper-case unless double-quoted. Wrap aliases in double-quotes when downstream contracts specify a case.
+2. `benchmark/skills/bigquery-sql/SKILL.md` → "Window-frame defaults for rolling aggregates": `OVER (ORDER BY x)` without explicit `ROWS`/`RANGE` defaults to cumulative, not trailing N-row. Documents `ROWS BETWEEN N-1 PRECEDING AND CURRENT ROW` with off-by-one warning.
+
+Also retroactively cleaned three `gold` / `evaluator` references from the existing snowflake-sql skill so all dialect skills now read as generic data-engineering rules.
+
+**Why no shared verifier rule:**
+- Rule 17 (added pre-R4) needs ≥2 rounds of clean fresh-stratum data before judging effectiveness.
+- R4's category leader splits into three distinct sub-patterns; no single rule generalizes them.
+- R4 oversampled past fails — wait one round of fresh-heavy sampling before deriving new rules.
+
+**Per-DB coverage gap (NEW finding):**
+Registry audit revealed only **17%** of cloud tasks (72/412) and **45%** of cloud DBs (58/128) have been touched after 4 rounds. 70 DBs are unseen, including high-mass ones (THELOOK_ECOMMERCE 19, ga4 17, firebase 9, sdoh 7, world_bank 6, chicago/ncaa_basketball/fda 5 each). MCMC sampler with per-DB cap=2 + targeted/regression strata drawing from past records naturally clusters on already-seen DBs.
+
+**Implication:** rules 14a/15/16/17 + dialect-skill additions are tuned against ~50% of the DB population. Risk of over-fitting to seen domains (StackOverflow, patents-public-data, GA-style) and missing patterns from unseen domains (genomics, fintech, geo, e-commerce).
+
+**Deferred for user decision:**
+- Coverage sweep: 1 task per each of 70 untouched DBs at conc=3 (~3-4hr, ~$15-20). Populates the registry; doesn't iterate rules.
+- Alternative: continue normal R5+ rounds and accept the coverage skew.
+
+**Watch for round 5:**
+- `wrong_value_calc` should drop on alias-casing (sf040, sf_bq291) and rolling-aggregate (bq031) sub-patterns.
+- If `wrong_value_calc` ≥ 3 again with **new** sub-patterns (unit/sign/convention not covered by current dialect skills), candidate rule 18: "probe column unit / sign convention / measurement system before computing".
+- If `interpretation_drift` repeats, that becomes a candidate verifier rule (output-shape / business-logic invention).
+- Retry workflow at concurrency=3 confirmed reliable — make it the default for retry batches.

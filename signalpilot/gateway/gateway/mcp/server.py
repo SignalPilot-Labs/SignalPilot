@@ -58,6 +58,24 @@ def main():
         authenticated_app = MCPAuthMiddleware(starlette_app)
         uvicorn.run(authenticated_app, host="0.0.0.0", port=port, server_header=False)
     else:
+        # In stdio mode there is no auth middleware to populate the request-context
+        # variables that tools require (mcp_org_id_var et al.). When running locally
+        # (SP_DEPLOYMENT_MODE=local), seed them with the "local" org so tools that
+        # call `_store_session` don't raise. This mirrors what MCPAuthMiddleware does
+        # for streamable-http when no API keys are configured.
+        if _entry_os.environ.get("SP_DEPLOYMENT_MODE") != "cloud":
+            from gateway.mcp.context import (
+                mcp_client_ip_var,
+                mcp_org_id_var,
+                mcp_raw_key_var,
+                mcp_user_agent_var,
+                mcp_user_id_var,
+            )
+            mcp_user_id_var.set("local")
+            mcp_org_id_var.set("local")
+            mcp_raw_key_var.set(None)
+            mcp_client_ip_var.set("127.0.0.1")
+            mcp_user_agent_var.set("mcp-stdio")
         mcp.run(transport="stdio")
 
 

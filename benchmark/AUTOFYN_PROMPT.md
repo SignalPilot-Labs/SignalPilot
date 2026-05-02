@@ -41,7 +41,7 @@ Three layers of correctness enforcement:
 
 ## 2. Hard Constraints (DO NOT VIOLATE)
 
-1. **Model**: `claude-sonnet-4-6` for SDK runs. **Effort**: `medium`. **Thinking budget**: 32_000 tokens. These live in [benchmark/agent/sdk_runner.py](benchmark/agent/sdk_runner.py) — do not change unless the user explicitly says so.
+1. **Model**: `claude-sonnet-4-6` for SDK runs. **Effort**: `medium`. **Thinking budget**: 64_000 tokens. These live in [benchmark/agent/sdk_runner.py](benchmark/agent/sdk_runner.py) — do not change unless the user explicitly says so.
 2. **Concurrency**: 10 parallel tasks per round.
 3. **Round size**: 25 tasks (default). Compose 60% fresh / 30% targeted / 10% regression.
 4. **Per-DB cap**: 2 tasks per DB per round (avoids within-DB redundancy).

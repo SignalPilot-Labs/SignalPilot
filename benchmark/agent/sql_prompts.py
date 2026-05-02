@@ -186,6 +186,25 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     column; only apply that conversion when the question explicitly asks for
     that format / unit / case."
 
+16. RELATIONSHIP DIRECTION & HOP COUNT — VERIFY THE GRAPH BEFORE JOINING:
+    If the question contains a relational verb that implies a non-trivial graph
+    traversal — "X depends on Y", "X is cited by Y", "X cites Y", "Y is used by X",
+    "X is derived from Y", "Y consumes X", "X is owned by Y", "Y reports to X" —
+    the SQL's JOIN structure must match BOTH the direction and hop count of that
+    relationship. FLAG IT if any of the following is true:
+    a) The agent matched two entities by a name/id field directly (e.g., A.name =
+       B.name, A.id = B.id) when the question's verb implies routing through a
+       relation/edge/junction table (dependencies, citations, ownership_links,
+       relations).
+    b) The join uses the wrong direction of the edge (e.g., for "X cites Y", the
+       agent put X on the cited side and Y on the citing side, or vice versa).
+    c) The agent picked a near-name table that captures a precursor or alternate
+       version of the entity (e.g., a draft/pre-publication table) when the
+       question asks about the granted/final/canonical version.
+    The fix is always: "FIX: probe the schema graph (information_schema, foreign-key
+    listings, or a sample SELECT joining candidate tables) to identify the relation
+    table; route the join through that edge in the direction the question asks."
+
 Respond with EXACTLY ONE of these formats:
 
   OK

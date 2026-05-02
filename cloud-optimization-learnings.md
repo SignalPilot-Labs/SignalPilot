@@ -150,3 +150,75 @@ timeout banner.
 - If `wrong_aggregation` (bq002) or `wrong_join_or_fanout` (sf_bq052) recurs,
   those are next round's candidates.
 - If GA still n=0 across rounds 3–4, lift per-DB cap from 2 → 3 for GA stratum only.
+
+## Round 3 — Rule 14(a) refined active, registry round=10
+**Branch:** `loop/cloud-round-3`
+**Sample (n=20):** 11 BQ + 9 SF + 0 GA again
+
+**Result (post-retry):** 11 PASS / 8 FAIL / 1 ERROR
+- Pass rate excl. ERROR: **57.9%** (R1 66.7% → R2 64.7% → R3 57.9%)
+- Pass rate raw: **55.0%**
+- BQ: 5/9 = 55.6%
+- SF: 6/10 = 60.0%
+
+**Trajectory note:** 3 rounds in, still in the n≈18 stochastic-noise band. Categorical
+distribution is shifting more decisively than the raw rate.
+
+**Retry workflow now standard:**
+- 4 tasks ERRORed at exactly 5.1s (SDK startup-wave timeout — all in batch 2 of
+  concurrency-10). 1 ERRORed at 162s. Re-ran via `python -m benchmark.run_parallel
+  ... --concurrency 5 --summary-out`.
+- 4/5 retries finished cleanly (sf_bq214 PASS, sf006/sf_bq118/bq234 FAIL); sf_bq450
+  hung again (turn 128 / 1075s in iterative verifier loop) — left as ERROR.
+- Registry round=10 patched in-place: replaced ERROR rows with retry-derived
+  PASS/FAIL via `evaluate_sql` on the post-retry workdir.
+
+**Cost:** ~$10 main + ~$3 retries.
+
+**Rule 14(a) verdict — EFFECTIVE:**
+- `wrong_filter_predicate`: 4 (R2) → 1 (R3). Refinement caught the literal-vs-stored
+  class. The remaining R3 case (sf006) is a different sub-pattern: "all 50 states"
+  scope check (DC inclusion). Coverage-probe rule could target this in R5+.
+
+**Rule 15 verdict — STILL EFFECTIVE for original target:**
+- R3 saw 2 `wrong_value_calc` (bq038 fixed-bucket boundary, bq393 DATE_DIFF
+  off-by-2), but BOTH are arithmetic-shift cases, NOT the unrequested-transformation
+  pattern rule 15 targets. So rule 15 is still correctly scoped; arithmetic-shift
+  is a separate emerging anti-pattern (candidate for R5).
+
+**Judge fail-category tally (n=9 real non-PASS):**
+- `wrong_value_calc` (2): bq038, bq393 — arithmetic-shift sub-pattern
+- `wrong_aggregation` (2): bq234 (drug-name normalization), sf_bq118 (collapsed to
+  scalar instead of per-age-group)
+- `wrong_join_or_fanout` (2): bq457 (direct name-match where dependencies edge
+  needed), sf_bq420 (pre-grant pubs instead of granted patents)
+- `wrong_filter_predicate` (1): sf006 (DC-vs-50-states scope)
+- `numeric_precision` (1): bq035 (geodesic float diffs)
+- `missing_artifacts` (1): sf_bq450 (retry timeout)
+
+**Cumulative wrong_join_or_fanout: R1=0, R2=1 (sf_bq052 citation direction),
+R3=2 (bq457, sf_bq420). Rising trend → highest-priority rule target.**
+
+**Proposal applied — rule 16 (RELATIONSHIP DIRECTION & HOP COUNT):**
+New verifier rule. If question contains a relational verb (depends on, cited by,
+derived from, owned by, etc.), the join structure must match the direction AND hop
+count. Three sub-clauses: (a) direct name-match where edge table needed,
+(b) wrong direction on a directional edge, (c) near-name table choice (pgpub vs
+granted). Generalization gate PASSED — no schema names, dialect-symmetric, no
+gold-token leak.
+
+**Why this over alternatives:**
+- vs. rule for arithmetic-shift (bq038/bq393): only n=2 in R3, no precedent in R1-R2.
+  Defer.
+- vs. rule for drug-name / category normalization (bq234): too narrow.
+- vs. coverage-probe rule for "all 50 states" / "every age group" (sf006/sf_bq118):
+  lifts only 2 of 9 fails; rule 16 lifts 2 of 9 directly + prevents R2-style
+  recurrence of sf_bq052.
+
+**Watch for round 4:**
+- `wrong_join_or_fanout` should drop from 2 → 0–1 if rule 16 fires.
+- Regressions to monitor: PASS tasks doing single-hop name joins (bq030, sf_bq091,
+  sf_bq349 still PASSing) — should not start over-traversing the schema graph.
+- If `wrong_value_calc` arithmetic-shift sub-pattern continues at 2+, propose
+  rule 17 in R5.
+- GA still 0: lift per-DB cap from 2 → 3 for GA stratum only in R4.

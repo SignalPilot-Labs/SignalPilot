@@ -163,9 +163,11 @@ def _parse_run_log(log_path: Path) -> list[tuple[str, str]]:
     """
     tasks: dict[str, str] = {}
 
-    parallel_re = re.compile(r"\bEND (local\w+)\s+status=(PASS|FAIL|SKIP|ERROR)\b")
-    parallel_skip_re = re.compile(r"\[(local\w+)\] result\.csv already present")
-    seq_start_re = re.compile(r"^===== START (local\w+)")
+    # Match local* (SQLite), bq*/ga* (BigQuery), sf*/sf_bq* (Snowflake) instance ids.
+    _ID = r"(?:local|sf_bq|sf|bq|ga)\w+"
+    parallel_re = re.compile(rf"\bEND ({_ID})\s+status=(PASS|FAIL|SKIP|ERROR)\b")
+    parallel_skip_re = re.compile(rf"\[({_ID})\] result\.csv already present")
+    seq_start_re = re.compile(rf"^===== START ({_ID})")
 
     cur_id: str | None = None
     cur_status: str | None = None

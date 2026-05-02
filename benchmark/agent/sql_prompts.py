@@ -153,6 +153,32 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     The fix is always: "FIX: run mcp__signalpilot__explore_column on <column> to
     verify what value(s) actually represent <qualifier>, then update the WHERE clause."
 
+15. UNREQUESTED OUTPUT TRANSFORMATION — RETURN RAW VALUES BY DEFAULT:
+    If the question asks for a column or computed value without specifying a
+    format change, encoding change, unit change, or calendar convention, the
+    SQL must return the column's RAW representation as stored. Wrapping a raw
+    column in a transformation the question never asked for is a common cause
+    of silent value mismatches. FLAG IT if any of the following is true:
+    a) A numeric or text column (e.g. an integer epoch, an opaque code, an
+       encoded id) is wrapped in a date/time conversion to produce a YYYY-MM-DD
+       or human-readable form, AND the question does not say "as a date",
+       "by day", or otherwise specify a date-shaped output. Many such columns
+       are intended to flow through as integers/strings unchanged.
+    b) A calendar component is extracted (e.g. day-of-week, week-of-year)
+       without the agent having verified which numbering convention is
+       expected. Different dialects default to different conventions
+       (e.g. Sunday=1 vs Monday=1 vs ISO Monday=1); since the question rarely
+       specifies, the agent should probe the data or pick a stable convention
+       and double-check against a sample row before committing.
+    c) A unit conversion is applied (smaller→larger or vice versa: cents→dollars,
+       milliseconds→seconds, bytes→MB, Kelvin→Celsius, Fahrenheit→Celsius)
+       without an explicit "in <unit>" cue in the question.
+    d) Case normalization (UPPER/LOWER) or whitespace trimming is applied to
+       output columns when the question does not request normalized text.
+    The fix is always: "FIX: remove the <transformation> and return the raw
+    column; only apply that conversion when the question explicitly asks for
+    that format / unit / case."
+
 Respond with EXACTLY ONE of these formats:
 
   OK

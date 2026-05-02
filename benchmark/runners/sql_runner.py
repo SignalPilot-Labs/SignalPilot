@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 
 from ..agent.sdk_runner import run_sdk_agent
-from ..agent.sql_prompts import build_sql_agent_prompt
+from ..agent.sql_prompts import build_sql_agent_prompt, build_verifier_subagent
+from ..checks import run_all_checks
 from ..core.audit import save_single_task_run
 from ..core.logging import log, log_separator
 from ..core.mcp import clear_all_connections
@@ -94,10 +95,10 @@ def _register_snowflake_http(instance_id: str, database: str, schema: str) -> bo
         return False
 
 _LARGE_DB_MAX_TURNS: dict[str, int] = {
-    "CMS_DATA": 75,
-    "STACKOVERFLOW": 75,
-    "complex_oracle": 75,
+    # Reserved for DBs that need MORE than the 100-turn default (none currently).
 }
+
+_DEFAULT_MAX_TURNS = 100
 
 
 def _get_skill_names(suite: BenchmarkSuite, backend: DBBackend) -> tuple[str, ...]:
@@ -107,13 +108,21 @@ def _get_skill_names(suite: BenchmarkSuite, backend: DBBackend) -> tuple[str, ..
     For Lite suite, select the dialect-appropriate skill so the agent only sees
     relevant syntax guidance instead of all dialects at once.
     """
+    # Pattern skills (description-triggered) — always loaded so the agent can
+    # invoke them via /<skill-name> when the question matches.
+    pattern_skills: tuple[str, ...] = (
+        "temporal-comparison",
+        "entity-with-metrics",
+        "ranking-with-position",
+        "classification-with-score",
+    )
     _BACKEND_SKILLS: dict[DBBackend, tuple[str, ...]] = {
         DBBackend.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),
         DBBackend.BIGQUERY: ("sql-workflow", "bigquery-sql"),
         DBBackend.SQLITE: ("sql-workflow", "sqlite-sql"),
         DBBackend.DUCKDB: ("sql-workflow", "duckdb-sql"),
     }
-    return _BACKEND_SKILLS.get(backend, ("sql-workflow",))
+    return _BACKEND_SKILLS.get(backend, ("sql-workflow",)) + pattern_skills
 
 
 def _get_max_turns(backend: DBBackend, task: dict, default: int) -> int:
@@ -243,6 +252,7 @@ async def _run_agent(
         label="sql-agent",
         skill_names=skill_names,
         system_prompt=system_prompt,
+        agents=build_verifier_subagent(model),
     )
 
     transcript_path = work_dir / "agent_output.json"
@@ -351,7 +361,7 @@ async def execute_sql_task(
 
     resolved_max_turns: int = (
         max_turns if max_turns is not None
-        else _get_max_turns(backend, task, default=50)
+        else _get_max_turns(backend, task, default=_DEFAULT_MAX_TURNS)
     )
     log(f"Max turns: {resolved_max_turns}")
 
@@ -409,6 +419,7 @@ async def execute_sql_task(
                     .replace("${instance_id}", instance_id)
                     .replace("${connection_name}", connection_name)
                 ),
+                agents=build_verifier_subagent(model),
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({
@@ -439,6 +450,33 @@ async def execute_sql_task(
         delete_local_connection(connection_name)
         if backend == DBBackend.SNOWFLAKE:
             await _delete_connection_http_async(connection_name)
+
+    # Step 4.5: Run Layer-1 harness checks (structural sanity, advisory)
+    # These run BEFORE the official evaluator so failures get logged in
+    # harness_checks.json. They do NOT block evaluation — they're a signal for
+    # the self-improvement loop and a cue if the result looks structurally wrong.
+    try:
+        import pandas as pd
+        result_csv = work_dir / "result.csv"
+        sql_text = (work_dir / "result.sql").read_text() if (work_dir / "result.sql").exists() else ""
+        df = pd.read_csv(result_csv)
+        check_failures = run_all_checks(question=instruction, sql=sql_text, df=df)
+        checks_payload = {
+            "instance_id": instance_id,
+            "n_rows": len(df),
+            "n_cols": len(df.columns),
+            "columns": list(df.columns),
+            "failures": [{"check": cf.check_name, "feedback": cf.feedback} for cf in check_failures],
+        }
+        (work_dir / "harness_checks.json").write_text(json.dumps(checks_payload, indent=2))
+        if check_failures:
+            log_separator(f"HARNESS CHECKS: {len(check_failures)} signal(s)")
+            for cf in check_failures:
+                log(f"  [{cf.check_name}] {cf.feedback}", "WARN")
+        else:
+            log("HARNESS CHECKS: all passed")
+    except Exception as e:
+        log(f"Harness check error (non-fatal): {e}", "WARN")
 
     # Step 5: Evaluate
     log_separator("Step 5: Evaluate against gold standard")
@@ -516,7 +554,7 @@ def main(suite: BenchmarkSuite) -> None:
         max_turns: int = user_max_turns
         log(f"Max turns: {max_turns} (user-specified)")
     else:
-        max_turns = _get_max_turns(backend, task, default=50)
+        max_turns = _get_max_turns(backend, task, default=_DEFAULT_MAX_TURNS)
         log(f"Max turns: {max_turns}")
 
     work_dir = config.work_dir / instance_id

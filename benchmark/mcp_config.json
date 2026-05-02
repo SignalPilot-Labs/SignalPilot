@@ -2,12 +2,14 @@
   "mcpServers": {
     "signalpilot": {
       "type": "stdio",
-      "command": "python3",
-      "args": ["-m", "gateway.mcp_server"],
-      "cwd": "/repo/signalpilot/gateway",
-      "env": {
-        "PYTHONPATH": "/repo/signalpilot/gateway"
-      }
+      "command": "docker",
+      "args": [
+        "exec", "-i",
+        "-e", "SP_DEPLOYMENT_MODE=local",
+        "-e", "SP_MCP_TRANSPORT=stdio",
+        "signalpilot-gateway-1",
+        "python3", "-c", "from gateway.mcp.context import mcp_user_id_var, mcp_org_id_var, mcp_raw_key_var, mcp_client_ip_var, mcp_user_agent_var; mcp_user_id_var.set('local'); mcp_org_id_var.set('local'); mcp_raw_key_var.set(None); mcp_client_ip_var.set('127.0.0.1'); mcp_user_agent_var.set('benchmark-runner'); from gateway.mcp import main; main()"
+      ]
     }
   }
 }

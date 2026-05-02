@@ -44,6 +44,10 @@ SKILL_TOOL_NAMES = (
     "snowflake-sql",
     "bigquery-sql",
     "sqlite-sql",
+    "temporal-comparison",
+    "entity-with-metrics",
+    "ranking-with-position",
+    "classification-with-score",
 )
 
 
@@ -70,7 +74,8 @@ async def run_sdk_agent(
         "cwd": str(work_dir),
         "mcp_servers": load_mcp_servers(),
         "debug_stderr": True,
-        "thinking": {"type": "enabled", "budget_tokens": 20_000},
+        "thinking": {"type": "enabled", "budget_tokens": 32_000},
+        "effort": "medium",
     }
     if system_prompt is not None:
         agent_options_kwargs["system_prompt"] = system_prompt

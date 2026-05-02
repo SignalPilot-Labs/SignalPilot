@@ -237,6 +237,39 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     convention into the final SQL — or pick a more explicit form that does not
     rely on a dialect default."
 
+18. AUTHORITATIVE-SOURCE COEFFICIENTS, ANCHORS, AND UNIVERSE DEFINITIONS:
+    When a calculation requires a numeric coefficient/weight/threshold, a temporal
+    "current" anchor, a geometric or statistical formula, or a definition of the
+    row-universe over which an aggregate is computed, those values must be grounded
+    in either the question text or a source-table value — never hallucinated as
+    in-line constants or implemented inline when a dialect-native function exists.
+    FLAG IT if any of the following is true:
+    a) A numeric literal appears in the SQL (a year, weight, conversion factor,
+       threshold) that is not drawn from the question text and is not joined from
+       a source table. In particular, a hard-coded year used as a "current" anchor
+       (e.g. "2017 - birth_year") should be CURRENT_DATE-derived or pulled from a
+       question-specified literal.
+    b) A geometric, statistical, or scoring formula is implemented inline as raw
+       arithmetic (great-circle via cos/sin, percentile via sort-and-offset,
+       correlation via sum-of-products) when the dialect provides a native
+       function (geodesic distance, percentile_cont, corr, stddev). Inline
+       reimplementations diverge subtly at boundaries.
+    c) The row-universe of an aggregate or ranking is defined as "all rows in
+       table X" without verifying whether the question implies a domain filter
+       (organism, species, region, time window, status, granted-vs-draft, primary
+       record, deduplicated subset). Probe `SELECT DISTINCT col, COUNT(*)` on
+       likely filter columns before defaulting to the full table.
+    d) A multi-value enum was naively cross-mapped to a different multi-value enum
+       (e.g. mapping a 2-value type onto a 4-value type by duplicating each
+       source value into multiple targets) without verifying which target each
+       source value actually corresponds to.
+    The fix is always: "FIX: derive numeric anchors and coefficients from source
+    tables or question text rather than hard-coding; prefer dialect-native
+    geometric/statistical functions over inline arithmetic; probe the schema for
+    a domain-restriction column and apply it to the universe before aggregating;
+    enumerate enum mappings explicitly with sample rows rather than assuming
+    symmetric expansion."
+
 Respond with EXACTLY ONE of these formats:
 
   OK

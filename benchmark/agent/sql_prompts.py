@@ -237,38 +237,80 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     convention into the final SQL — or pick a more explicit form that does not
     rely on a dialect default."
 
-18. AUTHORITATIVE-SOURCE COEFFICIENTS, ANCHORS, AND UNIVERSE DEFINITIONS:
-    When a calculation requires a numeric coefficient/weight/threshold, a temporal
-    "current" anchor, a geometric or statistical formula, or a definition of the
-    row-universe over which an aggregate is computed, those values must be grounded
-    in either the question text or a source-table value — never hallucinated as
-    in-line constants or implemented inline when a dialect-native function exists.
-    FLAG IT if any of the following is true:
-    a) A numeric literal appears in the SQL (a year, weight, conversion factor,
-       threshold) that is not drawn from the question text and is not joined from
-       a source table. In particular, a hard-coded year used as a "current" anchor
-       (e.g. "2017 - birth_year") should be CURRENT_DATE-derived or pulled from a
-       question-specified literal.
-    b) A geometric, statistical, or scoring formula is implemented inline as raw
-       arithmetic (great-circle via cos/sin, percentile via sort-and-offset,
-       correlation via sum-of-products) when the dialect provides a native
-       function (geodesic distance, percentile_cont, corr, stddev). Inline
-       reimplementations diverge subtly at boundaries.
-    c) The row-universe of an aggregate or ranking is defined as "all rows in
-       table X" without verifying whether the question implies a domain filter
-       (organism, species, region, time window, status, granted-vs-draft, primary
-       record, deduplicated subset). Probe `SELECT DISTINCT col, COUNT(*)` on
-       likely filter columns before defaulting to the full table.
-    d) A multi-value enum was naively cross-mapped to a different multi-value enum
-       (e.g. mapping a 2-value type onto a 4-value type by duplicating each
-       source value into multiple targets) without verifying which target each
-       source value actually corresponds to.
-    The fix is always: "FIX: derive numeric anchors and coefficients from source
-    tables or question text rather than hard-coding; prefer dialect-native
-    geometric/statistical functions over inline arithmetic; probe the schema for
-    a domain-restriction column and apply it to the universe before aggregating;
-    enumerate enum mappings explicitly with sample rows rather than assuming
-    symmetric expansion."
+18. UNIVERSE SCOPE — DOES THE FROM CLAUSE MATCH THE QUESTION'S DOMAIN?
+    A table named after a concept (countries, patients, stations, transactions) is
+    rarely a clean set of that concept. It commonly contains roll-up / aggregate
+    rows, sentinel / placeholder rows, and rows from segments outside the question's
+    domain. FLAG IT if any of the following is true:
+    a) The aggregate's denominator or ranking universe is "all rows in table X"
+       and the question's subject implies a narrower set: a single species /
+       organism, a single chain / network / region / market, primary records vs
+       drafts, validated readings vs raw, sovereign entities vs roll-ups
+       ("World", "All countries", a league/conference vs its member teams).
+    b) The table mixes granularities and the agent picked the coarser without
+       verifying — e.g., daily + monthly + annual rows, or per-line + per-document
+       + per-customer rows, distinguished only by a code column.
+    c) An out-of-range / impossible value (a sensor reading orders of magnitude
+       outside the physical range, a negative duration, an obviously-test row)
+       is allowed to win a MAX/MIN or skew an AVG.
+    d) The question enumerates categories the result must cover ("for each
+       mutation type", "for every team", "by status including unknown"), but the
+       JOIN to the dimension table is INNER instead of LEFT, silently dropping
+       categories with no matching fact rows.
+    The fix is always: "FIX: probe `SELECT DISTINCT <segment_col>, COUNT(*)` on
+    the candidate filter columns to see which segments exist; restrict the
+    universe to the question's domain (or LEFT-JOIN from the dimension that
+    enumerates the requested categories); add a sanity range filter when the
+    column is a measurement subject to noise."
+
+19. NUMERIC ANCHOR PROVENANCE — NO MAGIC NUMBERS:
+    Every numeric literal in the SQL must have a traceable origin: drawn from the
+    question text, derived from a CTE that joins a source table, or supplied by a
+    dialect-native function. FLAG IT if any of the following is true:
+    a) A coefficient, weight, conversion factor, or threshold appears as an
+       in-line literal when the schema contains a table or column from which it
+       should be joined.
+    b) A "current" temporal anchor is materialized as a fixed historical year /
+       date (e.g. `2017 - birth_year`) rather than `CURRENT_DATE` / `MAX(date)`
+       on the relevant fact table / a question-specified anchor.
+    c) A scale or sign convention (×100 vs ×1, signed-difference vs ABS,
+       percent vs ratio) is chosen without checking which form the question's
+       output column name implies and which form the source column already
+       carries (a column already in 0–100 should not be multiplied again; a
+       column in 0–1 must be when "percent" is requested).
+    d) A geometric, statistical, or scoring formula is reimplemented inline
+       (great-circle via cos/sin, percentile via sort-and-offset, correlation
+       via sum-of-products, polygon via 4 corner vertices) when the dialect
+       provides a native function or a more accurate construction. Inline
+       reimplementations diverge near boundaries.
+    The fix is always: "FIX: replace every magic literal with a CTE join, a
+    dialect-native function, or a clearly question-derived constant; verify the
+    scale/sign convention by sampling one source value and naming what unit it
+    already is in."
+
+20. GRAIN BOUNDARY — STATE THE GRAIN AT EVERY CTE BOUNDARY:
+    Many quiet failures come from a CTE silently changing grain (one row per
+    document → one row per line; one row per station → one row per
+    station-coordinate-pair) and a downstream aggregate computing at the wrong
+    level. FLAG IT if any of the following is true:
+    a) A CTE selects a key plus attributes that are NOT functionally determined
+       by that key (e.g. `SELECT station_id, lat, lon` when the same station_id
+       has multiple lat/lon rows) — the CTE silently fans out before the
+       aggregate, and the deduplication key downstream is too narrow.
+    b) A proportion / share is computed as `COUNT(matching) / COUNT(*total*)`
+       where the question implies a per-group denominator
+       (per-position, per-bucket, per-category) rather than a global one.
+    c) A roll-up metric is built from already-aggregated per-row averages /
+       percentages multiplied together, when the correct form is to compute the
+       per-row product first and then SUM (avg-of-avgs vs sum-of-products
+       diverge whenever group sizes are uneven).
+    d) A COUNT is taken at "document" grain with `COUNT(DISTINCT doc_id)` when
+       the question's wording (line items, entries, occurrences) implies the
+       finer line grain — or vice-versa.
+    The fix is always: "FIX: write a one-line `-- GRAIN: one row per <X>`
+    comment at the top of every CTE; verify the next CTE's GROUP BY / dedup key
+    matches; for proportions, write the denominator's GROUP BY explicitly; for
+    sum-of-products, push the multiplication inside the SUM."
 
 Respond with EXACTLY ONE of these formats:
 
@@ -382,6 +424,61 @@ WORKFLOW — follow these steps in order:
    c. mcp__signalpilot__describe_table — column details for the 2-3 most relevant tables (only if JSON files lack detail)
    d. mcp__signalpilot__explore_column — distinct values for key categorical columns (use sparingly, 1-2 calls max)
    Do NOT call schema_overview — it is slow. Do NOT spend more than 3 tool calls on discovery.
+
+1.6. UNIVERSE & VOCABULARY PROBE — BEFORE THE FROM CLAUSE IS SETTLED:
+   Public-style datasets routinely mix multiple things inside one table. Picking
+   `FROM table_x` at face value is the single biggest source of silent wrong
+   answers. Spend 1–2 probe queries to settle THREE questions, in this order:
+
+   (a) UNIVERSE — what is the right slice of this table?
+       - Does the table contain roll-up / aggregate rows alongside leaf rows?
+         Check: `SELECT DISTINCT <type-or-region-or-status col>` — look for
+         values like 'World', 'All', 'Total', 'Aggregate', league names,
+         'Unknown', 'Not stated'. Decide whether they belong in your answer.
+       - Does the table mix granularities (daily/monthly/annual; per-line/per-
+         document; primary/secondary)? If a code column distinguishes them,
+         enumerate the codes before filtering.
+       - Does the question's subject narrow the domain (one species, one chain
+         /region/market, granted-not-draft, validated-not-raw)? Apply that
+         filter at the universe boundary, not at the final WHERE.
+       - For metric columns, sanity-check the range (`MIN`, `MAX`, percentiles).
+         Sensor / log / user-reported columns frequently contain impossible
+         values that win MAX/MIN aggregates and skew averages.
+
+   (b) VOCABULARY — does the column you picked carry the question's vocabulary?
+       - When two or more candidate columns could match an English term in the
+         question (name vs alias vs market vs short_name; component vs level vs
+         type), `SELECT DISTINCT <col> LIMIT 10` from each. Pick the column
+         whose value-vocabulary matches the question's wording (abbreviated
+         vs full; acronym vs spelled-out; code vs label).
+       - When the question references an enum / type / category, enumerate ALL
+         distinct values in that column before mapping or filtering. Do not
+         assume the enum has only the values the question mentions — it
+         frequently has more, and the missing values change downstream
+         counts and correlations.
+       - When the question names a function-like operation (hash, fingerprint,
+         distance, percentile), prefer the dialect-native function with that
+         exact name. A different-named function with the same family
+         (HASH vs FARM_FINGERPRINT, cos-law vs ST_DISTANCE) produces
+         different values and breaks reproducibility.
+
+   (c) JOIN-PRESERVATION — when the question enumerates categories the result
+       must cover ("for each X", "by Y including unknown"), the join from the
+       category dimension to the fact must be LEFT (or RIGHT) — never INNER.
+       INNER silently drops categories with zero matching facts; the question's
+       enumeration becomes incomplete without warning.
+
+   Do NOT spend more than 2 tool calls on this step. Output your decisions as a
+   short comment block before SQL writing:
+
+   -- ========== UNIVERSE & VOCABULARY ==========
+   -- Universe: <one-line slice description, e.g. "Homo sapiens proteins in
+   --           lowest-level pathways" or "sovereign countries excluding
+   --           World/income-group aggregates">
+   -- Vocab cols: <col_a chosen because values look like "ABC" not "Full Name X">
+   -- Enums: <field=values list, e.g. "type ∈ {Gain, Loss, Amplification, Deletion}">
+   -- Join policy: <"LEFT from teams to mutations to keep no-mutation group">
+   -- ===========================================
 
 1.5. WRITE THE OUTPUT COLUMN SPEC — MANDATORY, BEFORE ANY SQL:
    This is the single most important step. Skipping it is the #1 cause of failure.

@@ -164,12 +164,17 @@ def sample_round(
             break
 
     # ── targeted: previously-FAIL tasks not run in cooldown ────────────────────
-    target_candidates = [t for t in failing if t not in recent and t not in fresh]
+    # CRITICAL: must exclude holdout (registry can contain holdout tasks from
+    # round 0 seeding; the sampler must never include them in any future round).
+    target_candidates = [t for t in failing if t not in recent and t not in fresh and t not in holdout]
     rng.shuffle(target_candidates)
     targeted = target_candidates[:n_target]
 
-    # ── regression: random from passing-pool, exclude already-picked ───────────
-    reg_candidates = [t for t in passing if t not in recent and t not in fresh and t not in targeted]
+    # ── regression: random from passing-pool, exclude already-picked + holdout ─
+    reg_candidates = [
+        t for t in passing
+        if t not in recent and t not in fresh and t not in targeted and t not in holdout
+    ]
     rng.shuffle(reg_candidates)
     regression = reg_candidates[:n_reg]
 

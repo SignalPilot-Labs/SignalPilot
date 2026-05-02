@@ -205,6 +205,36 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     listings, or a sample SELECT joining candidate tables) to identify the relation
     table; route the join through that edge in the direction the question asks."
 
+17. COMPUTED-VALUE CONVENTION SPOT-CHECK — VERIFY ARITHMETIC AND BOUNDARIES:
+    Whenever the SQL produces a derived numeric value via date arithmetic, time
+    bucketing, range counting, or window-bucket assignment, the agent must verify
+    the convention against a known sample row before committing. Different conventions
+    silently produce values that differ by 1, by an off-by-one window, or by a
+    miscategorized boundary case. FLAG IT if any of the following is true:
+    a) DATE_DIFF / DATEDIFF / DATEADD-style elapsed counting was used without the
+       agent verifying whether the gold-style convention counts both endpoints,
+       only one endpoint, or neither. (Example: months between Jan-15 and Mar-15
+       can be 2, 3, or "2 active months including both" depending on definition.)
+    b) DATE_TRUNC, calendar bucketing, or week-of-year was used without verifying
+       which calendar convention applies (Sunday-start vs Monday-start vs
+       ISO Monday). Many dialects default differently; the question rarely says.
+    c) Fixed-time bucketing via DIV(seconds, N), FLOOR(time/N), or similar
+       integer-division was used to identify "events within N seconds/minutes
+       of each other". This silently misses cross-boundary groups: a window that
+       starts at T=N-1 and another at T=N+1 land in different buckets despite
+       being only 2 apart. Use a self-join with ABS(diff) <= N instead.
+    d) Window functions (ROW_NUMBER, RANK, DENSE_RANK, NTILE, percentile) were
+       applied with a partition or order-by that the agent did not verify — in
+       particular, ranking on a column whose distribution has heavy ties or
+       whose ordering convention (NULLS FIRST/LAST) differs by dialect.
+    e) Percentile / median was computed via a function whose continuous-vs-discrete
+       behavior was not verified (PERCENTILE_CONT vs PERCENTILE_DISC produce
+       different values when the percentile lands between two data points).
+    The fix is always: "FIX: run a small probe SELECT on a row whose answer the
+    agent can verify by hand, confirm the computed value matches, then port the
+    convention into the final SQL — or pick a more explicit form that does not
+    rely on a dialect default."
+
 Respond with EXACTLY ONE of these formats:
 
   OK

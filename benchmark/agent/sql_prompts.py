@@ -312,6 +312,62 @@ SQL-correctness rules — do not infer anything about the expected answer's exac
     matches; for proportions, write the denominator's GROUP BY explicitly; for
     sum-of-products, push the multiplication inside the SUM."
 
+21. POPULATION QUALIFIER PROPAGATED TO EVERY CTE:
+    If the question contains a population-narrowing adjective ("delivered",
+    "completed", "active", "qualified", "primary", "validated", "approved",
+    "shipped", "paid", "refunded") that the answer must respect, the predicate
+    enforcing that adjective MUST appear in EVERY CTE that touches the fact
+    table — not only at the top-level WHERE. FLAG IT if any of the following
+    is true:
+    a) An NTILE / RANK / PERCENT_RANK / window aggregate is computed inside a
+       CTE that does NOT carry the population predicate, but the final SELECT
+       does. (The window's bucket boundaries shift because they were computed
+       against the un-filtered universe.)
+    b) Per-entity aggregates (SUM / COUNT / MAX) feed a downstream join, and
+       only some of the contributing CTEs carry the predicate.
+    c) A "base" CTE was defined that filters the population, but a downstream
+       CTE bypasses it and re-reads the raw table.
+    The fix is always: "FIX: factor the population predicate into a single
+    `base` CTE (`SELECT * FROM <fact> WHERE <predicate>`) and have every
+    downstream CTE read from `base` instead of the raw table — OR repeat the
+    same predicate in every contributing CTE's WHERE clause."
+
+22. MODIFIER-BOUND DATE COLUMN — MATCH THE TIMESTAMP TO THE STATE:
+    If the question pairs a state modifier with a temporal grouping ("delivered
+    orders per month", "shipped volume by quarter", "paid invoices in 2017"),
+    the date column used for the GROUP BY (and for the year/quarter WHERE) must
+    be the state-transition timestamp for that modifier (e.g.
+    `order_delivered_customer_date` for delivered, `paid_at` for paid),
+    NOT the generic creation timestamp (`order_purchase_timestamp`,
+    `created_at`). FLAG IT if any of the following is true:
+    a) The entity table has multiple date columns (a creation timestamp and
+       one or more state-transition timestamps) AND the SQL groups by the
+       creation timestamp despite the question naming a state modifier.
+    b) The year/quarter filter and the GROUP BY use DIFFERENT date columns
+       (orders purchased in Dec 2017 but delivered in Jan 2018 are split
+       inconsistently between buckets).
+    c) The state-transition column is grouped without an `IS NOT NULL`
+       guard — rows that never reached that state pollute the buckets.
+    The fix is always: "FIX: replace the generic `<creation_ts>` with the
+    state-transition column matching the modifier in BOTH the GROUP BY and the
+    year/period filter; add `<state_transition_col> IS NOT NULL`."
+
+23. CALENDAR-DECOMPOSITION VS COMPONENT-SUBTRACT:
+    If the question asks for the difference between two dates expressed in
+    multiple units (years AND months AND days, or any pair) AND the SQL takes
+    each unit's difference independently with strftime / EXTRACT and combines
+    them (especially with ABS on each component before summing), FLAG IT.
+    Independent component subtraction silently overestimates the span whenever
+    the smaller-unit residual is negative (Sep-10 → Apr-13 component-subtracts
+    to 5y −5m 3d, which after ABS becomes 5y 5m 3d instead of the correct
+    4y 7m 3d). The correct form is calendar age decomposition: full years
+    first (subtracting one when end's month-day is earlier than start's),
+    then residual months (subtracting one when end's day is earlier), then
+    residual days. The fix is always: "FIX: replace independent component
+    subtraction with calendar-age decomposition — borrow across boundaries
+    (years−1 when end-month-day < start-month-day; months−1 when end-day <
+    start-day) before assembling the final fractional value."
+
 Respond with EXACTLY ONE of these formats:
 
   OK
@@ -415,6 +471,65 @@ DATABASE: SignalPilot connection '{connection_name}' (backend: {db_backend.value
 
 WORKFLOW — follow these steps in order:
 
+0. LOAD ALL RELEVANT SKILLS — MANDATORY, NON-NEGOTIABLE, BEFORE ANY OTHER WORK:
+
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ⚠  YOU MUST LOAD EVERY APPLICABLE SKILL BEFORE WRITING SQL.  ⚠
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   Skills are in .claude/skills/. Each skill targets ONE recurring failure mode.
+   Skipping a skill that applies is the #1 cause of avoidable failures on this
+   task suite. THIS IS NOT OPTIONAL.
+
+   PROCEDURE — execute step (a) and (b) before ANY tool call:
+
+   (a) SCAN the question for trigger words. For EACH trigger you find, you MUST
+       load the matching skill. Multiple skills almost always apply — load
+       ALL of them. Loading three skills is normal; loading one is suspicious;
+       loading zero is wrong.
+
+       | Trigger in the question                                          | Skill you MUST load |
+       |------------------------------------------------------------------|---------------------|
+       | ANY question (always)                                            | output-column-spec  |
+       | "for each X" / "per X" / "by X" / "list each X"                  | entity-with-metrics |
+       | "top N" / "highest" / "lowest" / "ranked" / "1st 2nd 3rd"        | ranking-with-position |
+       | "tier" / "grade" / "quintile" / "category" / "classify"          | classification-with-score |
+       | "compare X to Y" / "year over year" / "before vs after" / two named periods | temporal-comparison |
+       | "considering only X" / "X only" / a population-narrowing adj    | qualifier-applies-everywhere |
+       | "delivered" / "shipped" / "completed" / "paid" + "per month/year/quarter" | modifier-bound-date-column |
+       | "Y years M months D days" / multi-unit date difference           | calendar-decomposition-vs-component-subtract |
+       | "average of [entity] averages" / "mean per-X mean"               | avg-of-avgs-vs-pooled |
+
+   (b) LOAD each matched skill by reading its file:
+         Read: .claude/skills/<skill-name>/SKILL.md
+       For skills with sub-files, read those too. State out loud which skills
+       you loaded and why. Example:
+
+         "Question mentions 'top 5 with highest avg X along with their batting
+          averages, considering only delivered orders'. Loading:
+          - output-column-spec  (always)
+          - ranking-with-position  (top 5, highest)
+          - entity-with-metrics  (per-player, two metrics)
+          - qualifier-applies-everywhere  (considering only delivered)
+          - modifier-bound-date-column  (delivered + temporal)"
+
+   (c) After loading, the loaded skill's instructions are PART OF THE WORKFLOW.
+       Follow every checklist and verification step the skill prescribes — the
+       OUTPUT COLUMN SPEC block, the population predicate placement, the
+       trailing-connector parsing — none of these are optional.
+
+   FAILURE MODES of skipping this step (all observed in past runs):
+   - Missing output column ("along with their X" silently dropped)
+   - Population qualifier applied at the final WHERE only, not in scoring CTEs
+   - Wrong date column for state-modifier + temporal-bucketing questions
+   - Component-subtraction date math instead of calendar decomposition
+   - Pooled mean returned when avg-of-avgs was asked
+   Each of these is fixed by the skill that exists for it. LOAD THE SKILL.
+
+   You may NOT skip this step "to save turns". Loading skills is cheap (file
+   reads). Returning a wrong answer wastes the entire run. The arithmetic is
+   not in your favor — load every applicable skill, every time.
+
 1. SCHEMA DISCOVERY (minimize MCP calls):
    a. READ LOCAL SCHEMA FILES FIRST — if a schema/ directory and DDL.csv exist in your workdir:
       - Read DDL.csv for CREATE TABLE statements (gives you all table names + columns)
@@ -476,7 +591,7 @@ WORKFLOW — follow these steps in order:
    --           lowest-level pathways" or "sovereign countries excluding
    --           World/income-group aggregates">
    -- Vocab cols: <col_a chosen because values look like "ABC" not "Full Name X">
-   -- Enums: <field=values list, e.g. "type ∈ {Gain, Loss, Amplification, Deletion}">
+   -- Enums: <field=values list, e.g. "type ∈ {{Gain, Loss, Amplification, Deletion}}">
    -- Join policy: <"LEFT from teams to mutations to keep no-mutation group">
    -- ===========================================
 
@@ -502,8 +617,8 @@ WORKFLOW — follow these steps in order:
    • Each classification ("grade", "tier", "quintile") → BOTH the numeric score AND
      the label column
    • Any "overall/total" alongside "for each X" → a roll-up column or row
-   You may also load the /output-column-spec skill for the full procedure. Either way,
-   you MUST produce the OUTPUT COLUMN SPEC block before SQL writing.
+   You MUST have already loaded /output-column-spec at step 0 — apply its full
+   procedure here. Produce the OUTPUT COLUMN SPEC block before SQL writing.
 
 2. PLAN THE QUERY (before writing SQL):
    - Read the question for cardinality clues: "for each X" = GROUP BY, "top N" = LIMIT/QUALIFY,

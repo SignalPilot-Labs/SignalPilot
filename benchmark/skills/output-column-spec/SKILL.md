@@ -61,6 +61,22 @@ If the metric has a qualifier in the question, the qualifier MUST be in the colu
 - "highest <unit>" → highest_<unit>
 - "best performing" → best_X
 
+### 3a. Trailing connectors attach an EXTRA metric (the second-metric trap)
+A small set of phrases attach a *second* metric onto a question that's already named one. Each one introduces an additional output column you must compute:
+
+- "**along with** their X" → add column for X
+- "**and (also) their** X" → add column for X
+- "**as well as** X" → add column for X
+- "**together with** X" → add column for X
+- "**including** X" → add column for X (when X is a metric, not a row filter)
+- "**plus** X" → add column for X
+- "**, showing** X" / "**, displaying** X" → add column for X
+- "**and provide** X" / "**and report** X" → add column for X
+
+These connectors are easy to miss because the sentence already has a primary metric and the second one feels like commentary. It isn't — it's a required column. The second metric usually has a *different formula* than the first (e.g., "top 5 X by avg runs per match, **along with their batting averages**" — `avg runs per match` and `batting average` are computed differently).
+
+When you see one of these connectors, treat what follows as a new line in the OUTPUT COLUMN SPEC, with its own semantic.
+
 ### 4. Time periods (when the question compares)
 If the question names two or more periods (e.g., "2019 and 2020", "before and after"):
 - Add a column for each period's value, named for the period:

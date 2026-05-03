@@ -116,6 +116,10 @@ def _get_skill_names(suite: BenchmarkSuite, backend: DBBackend) -> tuple[str, ..
         "entity-with-metrics",
         "ranking-with-position",
         "classification-with-score",
+        "qualifier-applies-everywhere",
+        "calendar-decomposition-vs-component-subtract",
+        "modifier-bound-date-column",
+        "avg-of-avgs-vs-pooled",
     )
     _BACKEND_SKILLS: dict[DBBackend, tuple[str, ...]] = {
         DBBackend.SNOWFLAKE: ("sql-workflow", "snowflake-sql"),

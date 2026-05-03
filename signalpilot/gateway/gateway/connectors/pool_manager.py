@@ -312,6 +312,14 @@ class PoolManager:
                     local_port,
                 )
 
+            # Re-validate hostname against SSRF denylist immediately before
+            # connecting. Prevents DNS rebinding TOCTOU: the hostname was checked
+            # at save time, but the driver re-resolves DNS here.
+            if is_cloud_mode() and db_type in _TUNNEL_CAPABLE_DB_TYPES:
+                from ..network import validate_connection_host
+                host, _ = _extract_host_port(actual_conn_str, db_type)
+                validate_connection_host(host)
+
             # Track keepalive interval if provided
             keepalive = credential_extras.get("keepalive_interval", 0) if credential_extras else 0
 

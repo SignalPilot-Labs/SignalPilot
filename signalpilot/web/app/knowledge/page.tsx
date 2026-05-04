@@ -1030,7 +1030,7 @@ export default function KnowledgePage() {
                 ) : (
                   <div className="text-[13px] text-[var(--color-text-muted)] leading-relaxed break-words min-h-[400px]">
                     {selectedDoc.body
-                      ? <MarkdownView source={selectedDoc.body} />
+                      ? <MarkdownView source={selectedDoc.body} docs={docs ?? []} onNavigate={handleSelectDoc} />
                       : <span className="font-mono text-[var(--color-text-dim)]">— no content —</span>
                     }
                   </div>
@@ -1158,11 +1158,61 @@ export default function KnowledgePage() {
 
 const SAFE_URL = /^https?:\/\//;
 
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
+// Priority order for wikilink resolution when multiple docs share the same title
+const CATEGORY_PRIORITY: KnowledgeDoc["category"][] = [
+  "understanding", "conventions", "decisions", "domain-rules", "debugging", "quirks",
+];
+
+function resolveWikilink(
+  target: string,
+  docs: KnowledgeDoc[],
+): KnowledgeDoc | null {
+  const trimmed = target.trim();
+  if (!trimmed) return null;
+
+  let catRaw: string | null = null;
+  let titleRaw: string;
+
+  const slashIdx = trimmed.indexOf("/");
+  if (slashIdx !== -1) {
+    catRaw = trimmed.slice(0, slashIdx).toLowerCase();
+    titleRaw = trimmed.slice(slashIdx + 1).toLowerCase();
+  } else {
+    titleRaw = trimmed.toLowerCase();
+  }
+
+  const candidates = docs.filter((doc) => {
+    if (doc.status !== "active") return false;
+    if (catRaw !== null && doc.category.toLowerCase() !== catRaw) return false;
+    return doc.title.toLowerCase() === titleRaw;
+  });
+
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  // Sort by CATEGORY_PRIORITY index ascending; stable (keeps input order on ties)
+  const sorted = candidates.slice().sort((a, b) => {
+    const ai = CATEGORY_PRIORITY.indexOf(a.category);
+    const bi = CATEGORY_PRIORITY.indexOf(b.category);
+    const ap = ai === -1 ? CATEGORY_PRIORITY.length : ai;
+    const bp = bi === -1 ? CATEGORY_PRIORITY.length : bi;
+    return ap - bp;
+  });
+
+  return sorted[0];
+}
+
+type RenderCtx = {
+  docs: KnowledgeDoc[];
+  onNavigate: (id: string) => void;
+};
+
+function renderInline(text: string, keyPrefix: string, ctx: RenderCtx): ReactNode[] {
   const nodes: ReactNode[] = [];
-  // Pattern order: backtick code, bold, italic (** before *), link, underscore italic
+  // Pattern order: backtick code, bold, italic (** before *), wikilink, external link, underscore italic
+  // Wikilink MUST come before the [label](url) branch so [[x]] is not partially eaten
   const pattern =
-    /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))|(_(?=\S)([^_]+?)(?<=\S)_)/g;
+    /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[\[[^\]\n]+\]\])|(\[[^\]]+\]\([^)]+\))|(_(?=\S)([^_]+?)(?<=\S)_)/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let idx = 0;
@@ -1179,12 +1229,38 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
         </code>,
       );
     } else if (full.startsWith("**")) {
-      nodes.push(<strong key={k}>{renderInline(full.slice(2, -2), k)}</strong>);
+      nodes.push(<strong key={k}>{renderInline(full.slice(2, -2), k, ctx)}</strong>);
     } else if (full.startsWith("*")) {
-      nodes.push(<em key={k}>{renderInline(full.slice(1, -1), k)}</em>);
+      nodes.push(<em key={k}>{renderInline(full.slice(1, -1), k, ctx)}</em>);
+    } else if (full.startsWith("[[")) {
+      const inner = full.slice(2, -2);
+      const resolved = resolveWikilink(inner, ctx.docs);
+      if (resolved) {
+        nodes.push(
+          <button
+            key={k}
+            type="button"
+            onClick={() => ctx.onNavigate(resolved.id)}
+            className="text-[var(--color-success)] underline decoration-dotted underline-offset-2 hover:opacity-80 bg-transparent border-0 p-0 cursor-pointer"
+            title={`${resolved.category}/${resolved.title}`}
+          >
+            {inner}
+          </button>,
+        );
+      } else {
+        nodes.push(
+          <span
+            key={k}
+            className="text-[var(--color-error)] opacity-70 line-through decoration-[var(--color-error)]/40"
+            title="broken link — no matching doc"
+          >
+            {`[[${inner}]]`}
+          </span>,
+        );
+      }
     } else if (full.startsWith("_")) {
       const inner = full.replace(/^_|_$/g, "");
-      nodes.push(<em key={k}>{renderInline(inner, k)}</em>);
+      nodes.push(<em key={k}>{renderInline(inner, k, ctx)}</em>);
     } else if (full.startsWith("[")) {
       const labelMatch = full.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (labelMatch) {
@@ -1212,7 +1288,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-function renderMarkdown(src: string): ReactNode[] {
+function renderMarkdown(src: string, ctx: RenderCtx): ReactNode[] {
   const lines = src.split("\n");
   const out: ReactNode[] = [];
   let i = 0;
@@ -1226,7 +1302,7 @@ function renderMarkdown(src: string): ReactNode[] {
     const k = key();
     out.push(
       <p key={k} className="my-2">
-        {renderInline(para.join(" "), k)}
+        {renderInline(para.join(" "), k, ctx)}
       </p>,
     );
     para = [];
@@ -1257,21 +1333,21 @@ function renderMarkdown(src: string): ReactNode[] {
     if (line.startsWith("### ")) {
       flushPara();
       const k = key();
-      out.push(<h3 key={k} className="text-[13px] font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(4), k)}</h3>);
+      out.push(<h3 key={k} className="text-[13px] font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(4), k, ctx)}</h3>);
       i++;
       continue;
     }
     if (line.startsWith("## ")) {
       flushPara();
       const k = key();
-      out.push(<h2 key={k} className="text-sm font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(3), k)}</h2>);
+      out.push(<h2 key={k} className="text-sm font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(3), k, ctx)}</h2>);
       i++;
       continue;
     }
     if (line.startsWith("# ")) {
       flushPara();
       const k = key();
-      out.push(<h1 key={k} className="text-base font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(2), k)}</h1>);
+      out.push(<h1 key={k} className="text-base font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(2), k, ctx)}</h1>);
       i++;
       continue;
     }
@@ -1282,7 +1358,7 @@ function renderMarkdown(src: string): ReactNode[] {
       const items: ReactNode[] = [];
       while (i < lines.length && /^[-*] /.test(lines[i])) {
         const ik = key();
-        items.push(<li key={ik}>{renderInline(lines[i].slice(2), ik)}</li>);
+        items.push(<li key={ik}>{renderInline(lines[i].slice(2), ik, ctx)}</li>);
         i++;
       }
       out.push(<ul key={key()} className="list-disc pl-5 my-1">{items}</ul>);
@@ -1295,7 +1371,7 @@ function renderMarkdown(src: string): ReactNode[] {
       const items: ReactNode[] = [];
       while (i < lines.length && /^\d+\. /.test(lines[i])) {
         const ik = key();
-        items.push(<li key={ik}>{renderInline(lines[i].replace(/^\d+\. /, ""), ik)}</li>);
+        items.push(<li key={ik}>{renderInline(lines[i].replace(/^\d+\. /, ""), ik, ctx)}</li>);
         i++;
       }
       out.push(<ol key={key()} className="list-decimal pl-5 my-1">{items}</ol>);
@@ -1318,6 +1394,15 @@ function renderMarkdown(src: string): ReactNode[] {
   return out;
 }
 
-function MarkdownView({ source }: { source: string }) {
-  return <>{renderMarkdown(source)}</>;
+function MarkdownView({
+  source,
+  docs,
+  onNavigate,
+}: {
+  source: string;
+  docs: KnowledgeDoc[];
+  onNavigate: (id: string) => void;
+}) {
+  const ctx: RenderCtx = { docs, onNavigate };
+  return <>{renderMarkdown(source, ctx)}</>;
 }

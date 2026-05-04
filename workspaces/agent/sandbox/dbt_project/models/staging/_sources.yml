@@ -1,0 +1,29 @@
+version: 2
+
+sources:
+  - name: raw_ecommerce
+    schema: raw_ecommerce
+    tables:
+      - name: customers
+      - name: orders
+      - name: order_items
+      - name: payments
+      - name: products
+      - name: categories
+      - name: reviews
+
+  - name: raw_marketing
+    schema: raw_marketing
+    tables:
+      - name: campaigns
+      - name: attribution
+
+  - name: raw_support
+    schema: raw_support
+    tables:
+      - name: support_tickets
+
+  - name: raw_product
+    schema: raw_product
+    tables:
+      - name: product_catalog

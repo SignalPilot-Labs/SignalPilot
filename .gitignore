@@ -7,6 +7,7 @@ CLAUDE.md
 __pycache__/
 *.pyc
 *.egg-info/
+.venv/
 *.tsbuildinfo
 .next/
 node_modules/

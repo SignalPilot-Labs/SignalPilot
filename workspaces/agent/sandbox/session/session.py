@@ -16,7 +16,6 @@ from claude_agent_sdk.types import (
 )
 
 from constants import SESSION_EVENT_QUEUE_SIZE
-from db.constants import resolve_sdk_model
 from session.gate import SessionGate
 from session.hooks import SessionHooks
 from session.security import SecurityGate
@@ -113,9 +112,9 @@ class Session:
         agents = parse_agents(agents_raw) if agents_raw else None
 
         return ClaudeAgentOptions(
-            model=resolve_sdk_model(opts["model"]),
+            model=opts["model"],
             fallback_model=(
-                resolve_sdk_model(opts["fallback_model"])
+                opts["fallback_model"]
                 if opts.get("fallback_model")
                 else None
             ),

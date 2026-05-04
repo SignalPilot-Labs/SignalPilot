@@ -1,7 +1,7 @@
-"""Session utility functions — DB logging, serialization, agent parsing.
+"""Session utility functions — logging, serialization, agent parsing.
 
-Shared by SessionManager and Session. All DB writes go directly to
-PostgreSQL — no round-trip to the agent container.
+Shared by SessionManager and Session. Audit and tool calls are logged
+to stdout (DB persistence deferred to a future round).
 """
 
 import json
@@ -22,8 +22,6 @@ from claude_agent_sdk.types import (
 )
 
 from constants import INPUT_CONTENT_MAX_LEN, INPUT_SUMMARY_MAX_LEN
-from db.connection import get_session_factory
-from db.models import AuditLog, ToolCall
 from models import ToolContext
 
 log = logging.getLogger("sandbox.session_utils")
@@ -36,38 +34,27 @@ async def log_tool_call(
     input_data: dict | None,
     output_data: dict | None,
 ) -> None:
-    """Insert a tool call row into the database."""
-    try:
-        async with get_session_factory()() as s:
-            s.add(
-                ToolCall(
-                    run_id=run_id,
-                    phase=phase,
-                    tool_name=context.tool_name,
-                    input_data=input_data,
-                    output_data=output_data,
-                    duration_ms=context.duration_ms,
-                    permitted=True,
-                    deny_reason=None,
-                    agent_role=context.role,
-                    tool_use_id=context.tool_use_id,
-                    session_id=context.session_id,
-                    agent_id=context.agent_id,
-                )
-            )
-            await s.commit()
-    except Exception as e:
-        log.warning("Failed to log tool call: %s", e)
+    """Log a tool call. DB persistence deferred to a future round."""
+    log.info(
+        "TOOL [%s] %s %s %s (%sms) in=%s out=%s",
+        run_id,
+        phase,
+        context.tool_name,
+        context.tool_use_id,
+        context.duration_ms,
+        bool(input_data),
+        bool(output_data),
+    )
 
 
 async def log_audit(run_id: str, event_type: str, details: dict) -> None:
-    """Insert an audit log row into the database."""
-    try:
-        async with get_session_factory()() as s:
-            s.add(AuditLog(run_id=run_id, event_type=event_type, details=details))
-            await s.commit()
-    except Exception as e:
-        log.warning("Failed to log audit event: %s", e)
+    """Log an audit event. DB persistence deferred to a future round."""
+    log.info(
+        "AUDIT [%s] %s: %s",
+        run_id,
+        event_type,
+        json.dumps(details, default=str)[:500],
+    )
 
 
 def parse_agents(raw: dict[str, dict]) -> dict[str, AgentDefinition]:

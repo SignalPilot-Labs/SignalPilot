@@ -4,6 +4,10 @@ WORKDIR /app
 ARG WORKSPACES_API_URL=http://workspaces-api:3400
 
 ENV WORKSPACES_API_URL=$WORKSPACES_API_URL
+ENV SP_LOCAL_API_KEY=build-placeholder
+ENV WORKSPACES_LOCAL_CHARTS_DIR=/tmp
+ENV WORKSPACES_LOCAL_DBT_LINKS_DIR=/tmp
+ENV WORKSPACES_LOCAL_AGENT_RUNS_DIR=/tmp
 
 # Copy only the workspaces/web package files first for layer caching
 COPY workspaces/web/package.json workspaces/web/package-lock.json* ./

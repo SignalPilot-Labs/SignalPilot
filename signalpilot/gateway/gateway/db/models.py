@@ -318,3 +318,51 @@ class GatewayApiKey(GatewayBase):
         Index("ix_gw_api_keys_org", "org_id"),
         Index("ix_gw_api_keys_hash", "key_hash"),
     )
+
+
+class GatewayKnowledgeDoc(GatewayBase):
+    """Knowledge Base documents — org/project/connection-scoped markdown docs."""
+
+    __tablename__ = "gateway_knowledge_docs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    scope_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    proposed_by_agent: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_knowledge_org_scope", "org_id", "scope", "scope_ref"),
+        Index("idx_knowledge_org_status", "org_id", "status"),
+        Index("idx_knowledge_org_cat", "org_id", "category"),
+    )
+
+
+class GatewayKnowledgeEdit(GatewayBase):
+    """Edit history for Knowledge Base documents."""
+
+    __tablename__ = "gateway_knowledge_edits"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    body_before: Mapped[str] = mapped_column(Text, nullable=False)
+    bytes_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    edited_at: Mapped[float] = mapped_column(Float, nullable=False)
+    edited_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    edit_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    __table_args__ = (
+        Index("idx_knowledge_edits_doc", "doc_id", "edited_at"),
+        Index("idx_knowledge_edits_org", "org_id"),
+    )

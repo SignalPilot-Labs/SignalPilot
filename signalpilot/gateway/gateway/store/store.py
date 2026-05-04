@@ -15,6 +15,7 @@ import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
+import gateway.store.knowledge as knowledge_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
 import gateway.store.settings as settings_mod
@@ -35,6 +36,7 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from gateway.models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeEdit, KnowledgeUsage
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
@@ -650,3 +652,189 @@ class Store:
         called from the admin-only security_status endpoint which needs a system-wide count.
         """
         return await settings_mod.get_credentials_needing_rotation(self.session)
+
+    # ─── Knowledge Base ──────────────────────────────────────────────────
+
+    async def _knowledge_limits(self):
+        """Resolve the org's plan limits for knowledge enforcement."""
+        from gateway.governance.plan_limits import get_org_limits
+
+        return await get_org_limits(self._require_org_id())
+
+    async def list_knowledge_docs(
+        self,
+        *,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        status: str = "active",
+        include_body: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[KnowledgeDoc]:
+        oid = self._require_org_id()
+        return await knowledge_mod.list_knowledge_docs(
+            self.session,
+            org_id=oid,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            status=status,
+            include_body=include_body,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def get_knowledge_doc(
+        self, doc_id: str, *, include_body: bool = True, bump_view: bool = False
+    ) -> KnowledgeDoc | None:
+        import asyncio
+
+        oid = self._require_org_id()
+        row = await knowledge_mod.get_knowledge_doc(
+            self.session, org_id=oid, doc_id=doc_id, include_body=include_body
+        )
+        if row is None:
+            return None
+        doc = knowledge_mod._row_to_doc(row, include_body=include_body)
+        if bump_view:
+            asyncio.create_task(self.increment_knowledge_view(doc_id))
+        return doc
+
+    async def get_knowledge_doc_by_key(
+        self,
+        *,
+        scope: str,
+        scope_ref: str | None,
+        category: str,
+        title: str,
+        bump_view: bool = False,
+    ) -> KnowledgeDoc | None:
+        import asyncio
+
+        oid = self._require_org_id()
+        row = await knowledge_mod.get_knowledge_doc_by_key(
+            self.session,
+            org_id=oid,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            title=title,
+        )
+        if row is None:
+            return None
+        doc = knowledge_mod._row_to_doc(row, include_body=True)
+        if bump_view:
+            asyncio.create_task(self.increment_knowledge_view(doc.id))
+        return doc
+
+    async def insert_knowledge_doc(
+        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.insert_knowledge_doc(
+            self.session,
+            org_id=oid,
+            payload=payload,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def upsert_knowledge_doc(
+        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.upsert_knowledge_doc(
+            self.session,
+            org_id=oid,
+            payload=payload,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def update_knowledge_body(
+        self,
+        doc_id: str,
+        *,
+        body: str,
+        user_id: str | None,
+        agent: str | None = None,
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.update_knowledge_body(
+            self.session,
+            org_id=oid,
+            doc_id=doc_id,
+            body=body,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def archive_knowledge_doc(self, doc_id: str) -> bool:
+        oid = self._require_org_id()
+        return await knowledge_mod.archive_knowledge_doc(self.session, org_id=oid, doc_id=doc_id)
+
+    async def approve_knowledge_doc(self, doc_id: str, *, user_id: str | None) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        return await knowledge_mod.approve_knowledge_doc(
+            self.session, org_id=oid, doc_id=doc_id, user_id=user_id
+        )
+
+    async def list_knowledge_edits(self, doc_id: str, *, limit: int = 20) -> list[KnowledgeEdit]:
+        oid = self._require_org_id()
+        return await knowledge_mod.list_knowledge_edits(
+            self.session, org_id=oid, doc_id=doc_id, limit=limit
+        )
+
+    async def search_knowledge(
+        self,
+        *,
+        query: str,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        bump_view: bool = True,
+    ) -> list[KnowledgeDoc]:
+        import asyncio
+
+        oid = self._require_org_id()
+        docs = await knowledge_mod.search_knowledge(
+            self.session,
+            org_id=oid,
+            query=query,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            limit=limit,
+        )
+        if bump_view:
+            for doc in docs:
+                asyncio.create_task(self.increment_knowledge_view(doc.id))
+        return docs
+
+    async def get_knowledge_usage(self) -> KnowledgeUsage:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        return await knowledge_mod.get_knowledge_usage(self.session, org_id=oid, limits=limits)
+
+    async def increment_knowledge_view(self, doc_id: str) -> None:
+        """Best-effort fire-and-forget view counter increment."""
+        oid = self._require_org_id()
+        from gateway.db.engine import get_session_factory
+
+        factory = get_session_factory()
+        async with factory() as session:
+            await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)

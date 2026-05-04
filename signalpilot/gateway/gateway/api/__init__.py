@@ -13,6 +13,7 @@ from .connections import router as connections_router
 from .files import router as files_router
 from .health import router as health_router
 from .keys import router as keys_router
+from .knowledge import router as knowledge_router
 from .metrics import router as metrics_router
 from .projects import router as projects_router
 from .query import router as query_router
@@ -44,3 +45,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(keys_router)
     app.include_router(security_router)
     app.include_router(byok_router)
+    app.include_router(knowledge_router)

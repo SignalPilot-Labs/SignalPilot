@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
+from ..dbt_proxy.api import router as dbt_proxy_router
 from ..runtime.mode import is_cloud_mode
 from .audit import router as audit_router
 from .budget import router as budget_router
@@ -44,3 +45,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(keys_router)
     app.include_router(security_router)
     app.include_router(byok_router)
+    app.include_router(dbt_proxy_router)

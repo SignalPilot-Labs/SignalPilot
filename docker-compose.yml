@@ -18,6 +18,7 @@ services:
       - "5601:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
+      - ./scripts/seed_dbt_learn.sql:/docker-entrypoint-initdb.d/01-seed.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-signalpilot}"]
       interval: 5s
@@ -34,10 +35,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
       SP_DATA_DIR: /data
-      SP_SANDBOX_MANAGER_URL: http://sandbox:8080
+      SP_SANDBOX_MANAGER_URL: http://sp-sandbox:8080
       SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_DEPLOYMENT_MODE: local
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
+      SP_MCP_ALLOWED_HOSTS: gateway
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
@@ -47,7 +49,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      sandbox:
+      sp-sandbox:
         condition: service_healthy
     restart: unless-stopped
 
@@ -63,7 +65,7 @@ services:
       - gateway
     restart: unless-stopped
 
-  sandbox:
+  sp-sandbox:
     build:
       context: ./sp-sandbox
       dockerfile: ../Dockerfile.sandbox
@@ -85,6 +87,61 @@ services:
       SP_MAX_VMS: "10"
     volumes:
       - ${HOST_DATA_DIR:-~}:/host-data:ro
+    restart: unless-stopped
+
+  sandbox:
+    build:
+      context: .
+      dockerfile: workspaces/agent/sandbox/Dockerfile.gvisor
+    ports:
+      - "8081:8080"
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      AGENT_INTERNAL_SECRET: ${AGENT_INTERNAL_SECRET:-dev-secret-change-me}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  workspaces-api:
+    build:
+      context: ./workspaces/api
+      dockerfile: Dockerfile
+    ports:
+      - "3400:3400"
+    environment:
+      WORKSPACES_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
+      SP_DEPLOYMENT_MODE: ${SP_DEPLOYMENT_MODE:-local}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      SP_GATEWAY_URL: http://gateway:3300
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  workspaces-web:
+    build:
+      context: .
+      dockerfile: workspaces/web/Dockerfile
+    ports:
+      - "3500:3500"
+    environment:
+      WORKSPACES_API_URL: http://workspaces-api:3400
+    volumes:
+      - signalpilot-shared:/shared:ro
+    depends_on:
+      - workspaces-api
     restart: unless-stopped
 
 volumes:

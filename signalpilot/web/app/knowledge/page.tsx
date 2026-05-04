@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import useSWR from "swr";
 import {
   RefreshCw,
@@ -800,6 +800,30 @@ export default function KnowledgePage() {
     searchQ ? d.title.toLowerCase().includes(searchQ.toLowerCase()) : true,
   );
 
+  // Build backlink index: target doc id → list of source docs that [[link]] to it.
+  // Keyed only on `docs` (unfiltered) so it survives tree search filtering.
+  const backlinkIndex = useMemo(() => {
+    const all = docs ?? [];
+    const idx = new Map<string, KnowledgeDoc[]>();
+    const re = /\[\[([^\]\n]+)\]\]/g;
+    for (const src of all) {
+      if (!src.body) continue;
+      const seen = new Set<string>();
+      let m: RegExpExecArray | null;
+      re.lastIndex = 0;
+      while ((m = re.exec(src.body)) !== null) {
+        const target = resolveWikilink(m[1], all);
+        if (!target || target.id === src.id) continue;
+        if (seen.has(target.id)) continue;
+        seen.add(target.id);
+        const list = idx.get(target.id) ?? [];
+        list.push(src);
+        idx.set(target.id, list);
+      }
+    }
+    return idx;
+  }, [docs]);
+
   const tree = buildTree(filteredDocs);
   const pendingCount = pending?.length ?? 0;
   const isFirstLoad = isLoading && (docs ?? []).length === 0;
@@ -1028,12 +1052,42 @@ export default function KnowledgePage() {
                     spellCheck={false}
                   />
                 ) : (
-                  <div className="text-[13px] text-[var(--color-text-muted)] leading-relaxed break-words min-h-[400px]">
-                    {selectedDoc.body
-                      ? <MarkdownView source={selectedDoc.body} docs={docs ?? []} onNavigate={handleSelectDoc} />
-                      : <span className="font-mono text-[var(--color-text-dim)]">— no content —</span>
-                    }
-                  </div>
+                  <>
+                    <div className="text-[13px] text-[var(--color-text-muted)] leading-relaxed break-words min-h-[400px]">
+                      {selectedDoc.body
+                        ? <MarkdownView source={selectedDoc.body} docs={docs ?? []} onNavigate={handleSelectDoc} />
+                        : <span className="font-mono text-[var(--color-text-dim)]">— no content —</span>
+                      }
+                    </div>
+                    {(() => {
+                      const links = backlinkIndex.get(selectedDoc.id) ?? [];
+                      if (links.length === 0) return null;
+                      return (
+                        <div className="mt-8 pt-4 border-t border-[var(--color-border)]">
+                          <h3 className="text-[10px] tracking-wider uppercase text-[var(--color-text-dim)] mb-2 font-normal">
+                            backlinks ({links.length})
+                          </h3>
+                          <ul className="flex flex-col gap-1">
+                            {links.map((src) => (
+                              <li key={src.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectDoc(src.id)}
+                                  className="flex items-center gap-2 w-full text-left px-1.5 py-1 text-[12px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text-dim)] transition-colors bg-transparent border-0 cursor-pointer"
+                                  title={`${src.category}/${src.title}`}
+                                >
+                                  <span className="px-1 py-0.5 border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+                                    {CATEGORY_LABELS[src.category]}
+                                  </span>
+                                  <span className="truncate">{src.title}</span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })()}
+                  </>
                 )}
               </div>
 

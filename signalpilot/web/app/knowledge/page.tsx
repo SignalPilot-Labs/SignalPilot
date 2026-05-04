@@ -166,6 +166,7 @@ function TreeNode({
   expanded,
   onToggle,
   onSelect,
+  backlinkCounts,
 }: {
   group: TreeGroup;
   docs: KnowledgeDoc[];
@@ -174,6 +175,7 @@ function TreeNode({
   expanded: Set<string>;
   onToggle: (key: string) => void;
   onSelect: (id: string) => void;
+  backlinkCounts: Map<string, number>;
 }) {
   const isOpen = expanded.has(group.key);
   const indent = depth * 12;
@@ -211,6 +213,7 @@ function TreeNode({
               expanded={expanded}
               onToggle={onToggle}
               onSelect={onSelect}
+              backlinkCounts={backlinkCounts}
             />
           ))}
           {group.docs.map((doc) => {
@@ -232,6 +235,18 @@ function TreeNode({
                   )}
                   <span className="truncate">{doc.title}</span>
                 </span>
+                {(() => {
+                  const n = backlinkCounts.get(doc.id) ?? 0;
+                  return n > 0 ? (
+                    <span
+                      className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0 ml-1"
+                      title={`${n} backlink${n === 1 ? "" : "s"}`}
+                      aria-label={`${n} backlink${n === 1 ? "" : "s"}`}
+                    >
+                      ↩ {n}
+                    </span>
+                  ) : null;
+                })()}
                 <span className="text-[10px] tabular-nums text-[var(--color-text-dim)] flex-shrink-0 ml-1">
                   {doc.view_count > 0 ? doc.view_count : ""}
                 </span>
@@ -823,6 +838,11 @@ export default function KnowledgePage() {
     }
     return idx;
   }, [docs]);
+
+  const backlinkCounts = useMemo(
+    () => new Map(Array.from(backlinkIndex, ([k, v]) => [k, v.length])),
+    [backlinkIndex],
+  );
 
   const tree = buildTree(filteredDocs);
   const pendingCount = pending?.length ?? 0;

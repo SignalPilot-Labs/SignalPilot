@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import useSWR from "swr";
 import {
   RefreshCw,
@@ -1028,11 +1028,12 @@ export default function KnowledgePage() {
                     spellCheck={false}
                   />
                 ) : (
-                  <pre className="text-[13px] font-mono whitespace-pre-wrap text-[var(--color-text-muted)] leading-relaxed break-words min-h-[400px]">
-                    {selectedDoc.body || (
-                      <span className="text-[var(--color-text-dim)]">— no content —</span>
-                    )}
-                  </pre>
+                  <div className="text-[13px] text-[var(--color-text-muted)] leading-relaxed break-words min-h-[400px]">
+                    {selectedDoc.body
+                      ? <MarkdownView source={selectedDoc.body} />
+                      : <span className="font-mono text-[var(--color-text-dim)]">— no content —</span>
+                    }
+                  </div>
                 )}
               </div>
 
@@ -1151,4 +1152,172 @@ export default function KnowledgePage() {
       />
     </div>
   );
+}
+
+// ── Markdown renderer ─────────────────────────────────────────────────────────
+
+const SAFE_URL = /^https?:\/\//;
+
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  // Pattern order: backtick code, bold, italic (** before *), link, underscore italic
+  const pattern =
+    /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))|(_(?=\S)([^_]+?)(?<=\S)_)/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let idx = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > last) {
+      nodes.push(text.slice(last, match.index));
+    }
+    const k = `${keyPrefix}-${idx++}`;
+    const [full] = match;
+    if (full.startsWith("`")) {
+      nodes.push(
+        <code key={k} className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px]">
+          {full.slice(1, -1)}
+        </code>,
+      );
+    } else if (full.startsWith("**")) {
+      nodes.push(<strong key={k}>{renderInline(full.slice(2, -2), k)}</strong>);
+    } else if (full.startsWith("*")) {
+      nodes.push(<em key={k}>{renderInline(full.slice(1, -1), k)}</em>);
+    } else if (full.startsWith("_")) {
+      const inner = full.replace(/^_|_$/g, "");
+      nodes.push(<em key={k}>{renderInline(inner, k)}</em>);
+    } else if (full.startsWith("[")) {
+      const labelMatch = full.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (labelMatch) {
+        const [, label, url] = labelMatch;
+        if (SAFE_URL.test(url)) {
+          nodes.push(
+            <a key={k} href={url} className="text-[var(--color-success)] underline" target="_blank" rel="noopener noreferrer">
+              {label}
+            </a>,
+          );
+        } else {
+          nodes.push(full);
+        }
+      } else {
+        nodes.push(full);
+      }
+    } else {
+      nodes.push(full);
+    }
+    last = match.index + full.length;
+  }
+  if (last < text.length) {
+    nodes.push(text.slice(last));
+  }
+  return nodes;
+}
+
+function renderMarkdown(src: string): ReactNode[] {
+  const lines = src.split("\n");
+  const out: ReactNode[] = [];
+  let i = 0;
+  let para: string[] = [];
+  let counter = 0;
+
+  const key = () => `md-${counter++}`;
+
+  const flushPara = () => {
+    if (para.length === 0) return;
+    const k = key();
+    out.push(
+      <p key={k} className="my-2">
+        {renderInline(para.join(" "), k)}
+      </p>,
+    );
+    para = [];
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Fenced code block
+    if (line.startsWith("```")) {
+      flushPara();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      out.push(
+        <pre key={key()} className="my-2 p-2 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] overflow-x-auto whitespace-pre-wrap">
+          {codeLines.join("\n")}
+        </pre>,
+      );
+      i++; // skip closing fence
+      continue;
+    }
+
+    // Headings
+    if (line.startsWith("### ")) {
+      flushPara();
+      const k = key();
+      out.push(<h3 key={k} className="text-[13px] font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(4), k)}</h3>);
+      i++;
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      flushPara();
+      const k = key();
+      out.push(<h2 key={k} className="text-sm font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(3), k)}</h2>);
+      i++;
+      continue;
+    }
+    if (line.startsWith("# ")) {
+      flushPara();
+      const k = key();
+      out.push(<h1 key={k} className="text-base font-semibold text-[var(--color-text)] mt-4 mb-2">{renderInline(line.slice(2), k)}</h1>);
+      i++;
+      continue;
+    }
+
+    // Unordered list — consume the run
+    if (/^[-*] /.test(line)) {
+      flushPara();
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^[-*] /.test(lines[i])) {
+        const ik = key();
+        items.push(<li key={ik}>{renderInline(lines[i].slice(2), ik)}</li>);
+        i++;
+      }
+      out.push(<ul key={key()} className="list-disc pl-5 my-1">{items}</ul>);
+      continue;
+    }
+
+    // Ordered list — consume the run
+    if (/^\d+\. /.test(line)) {
+      flushPara();
+      const items: ReactNode[] = [];
+      while (i < lines.length && /^\d+\. /.test(lines[i])) {
+        const ik = key();
+        items.push(<li key={ik}>{renderInline(lines[i].replace(/^\d+\. /, ""), ik)}</li>);
+        i++;
+      }
+      out.push(<ol key={key()} className="list-decimal pl-5 my-1">{items}</ol>);
+      continue;
+    }
+
+    // Blank line — paragraph break
+    if (line.trim() === "") {
+      flushPara();
+      i++;
+      continue;
+    }
+
+    // Default — accumulate paragraph
+    para.push(line);
+    i++;
+  }
+
+  flushPara();
+  return out;
+}
+
+function MarkdownView({ source }: { source: string }) {
+  return <>{renderMarkdown(source)}</>;
 }

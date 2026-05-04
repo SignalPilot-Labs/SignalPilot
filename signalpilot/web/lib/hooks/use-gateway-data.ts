@@ -14,12 +14,18 @@ import {
   getConnectionSchema,
   getPlan,
   setApiKey,
+  listKnowledge,
+  getKnowledgeUsage,
+  listKnowledgeEdits,
 } from "@/lib/api";
 import type { PlanUsage } from "@/lib/api";
 import type {
   ConnectionInfo,
   ConnectionHealthStats,
   GatewaySettings,
+  KnowledgeDoc,
+  KnowledgeEdit,
+  KnowledgeUsage,
 } from "@/lib/types";
 
 // ── Cache keys (exported for manual invalidation) ────────────────────────────
@@ -37,6 +43,10 @@ export const SWR_KEYS = {
   auditStats: "/api/audit/stats",
   connectionSchema: (name: string) => `/api/connections/${name}/schema`,
   healthHistory: (name: string) => `/api/connections/${name}/health/history`,
+  knowledge: (qs?: string) => `/api/knowledge${qs ? `?${qs}` : ""}`,
+  knowledgeUsage: "/api/knowledge/usage",
+  knowledgeDoc: (id: string) => `/api/knowledge/${id}`,
+  knowledgeEdits: (id: string) => `/api/knowledge/${id}/edits`,
 } as const;
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -154,6 +164,50 @@ export function useConnectionSchema(name: string | null) {
     name ? SWR_KEYS.connectionSchema(name) : null,
     () => getConnectionSchema(name!),
     { dedupingInterval: 300_000, revalidateOnFocus: false },
+  );
+}
+
+// ── Knowledge Base hooks ────────────────────────────────────────────────────
+
+/** Knowledge docs with optional filters — 30s cache. */
+export function useKnowledgeDocs(filters?: { scope?: string; scope_ref?: string; category?: string; status?: string }) {
+  const qs = filters
+    ? new URLSearchParams(
+        Object.entries(filters).filter(([, v]) => v !== undefined) as [string, string][]
+      ).toString()
+    : "";
+  const key = SWR_KEYS.knowledge(qs || undefined);
+  return useSWR<KnowledgeDoc[]>(
+    key,
+    () => listKnowledge(filters),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** Knowledge storage usage — 30s cache. */
+export function useKnowledgeUsage() {
+  return useSWR<KnowledgeUsage>(
+    SWR_KEYS.knowledgeUsage,
+    () => getKnowledgeUsage(),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** Edit history for a knowledge doc — fetched only when id is provided. */
+export function useKnowledgeEdits(id: string | null) {
+  return useSWR<KnowledgeEdit[]>(
+    id ? SWR_KEYS.knowledgeEdits(id) : null,
+    () => listKnowledgeEdits(id!),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** Invalidate all /api/knowledge keys (active + pending) using predicate mutate. */
+export function invalidateKnowledge() {
+  return mutate(
+    (key: unknown) => typeof key === "string" && key.startsWith("/api/knowledge"),
+    undefined,
+    { revalidate: true },
   );
 }
 

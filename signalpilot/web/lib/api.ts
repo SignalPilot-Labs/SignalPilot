@@ -567,6 +567,34 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
+// Knowledge Base
+import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+
+export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
+  const qs = params ? new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][]
+  ).toString() : "";
+  return request<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`);
+};
+export const getKnowledgeUsage = () => request<KnowledgeUsage>("/api/knowledge/usage");
+export const getKnowledgeDoc = (id: string) => request<KnowledgeDoc>(`/api/knowledge/${id}`);
+export const createKnowledgeDoc = (payload: {
+  scope: KnowledgeDoc["scope"];
+  scope_ref: string | null;
+  category: KnowledgeDoc["category"];
+  title: string;
+  body: string;
+  status?: KnowledgeDoc["status"];
+}) => request<KnowledgeDoc>("/api/knowledge", { method: "POST", body: JSON.stringify(payload) });
+export const updateKnowledgeDoc = (id: string, body: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}`, { method: "PUT", body: JSON.stringify({ body }) });
+export const archiveKnowledgeDoc = (id: string) =>
+  request<void>(`/api/knowledge/${id}`, { method: "DELETE" });
+export const approveKnowledgeDoc = (id: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}/approve`, { method: "POST" });
+export const listKnowledgeEdits = (id: string, limit = 20) =>
+  request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

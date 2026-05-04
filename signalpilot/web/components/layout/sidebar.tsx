@@ -97,6 +97,18 @@ function NavIconSettings({ active }: { active: boolean }) {
     </svg>
   );
 }
+function NavIconKnowledge({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="1" y="3" width="10" height="10" stroke="currentColor" strokeWidth="1" />
+      <rect x="3" y="1" width="10" height="10" stroke="currentColor" strokeWidth="1" />
+      <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="5" y1="7.5" x2="11" y2="7.5" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="5" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="0.75" />
+      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
+    </svg>
+  );
+}
 
 type NavIconComponent = React.FC<{ active: boolean }>;
 
@@ -108,8 +120,9 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "5" },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "8" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
+  { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "9" },
+  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "10" },
 ];
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */

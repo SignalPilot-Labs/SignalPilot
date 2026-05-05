@@ -610,6 +610,18 @@ export function getNotebookDownloadUrl(id: string): string {
 export const getNotebooksSummary = () =>
   request<import("./types").NotebookSummary>("/api/notebooks/summary");
 
+export const batchAnalyzeNotebooks = (notebookIds: string[]) =>
+  request<import("./types").BatchResult>("/api/notebooks/batch/analyze", {
+    method: "POST",
+    body: JSON.stringify({ notebook_ids: notebookIds }),
+  });
+
+export const batchDeleteNotebooks = (notebookIds: string[]) =>
+  request<import("./types").BatchResult>("/api/notebooks/batch/delete", {
+    method: "POST",
+    body: JSON.stringify({ notebook_ids: notebookIds }),
+  });
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

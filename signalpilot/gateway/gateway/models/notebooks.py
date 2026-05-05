@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from pydantic import BaseModel, Field, field_validator
 
 from ._helpers import _validate_string_list
+
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 class NotebookUpload(BaseModel):
@@ -82,3 +88,33 @@ class NotebookSummary(BaseModel):
     notebooks_with_errors: int
     total_error_cells: int
     top_imports: list[str]
+
+
+class BatchNotebookRequest(BaseModel):
+    """Request body for batch operations on notebooks."""
+
+    notebook_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("notebook_ids")
+    @classmethod
+    def validate_notebook_ids(cls, v: list[str]) -> list[str]:
+        for nid in v:
+            if not _UUID_PATTERN.match(nid):
+                raise ValueError(f"Invalid notebook ID format: '{nid}'")
+        return v
+
+
+class BatchResultItem(BaseModel):
+    """Per-notebook result from a batch operation."""
+
+    notebook_id: str
+    success: bool
+    error: str | None = None
+
+
+class BatchResult(BaseModel):
+    """Aggregated result from a batch operation."""
+
+    results: list[BatchResultItem]
+    succeeded: int
+    failed: int

@@ -652,6 +652,14 @@ class Store:
         oid = self._require_org_id()
         return await notebooks_store.get_notebooks_summary(self.session, org_id=oid)
 
+    async def batch_get_notebook_ids(self, notebook_ids: list[str]) -> list[str]:
+        oid = self._require_org_id()
+        return await notebooks_store.batch_get_notebook_ids(self.session, org_id=oid, notebook_ids=notebook_ids)
+
+    async def batch_delete_notebooks(self, notebook_ids: list[str]) -> list[tuple[str, bool, str | None]]:
+        oid = self._require_org_id()
+        return await notebooks_store.batch_delete_notebooks(self.session, org_id=oid, notebook_ids=notebook_ids)
+
     # ─── Audit ───────────────────────────────────────────────────────────
 
     async def append_audit(self, entry: AuditEntry) -> None:

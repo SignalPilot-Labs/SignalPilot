@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections import Counter
 
-from sqlalchemy import Text, case, cast, or_, select
+from sqlalchemy import Text, case, cast, delete, or_, select
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -337,3 +337,53 @@ async def get_notebooks_summary(
         total_error_cells=total_error_cells,
         top_imports=top_imports,
     )
+
+
+async def batch_get_notebook_ids(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    notebook_ids: list[str],
+) -> list[str]:
+    """Return the subset of notebook_ids that exist in the org."""
+    result = await session.execute(
+        select(GatewayNotebook.id).where(
+            GatewayNotebook.org_id == org_id,
+            GatewayNotebook.id.in_(notebook_ids),
+        )
+    )
+    return [row[0] for row in result.all()]
+
+
+async def batch_delete_notebooks(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    notebook_ids: list[str],
+) -> list[tuple[str, bool, str | None]]:
+    """Delete multiple notebooks by ID.
+
+    Returns a list of (notebook_id, success, error_or_none) tuples.
+    IDs not found in the org return success=False with error='not found'.
+    """
+    found_result = await session.execute(
+        select(GatewayNotebook.id).where(
+            GatewayNotebook.org_id == org_id,
+            GatewayNotebook.id.in_(notebook_ids),
+        )
+    )
+    found_ids: set[str] = {row[0] for row in found_result.all()}
+
+    if found_ids:
+        await session.execute(
+            delete(GatewayNotebook).where(
+                GatewayNotebook.org_id == org_id,
+                GatewayNotebook.id.in_(list(found_ids)),
+            )
+        )
+        await session.commit()
+
+    return [
+        (nid, True, None) if nid in found_ids else (nid, False, "not found")
+        for nid in notebook_ids
+    ]

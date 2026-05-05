@@ -33,7 +33,16 @@ from .connections import (
     SSLConfig,
 )
 from .mcp import MCPToolCall
-from .notebooks import NotebookAnalysis, NotebookInfo, NotebookSummary, NotebookUpdate, NotebookUpload
+from .notebooks import (
+    BatchNotebookRequest,
+    BatchResult,
+    BatchResultItem,
+    NotebookAnalysis,
+    NotebookInfo,
+    NotebookSummary,
+    NotebookUpdate,
+    NotebookUpload,
+)
 from .projects import (
     ProjectCreate,
     ProjectInfo,
@@ -72,6 +81,9 @@ __all__ = [
     "ExecuteRequest",
     "ExecuteResult",
     "GatewaySettings",
+    "BatchNotebookRequest",
+    "BatchResult",
+    "BatchResultItem",
     "MCPToolCall",
     "NotebookAnalysis",
     "NotebookInfo",

@@ -212,6 +212,18 @@ export interface NotebookSummary {
   top_imports: string[];
 }
 
+export interface BatchResultItem {
+  notebook_id: string;
+  success: boolean;
+  error: string | null;
+}
+
+export interface BatchResult {
+  results: BatchResultItem[];
+  succeeded: number;
+  failed: number;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

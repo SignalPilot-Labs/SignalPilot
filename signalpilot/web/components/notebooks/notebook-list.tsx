@@ -4,9 +4,13 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import type { NotebookInfo } from "@/lib/types";
 import { NotebookUploadModal } from "./notebook-upload";
+import { BatchActionBar } from "./batch-action-bar";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { getNotebooks, searchNotebooks } from "@/lib/api";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { getNotebooks, searchNotebooks, batchAnalyzeNotebooks, batchDeleteNotebooks } from "@/lib/api";
+import { invalidateNotebooks } from "@/lib/hooks/use-gateway-data";
+import { useToast } from "@/components/ui/toast";
 
 interface NotebookListProps {
   notebooks: NotebookInfo[];
@@ -14,6 +18,8 @@ interface NotebookListProps {
 }
 
 export function NotebookList({ notebooks, total }: NotebookListProps) {
+  const { toast } = useToast();
+
   const [modalOpen, setModalOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<NotebookInfo[] | null>(null);
@@ -23,6 +29,12 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
   const [extra, setExtra] = useState<NotebookInfo[]>([]);
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchAnalyzing, setBatchAnalyzing] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   // Use a ref to detect stale responses: compare the query that triggered the
   // request against the current query when the response arrives.
@@ -39,6 +51,8 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
       // Reset pagination when search is cleared
       setExtra([]);
       setPage(0);
+      // Clear selection when search query changes (prevents stale counts)
+      setSelectedIds(new Set());
       return;
     }
 
@@ -48,6 +62,8 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     setSearchTotal(0);
     setExtra([]);
     setPage(0);
+    // Clear selection when search query changes
+    setSelectedIds(new Set());
 
     const timer = setTimeout(async () => {
       try {
@@ -94,6 +110,70 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
   const counterText = isServerSearch
     ? `${filtered.length} result${filtered.length !== 1 ? "s" : ""}`
     : `${filtered.length} of ${total} notebook${total !== 1 ? "s" : ""}`;
+
+  // Selection helpers
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(filtered.map((nb) => nb.id)));
+  }
+
+  function deselectAll() {
+    setSelectedIds(new Set());
+  }
+
+  const allSelected = filtered.length > 0 && filtered.every((nb) => selectedIds.has(nb.id));
+
+  async function handleBatchAnalyze() {
+    if (selectedIds.size === 0) return;
+    setBatchAnalyzing(true);
+    try {
+      const result = await batchAnalyzeNotebooks([...selectedIds]);
+      await invalidateNotebooks();
+      setSelectedIds(new Set());
+      const msg = result.failed > 0
+        ? `Analyzed: ${result.succeeded} succeeded, ${result.failed} failed`
+        : `Analyzed ${result.succeeded} notebook${result.succeeded !== 1 ? "s" : ""}`;
+      toast(msg, result.failed > 0 ? "error" : "success");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Batch analyze failed", "error");
+    } finally {
+      setBatchAnalyzing(false);
+    }
+  }
+
+  function handleBatchDeleteRequest() {
+    setDeleteConfirmOpen(true);
+  }
+
+  async function handleBatchDeleteConfirm() {
+    setDeleteConfirmOpen(false);
+    if (selectedIds.size === 0) return;
+    setBatchDeleting(true);
+    try {
+      const result = await batchDeleteNotebooks([...selectedIds]);
+      await invalidateNotebooks();
+      setSelectedIds(new Set());
+      const msg = result.failed > 0
+        ? `Deleted: ${result.succeeded} succeeded, ${result.failed} failed`
+        : `Deleted ${result.succeeded} notebook${result.succeeded !== 1 ? "s" : ""}`;
+      toast(msg, result.failed > 0 ? "error" : "success");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Batch delete failed", "error");
+    } finally {
+      setBatchDeleting(false);
+    }
+  }
 
   async function handleLoadMore() {
     setLoadingMore(true);
@@ -204,65 +284,91 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map((nb) => (
-            <Link
-              key={nb.id}
-              href={`/notebooks/${nb.id}`}
-              className="block bg-[var(--color-bg-card)] border border-[var(--color-border)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group"
-            >
-              <h3 className="text-[12px] font-medium tracking-[0.15em] uppercase text-[var(--color-text)] group-hover:text-[var(--color-text)] mb-1 truncate">
-                {nb.name}
-              </h3>
-              {nb.description && (
-                <p className="text-[12px] text-[var(--color-text-muted)] mb-3 line-clamp-2">
-                  {nb.description}
-                </p>
-              )}
-
-              {/* Tags */}
-              {nb.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-3">
-                  {nb.tags.slice(0, 4).map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-1.5 py-0.5 text-[10px] font-mono tracking-wider bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-dim)]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                  {nb.tags.length > 4 && (
-                    <span className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-dim)]">
-                      +{nb.tags.length - 4}
-                    </span>
-                  )}
+          {filtered.map((nb) => {
+            const isSelected = selectedIds.has(nb.id);
+            return (
+              <div key={nb.id} className="relative">
+                {/* Checkbox overlay — top-right, does not trigger card navigation */}
+                <div
+                  className="absolute top-2 right-2 z-10"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSelect(nb.id);
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${nb.name}`}
+                    checked={isSelected}
+                    onChange={() => toggleSelect(nb.id)}
+                    className="w-4 h-4 cursor-pointer accent-[var(--color-text)] bg-[var(--color-bg-card)] border border-[var(--color-border)]"
+                  />
                 </div>
-              )}
 
-              <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                <span>{nb.cell_count} cell{nb.cell_count !== 1 ? "s" : ""}</span>
-                {nb.code_cell_count > 0 && (
-                  <>
+                <Link
+                  href={`/notebooks/${nb.id}`}
+                  className={`block bg-[var(--color-bg-card)] border p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group ${
+                    isSelected
+                      ? "border-[var(--color-border-active)]"
+                      : "border-[var(--color-border)]"
+                  }`}
+                >
+                  <h3 className="text-[12px] font-medium tracking-[0.15em] uppercase text-[var(--color-text)] group-hover:text-[var(--color-text)] mb-1 truncate pr-6">
+                    {nb.name}
+                  </h3>
+                  {nb.description && (
+                    <p className="text-[12px] text-[var(--color-text-muted)] mb-3 line-clamp-2">
+                      {nb.description}
+                    </p>
+                  )}
+
+                  {/* Tags */}
+                  {nb.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-3">
+                      {nb.tags.slice(0, 4).map((tag) => (
+                        <span
+                          key={tag}
+                          className="px-1.5 py-0.5 text-[10px] font-mono tracking-wider bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-dim)]"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                      {nb.tags.length > 4 && (
+                        <span className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-dim)]">
+                          +{nb.tags.length - 4}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                    <span>{nb.cell_count} cell{nb.cell_count !== 1 ? "s" : ""}</span>
+                    {nb.code_cell_count > 0 && (
+                      <>
+                        <span>&middot;</span>
+                        <span>{nb.code_cell_count} code</span>
+                      </>
+                    )}
+                    {nb.kernel_name && (
+                      <>
+                        <span>&middot;</span>
+                        <span className="font-mono">{nb.kernel_name}</span>
+                      </>
+                    )}
                     <span>&middot;</span>
-                    <span>{nb.code_cell_count} code</span>
-                  </>
-                )}
-                {nb.kernel_name && (
-                  <>
-                    <span>&middot;</span>
-                    <span className="font-mono">{nb.kernel_name}</span>
-                  </>
-                )}
-                <span>&middot;</span>
-                <TimeAgo timestamp={nb.updated_at} />
-                {nb.analyzed_at && (
-                  <>
-                    <span>&middot;</span>
-                    <span className="text-[var(--color-success)] opacity-70">analyzed</span>
-                  </>
-                )}
+                    <TimeAgo timestamp={nb.updated_at} />
+                    {nb.analyzed_at && (
+                      <>
+                        <span>&middot;</span>
+                        <span className="text-[var(--color-success)] opacity-70">analyzed</span>
+                      </>
+                    )}
+                  </div>
+                </Link>
               </div>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -295,6 +401,28 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
       )}
 
       <NotebookUploadModal open={modalOpen} onClose={() => setModalOpen(false)} />
+
+      <BatchActionBar
+        selectedCount={selectedIds.size}
+        allSelected={allSelected}
+        onSelectAll={selectAll}
+        onDeselectAll={deselectAll}
+        onAnalyze={handleBatchAnalyze}
+        onDelete={handleBatchDeleteRequest}
+        analyzing={batchAnalyzing}
+        deleting={batchDeleting}
+      />
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="delete notebooks"
+        message={`This will permanently delete ${selectedIds.size} notebook${selectedIds.size !== 1 ? "s" : ""} and their files. This cannot be undone.`}
+        confirmLabel="delete"
+        cancelLabel="cancel"
+        variant="danger"
+        onConfirm={handleBatchDeleteConfirm}
+        onCancel={() => setDeleteConfirmOpen(false)}
+      />
     </>
   );
 }

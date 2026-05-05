@@ -170,7 +170,7 @@ export function useConnectionSchema(name: string | null) {
 
 /** Notebooks list — 30s dedup. */
 export function useNotebooks() {
-  return useSWR<NotebookInfo[]>(
+  return useSWR<{ items: NotebookInfo[]; total: number }>(
     SWR_KEYS.notebooks,
     () => getNotebooks(),
     { dedupingInterval: 30_000 },

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 from sqlalchemy import Text, cast, or_, select
+from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +48,17 @@ async def list_notebooks(
         .offset(offset)
     )
     return [_row_to_info(r) for r in result.scalars().all()]
+
+
+async def count_notebooks(
+    session: AsyncSession,
+    *,
+    org_id: str,
+) -> int:
+    result = await session.execute(
+        select(sa_func.count()).select_from(GatewayNotebook).where(GatewayNotebook.org_id == org_id)
+    )
+    return result.scalar_one()
 
 
 async def get_notebook_meta(

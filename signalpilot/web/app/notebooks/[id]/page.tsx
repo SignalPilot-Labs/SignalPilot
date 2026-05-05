@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, use, useCallback } from "react";
+import { useState, use, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
+import { mutate as globalMutate } from "swr";
+import { TerminalBar } from "@/components/ui/page-header";
 import { NotebookCellRenderer } from "@/components/notebooks/notebook-cell";
 import { NotebookAnalysisDisplay } from "@/components/notebooks/notebook-analysis";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -14,11 +15,13 @@ import {
   useNotebook,
   useNotebookCells,
   useNotebookAnalysis,
+  SWR_KEYS,
   invalidateNotebook,
   invalidateNotebooks,
 } from "@/lib/hooks/use-gateway-data";
-import { analyzeNotebook, deleteNotebook } from "@/lib/api";
+import { analyzeNotebook, deleteNotebook, updateNotebook } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import type { NotebookInfo } from "@/lib/types";
 
 const MAX_CELLS = 200;
 
@@ -42,6 +45,47 @@ export default function NotebookDetailPage({ params }: PageProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // ── Inline name editing ──────────────────────────────────────────────────────
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Inline description editing ───────────────────────────────────────────────
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descValue, setDescValue] = useState("");
+  const descTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── Tag editing ──────────────────────────────────────────────────────────────
+  const [tagInput, setTagInput] = useState("");
+  const [savingTag, setSavingTag] = useState(false);
+
+  // Sync local state when notebook data arrives (or changes)
+  useEffect(() => {
+    if (notebook && !editingName) {
+      setNameValue(notebook.name);
+    }
+  }, [notebook, editingName]);
+
+  useEffect(() => {
+    if (notebook && !editingDesc) {
+      setDescValue(notebook.description ?? "");
+    }
+  }, [notebook, editingDesc]);
+
+  useEffect(() => {
+    if (editingName && nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.select();
+    }
+  }, [editingName]);
+
+  useEffect(() => {
+    if (editingDesc && descTextareaRef.current) {
+      descTextareaRef.current.focus();
+      descTextareaRef.current.select();
+    }
+  }, [editingDesc]);
+
   const handleTabKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLButtonElement>, currentIdx: number, tabs: { id: TabId }[]) => {
       if (e.key === "ArrowRight") {
@@ -61,6 +105,112 @@ export default function NotebookDetailPage({ params }: PageProps) {
     []
   );
 
+  // ── Optimistic update helper ─────────────────────────────────────────────────
+  async function applyUpdate(
+    patch: { name?: string; description?: string; tags?: string[] },
+    optimisticNotebook: NotebookInfo,
+  ) {
+    await globalMutate(SWR_KEYS.notebook(id), optimisticNotebook, { revalidate: false });
+    try {
+      const updated = await updateNotebook(id, patch);
+      await globalMutate(SWR_KEYS.notebook(id), updated, { revalidate: false });
+    } catch (err) {
+      console.error("Update failed:", err);
+      await globalMutate(SWR_KEYS.notebook(id));
+      toast("failed to update notebook", "error");
+    }
+  }
+
+  // ── Name save ────────────────────────────────────────────────────────────────
+  async function commitName() {
+    if (!notebook) return;
+    const trimmed = nameValue.trim();
+    if (!trimmed || trimmed === notebook.name) {
+      setEditingName(false);
+      setNameValue(notebook.name);
+      return;
+    }
+    setEditingName(false);
+    const optimistic: NotebookInfo = { ...notebook, name: trimmed };
+    await applyUpdate({ name: trimmed }, optimistic);
+  }
+
+  function cancelName() {
+    if (!notebook) return;
+    setEditingName(false);
+    setNameValue(notebook.name);
+  }
+
+  function handleNameKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void commitName();
+    } else if (e.key === "Escape") {
+      cancelName();
+    }
+  }
+
+  // ── Description save ─────────────────────────────────────────────────────────
+  async function commitDesc() {
+    if (!notebook) return;
+    const trimmed = descValue.trim();
+    if (trimmed === (notebook.description ?? "")) {
+      setEditingDesc(false);
+      return;
+    }
+    setEditingDesc(false);
+    const optimistic: NotebookInfo = { ...notebook, description: trimmed };
+    await applyUpdate({ description: trimmed }, optimistic);
+  }
+
+  function cancelDesc() {
+    if (!notebook) return;
+    setEditingDesc(false);
+    setDescValue(notebook.description ?? "");
+  }
+
+  function handleDescKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void commitDesc();
+    } else if (e.key === "Escape") {
+      cancelDesc();
+    }
+  }
+
+  // ── Tag operations ───────────────────────────────────────────────────────────
+  async function addTag() {
+    if (!notebook) return;
+    const trimmed = tagInput.trim();
+    if (!trimmed || notebook.tags.includes(trimmed)) {
+      setTagInput("");
+      return;
+    }
+    setSavingTag(true);
+    setTagInput("");
+    const newTags = [...notebook.tags, trimmed];
+    const optimistic: NotebookInfo = { ...notebook, tags: newTags };
+    await applyUpdate({ tags: newTags }, optimistic);
+    setSavingTag(false);
+  }
+
+  async function removeTag(tag: string) {
+    if (!notebook) return;
+    const newTags = notebook.tags.filter((t) => t !== tag);
+    const optimistic: NotebookInfo = { ...notebook, tags: newTags };
+    await applyUpdate({ tags: newTags }, optimistic);
+  }
+
+  function handleTagInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void addTag();
+    } else if (e.key === "Escape") {
+      setTagInput("");
+    }
+  }
+
+  // ── Analyze / Delete ─────────────────────────────────────────────────────────
   async function handleAnalyze() {
     setAnalyzing(true);
     try {
@@ -86,7 +236,6 @@ export default function NotebookDetailPage({ params }: PageProps) {
       console.error("Delete failed:", err);
       toast("failed to delete notebook", "error");
       setDeleting(false);
-      // Keep the dialog open so the user sees it failed and can retry
     }
   }
 
@@ -138,14 +287,64 @@ export default function NotebookDetailPage({ params }: PageProps) {
 
   return (
     <div className="p-8 max-w-[1400px] animate-fade-in">
-      <PageHeader
-        title={notebook.name}
-        subtitle="notebook"
-        description={
-          notebook.description ||
-          `${notebook.cell_count} cell${notebook.cell_count !== 1 ? "s" : ""}${notebook.kernel_name ? ` · ${notebook.kernel_name}` : ""}`
-        }
-        actions={
+      {/* Inlined page header layout (PageHeader only accepts title: string, not ReactNode) */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between">
+          <div>
+            {/* Title row with editable name */}
+            <div className="flex items-center gap-3 mb-1">
+              {editingName ? (
+                <input
+                  ref={nameInputRef}
+                  value={nameValue}
+                  onChange={(e) => setNameValue(e.target.value)}
+                  onBlur={() => void commitName()}
+                  onKeyDown={handleNameKeyDown}
+                  className="text-xl font-light tracking-wide leading-none text-[var(--color-text)] bg-transparent border-b border-[var(--color-border-hover)] outline-none min-w-0 w-auto"
+                  style={{ width: `${Math.max(nameValue.length, 8)}ch` }}
+                  aria-label="Notebook name"
+                />
+              ) : (
+                <h1
+                  className="text-xl font-light tracking-wide leading-none text-[var(--color-text)] cursor-pointer hover:underline hover:underline-offset-2 hover:decoration-[var(--color-border-hover)] transition-all"
+                  onClick={() => setEditingName(true)}
+                  title="Click to edit name"
+                >
+                  {notebook.name}
+                </h1>
+              )}
+              <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">
+                notebook
+              </span>
+            </div>
+
+            {/* Editable description */}
+            {editingDesc ? (
+              <textarea
+                ref={descTextareaRef}
+                value={descValue}
+                onChange={(e) => setDescValue(e.target.value)}
+                onBlur={() => void commitDesc()}
+                onKeyDown={handleDescKeyDown}
+                rows={2}
+                placeholder="Add a description..."
+                className="text-sm text-[var(--color-text-muted)] tracking-wider bg-transparent border border-[var(--color-border)] outline-none resize-none w-full max-w-lg px-2 py-1 focus:border-[var(--color-border-hover)]"
+                aria-label="Notebook description"
+              />
+            ) : (
+              <p
+                className="text-sm text-[var(--color-text-muted)] tracking-wider cursor-pointer hover:text-[var(--color-text)] transition-colors"
+                onClick={() => setEditingDesc(true)}
+                title="Click to edit description"
+              >
+                {notebook.description
+                  ? notebook.description
+                  : `${notebook.cell_count} cell${notebook.cell_count !== 1 ? "s" : ""}${notebook.kernel_name ? ` · ${notebook.kernel_name}` : ""}`}
+              </p>
+            )}
+          </div>
+
+          {/* Action buttons */}
           <div className="flex items-center gap-2">
             <button
               onClick={handleAnalyze}
@@ -168,8 +367,10 @@ export default function NotebookDetailPage({ params }: PageProps) {
               &larr; all notebooks
             </Link>
           </div>
-        }
-      />
+        </div>
+
+        <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
+      </div>
 
       <TerminalBar path={`notebooks/${id}`}>
         <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
@@ -196,6 +397,36 @@ export default function NotebookDetailPage({ params }: PageProps) {
           )}
         </div>
       </TerminalBar>
+
+      {/* Tags section */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-6">
+        {notebook.tags.map((tag) => (
+          <span
+            key={tag}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono tracking-wider bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-dim)]"
+          >
+            {tag}
+            <button
+              onClick={() => void removeTag(tag)}
+              className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors leading-none"
+              aria-label={`Remove tag ${tag}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={tagInput}
+          onChange={(e) => setTagInput(e.target.value)}
+          onKeyDown={handleTagInputKeyDown}
+          onBlur={() => void addTag()}
+          placeholder={savingTag ? "saving..." : "add tag..."}
+          disabled={savingTag}
+          className="px-1.5 py-0.5 text-[10px] font-mono tracking-wider bg-transparent border border-dashed border-[var(--color-border)] text-[var(--color-text-dim)] placeholder:text-[var(--color-text-dim)] outline-none focus:border-[var(--color-border-hover)] w-24 transition-colors disabled:opacity-50"
+          aria-label="Add tag"
+        />
+      </div>
 
       {/* Tab bar */}
       <div role="tablist" className="flex items-center gap-0 border-b border-[var(--color-border)] mb-6">

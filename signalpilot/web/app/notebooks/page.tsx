@@ -6,7 +6,7 @@ import { useNotebooks } from "@/lib/hooks/use-gateway-data";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function NotebooksPage() {
-  const { data: notebooks, isLoading, error } = useNotebooks();
+  const { data, isLoading, error } = useNotebooks();
 
   return (
     <div className="p-8 max-w-[1400px] animate-fade-in">
@@ -34,7 +34,7 @@ export default function NotebooksPage() {
       )}
 
       {!isLoading && !error && (
-        <NotebookList notebooks={notebooks ?? []} />
+        <NotebookList notebooks={data?.items ?? []} total={data?.total ?? 0} />
       )}
     </div>
   );

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -32,9 +33,13 @@ async def list_notebooks(
     store: StoreD,
     limit: int = 50,
     offset: int = 0,
-) -> list[NotebookInfo]:
+) -> dict:
     """List all notebooks with pagination."""
-    return await store.list_notebooks(limit=limit, offset=offset)
+    items, total = await asyncio.gather(
+        store.list_notebooks(limit=limit, offset=offset),
+        store.count_notebooks(),
+    )
+    return {"items": items, "total": total}
 
 
 @router.post("/notebooks", status_code=201, dependencies=[RequireScope("write")])
@@ -75,11 +80,12 @@ async def search_notebooks(
     q: str = "",
     limit: int = 50,
     offset: int = 0,
-) -> list[NotebookInfo]:
+) -> dict:
     """Search notebooks by name, description, or tags."""
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' must not be empty.")
-    return await store.search_notebooks(query=q, limit=limit, offset=offset)
+    results = await store.search_notebooks(query=q, limit=limit, offset=offset)
+    return {"items": results, "total": len(results)}
 
 
 @router.get("/notebooks/{notebook_id}", dependencies=[RequireScope("read")])

@@ -6,17 +6,21 @@ import type { NotebookInfo } from "@/lib/types";
 import { NotebookUploadModal } from "./notebook-upload";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { searchNotebooks } from "@/lib/api";
+import { getNotebooks, searchNotebooks } from "@/lib/api";
 
 interface NotebookListProps {
   notebooks: NotebookInfo[];
+  total: number;
 }
 
-export function NotebookList({ notebooks }: NotebookListProps) {
+export function NotebookList({ notebooks, total }: NotebookListProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<NotebookInfo[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [extra, setExtra] = useState<NotebookInfo[]>([]);
+  const [page, setPage] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Use a ref to detect stale responses: compare the query that triggered the
   // request against the current query when the response arrives.
@@ -29,16 +33,22 @@ export function NotebookList({ notebooks }: NotebookListProps) {
     if (!trimmed) {
       setSearchResults(null);
       setIsSearching(false);
+      // Reset pagination when search is cleared
+      setExtra([]);
+      setPage(0);
       return;
     }
 
     setIsSearching(true);
+    // Reset accumulated extras when search query changes
+    setExtra([]);
+    setPage(0);
 
     const timer = setTimeout(async () => {
       try {
-        const results = await searchNotebooks(trimmed, 50, 0);
+        const response = await searchNotebooks(trimmed, 50, 0);
         if (latestQueryRef.current === trimmed) {
-          setSearchResults(results);
+          setSearchResults(response.items);
         }
       } catch {
         if (latestQueryRef.current === trimmed) {
@@ -56,24 +66,43 @@ export function NotebookList({ notebooks }: NotebookListProps) {
     };
   }, [query]);
 
-  // When server search is active, use its results; otherwise use client-side filter
+  const allItems = [...notebooks, ...extra];
+
+  // When server search is active, use its results; otherwise use accumulated items
   const isServerSearch = searchResults !== null;
+  const isSearching_ = isServerSearch || query.trim().length > 0;
   const filtered = isServerSearch
     ? searchResults
     : query.trim()
-      ? notebooks.filter((nb) => {
+      ? allItems.filter((nb) => {
           const q = query.toLowerCase();
           return (
             nb.name.toLowerCase().includes(q) ||
             nb.tags.some((t) => t.toLowerCase().includes(q))
           );
         })
-      : notebooks;
+      : allItems;
 
   // Counter copy: show result count during server search; "X of Y" otherwise
   const counterText = isServerSearch
     ? `${filtered.length} result${filtered.length !== 1 ? "s" : ""}`
-    : `${filtered.length} of ${notebooks.length} notebook${notebooks.length !== 1 ? "s" : ""}`;
+    : `${filtered.length} of ${total} notebook${total !== 1 ? "s" : ""}`;
+
+  async function handleLoadMore() {
+    setLoadingMore(true);
+    try {
+      const nextPage = page + 1;
+      const response = await getNotebooks(50, nextPage * 50);
+      setExtra((prev) => [...prev, ...response.items]);
+      setPage(nextPage);
+    } catch {
+      // Load more failing silently is acceptable — user can retry
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  const showLoadMore = !isSearching_ && allItems.length < total;
 
   return (
     <>
@@ -208,6 +237,18 @@ export function NotebookList({ notebooks }: NotebookListProps) {
               </div>
             </Link>
           ))}
+        </div>
+      )}
+
+      {showLoadMore && (
+        <div className="flex justify-center mt-8">
+          <button
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+            className="px-6 py-2 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50"
+          >
+            {loadingMore ? "loading..." : `load more (${allItems.length} of ${total})`}
+          </button>
         </div>
       )}
 

@@ -33,7 +33,7 @@ from .connections import (
     SSLConfig,
 )
 from .mcp import MCPToolCall
-from .notebooks import NotebookAnalysis, NotebookInfo, NotebookUpload
+from .notebooks import NotebookAnalysis, NotebookInfo, NotebookUpdate, NotebookUpload
 from .projects import (
     ProjectCreate,
     ProjectInfo,
@@ -75,6 +75,7 @@ __all__ = [
     "MCPToolCall",
     "NotebookAnalysis",
     "NotebookInfo",
+    "NotebookUpdate",
     "NotebookUpload",
     "ProjectCreate",
     "ProjectInfo",

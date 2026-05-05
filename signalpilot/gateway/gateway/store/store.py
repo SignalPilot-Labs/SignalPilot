@@ -570,6 +570,10 @@ class Store:
         oid = self._require_org_id()
         return await notebooks_store.list_notebooks(self.session, org_id=oid, limit=limit, offset=offset)
 
+    async def count_notebooks(self) -> int:
+        oid = self._require_org_id()
+        return await notebooks_store.count_notebooks(self.session, org_id=oid)
+
     async def get_notebook_meta(self, notebook_id: str) -> NotebookInfo | None:
         oid = self._require_org_id()
         return await notebooks_store.get_notebook_meta(self.session, org_id=oid, notebook_id=notebook_id)

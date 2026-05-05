@@ -569,7 +569,7 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
 
 // Notebooks
 export const getNotebooks = (limit = 50, offset = 0) =>
-  request<import("./types").NotebookInfo[]>(`/api/notebooks?limit=${limit}&offset=${offset}`);
+  request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks?limit=${limit}&offset=${offset}`);
 
 export const getNotebook = (id: string) =>
   request<import("./types").NotebookInfo>(`/api/notebooks/${id}`);
@@ -601,7 +601,7 @@ export const updateNotebook = (id: string, payload: { name?: string; description
   });
 
 export const searchNotebooks = (query: string, limit = 50, offset = 0) =>
-  request<import("./types").NotebookInfo[]>(`/api/notebooks/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
+  request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
 
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {

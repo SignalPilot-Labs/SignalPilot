@@ -41,6 +41,7 @@ services:
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
       SP_MCP_ALLOWED_HOSTS: gateway
       SP_DASHBOARDS_DIR: /dashboards
+      SP_NOTEBOOKS_DIR: /data/notebooks
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared

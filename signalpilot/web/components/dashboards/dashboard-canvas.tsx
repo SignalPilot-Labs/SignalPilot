@@ -15,7 +15,7 @@ export function DashboardCanvas({ dashboard }: { dashboard: DashboardDefinition 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {dashboard.charts.map((chart) => (
-          <DashboardChartCard key={chart.id} chart={chart} />
+          <DashboardChartCard key={chart.id} chart={chart} dashboardId={dashboard.id} />
         ))}
       </div>
     );
@@ -47,7 +47,7 @@ export function DashboardCanvas({ dashboard }: { dashboard: DashboardDefinition 
               gridRow: `${y + 1} / span ${h}`,
             }}
           >
-            <DashboardChartCard chart={chart} />
+            <DashboardChartCard chart={chart} dashboardId={dashboard.id} />
           </div>
         );
       })}

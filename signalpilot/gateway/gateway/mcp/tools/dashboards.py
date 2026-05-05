@@ -11,7 +11,12 @@ from pathlib import Path
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.server import mcp
 
-_VALID_CHART_TYPES = {"bar", "line", "area", "scatter", "pie", "histogram", "table", "kpi"}
+_VALID_CHART_TYPES = {
+    "bar", "line", "area", "scatter", "pie", "histogram",
+    "radar", "gauge", "funnel", "heatmap", "treemap", "sunburst",
+    "sankey", "boxplot", "candlestick", "graph",
+    "table", "kpi",
+}
 
 _UUID_RE_PATTERN = (
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -243,13 +248,25 @@ async def add_chart_to_dashboard(
 
     Use query_database first to validate your SQL before adding it to a dashboard.
 
-    Supported chart_type values: bar, line, area, scatter, pie, histogram, table, kpi
+    Supported chart_type values: bar, line, area, scatter, pie, histogram,
+    radar, gauge, funnel, heatmap, treemap, sunburst, sankey, boxplot,
+    candlestick, graph, table, kpi
 
     Convention for SQL result shape:
     - bar/line/area: first column = x-axis (categories/dates), remaining columns = y-axis series
     - scatter: first column = x values, second column = y values
     - pie: first column = name/label, second column = value
     - histogram: first column = values to bin (auto-binned by the renderer)
+    - radar: first column = indicator names, remaining columns = series values
+    - gauge: first row, first column = the number to display (like kpi but rendered as a gauge dial)
+    - funnel: first column = stage name, second column = value (rendered largest-to-smallest)
+    - heatmap: first column = x category, second column = y category, third column = value
+    - treemap: first column = name, second column = value (area-proportional rectangles)
+    - sunburst: first column = name, second column = value (nested ring chart)
+    - sankey: first column = source, second column = target, third column = flow value
+    - boxplot: first column = category/group, second column = numeric value (many rows per category, stats computed automatically)
+    - candlestick: first column = date, then open, close, low, high columns
+    - graph: first column = source node, second column = target node, optional third column = value
     - table: all columns rendered as-is
     - kpi: first row, first column = the number to display
 
@@ -258,7 +275,7 @@ async def add_chart_to_dashboard(
     Args:
         dashboard_id: UUID of the target dashboard
         title: Chart title (1-120 characters)
-        chart_type: One of: bar, line, area, scatter, pie, histogram, table, kpi
+        chart_type: One of: bar, line, area, scatter, pie, histogram, radar, gauge, funnel, heatmap, treemap, sunburst, sankey, boxplot, candlestick, graph, table, kpi
         sql: SQL query (SELECT only, max 4000 characters)
         connection_name: Database connection to execute against
         echarts_option: JSON string of ECharts option overrides (optional)

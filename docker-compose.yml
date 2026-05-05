@@ -63,9 +63,10 @@ services:
       - "3200:3200"
     environment:
       SP_DASHBOARDS_DIR: /dashboards
+      GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
       - signalpilot-shared:/shared:ro
-      - /tmp/sp-workspaces/dashboards:/dashboards:ro
+      - /tmp/sp-workspaces/dashboards:/dashboards
     depends_on:
       - gateway
     restart: unless-stopped

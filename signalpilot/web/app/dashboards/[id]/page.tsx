@@ -1,5 +1,6 @@
 import { loadDashboard } from "@/lib/dashboards/load-dashboards";
 import { DashboardCanvas } from "@/components/dashboards/dashboard-canvas";
+import { RefreshAllButton } from "@/components/dashboards/refresh-all-button";
 import { EmptyState, EmptyTerminal } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { notFound } from "next/navigation";
@@ -26,12 +27,17 @@ export default async function DashboardDetailPage({ params }: PageProps) {
         subtitle="dashboard"
         description={dashboard.description || `${dashboard.charts.length} chart${dashboard.charts.length !== 1 ? "s" : ""}`}
         actions={
-          <Link
-            href="/dashboards"
-            className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all"
-          >
-            &larr; all dashboards
-          </Link>
+          <div className="flex items-center gap-2">
+            {dashboard.charts.length > 0 && (
+              <RefreshAllButton dashboardId={dashboard.id} />
+            )}
+            <Link
+              href="/dashboards"
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all"
+            >
+              &larr; all dashboards
+            </Link>
+          </div>
         }
       />
       <TerminalBar path={`dashboards/${id}`} />

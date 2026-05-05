@@ -1,7 +1,10 @@
 "use client";
 
+import { useTransition } from "react";
 import type { DashboardChart } from "@/lib/dashboards/types";
 import { mapDashboardChartOption } from "@/lib/echarts/map-dashboard-option";
+import { refreshChart } from "@/lib/dashboards/refresh-chart";
+import { useRouter } from "next/navigation";
 import { EChart } from "./echart";
 
 function formatNumber(value: unknown): string {
@@ -17,8 +20,23 @@ function formatNumber(value: unknown): string {
   return String(value);
 }
 
-export function DashboardChartCard({ chart }: { chart: DashboardChart }) {
+export function DashboardChartCard({
+  chart,
+  dashboardId,
+}: {
+  chart: DashboardChart;
+  dashboardId: string;
+}) {
   const cached = chart.cachedData;
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  function handleRefresh() {
+    startTransition(async () => {
+      await refreshChart(dashboardId, chart.id);
+      router.refresh();
+    });
+  }
 
   return (
     <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-4 flex flex-col h-full hover:bg-[var(--color-bg-hover)] transition-all card-glow">
@@ -46,8 +64,32 @@ export function DashboardChartCard({ chart }: { chart: DashboardChart }) {
       )}
 
       {cached?.computedAt && (
-        <div className="mt-2 text-[10px] text-[var(--color-text-dim)] tracking-wider">
-          data from {new Date(cached.computedAt).toLocaleString()}
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider">
+            data from {new Date(cached.computedAt).toLocaleString()}
+          </span>
+          <button
+            onClick={handleRefresh}
+            disabled={isPending}
+            title="Refresh chart data"
+            className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors disabled:opacity-40"
+          >
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 12 12"
+              fill="none"
+              className={isPending ? "animate-spin" : ""}
+            >
+              <path
+                d="M10 6A4 4 0 1 1 6 2"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+              <path d="M6 0L8 2L6 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
       )}
     </div>

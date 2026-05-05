@@ -2,13 +2,30 @@
 
 import { useRef, useEffect } from "react";
 import * as echarts from "echarts/core";
-import { BarChart, LineChart, PieChart, ScatterChart } from "echarts/charts";
+import {
+  BarChart,
+  LineChart,
+  PieChart,
+  ScatterChart,
+  RadarChart,
+  GaugeChart,
+  FunnelChart,
+  HeatmapChart,
+  TreemapChart,
+  SunburstChart,
+  SankeyChart,
+  BoxplotChart,
+  CandlestickChart,
+  GraphChart,
+} from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
   LegendComponent,
   TitleComponent,
   GraphicComponent,
+  RadarComponent,
+  VisualMapComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { signalpilotTheme } from "@/lib/echarts/theme";
@@ -18,11 +35,23 @@ echarts.use([
   LineChart,
   PieChart,
   ScatterChart,
+  RadarChart,
+  GaugeChart,
+  FunnelChart,
+  HeatmapChart,
+  TreemapChart,
+  SunburstChart,
+  SankeyChart,
+  BoxplotChart,
+  CandlestickChart,
+  GraphChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
   TitleComponent,
   GraphicComponent,
+  RadarComponent,
+  VisualMapComponent,
   CanvasRenderer,
 ]);
 

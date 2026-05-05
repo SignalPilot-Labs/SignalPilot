@@ -18,6 +18,7 @@ import {
   invalidateNotebooks,
 } from "@/lib/hooks/use-gateway-data";
 import { analyzeNotebook, deleteNotebook } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 const MAX_CELLS = 200;
 
@@ -35,6 +36,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
   const { data: cells, isLoading: cellsLoading } = useNotebookCells(id);
   const { data: analysis, isLoading: analysisLoading, mutate: mutateAnalysis } = useNotebookAnalysis(id);
 
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>("cells");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -46,9 +48,10 @@ export default function NotebookDetailPage({ params }: PageProps) {
       const result = await analyzeNotebook(id);
       await mutateAnalysis(result, { revalidate: false });
       await invalidateNotebook(id);
+      toast("analysis complete", "success");
     } catch (err) {
-      // Surface the error — do not silently swallow it
       console.error("Analyze failed:", err);
+      toast("analysis failed", "error");
     } finally {
       setAnalyzing(false);
     }
@@ -62,8 +65,9 @@ export default function NotebookDetailPage({ params }: PageProps) {
       router.push("/notebooks");
     } catch (err) {
       console.error("Delete failed:", err);
+      toast("failed to delete notebook", "error");
       setDeleting(false);
-      setDeleteOpen(false);
+      // Keep the dialog open so the user sees it failed and can retry
     }
   }
 

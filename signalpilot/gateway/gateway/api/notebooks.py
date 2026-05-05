@@ -69,6 +69,19 @@ async def upload_notebook(upload: NotebookUpload, store: StoreD) -> NotebookInfo
     return info
 
 
+@router.get("/notebooks/search", dependencies=[RequireScope("read")])
+async def search_notebooks(
+    store: StoreD,
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> list[NotebookInfo]:
+    """Search notebooks by name, description, or tags."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'q' must not be empty.")
+    return await store.search_notebooks(query=q, limit=limit, offset=offset)
+
+
 @router.get("/notebooks/{notebook_id}", dependencies=[RequireScope("read")])
 async def get_notebook(notebook_id: NotebookIdP, store: StoreD) -> NotebookInfo:
     """Get notebook metadata by ID."""

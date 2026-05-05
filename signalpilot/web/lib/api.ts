@@ -594,6 +594,9 @@ export const analyzeNotebook = (id: string) =>
 export const deleteNotebook = (id: string) =>
   request<void>(`/api/notebooks/${id}`, { method: "DELETE" });
 
+export const searchNotebooks = (query: string, limit = 50, offset = 0) =>
+  request<import("./types").NotebookInfo[]>(`/api/notebooks/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

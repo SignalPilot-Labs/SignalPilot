@@ -103,6 +103,7 @@ def _analyze_notebook_content(nb: dict) -> dict:
     functions_defined: list[str] = []
     seen_imports: set[str] = set()
     seen_functions: set[str] = set()
+    seen_error_indices: set[int] = set()
     execution_counts: list[int] = []
 
     for idx, cell in enumerate(cells):
@@ -133,7 +134,8 @@ def _analyze_notebook_content(nb: dict) -> dict:
             for output in cell.get("outputs", []):
                 output_type = output.get("output_type", "unknown")
                 output_summary[output_type] = output_summary.get(output_type, 0) + 1
-                if output_type == "error":
+                if output_type == "error" and idx not in seen_error_indices:
+                    seen_error_indices.add(idx)
                     error_cells.append(idx)
 
     if execution_counts:

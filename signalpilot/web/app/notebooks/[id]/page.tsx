@@ -272,7 +272,13 @@ export default function NotebookDetailPage({ params }: PageProps) {
               disabled={analyzing}
               className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50"
             >
-              {analyzing ? "analyzing..." : "analyze"}
+              {analyzing
+                ? notebook.analyzed_at
+                  ? "re-analyzing..."
+                  : "analyzing..."
+                : notebook.analyzed_at
+                  ? "re-analyze"
+                  : "analyze"}
             </button>
             <button
               onClick={() => setDeleteOpen(true)}

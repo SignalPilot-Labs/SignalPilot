@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 
 from gateway.mcp.audit import audited_tool
@@ -11,6 +12,7 @@ from gateway.mcp.context import _store_session
 from gateway.mcp.server import mcp
 from gateway.models.notebooks import NotebookUpload
 from gateway.store.notebook_files import (
+    _analyze_notebook_content,
     _cell_source,
     _delete_notebook_file,
     _load_notebook_file,
@@ -79,6 +81,8 @@ async def upload_notebook(name: str, content: str, description: str = "", tags: 
         return "Error: Content must be a valid Jupyter notebook (must have 'cells' key)."
 
     parsed = _parse_notebook(nb)
+    analysis = _analyze_notebook_content(nb)
+    analyzed_at = time.time()
     notebook_id = str(uuid.uuid4())
 
     upload = NotebookUpload(
@@ -104,11 +108,19 @@ async def upload_notebook(name: str, content: str, description: str = "", tags: 
             _delete_notebook_file(notebook_id)
             return f"Error: {e}"
 
+        analysis_json = {**analysis, "notebook_id": notebook_id, "analyzed_at": analyzed_at}
+        await store.update_notebook_analysis(
+            notebook_id=notebook_id,
+            analysis_json=analysis_json,
+            analyzed_at=analyzed_at,
+        )
+
     return (
         f"Notebook uploaded: {info.id}\n"
         f"Name: {info.name}\n"
         f"Cells: {info.cell_count} ({info.code_cell_count} code, "
-        f"{info.markdown_cell_count} markdown)"
+        f"{info.markdown_cell_count} markdown)\n"
+        f"Analysis: complete ({len(analysis['imports'])} imports, {analysis['total_code_lines']} code lines)"
     )
 
 

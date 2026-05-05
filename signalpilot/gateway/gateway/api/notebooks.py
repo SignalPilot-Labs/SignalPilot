@@ -64,6 +64,8 @@ async def upload_notebook(upload: NotebookUpload, store: StoreD) -> NotebookInfo
         raise HTTPException(status_code=422, detail="Content must be a valid Jupyter notebook (must have 'cells' key).")
 
     parsed = _parse_notebook(nb)
+    analysis = _analyze_notebook_content(nb)
+    analyzed_at = time.time()
     notebook_id = str(uuid.uuid4())
 
     _save_notebook_file(notebook_id, upload.content)
@@ -81,7 +83,15 @@ async def upload_notebook(upload: NotebookUpload, store: StoreD) -> NotebookInfo
         _delete_notebook_file(notebook_id)
         raise HTTPException(status_code=409, detail="A notebook with this name already exists.")
 
-    return info
+    analysis_json = {**analysis, "notebook_id": notebook_id, "analyzed_at": analyzed_at}
+    await store.update_notebook_analysis(
+        notebook_id=notebook_id,
+        analysis_json=analysis_json,
+        analyzed_at=analyzed_at,
+    )
+
+    updated = await store.get_notebook_meta(notebook_id)
+    return updated or info
 
 
 @router.get("/notebooks/search", dependencies=[RequireScope("read")])

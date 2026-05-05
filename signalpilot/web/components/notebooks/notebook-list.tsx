@@ -361,7 +361,9 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
                     {nb.analyzed_at && (
                       <>
                         <span>&middot;</span>
-                        <span className="text-[var(--color-success)] opacity-70">analyzed</span>
+                        <span className="text-[var(--color-success)] opacity-70">
+                          analyzed <TimeAgo timestamp={nb.analyzed_at} />
+                        </span>
                       </>
                     )}
                   </div>

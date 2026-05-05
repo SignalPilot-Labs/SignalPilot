@@ -49,17 +49,8 @@ async def get_notebooks_summary() -> str:
     return "\n".join(lines)
 
 
-@audited_tool(mcp)
-async def analyze_notebook(notebook_id: str) -> str:
-    """
-    Analyze a notebook: scan imports, detect errors, summarize outputs, find function definitions.
-
-    Args:
-        notebook_id: UUID of the notebook
-
-    Returns:
-        Formatted analysis text including imports, errors, execution gaps, and output summary.
-    """
+async def _run_analysis(notebook_id: str) -> str:
+    """Validate UUID, load file, run analysis, store results, format output string."""
     if not _UUID_RE.match(notebook_id):
         return f"Error: Invalid notebook ID '{notebook_id}'."
 
@@ -93,6 +84,34 @@ async def analyze_notebook(notebook_id: str) -> str:
         f"Kernel: {analysis['kernel_info'] or 'unknown'}",
     ]
     return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def analyze_notebook(notebook_id: str) -> str:
+    """
+    Analyze a notebook: scan imports, detect errors, summarize outputs, find function definitions.
+
+    Args:
+        notebook_id: UUID of the notebook
+
+    Returns:
+        Formatted analysis text including imports, errors, execution gaps, and output summary.
+    """
+    return await _run_analysis(notebook_id)
+
+
+@audited_tool(mcp)
+async def reanalyze_notebook(notebook_id: str) -> str:
+    """
+    Re-analyze a previously analyzed notebook. Updates the analysis results and analyzed_at timestamp.
+
+    Args:
+        notebook_id: UUID of the notebook
+
+    Returns:
+        Formatted analysis text including imports, errors, execution gaps, and output summary.
+    """
+    return await _run_analysis(notebook_id)
 
 
 @audited_tool(mcp)
@@ -269,6 +288,7 @@ async def get_notebook_file(notebook_id: str) -> str:
 __all__ = [
     "get_notebooks_summary",
     "analyze_notebook",
+    "reanalyze_notebook",
     "get_notebook_outputs",
     "get_notebook_cell",
     "search_notebooks",

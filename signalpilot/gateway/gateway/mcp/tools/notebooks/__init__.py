@@ -34,6 +34,7 @@ from gateway.mcp.tools.notebooks.analysis import (
     get_notebook_file,
     get_notebook_outputs,
     get_notebooks_summary,
+    reanalyze_notebook,
     search_notebooks,
 )
 from gateway.mcp.tools.notebooks.batch import (
@@ -49,6 +50,7 @@ __all__ = [
     "delete_notebook",
     "get_notebooks_summary",
     "analyze_notebook",
+    "reanalyze_notebook",
     "get_notebook_outputs",
     "get_notebook_cell",
     "search_notebooks",

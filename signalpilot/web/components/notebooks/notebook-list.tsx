@@ -106,6 +106,7 @@ export function NotebookList({ notebooks }: NotebookListProps) {
           )}
           <input
             type="text"
+            aria-label="Search notebooks"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="search notebooks..."

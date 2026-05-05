@@ -100,7 +100,7 @@ export function NotebookAnalysisDisplay({ analysis, loading, onAnalyze }: Notebo
       </div>
 
       {/* Metrics grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-px bg-[var(--color-border)]">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
         {/* Cell counts */}
         <MetricCard
           label="code cells"
@@ -153,7 +153,7 @@ export function NotebookAnalysisDisplay({ analysis, loading, onAnalyze }: Notebo
           value={
             <span
               className={`text-xl font-light tabular-nums ${
-                gapCount > 0 ? "text-[var(--color-warning,orange)]" : "text-[var(--color-text)]"
+                gapCount > 0 ? "text-[var(--color-warning)]" : "text-[var(--color-text)]"
               }`}
             >
               {gapCount}

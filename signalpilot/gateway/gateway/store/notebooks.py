@@ -180,7 +180,8 @@ async def search_notebooks(
 ) -> list[NotebookInfo]:
     limit = min(limit, _MAX_LIMIT)
     offset = max(offset, 0)
-    pattern = f"%{query}%"
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
     result = await session.execute(
         select(GatewayNotebook)
         .where(

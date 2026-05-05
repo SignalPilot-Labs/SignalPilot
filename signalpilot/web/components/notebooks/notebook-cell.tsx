@@ -31,7 +31,7 @@ interface CellOutput {
   name?: string;
 }
 
-function renderOutput(output: unknown, idx: number) {
+function renderOutput(output: unknown, idx: number, cellIndex: number) {
   if (!output || typeof output !== "object") return null;
   const o = output as CellOutput;
   const outputType = o.output_type ?? "";
@@ -74,7 +74,7 @@ function renderOutput(output: unknown, idx: number) {
         <img
           key={idx}
           src={`data:image/png;base64,${b64}`}
-          alt="cell output"
+          alt={`Output ${idx + 1} of cell ${cellIndex}`}
           className="mt-1 max-w-full"
         />
       );
@@ -90,7 +90,7 @@ function renderOutput(output: unknown, idx: number) {
         <img
           key={idx}
           src={src}
-          alt="cell output"
+          alt={`Output ${idx + 1} of cell ${cellIndex}`}
           className="mt-1 max-w-full"
         />
       );
@@ -104,7 +104,7 @@ function renderOutput(output: unknown, idx: number) {
         return (
           <div
             key={idx}
-            className="mt-1 px-3 py-2 text-[11px] overflow-x-auto notebook-html-output"
+            className="mt-1 px-3 py-2 text-[11px] overflow-x-auto notebook-html-output border border-[var(--color-border)] bg-[var(--color-bg)]"
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{ __html: clean }}
           />
@@ -153,7 +153,7 @@ export function NotebookCellRenderer({ cell, outputsOnly = false }: { cell: Note
           </span>
         </div>
         <div className="px-3 py-2">
-          {outputs.map((o, i) => renderOutput(o, i))}
+          {outputs.map((o, i) => renderOutput(o, i, cell.index))}
         </div>
       </div>
     );
@@ -206,7 +206,7 @@ export function NotebookCellRenderer({ cell, outputsOnly = false }: { cell: Note
       {outputs.length > 0 && (
         <div className="px-3 pb-2 border-t border-[var(--color-border)]">
           <div className="pt-2">
-            {outputs.map((o, i) => renderOutput(o, i))}
+            {outputs.map((o, i) => renderOutput(o, i, cell.index))}
           </div>
         </div>
       )}

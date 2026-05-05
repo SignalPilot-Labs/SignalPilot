@@ -179,10 +179,14 @@ export default function NotebookDetailPage({ params }: PageProps) {
       </TerminalBar>
 
       {/* Tab bar */}
-      <div className="flex items-center gap-0 border-b border-[var(--color-border)] mb-6">
+      <div role="tablist" className="flex items-center gap-0 border-b border-[var(--color-border)] mb-6">
         {TABS.map((tab) => (
           <button
             key={tab.id}
+            role="tab"
+            id={`tab-${tab.id}`}
+            aria-selected={activeTab === tab.id}
+            aria-controls={`tabpanel-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2 text-[12px] uppercase tracking-[0.15em] transition-all border-b-2 -mb-px ${
               activeTab === tab.id
@@ -202,7 +206,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
 
       {/* Cells tab */}
       {activeTab === "cells" && (
-        <div className="space-y-3">
+        <div role="tabpanel" id="tabpanel-cells" aria-labelledby="tab-cells" className="space-y-3">
           {cellsLoading && (
             <>
               {Array.from({ length: 4 }).map((_, i) => (
@@ -231,16 +235,18 @@ export default function NotebookDetailPage({ params }: PageProps) {
 
       {/* Analysis tab */}
       {activeTab === "analysis" && (
-        <NotebookAnalysisDisplay
-          analysis={analysis ?? null}
-          loading={analyzing || analysisLoading}
-          onAnalyze={handleAnalyze}
-        />
+        <div role="tabpanel" id="tabpanel-analysis" aria-labelledby="tab-analysis">
+          <NotebookAnalysisDisplay
+            analysis={analysis ?? null}
+            loading={analyzing || analysisLoading}
+            onAnalyze={handleAnalyze}
+          />
+        </div>
       )}
 
       {/* Outputs tab */}
       {activeTab === "outputs" && (
-        <div className="space-y-3">
+        <div role="tabpanel" id="tabpanel-outputs" aria-labelledby="tab-outputs" className="space-y-3">
           {cellsLoading && (
             <>
               {Array.from({ length: 3 }).map((_, i) => (

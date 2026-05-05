@@ -78,13 +78,16 @@ export function NotebookUploadModal({ open, onClose }: NotebookUploadModalProps)
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="notebook-upload-title"
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] w-full max-w-md p-6">
-        <h2 className="text-[12px] font-medium tracking-[0.15em] uppercase text-[var(--color-text)] mb-4">
+        <h2 id="notebook-upload-title" className="text-[12px] font-medium tracking-[0.15em] uppercase text-[var(--color-text)] mb-4">
           upload notebook
         </h2>
 

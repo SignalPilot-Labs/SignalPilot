@@ -47,6 +47,16 @@ from gateway.mcp.tools.model_verify import (
     compare_join_types,
     validate_model_output,
 )
+from gateway.mcp.tools.notebooks import (
+    analyze_notebook,
+    delete_notebook,
+    get_notebook,
+    get_notebook_cell,
+    get_notebook_outputs,
+    list_notebooks,
+    search_notebooks,
+    upload_notebook,
+)
 from gateway.mcp.tools.projects import get_project, list_projects
 from gateway.mcp.tools.query import (
     check_budget,
@@ -124,6 +134,14 @@ __all__ = [
     "validate_model_output",
     "audit_model_sources",
     "compare_join_types",
+    "list_notebooks",
+    "upload_notebook",
+    "get_notebook",
+    "get_notebook_cell",
+    "analyze_notebook",
+    "get_notebook_outputs",
+    "search_notebooks",
+    "delete_notebook",
     "list_projects",
     "get_project",
     # Internal context helpers

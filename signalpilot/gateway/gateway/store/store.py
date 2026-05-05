@@ -15,6 +15,7 @@ import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
+import gateway.store.notebooks as notebooks_store
 import gateway.store.paths as paths
 import gateway.store.projects as projects
 import gateway.store.settings as settings_mod
@@ -35,6 +36,7 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from gateway.models.notebooks import NotebookInfo, NotebookUpload
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
@@ -561,6 +563,65 @@ class Store:
     async def delete_project(self, name: str) -> bool:
         oid = self._require_org_id()
         return await projects.delete_project(self.session, org_id=oid, name=name)
+
+    # ─── Notebooks ───────────────────────────────────────────────────────
+
+    async def list_notebooks(self, limit: int = 50, offset: int = 0) -> list[NotebookInfo]:
+        oid = self._require_org_id()
+        return await notebooks_store.list_notebooks(self.session, org_id=oid, limit=limit, offset=offset)
+
+    async def get_notebook_meta(self, notebook_id: str) -> NotebookInfo | None:
+        oid = self._require_org_id()
+        return await notebooks_store.get_notebook_meta(self.session, org_id=oid, notebook_id=notebook_id)
+
+    async def create_notebook(
+        self,
+        upload: NotebookUpload,
+        notebook_id: str,
+        cell_count: int,
+        code_cell_count: int,
+        markdown_cell_count: int,
+        kernel_name: str | None,
+    ) -> NotebookInfo:
+        oid = self._require_org_id()
+        return await notebooks_store.create_notebook(
+            self.session,
+            org_id=oid,
+            user_id=self.user_id,
+            upload=upload,
+            notebook_id=notebook_id,
+            cell_count=cell_count,
+            code_cell_count=code_cell_count,
+            markdown_cell_count=markdown_cell_count,
+            kernel_name=kernel_name,
+        )
+
+    async def update_notebook_analysis(
+        self,
+        notebook_id: str,
+        analysis_json: dict,
+        analyzed_at: float,
+    ) -> bool:
+        oid = self._require_org_id()
+        return await notebooks_store.update_notebook_analysis(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
+            analysis_json=analysis_json,
+            analyzed_at=analyzed_at,
+        )
+
+    async def delete_notebook_meta(self, notebook_id: str) -> bool:
+        oid = self._require_org_id()
+        return await notebooks_store.delete_notebook(self.session, org_id=oid, notebook_id=notebook_id)
+
+    async def get_notebook_analysis_json(self, notebook_id: str) -> dict | None:
+        oid = self._require_org_id()
+        return await notebooks_store.get_notebook_analysis_json(self.session, org_id=oid, notebook_id=notebook_id)
+
+    async def search_notebooks(self, query: str, limit: int = 50, offset: int = 0) -> list[NotebookInfo]:
+        oid = self._require_org_id()
+        return await notebooks_store.search_notebooks(self.session, org_id=oid, query=query, limit=limit, offset=offset)
 
     # ─── Audit ───────────────────────────────────────────────────────────
 

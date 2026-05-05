@@ -89,6 +89,19 @@ function NavIconAudit({ active }: { active: boolean }) {
     </svg>
   );
 }
+function NavIconNotebook({ active: _active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" />
+      <line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="4" y1="9" x2="8" y2="9" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="0" y1="3" x2="2" y2="3" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="0" y1="7" x2="2" y2="7" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="0" y1="11" x2="2" y2="11" stroke="currentColor" strokeWidth="0.75" />
+    </svg>
+  );
+}
 function NavIconSettings({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -122,6 +135,7 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "9" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
+  { href: "/notebooks", label: "notebooks", icon: NavIconNotebook, shortcut: "" },
 ];
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */

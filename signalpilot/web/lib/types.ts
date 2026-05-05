@@ -163,6 +163,42 @@ export interface ConnectionHealthStats {
   latency_avg_ms: number | null;
 }
 
+export interface NotebookInfo {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  cell_count: number;
+  code_cell_count: number;
+  markdown_cell_count: number;
+  kernel_name: string | null;
+  created_at: number;
+  updated_at: number;
+  analyzed_at: number | null;
+}
+
+export interface NotebookAnalysis {
+  notebook_id: string;
+  cell_counts: Record<string, number>;
+  imports: string[];
+  execution_order_gaps: number[];
+  error_cells: number[];
+  output_summary: Record<string, number>;
+  total_code_lines: number;
+  functions_defined: string[];
+  kernel_info: Record<string, unknown> | null;
+  analyzed_at: number;
+}
+
+export interface NotebookCell {
+  index: number;
+  cell_type: string;
+  source: string | string[];
+  outputs?: unknown[];
+  execution_count?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

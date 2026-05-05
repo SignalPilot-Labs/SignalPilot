@@ -14,12 +14,19 @@ import {
   getConnectionSchema,
   getPlan,
   setApiKey,
+  getNotebooks,
+  getNotebook,
+  getNotebookCells,
+  getNotebookAnalysis,
 } from "@/lib/api";
 import type { PlanUsage } from "@/lib/api";
 import type {
   ConnectionInfo,
   ConnectionHealthStats,
   GatewaySettings,
+  NotebookInfo,
+  NotebookAnalysis,
+  NotebookCell,
 } from "@/lib/types";
 
 // ── Cache keys (exported for manual invalidation) ────────────────────────────
@@ -37,6 +44,10 @@ export const SWR_KEYS = {
   auditStats: "/api/audit/stats",
   connectionSchema: (name: string) => `/api/connections/${name}/schema`,
   healthHistory: (name: string) => `/api/connections/${name}/health/history`,
+  notebooks: "/api/notebooks",
+  notebook: (id: string) => `/api/notebooks/${id}`,
+  notebookCells: (id: string) => `/api/notebooks/${id}/cells`,
+  notebookAnalysis: (id: string) => `/api/notebooks/${id}/analysis`,
 } as const;
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -155,6 +166,64 @@ export function useConnectionSchema(name: string | null) {
     () => getConnectionSchema(name!),
     { dedupingInterval: 300_000, revalidateOnFocus: false },
   );
+}
+
+/** Notebooks list — 30s dedup. */
+export function useNotebooks() {
+  return useSWR<NotebookInfo[]>(
+    SWR_KEYS.notebooks,
+    () => getNotebooks(),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** Single notebook metadata — 60s dedup. */
+export function useNotebook(id: string | null) {
+  return useSWR<NotebookInfo>(
+    id ? SWR_KEYS.notebook(id) : null,
+    () => getNotebook(id!),
+    { dedupingInterval: 60_000 },
+  );
+}
+
+/** Notebook cells — 60s dedup. */
+export function useNotebookCells(id: string | null) {
+  return useSWR<NotebookCell[]>(
+    id ? SWR_KEYS.notebookCells(id) : null,
+    () => getNotebookCells(id!),
+    { dedupingInterval: 60_000 },
+  );
+}
+
+/** Notebook analysis — 60s dedup. Returns null when 404 (not yet analyzed). */
+export function useNotebookAnalysis(id: string | null) {
+  return useSWR<NotebookAnalysis | null>(
+    id ? SWR_KEYS.notebookAnalysis(id) : null,
+    async () => {
+      try {
+        return await getNotebookAnalysis(id!);
+      } catch (err) {
+        // 404 means not yet analyzed — treat as null, not an error
+        if (err instanceof Error && err.message.startsWith("404:")) {
+          return null;
+        }
+        throw err;
+      }
+    },
+    { dedupingInterval: 60_000 },
+  );
+}
+
+export function invalidateNotebooks() {
+  return mutate(SWR_KEYS.notebooks);
+}
+
+export function invalidateNotebook(id: string) {
+  return Promise.all([
+    mutate(SWR_KEYS.notebook(id)),
+    mutate(SWR_KEYS.notebookCells(id)),
+    mutate(SWR_KEYS.notebookAnalysis(id)),
+  ]);
 }
 
 // ── Invalidation helpers ────────────────────────────────────────────────────

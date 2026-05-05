@@ -318,3 +318,28 @@ class GatewayApiKey(GatewayBase):
         Index("ix_gw_api_keys_org", "org_id"),
         Index("ix_gw_api_keys_hash", "key_hash"),
     )
+
+
+class GatewayNotebook(GatewayBase):
+    __tablename__ = "gateway_notebooks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list | None] = mapped_column(JSON)
+    filename: Mapped[str | None] = mapped_column(String(500))
+    cell_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    code_cell_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    markdown_cell_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    kernel_name: Mapped[str | None] = mapped_column(String(100))
+    analysis_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    analyzed_at: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_gw_nb_org_name"),
+        Index("ix_gw_nb_org_id", "org_id"),
+    )

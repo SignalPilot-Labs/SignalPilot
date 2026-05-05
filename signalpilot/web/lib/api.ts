@@ -567,6 +567,33 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
+// Notebooks
+export const getNotebooks = (limit = 50, offset = 0) =>
+  request<import("./types").NotebookInfo[]>(`/api/notebooks?limit=${limit}&offset=${offset}`);
+
+export const getNotebook = (id: string) =>
+  request<import("./types").NotebookInfo>(`/api/notebooks/${id}`);
+
+export const uploadNotebook = (payload: { name: string; content: string; description: string; tags: string[] }) =>
+  request<import("./types").NotebookInfo>("/api/notebooks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getNotebookCells = (id: string, cellType?: string) => {
+  const qs = cellType ? `?cell_type=${encodeURIComponent(cellType)}` : "";
+  return request<import("./types").NotebookCell[]>(`/api/notebooks/${id}/cells${qs}`);
+};
+
+export const getNotebookAnalysis = (id: string) =>
+  request<import("./types").NotebookAnalysis>(`/api/notebooks/${id}/analysis`);
+
+export const analyzeNotebook = (id: string) =>
+  request<import("./types").NotebookAnalysis>(`/api/notebooks/${id}/analyze`, { method: "POST" });
+
+export const deleteNotebook = (id: string) =>
+  request<void>(`/api/notebooks/${id}`, { method: "DELETE" });
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

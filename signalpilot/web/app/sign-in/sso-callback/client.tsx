@@ -14,7 +14,7 @@ export default function SSOCallbackClient() {
         </p>
       </div>
       <AuthenticateWithRedirectCallback
-        signInFallbackRedirectUrl="/dashboard"
+        signInFallbackRedirectUrl="/general"
         signUpFallbackRedirectUrl="/onboarding"
       />
     </AuthShell>

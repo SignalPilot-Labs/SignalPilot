@@ -53,7 +53,7 @@ export default function NotFound() {
 
         <div className="flex items-center justify-center gap-4">
           <Link
-            href="/dashboard"
+            href="/general"
             className="flex items-center gap-2 px-5 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
           >
             dashboard

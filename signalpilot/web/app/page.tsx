@@ -58,7 +58,7 @@ export default function Home() {
       if (isCloudMode && !isAuthenticated) {
         router.push("/sign-in");
       } else {
-        router.push("/dashboard");
+        router.push("/general");
       }
     }, 3200);
 
@@ -70,7 +70,7 @@ export default function Home() {
     if (isCloudMode && !isAuthenticated) {
       router.push("/sign-in");
     } else {
-      router.push("/dashboard");
+      router.push("/general");
     }
   };
 

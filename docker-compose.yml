@@ -61,8 +61,11 @@ services:
       dockerfile: ../../Dockerfile.web
     ports:
       - "3200:3200"
+    environment:
+      SP_DASHBOARDS_DIR: /dashboards
     volumes:
       - signalpilot-shared:/shared:ro
+      - /tmp/sp-workspaces/dashboards:/dashboards:ro
     depends_on:
       - gateway
     restart: unless-stopped

@@ -98,18 +98,30 @@ function NavIconSettings({ active }: { active: boolean }) {
   );
 }
 
+function NavIconAnalytics({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="1" y="8" width="3" height="5" stroke="currentColor" strokeWidth="1" />
+      <rect x="5.5" y="5" width="3" height="8" stroke="currentColor" strokeWidth="1" />
+      <rect x="10" y="2" width="3" height="11" stroke="currentColor" strokeWidth="1" />
+      {active && <rect x="10.5" y="2.5" width="2" height="2" fill="var(--color-success)" />}
+    </svg>
+  );
+}
+
 type NavIconComponent = React.FC<{ active: boolean }>;
 
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
-  { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
-  { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
-  { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
-  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "5" },
-  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "8" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "9" },
+  { href: "/general", label: "general", icon: NavIconDashboard, shortcut: "1" },
+  { href: "/dashboards", label: "dashboards", icon: NavIconAnalytics, shortcut: "2" },
+  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "3" },
+  { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "4" },
+  { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "5" },
+  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "6" },
+  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "7" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "9" },
+  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
 ];
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
@@ -405,7 +417,7 @@ export default function Sidebar() {
     <aside className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
       {/* Logo */}
       <div className="px-5 py-5 border-b border-[var(--color-border)]">
-        <Link href="/dashboard" className="flex items-center gap-3 group">
+        <Link href="/general" className="flex items-center gap-3 group">
           <div className="transition-transform group-hover:scale-105">
             <SignalPilotLogo />
           </div>

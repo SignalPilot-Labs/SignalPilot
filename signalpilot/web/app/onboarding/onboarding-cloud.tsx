@@ -535,7 +535,7 @@ function OnboardingWizard({
 
   useEffect(() => {
     if (isComplete === true) {
-      router.push("/dashboard");
+      router.push("/general");
     }
   }, [isComplete, router]);
 
@@ -553,7 +553,7 @@ function OnboardingWizard({
     } catch {
       toast("could not save onboarding status", "error");
     }
-    router.push("/dashboard");
+    router.push("/general");
   }
 
   return (
@@ -657,7 +657,7 @@ function CloudOnboardingInner() {
       user.update({
         unsafeMetadata: { ...user.unsafeMetadata, onboardingCompleted: true },
       }).catch(() => {}).finally(() => {
-        router.push("/dashboard");
+        router.push("/general");
       });
     }
   }, [orgLoaded, orgId, teamCreated, user, router]);

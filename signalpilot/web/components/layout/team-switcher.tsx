@@ -163,7 +163,7 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
     try {
       await setActive({ organization: orgId });
       // Force full reload so gateway gets fresh JWT with new org_id
-      window.location.href = "/dashboard";
+      window.location.href = "/general";
       return;
     } catch (e) {
       setSwitchError(e instanceof Error ? e.message : String(e));
@@ -179,7 +179,7 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
     try {
       await createTeam(trimmed);
       // useCreateTeam already calls setActive internally — reload to pick up new org
-      window.location.href = "/dashboard";
+      window.location.href = "/general";
       return;
     } catch {
       // createError from hook will render

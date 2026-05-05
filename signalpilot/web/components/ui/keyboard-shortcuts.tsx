@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { TierBadge } from "@/components/branding/tier-badge";
 
 const NAV_SHORTCUTS = [
-  { key: "1", label: "dashboard", path: "/dashboard" },
+  { key: "1", label: "general", path: "/general" },
   { key: "2", label: "query", path: "/query" },
   { key: "3", label: "schema", path: "/schema" },
   { key: "4", label: "sandboxes", path: "/sandboxes" },

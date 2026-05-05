@@ -199,6 +199,19 @@ export interface NotebookCell {
   metadata?: Record<string, unknown>;
 }
 
+export interface NotebookSummary {
+  total_notebooks: number;
+  total_cells: number;
+  total_code_cells: number;
+  total_markdown_cells: number;
+  total_code_lines: number;
+  analyzed_count: number;
+  pending_count: number;
+  notebooks_with_errors: number;
+  total_error_cells: number;
+  top_imports: string[];
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

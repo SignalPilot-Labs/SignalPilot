@@ -36,7 +36,7 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
-from gateway.models.notebooks import NotebookInfo, NotebookUpload
+from gateway.models.notebooks import NotebookInfo, NotebookSummary, NotebookUpload
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
@@ -647,6 +647,10 @@ class Store:
     async def count_search_notebooks(self, query: str) -> int:
         oid = self._require_org_id()
         return await notebooks_store.count_search_notebooks(self.session, org_id=oid, query=query)
+
+    async def get_notebooks_summary(self) -> NotebookSummary:
+        oid = self._require_org_id()
+        return await notebooks_store.get_notebooks_summary(self.session, org_id=oid)
 
     # ─── Audit ───────────────────────────────────────────────────────────
 

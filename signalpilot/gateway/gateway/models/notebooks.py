@@ -67,3 +67,18 @@ class NotebookAnalysis(BaseModel):
     functions_defined: list[str]
     kernel_info: dict | None
     analyzed_at: float = Field(default_factory=time.time)
+
+
+class NotebookSummary(BaseModel):
+    """Aggregate statistics across all notebooks."""
+
+    total_notebooks: int
+    total_cells: int
+    total_code_cells: int
+    total_markdown_cells: int
+    total_code_lines: int
+    analyzed_count: int
+    pending_count: int
+    notebooks_with_errors: int
+    total_error_cells: int
+    top_imports: list[str]

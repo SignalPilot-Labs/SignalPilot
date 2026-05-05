@@ -607,6 +607,9 @@ export function getNotebookDownloadUrl(id: string): string {
   return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/download`;
 }
 
+export const getNotebooksSummary = () =>
+  request<import("./types").NotebookSummary>("/api/notebooks/summary");
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Response
 
-from gateway.models.notebooks import NotebookAnalysis, NotebookInfo, NotebookUpdate, NotebookUpload
+from gateway.models.notebooks import NotebookAnalysis, NotebookInfo, NotebookSummary, NotebookUpdate, NotebookUpload
 from gateway.security.scope_guard import RequireScope
 from gateway.store.notebook_files import (
     _analyze_notebook_content,
@@ -90,6 +90,12 @@ async def search_notebooks(
         store.count_search_notebooks(query=q),
     )
     return {"items": results, "total": total}
+
+
+@router.get("/notebooks/summary", dependencies=[RequireScope("read")])
+async def get_notebooks_summary(store: StoreD) -> NotebookSummary:
+    """Get aggregate statistics across all notebooks."""
+    return await store.get_notebooks_summary()
 
 
 @router.get("/notebooks/{notebook_id}", dependencies=[RequireScope("read")])

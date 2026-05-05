@@ -2,11 +2,15 @@
 
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { NotebookList } from "@/components/notebooks/notebook-list";
-import { useNotebooks } from "@/lib/hooks/use-gateway-data";
+import { useNotebooks, useNotebooksSummary } from "@/lib/hooks/use-gateway-data";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function NotebooksPage() {
   const { data, isLoading, error } = useNotebooks();
+  const { data: summary, isLoading: summaryLoading } = useNotebooksSummary();
+
+  // Only show summary cards when there are notebooks to summarize
+  const showSummary = summaryLoading || (summary !== undefined && summary.total_notebooks > 0);
 
   return (
     <div className="p-8 max-w-[1400px] animate-fade-in">
@@ -16,6 +20,61 @@ export default function NotebooksPage() {
         description="Upload and analyze Jupyter notebooks. View cells, outputs, and analysis results."
       />
       <TerminalBar path="notebooks --list" />
+
+      {/* Summary stat cards */}
+      {showSummary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          {summaryLoading ? (
+            <>
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+            </>
+          ) : summary !== undefined ? (
+            <>
+              <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+                <p className="text-[11px] uppercase tracking-wider text-[var(--color-text-dim)] mb-1">
+                  notebooks
+                </p>
+                <p className="text-2xl font-light text-[var(--color-text)]">
+                  {summary.total_notebooks.toLocaleString()}
+                </p>
+              </div>
+              <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+                <p className="text-[11px] uppercase tracking-wider text-[var(--color-text-dim)] mb-1">
+                  cells analyzed
+                </p>
+                <p className="text-2xl font-light text-[var(--color-text)]">
+                  {summary.total_cells.toLocaleString()}
+                </p>
+                <p className="text-[11px] text-[var(--color-text-dim)] mt-1">
+                  {summary.analyzed_count} / {summary.total_notebooks} analyzed
+                </p>
+              </div>
+              <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+                <p className="text-[11px] uppercase tracking-wider text-[var(--color-text-dim)] mb-1">
+                  error cells
+                </p>
+                <p className="text-2xl font-light text-[var(--color-text)]">
+                  {summary.total_error_cells.toLocaleString()}
+                </p>
+                <p className="text-[11px] text-[var(--color-text-dim)] mt-1">
+                  {summary.notebooks_with_errors} notebooks affected
+                </p>
+              </div>
+              <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+                <p className="text-[11px] uppercase tracking-wider text-[var(--color-text-dim)] mb-1">
+                  code lines
+                </p>
+                <p className="text-2xl font-light text-[var(--color-text)]">
+                  {summary.total_code_lines.toLocaleString()}
+                </p>
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
 
       {isLoading && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

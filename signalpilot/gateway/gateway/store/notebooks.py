@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 
-from sqlalchemy import Text, cast, or_, select
+from sqlalchemy import Text, case, cast, or_, select
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import ColumnElement
 
 from gateway.db.models import GatewayNotebook
-from gateway.models.notebooks import NotebookInfo, NotebookUpload
+from gateway.models.notebooks import NotebookInfo, NotebookSummary, NotebookUpload
 
 _MAX_LIMIT = 100
 
@@ -262,3 +263,77 @@ async def count_search_notebooks(
         select(sa_func.count()).select_from(GatewayNotebook).where(*_search_filter(query, org_id))
     )
     return result.scalar_one()
+
+
+async def get_notebooks_summary(
+    session: AsyncSession,
+    *,
+    org_id: str,
+) -> NotebookSummary:
+    """Compute aggregate statistics across all notebooks for an org."""
+
+    async def _fetch_aggregate() -> tuple[int, int, int, int, int]:
+        result = await session.execute(
+            select(
+                sa_func.count().label("total_notebooks"),
+                sa_func.coalesce(sa_func.sum(GatewayNotebook.cell_count), 0).label("total_cells"),
+                sa_func.coalesce(sa_func.sum(GatewayNotebook.code_cell_count), 0).label("total_code_cells"),
+                sa_func.coalesce(sa_func.sum(GatewayNotebook.markdown_cell_count), 0).label("total_markdown_cells"),
+                sa_func.sum(
+                    case((GatewayNotebook.analyzed_at.isnot(None), 1), else_=0)
+                ).label("analyzed_count"),
+            ).where(GatewayNotebook.org_id == org_id)
+        )
+        row = result.one()
+        return (
+            int(row.total_notebooks),
+            int(row.total_cells),
+            int(row.total_code_cells),
+            int(row.total_markdown_cells),
+            int(row.analyzed_count or 0),
+        )
+
+    async def _fetch_analysis_jsons() -> list[dict]:
+        result = await session.execute(
+            select(GatewayNotebook.analysis_json).where(
+                GatewayNotebook.org_id == org_id,
+                GatewayNotebook.analyzed_at.isnot(None),
+                GatewayNotebook.analysis_json.isnot(None),
+            )
+        )
+        return [row[0] for row in result.all() if isinstance(row[0], dict)]
+
+    total_notebooks, total_cells, total_code_cells, total_markdown_cells, analyzed_count = (
+        await _fetch_aggregate()
+    )
+    analysis_jsons = await _fetch_analysis_jsons()
+
+    total_code_lines = 0
+    notebooks_with_errors = 0
+    total_error_cells = 0
+    import_counter: Counter[str] = Counter()
+
+    for aj in analysis_jsons:
+        total_code_lines += aj.get("total_code_lines", 0)
+        error_cells = aj.get("error_cells", [])
+        if error_cells:
+            notebooks_with_errors += 1
+            total_error_cells += len(error_cells)
+        for imp in aj.get("imports", []):
+            import_counter[imp] += 1
+
+    top_imports = [imp for imp, _ in import_counter.most_common(10)]
+    pending_count = total_notebooks - analyzed_count
+
+    return NotebookSummary(
+        total_notebooks=total_notebooks,
+        total_cells=total_cells,
+        total_code_cells=total_code_cells,
+        total_markdown_cells=total_markdown_cells,
+        total_code_lines=total_code_lines,
+        analyzed_count=analyzed_count,
+        pending_count=pending_count,
+        notebooks_with_errors=notebooks_with_errors,
+        total_error_cells=total_error_cells,
+        top_imports=top_imports,
+    )

@@ -45,6 +45,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // ── Tag editing ──────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState("");
@@ -146,6 +147,27 @@ export default function NotebookDetailPage({ params }: PageProps) {
     }
   }
 
+  async function handleDownload() {
+    if (!notebook) return;
+    setDownloading(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(getNotebookDownloadUrl(id), { headers });
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${notebook.name}.ipynb`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast("download failed", "error");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (nbLoading) {
     return (
       <div className="p-8 max-w-[1400px] animate-fade-in">
@@ -239,25 +261,11 @@ export default function NotebookDetailPage({ params }: PageProps) {
           {/* Action buttons */}
           <div className="flex items-center gap-2">
             <button
-              onClick={async () => {
-                try {
-                  const headers = await getAuthHeaders();
-                  const res = await fetch(getNotebookDownloadUrl(id), { headers });
-                  if (!res.ok) throw new Error("Download failed");
-                  const blob = await res.blob();
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${notebook.name}.ipynb`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                } catch {
-                  toast("download failed", "error");
-                }
-              }}
-              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all"
+              onClick={handleDownload}
+              disabled={downloading}
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              download
+              {downloading ? "downloading..." : "download"}
             </button>
             <button
               onClick={handleAnalyze}

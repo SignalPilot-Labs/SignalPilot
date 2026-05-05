@@ -18,6 +18,7 @@ import {
   getNotebook,
   getNotebookCells,
   getNotebookAnalysis,
+  getNotebooksSummary,
 } from "@/lib/api";
 import type { PlanUsage } from "@/lib/api";
 import type {
@@ -27,6 +28,7 @@ import type {
   NotebookInfo,
   NotebookAnalysis,
   NotebookCell,
+  NotebookSummary,
 } from "@/lib/types";
 
 // ── Cache keys (exported for manual invalidation) ────────────────────────────
@@ -45,6 +47,7 @@ export const SWR_KEYS = {
   connectionSchema: (name: string) => `/api/connections/${name}/schema`,
   healthHistory: (name: string) => `/api/connections/${name}/health/history`,
   notebooks: "/api/notebooks",
+  notebooksSummary: "/api/notebooks/summary",
   notebook: (id: string) => `/api/notebooks/${id}`,
   notebookCells: (id: string) => `/api/notebooks/${id}/cells`,
   notebookAnalysis: (id: string) => `/api/notebooks/${id}/analysis`,
@@ -177,6 +180,15 @@ export function useNotebooks() {
   );
 }
 
+/** Aggregate stats across all notebooks — 30s dedup. */
+export function useNotebooksSummary() {
+  return useSWR<NotebookSummary>(
+    SWR_KEYS.notebooksSummary,
+    () => getNotebooksSummary(),
+    { dedupingInterval: 30_000 },
+  );
+}
+
 /** Single notebook metadata — 60s dedup. */
 export function useNotebook(id: string | null) {
   return useSWR<NotebookInfo>(
@@ -215,7 +227,10 @@ export function useNotebookAnalysis(id: string | null) {
 }
 
 export function invalidateNotebooks() {
-  return mutate(SWR_KEYS.notebooks);
+  return Promise.all([
+    mutate(SWR_KEYS.notebooks),
+    mutate(SWR_KEYS.notebooksSummary),
+  ]);
 }
 
 export function invalidateNotebook(id: string) {

@@ -52,6 +52,30 @@ async def list_notebooks() -> str:
 
 
 @audited_tool(mcp)
+async def get_notebooks_summary() -> str:
+    """
+    Get aggregate statistics across all notebooks: totals, analysis status, error counts, and top imports.
+
+    Returns:
+        Summary text with total notebooks, cells, analysis status breakdown, error counts, and top imports.
+    """
+    async with _store_session() as store:
+        summary = await store.get_notebooks_summary()
+
+    lines = [
+        "Notebooks summary:",
+        f"  Total notebooks: {summary.total_notebooks}",
+        f"  Total cells: {summary.total_cells} ({summary.total_code_cells} code, {summary.total_markdown_cells} markdown)",
+        f"  Total code lines: {summary.total_code_lines}",
+        f"  Analyzed: {summary.analyzed_count} | Pending: {summary.pending_count}",
+        f"  Notebooks with errors: {summary.notebooks_with_errors}",
+        f"  Total error cells: {summary.total_error_cells}",
+        f"  Top imports: {', '.join(summary.top_imports[:10]) if summary.top_imports else '(none)'}",
+    ]
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
 async def upload_notebook(name: str, content: str, description: str = "", tags: str = "") -> str:
     """
     Upload a Jupyter notebook (.ipynb JSON) to SignalPilot.

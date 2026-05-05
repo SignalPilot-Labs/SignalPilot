@@ -644,6 +644,10 @@ class Store:
         oid = self._require_org_id()
         return await notebooks_store.search_notebooks(self.session, org_id=oid, query=query, limit=limit, offset=offset)
 
+    async def count_search_notebooks(self, query: str) -> int:
+        oid = self._require_org_id()
+        return await notebooks_store.count_search_notebooks(self.session, org_id=oid, query=query)
+
     # ─── Audit ───────────────────────────────────────────────────────────
 
     async def append_audit(self, entry: AuditEntry) -> None:

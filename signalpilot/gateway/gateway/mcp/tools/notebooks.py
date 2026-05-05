@@ -397,12 +397,14 @@ async def get_notebook_outputs(notebook_id: str) -> str:
 
 
 @audited_tool(mcp)
-async def search_notebooks(query: str) -> str:
+async def search_notebooks(query: str, limit: int = 50, offset: int = 0) -> str:
     """
     Search notebooks by name, description, or tags.
 
     Args:
         query: Search string (case-insensitive)
+        limit: Maximum number of results to return (default 50, max 100)
+        offset: Number of results to skip for pagination (default 0)
 
     Returns:
         Matching notebooks with IDs and metadata.
@@ -412,12 +414,17 @@ async def search_notebooks(query: str) -> str:
         return "Error: Query must not be empty."
 
     async with _store_session() as store:
-        results = await store.search_notebooks(query=query, limit=50, offset=0)
+        results = await store.search_notebooks(query=query, limit=limit, offset=offset)
 
     if not results:
         return f"No notebooks found matching '{query}'."
 
-    lines = [f"Found {len(results)} notebook(s) matching '{query}':\n"]
+    if offset > 0:
+        header = f"Found {len(results)} notebook(s) matching '{query}' (showing from offset {offset}):\n"
+    else:
+        header = f"Found {len(results)} notebook(s) matching '{query}':\n"
+
+    lines = [header]
     for nb in results:
         lines.append(
             f"  - {nb.name} (id: {nb.id}, {nb.cell_count} cells, updated: {nb.updated_at})"

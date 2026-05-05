@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, use, useCallback, useRef, useEffect } from "react";
+import { useState, use, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { mutate as globalMutate } from "swr";
@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { EmptyState, EmptyTerminal } from "@/components/ui/empty-states";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EditableField } from "@/components/notebooks/editable-field";
 import {
   useNotebook,
   useNotebookCells,
@@ -45,46 +46,9 @@ export default function NotebookDetailPage({ params }: PageProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // ── Inline name editing ──────────────────────────────────────────────────────
-  const [editingName, setEditingName] = useState(false);
-  const [nameValue, setNameValue] = useState("");
-  const nameInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Inline description editing ───────────────────────────────────────────────
-  const [editingDesc, setEditingDesc] = useState(false);
-  const [descValue, setDescValue] = useState("");
-  const descTextareaRef = useRef<HTMLTextAreaElement>(null);
-
   // ── Tag editing ──────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState("");
   const [savingTag, setSavingTag] = useState(false);
-
-  // Sync local state when notebook data arrives (or changes)
-  useEffect(() => {
-    if (notebook && !editingName) {
-      setNameValue(notebook.name);
-    }
-  }, [notebook, editingName]);
-
-  useEffect(() => {
-    if (notebook && !editingDesc) {
-      setDescValue(notebook.description ?? "");
-    }
-  }, [notebook, editingDesc]);
-
-  useEffect(() => {
-    if (editingName && nameInputRef.current) {
-      nameInputRef.current.focus();
-      nameInputRef.current.select();
-    }
-  }, [editingName]);
-
-  useEffect(() => {
-    if (editingDesc && descTextareaRef.current) {
-      descTextareaRef.current.focus();
-      descTextareaRef.current.select();
-    }
-  }, [editingDesc]);
 
   const handleTabKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLButtonElement>, currentIdx: number, tabs: { id: TabId }[]) => {
@@ -118,63 +82,6 @@ export default function NotebookDetailPage({ params }: PageProps) {
       console.error("Update failed:", err);
       await globalMutate(SWR_KEYS.notebook(id));
       toast("failed to update notebook", "error");
-    }
-  }
-
-  // ── Name save ────────────────────────────────────────────────────────────────
-  async function commitName() {
-    if (!notebook) return;
-    const trimmed = nameValue.trim();
-    if (!trimmed || trimmed === notebook.name) {
-      setEditingName(false);
-      setNameValue(notebook.name);
-      return;
-    }
-    setEditingName(false);
-    const optimistic: NotebookInfo = { ...notebook, name: trimmed };
-    await applyUpdate({ name: trimmed }, optimistic);
-  }
-
-  function cancelName() {
-    if (!notebook) return;
-    setEditingName(false);
-    setNameValue(notebook.name);
-  }
-
-  function handleNameKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      void commitName();
-    } else if (e.key === "Escape") {
-      cancelName();
-    }
-  }
-
-  // ── Description save ─────────────────────────────────────────────────────────
-  async function commitDesc() {
-    if (!notebook) return;
-    const trimmed = descValue.trim();
-    if (trimmed === (notebook.description ?? "")) {
-      setEditingDesc(false);
-      return;
-    }
-    setEditingDesc(false);
-    const optimistic: NotebookInfo = { ...notebook, description: trimmed };
-    await applyUpdate({ description: trimmed }, optimistic);
-  }
-
-  function cancelDesc() {
-    if (!notebook) return;
-    setEditingDesc(false);
-    setDescValue(notebook.description ?? "");
-  }
-
-  function handleDescKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void commitDesc();
-    } else if (e.key === "Escape") {
-      cancelDesc();
     }
   }
 
@@ -293,55 +200,40 @@ export default function NotebookDetailPage({ params }: PageProps) {
           <div>
             {/* Title row with editable name */}
             <div className="flex items-center gap-3 mb-1">
-              {editingName ? (
-                <input
-                  ref={nameInputRef}
-                  value={nameValue}
-                  onChange={(e) => setNameValue(e.target.value)}
-                  onBlur={() => void commitName()}
-                  onKeyDown={handleNameKeyDown}
-                  className="text-xl font-light tracking-wide leading-none text-[var(--color-text)] bg-transparent border-b border-[var(--color-border-hover)] outline-none min-w-0 w-auto"
-                  style={{ width: `${Math.max(nameValue.length, 8)}ch` }}
-                  aria-label="Notebook name"
+              <h1 className="leading-none text-[var(--color-text)]">
+                <EditableField
+                  value={notebook.name}
+                  onSave={async (newName) => {
+                    const trimmed = newName.trim();
+                    if (!trimmed || trimmed === notebook.name) return;
+                    const optimistic: NotebookInfo = { ...notebook, name: trimmed };
+                    await applyUpdate({ name: trimmed }, optimistic);
+                  }}
+                  ariaLabel="Notebook name"
+                  variant="input"
+                  displayClassName="text-xl font-light tracking-wide"
                 />
-              ) : (
-                <h1
-                  className="text-xl font-light tracking-wide leading-none text-[var(--color-text)] cursor-pointer hover:underline hover:underline-offset-2 hover:decoration-[var(--color-border-hover)] transition-all"
-                  onClick={() => setEditingName(true)}
-                  title="Click to edit name"
-                >
-                  {notebook.name}
-                </h1>
-              )}
+              </h1>
               <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">
                 notebook
               </span>
             </div>
 
             {/* Editable description */}
-            {editingDesc ? (
-              <textarea
-                ref={descTextareaRef}
-                value={descValue}
-                onChange={(e) => setDescValue(e.target.value)}
-                onBlur={() => void commitDesc()}
-                onKeyDown={handleDescKeyDown}
-                rows={2}
+            <div className="text-sm text-[var(--color-text-muted)] tracking-wider">
+              <EditableField
+                value={notebook.description ?? ""}
+                onSave={async (newDesc) => {
+                  const trimmed = newDesc.trim();
+                  if (trimmed === (notebook.description ?? "")) return;
+                  const optimistic: NotebookInfo = { ...notebook, description: trimmed };
+                  await applyUpdate({ description: trimmed }, optimistic);
+                }}
+                ariaLabel="Notebook description"
+                variant="textarea"
                 placeholder="Add a description..."
-                className="text-sm text-[var(--color-text-muted)] tracking-wider bg-transparent border border-[var(--color-border)] outline-none resize-none w-full max-w-lg px-2 py-1 focus:border-[var(--color-border-hover)]"
-                aria-label="Notebook description"
               />
-            ) : (
-              <p
-                className="text-sm text-[var(--color-text-muted)] tracking-wider cursor-pointer hover:text-[var(--color-text)] transition-colors"
-                onClick={() => setEditingDesc(true)}
-                title="Click to edit description"
-              >
-                {notebook.description
-                  ? notebook.description
-                  : `${notebook.cell_count} cell${notebook.cell_count !== 1 ? "s" : ""}${notebook.kernel_name ? ` · ${notebook.kernel_name}` : ""}`}
-              </p>
-            )}
+            </div>
           </div>
 
           {/* Action buttons */}
@@ -399,7 +291,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
       </TerminalBar>
 
       {/* Tags section */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-6">
+      <div className="flex flex-wrap items-center gap-1.5 mt-2 mb-6">
         {notebook.tags.map((tag) => (
           <span
             key={tag}

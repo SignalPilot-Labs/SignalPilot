@@ -218,6 +218,19 @@ async def get_notebook_analysis_json(
     return row.analysis_json
 
 
+def _search_filter(query: str, org_id: str):
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    return (
+        GatewayNotebook.org_id == org_id,
+        or_(
+            GatewayNotebook.name.ilike(pattern),
+            GatewayNotebook.description.ilike(pattern),
+            cast(GatewayNotebook.tags, Text).ilike(pattern),
+        ),
+    )
+
+
 async def search_notebooks(
     session: AsyncSession,
     *,
@@ -228,20 +241,23 @@ async def search_notebooks(
 ) -> list[NotebookInfo]:
     limit = min(limit, _MAX_LIMIT)
     offset = max(offset, 0)
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{escaped}%"
     result = await session.execute(
         select(GatewayNotebook)
-        .where(
-            GatewayNotebook.org_id == org_id,
-            or_(
-                GatewayNotebook.name.ilike(pattern),
-                GatewayNotebook.description.ilike(pattern),
-                cast(GatewayNotebook.tags, Text).ilike(pattern),
-            ),
-        )
+        .where(*_search_filter(query, org_id))
         .order_by(GatewayNotebook.updated_at.desc())
         .limit(limit)
         .offset(offset)
     )
     return [_row_to_info(r) for r in result.scalars().all()]
+
+
+async def count_search_notebooks(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    query: str,
+) -> int:
+    result = await session.execute(
+        select(sa_func.count()).select_from(GatewayNotebook).where(*_search_filter(query, org_id))
+    )
+    return result.scalar_one()

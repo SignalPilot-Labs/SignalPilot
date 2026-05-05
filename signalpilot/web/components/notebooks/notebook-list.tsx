@@ -17,7 +17,9 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<NotebookInfo[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
+  const [loadingMoreSearch, setLoadingMoreSearch] = useState(false);
   const [extra, setExtra] = useState<NotebookInfo[]>([]);
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -32,6 +34,7 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
 
     if (!trimmed) {
       setSearchResults(null);
+      setSearchTotal(0);
       setIsSearching(false);
       // Reset pagination when search is cleared
       setExtra([]);
@@ -40,7 +43,9 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     }
 
     setIsSearching(true);
-    // Reset accumulated extras when search query changes
+    // Reset search state when query changes (avoid stale "X of Y")
+    setSearchResults(null);
+    setSearchTotal(0);
     setExtra([]);
     setPage(0);
 
@@ -49,10 +54,12 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
         const response = await searchNotebooks(trimmed, 50, 0);
         if (latestQueryRef.current === trimmed) {
           setSearchResults(response.items);
+          setSearchTotal(response.total);
         }
       } catch {
         if (latestQueryRef.current === trimmed) {
           setSearchResults(null);
+          setSearchTotal(0);
         }
       } finally {
         if (latestQueryRef.current === trimmed) {
@@ -102,7 +109,26 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     }
   }
 
+  async function handleSearchLoadMore() {
+    if (!searchResults) return;
+    setLoadingMoreSearch(true);
+    try {
+      const trimmed = query.trim();
+      const nextOffset = searchResults.length;
+      const response = await searchNotebooks(trimmed, 50, nextOffset);
+      if (latestQueryRef.current === trimmed) {
+        setSearchResults((prev) => [...(prev ?? []), ...response.items]);
+        setSearchTotal(response.total);
+      }
+    } catch {
+      // Load more failing silently is acceptable — user can retry
+    } finally {
+      setLoadingMoreSearch(false);
+    }
+  }
+
   const showLoadMore = !isSearching_ && allItems.length < total;
+  const showSearchLoadMore = isServerSearch && searchResults !== null && searchResults.length < searchTotal;
 
   return (
     <>
@@ -247,7 +273,23 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
             disabled={loadingMore}
             className="px-6 py-2 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50"
           >
-            {loadingMore ? "loading..." : `load more (${allItems.length} of ${total})`}
+            {loadingMore
+              ? `loading... (${allItems.length} of ${total})`
+              : `load more (${allItems.length} of ${total})`}
+          </button>
+        </div>
+      )}
+
+      {showSearchLoadMore && (
+        <div className="flex justify-center mt-8">
+          <button
+            onClick={handleSearchLoadMore}
+            disabled={loadingMoreSearch}
+            className="px-6 py-2 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50"
+          >
+            {loadingMoreSearch
+              ? `loading... (${searchResults!.length} of ${searchTotal})`
+              : `load more (${searchResults!.length} of ${searchTotal})`}
           </button>
         </div>
       )}

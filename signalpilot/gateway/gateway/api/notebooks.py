@@ -84,8 +84,11 @@ async def search_notebooks(
     """Search notebooks by name, description, or tags."""
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' must not be empty.")
-    results = await store.search_notebooks(query=q, limit=limit, offset=offset)
-    return {"items": results, "total": len(results)}
+    results, total = await asyncio.gather(
+        store.search_notebooks(query=q, limit=limit, offset=offset),
+        store.count_search_notebooks(query=q),
+    )
+    return {"items": results, "total": total}
 
 
 @router.get("/notebooks/{notebook_id}", dependencies=[RequireScope("read")])

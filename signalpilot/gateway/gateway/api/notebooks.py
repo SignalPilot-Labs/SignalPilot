@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Response
 
 from gateway.models.notebooks import NotebookAnalysis, NotebookInfo, NotebookUpdate, NotebookUpload
 from gateway.security.scope_guard import RequireScope
@@ -16,6 +16,7 @@ from gateway.store.notebook_files import (
     _analyze_notebook_content,
     _delete_notebook_file,
     _load_notebook_file,
+    _load_notebook_file_raw,
     _parse_notebook,
     _save_notebook_file,
 )
@@ -98,6 +99,23 @@ async def get_notebook(notebook_id: NotebookIdP, store: StoreD) -> NotebookInfo:
     if not meta:
         raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
     return meta
+
+
+@router.get("/notebooks/{notebook_id}/download", dependencies=[RequireScope("read")])
+async def download_notebook(notebook_id: NotebookIdP, store: StoreD) -> Response:
+    """Download the raw .ipynb file."""
+    meta = await store.get_notebook_meta(notebook_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+    content = _load_notebook_file_raw(notebook_id)
+    if not content:
+        raise HTTPException(status_code=404, detail=f"Notebook file for '{notebook_id}' not found")
+    safe_name = meta.name.replace('"', "'").replace("\r", "").replace("\n", "")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.ipynb"'},
+    )
 
 
 @router.patch("/notebooks/{notebook_id}", dependencies=[RequireScope("write")])

@@ -57,6 +57,17 @@ def _load_notebook_file(notebook_id: str) -> dict | None:
         return None
 
 
+def _load_notebook_file_raw(notebook_id: str) -> str | None:
+    """Read raw notebook file content as string; returns None if missing."""
+    path = _safe_notebook_path(notebook_id)
+    if not path.exists():
+        return None
+    try:
+        return path.read_text("utf-8")
+    except OSError:
+        return None
+
+
 def _delete_notebook_file(notebook_id: str) -> None:
     """Delete notebook file, ignoring missing files."""
     path = _safe_notebook_path(notebook_id)

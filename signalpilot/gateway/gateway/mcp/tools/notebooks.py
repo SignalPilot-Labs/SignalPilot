@@ -397,6 +397,27 @@ async def get_notebook_outputs(notebook_id: str) -> str:
 
 
 @audited_tool(mcp)
+async def get_notebook_file(notebook_id: str) -> str:
+    """
+    Get the raw .ipynb JSON content of a notebook file.
+
+    Args:
+        notebook_id: UUID of the notebook
+
+    Returns:
+        The full notebook JSON content as a string, suitable for saving as .ipynb.
+    """
+    if not _UUID_RE.match(notebook_id):
+        return f"Error: Invalid notebook ID '{notebook_id}'."
+
+    nb = _load_notebook_file(notebook_id)
+    if not nb:
+        return f"Error: Notebook '{notebook_id}' not found."
+
+    return json.dumps(nb, indent=1)
+
+
+@audited_tool(mcp)
 async def search_notebooks(query: str, limit: int = 50, offset: int = 0) -> str:
     """
     Search notebooks by name, description, or tags.

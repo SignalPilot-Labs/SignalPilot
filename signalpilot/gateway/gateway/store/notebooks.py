@@ -8,6 +8,7 @@ from sqlalchemy import Text, cast, or_, select
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.expression import ColumnElement
 
 from gateway.db.models import GatewayNotebook
 from gateway.models.notebooks import NotebookInfo, NotebookUpload
@@ -218,7 +219,7 @@ async def get_notebook_analysis_json(
     return row.analysis_json
 
 
-def _search_filter(query: str, org_id: str):
+def _search_filter(query: str, org_id: str) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     pattern = f"%{escaped}%"
     return (

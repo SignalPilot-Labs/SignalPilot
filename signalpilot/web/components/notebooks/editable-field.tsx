@@ -25,7 +25,7 @@ export function EditableField({ value, onSave, placeholder, ariaLabel, variant, 
   }, [editing, variant]);
 
   function enterEdit() { setLocalValue(value); setEditing(true); }
-  async function commit() { setEditing(false); await onSave(localValue.trim()); }
+  async function commit() { if (!editing) return; setEditing(false); await onSave(localValue.trim()); }
   function cancel() { setEditing(false); setLocalValue(value); }
 
   if (editing && variant === "input") {

@@ -20,7 +20,7 @@ import {
   invalidateNotebook,
   invalidateNotebooks,
 } from "@/lib/hooks/use-gateway-data";
-import { analyzeNotebook, deleteNotebook, updateNotebook } from "@/lib/api";
+import { analyzeNotebook, deleteNotebook, updateNotebook, getNotebookDownloadUrl, getAuthHeaders } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { NotebookInfo } from "@/lib/types";
 
@@ -238,6 +238,27 @@ export default function NotebookDetailPage({ params }: PageProps) {
 
           {/* Action buttons */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  const headers = await getAuthHeaders();
+                  const res = await fetch(getNotebookDownloadUrl(id), { headers });
+                  if (!res.ok) throw new Error("Download failed");
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${notebook.name}.ipynb`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch {
+                  toast("download failed", "error");
+                }
+              }}
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all"
+            >
+              download
+            </button>
             <button
               onClick={handleAnalyze}
               disabled={analyzing}

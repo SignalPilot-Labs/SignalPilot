@@ -603,6 +603,10 @@ export const updateNotebook = (id: string, payload: { name?: string; description
 export const searchNotebooks = (query: string, limit = 50, offset = 0) =>
   request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
 
+export function getNotebookDownloadUrl(id: string): string {
+  return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/download`;
+}
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

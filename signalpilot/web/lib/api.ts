@@ -594,6 +594,12 @@ export const analyzeNotebook = (id: string) =>
 export const deleteNotebook = (id: string) =>
   request<void>(`/api/notebooks/${id}`, { method: "DELETE" });
 
+export const updateNotebook = (id: string, payload: { name?: string; description?: string; tags?: string[] }) =>
+  request<import("./types").NotebookInfo>(`/api/notebooks/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
 export const searchNotebooks = (query: string, limit = 50, offset = 0) =>
   request<import("./types").NotebookInfo[]>(`/api/notebooks/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
 

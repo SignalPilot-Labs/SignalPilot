@@ -23,6 +23,21 @@ class NotebookUpload(BaseModel):
         return _validate_string_list(v, 64, "tags")
 
 
+class NotebookUpdate(BaseModel):
+    """Payload for updating notebook metadata (PATCH semantics)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    tags: list[str] | None = Field(default=None, max_length=50)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        return _validate_string_list(v, 64, "tags")
+
+
 class NotebookInfo(BaseModel):
     """Persisted metadata for an uploaded notebook."""
 

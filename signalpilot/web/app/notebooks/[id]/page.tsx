@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, use } from "react";
+import { useState, use, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -41,6 +41,25 @@ export default function NotebookDetailPage({ params }: PageProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  const handleTabKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, currentIdx: number, tabs: { id: TabId }[]) => {
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const targetIdx = (currentIdx + 1) % tabs.length;
+        const targetId = tabs[targetIdx].id;
+        setActiveTab(targetId);
+        document.getElementById(`tab-${targetId}`)?.focus();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const targetIdx = (currentIdx - 1 + tabs.length) % tabs.length;
+        const targetId = tabs[targetIdx].id;
+        setActiveTab(targetId);
+        document.getElementById(`tab-${targetId}`)?.focus();
+      }
+    },
+    []
+  );
 
   async function handleAnalyze() {
     setAnalyzing(true);
@@ -180,14 +199,16 @@ export default function NotebookDetailPage({ params }: PageProps) {
 
       {/* Tab bar */}
       <div role="tablist" className="flex items-center gap-0 border-b border-[var(--color-border)] mb-6">
-        {TABS.map((tab) => (
+        {TABS.map((tab, idx) => (
           <button
             key={tab.id}
             role="tab"
             id={`tab-${tab.id}`}
             aria-selected={activeTab === tab.id}
             aria-controls={`tabpanel-${tab.id}`}
+            tabIndex={activeTab === tab.id ? 0 : -1}
             onClick={() => setActiveTab(tab.id)}
+            onKeyDown={(e) => handleTabKeyDown(e, idx, TABS)}
             className={`px-4 py-2 text-[12px] uppercase tracking-[0.15em] transition-all border-b-2 -mb-px ${
               activeTab === tab.id
                 ? "border-[var(--color-text)] text-[var(--color-text)]"

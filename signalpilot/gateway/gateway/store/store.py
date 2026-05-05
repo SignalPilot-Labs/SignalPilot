@@ -611,6 +611,23 @@ class Store:
             analyzed_at=analyzed_at,
         )
 
+    async def update_notebook_metadata(
+        self,
+        notebook_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+    ) -> NotebookInfo | None:
+        oid = self._require_org_id()
+        return await notebooks_store.update_notebook_metadata(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
+            name=name,
+            description=description,
+            tags=tags,
+        )
+
     async def delete_notebook_meta(self, notebook_id: str) -> bool:
         oid = self._require_org_id()
         return await notebooks_store.delete_notebook(self.session, org_id=oid, notebook_id=notebook_id)

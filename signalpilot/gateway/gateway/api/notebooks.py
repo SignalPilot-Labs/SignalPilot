@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path
 
-from gateway.models.notebooks import NotebookAnalysis, NotebookInfo, NotebookUpload
+from gateway.models.notebooks import NotebookAnalysis, NotebookInfo, NotebookUpdate, NotebookUpload
 from gateway.security.scope_guard import RequireScope
 from gateway.store.notebook_files import (
     _analyze_notebook_content,
@@ -89,6 +89,25 @@ async def get_notebook(notebook_id: NotebookIdP, store: StoreD) -> NotebookInfo:
     if not meta:
         raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
     return meta
+
+
+@router.patch("/notebooks/{notebook_id}", dependencies=[RequireScope("write")])
+async def update_notebook(notebook_id: NotebookIdP, update: NotebookUpdate, store: StoreD) -> NotebookInfo:
+    """Update notebook metadata (name, description, tags). At least one field must be provided."""
+    if update.name is None and update.description is None and update.tags is None:
+        raise HTTPException(status_code=400, detail="At least one field must be provided.")
+    try:
+        result = await store.update_notebook_metadata(
+            notebook_id,
+            name=update.name,
+            description=update.description,
+            tags=update.tags,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+    return result
 
 
 @router.get("/notebooks/{notebook_id}/cells", dependencies=[RequireScope("read")])

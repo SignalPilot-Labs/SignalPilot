@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { uploadNotebook } from "@/lib/api";
 import { invalidateNotebooks } from "@/lib/hooks/use-gateway-data";
 
+const MAX_TAGS = 20;
+const MAX_TAG_LENGTH = 64;
+
 interface NotebookUploadModalProps {
   open: boolean;
   onClose: () => void;
@@ -15,6 +18,8 @@ export function NotebookUploadModal({ open, onClose }: NotebookUploadModalProps)
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -26,10 +31,26 @@ export function NotebookUploadModal({ open, onClose }: NotebookUploadModalProps)
       setDescription("");
       setFile(null);
       setError(null);
+      setTags([]);
+      setTagInput("");
       if (fileRef.current) fileRef.current.value = "";
       setTimeout(() => nameRef.current?.focus(), 50);
     }
   }, [open]);
+
+  // Escape key closes the modal — must be before the early return (rules of hooks)
+  useEffect(() => {
+    if (!open || isPending) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, onClose, isPending]);
 
   if (!open) return null;
 
@@ -41,6 +62,31 @@ export function NotebookUploadModal({ open, onClose }: NotebookUploadModalProps)
       const baseName = picked.name.replace(/\.ipynb$/i, "").replace(/[-_]/g, " ");
       setName(baseName);
     }
+  }
+
+  function handleTagKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      const trimmed = tagInput.trim().replace(/,+$/, "");
+      if (!trimmed) return;
+      if (trimmed.length > MAX_TAG_LENGTH) {
+        setError(`Tag must be ${MAX_TAG_LENGTH} characters or fewer.`);
+        return;
+      }
+      if (tags.length >= MAX_TAGS) {
+        setError(`Maximum ${MAX_TAGS} tags allowed.`);
+        return;
+      }
+      setError(null);
+      if (!tags.includes(trimmed)) {
+        setTags((prev) => [...prev, trimmed]);
+      }
+      setTagInput("");
+    }
+  }
+
+  function removeTag(tag: string) {
+    setTags((prev) => prev.filter((t) => t !== tag));
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -64,7 +110,7 @@ export function NotebookUploadModal({ open, onClose }: NotebookUploadModalProps)
           name: name.trim(),
           content,
           description: description.trim(),
-          tags: [],
+          tags,
         });
 
         await invalidateNotebooks();
@@ -151,6 +197,47 @@ export function NotebookUploadModal({ open, onClose }: NotebookUploadModalProps)
               rows={2}
               disabled={isPending}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] outline-none transition-colors resize-none"
+            />
+          </div>
+
+          {/* Tags */}
+          <div>
+            <label
+              htmlFor="notebook-tags"
+              className="block text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1"
+            >
+              tags <span className="normal-case">(optional)</span>
+            </label>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 border border-[var(--color-border)] bg-[var(--color-bg)] text-[10px] font-mono tracking-wider text-[var(--color-text-dim)]"
+                  >
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeTag(tag)}
+                      disabled={isPending}
+                      aria-label={`Remove tag ${tag}`}
+                      className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors leading-none"
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <input
+              id="notebook-tags"
+              type="text"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={handleTagKeyDown}
+              placeholder="Type and press Enter"
+              disabled={isPending || tags.length >= MAX_TAGS}
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] outline-none transition-colors disabled:opacity-50"
             />
           </div>
 

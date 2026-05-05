@@ -117,6 +117,79 @@ async def upload_notebook(name: str, content: str, description: str = "", tags: 
 
 
 @audited_tool(mcp)
+async def update_notebook_metadata(
+    notebook_id: str,
+    name: str = "",
+    description: str = "",
+    tags: str = "",
+) -> str:
+    """
+    Update notebook metadata: name, description, and/or tags.
+
+    Args:
+        notebook_id: UUID of the notebook to update
+        name: New notebook name (1-120 characters). Leave empty to keep current.
+        description: New description (max 500 characters). Leave empty to keep current.
+        tags: Comma-separated list of tags. Leave empty to keep current tags.
+
+    Returns:
+        Confirmation with updated fields, or an error message.
+    """
+    if not _UUID_RE.match(notebook_id):
+        return f"Error: Invalid notebook ID '{notebook_id}'."
+
+    name_val = name.strip() if name else ""
+    description_val = description.strip() if description else ""
+    tags_val = tags.strip() if tags else ""
+
+    if not name_val and not description_val and not tags_val:
+        return "Error: At least one field must be provided."
+
+    name_arg: str | None = None
+    if name_val:
+        if len(name_val) > 120:
+            return "Error: Name must be between 1 and 120 characters."
+        name_arg = name_val
+
+    description_arg: str | None = None
+    if description_val:
+        if len(description_val) > 500:
+            return "Error: Description must be under 500 characters."
+        description_arg = description_val
+
+    tags_arg: list[str] | None = None
+    if tags_val:
+        tags_arg = [t.strip() for t in tags_val.split(",") if t.strip()]
+
+    async with _store_session() as store:
+        try:
+            info = await store.update_notebook_metadata(
+                notebook_id,
+                name=name_arg,
+                description=description_arg,
+                tags=tags_arg,
+            )
+        except ValueError as e:
+            return f"Error: {e}"
+
+    if info is None:
+        return "Notebook not found."
+
+    updated_fields = []
+    if name_arg is not None:
+        updated_fields.append(f"name: {info.name}")
+    if description_arg is not None:
+        updated_fields.append(f"description: {info.description}")
+    if tags_arg is not None:
+        updated_fields.append(f"tags: {', '.join(info.tags) if info.tags else '(none)'}")
+
+    return (
+        f"Notebook '{notebook_id}' updated.\n"
+        + "\n".join(f"  {f}" for f in updated_fields)
+    )
+
+
+@audited_tool(mcp)
 async def get_notebook(notebook_id: str) -> str:
     """
     Get a summary of a notebook including metadata and a preview of its cells.

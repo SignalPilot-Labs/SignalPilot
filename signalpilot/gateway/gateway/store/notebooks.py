@@ -131,6 +131,42 @@ async def update_notebook_analysis(
     return True
 
 
+async def update_notebook_metadata(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    notebook_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+) -> NotebookInfo | None:
+    result = await session.execute(
+        select(GatewayNotebook).where(
+            GatewayNotebook.org_id == org_id,
+            GatewayNotebook.id == notebook_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        return None
+    if name is not None:
+        row.name = name
+    if description is not None:
+        row.description = description
+    if tags is not None:
+        row.tags = tags
+    row.updated_at = time.time()
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        orig = str(e.orig) if e.orig is not None else str(e)
+        if "uq_gw_nb_org_name" in orig:
+            raise ValueError(f"Notebook '{name}' already exists") from e
+        raise
+    return _row_to_info(row)
+
+
 async def delete_notebook(
     session: AsyncSession,
     *,

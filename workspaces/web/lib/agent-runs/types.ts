@@ -37,6 +37,8 @@ export interface AgentRunV1 {
   summary?: string;
   /** Present when status is approval_required — human-readable description of the pending approval */
   pendingApproval?: string;
+  /** Sandbox session ID — present when the run has been dispatched */
+  sessionId?: string;
   /** Optional target workspace ID — deferred to a future round */
   targetWorkspaceId?: string;
 }

@@ -58,9 +58,8 @@ type NavIconComponent = React.FC<{ active: boolean }>;
 
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboards", label: "dashboards", icon: NavIconDashboard, shortcut: "1" },
-  { href: "/charts", label: "charts", icon: NavIconChart, shortcut: "2" },
-  { href: "/agent-runs", label: "agent runs", icon: NavIconTerminal, shortcut: "3" },
-  { href: "/dbt-links", label: "dbt links", icon: NavIconDatabase, shortcut: "4" },
+  { href: "/agent-runs", label: "agent runs", icon: NavIconTerminal, shortcut: "2" },
+  { href: "/dbt-links", label: "dbt links", icon: NavIconDatabase, shortcut: "3" },
 ];
 
 /* ── Uptime counter ── */

@@ -14,6 +14,7 @@ const OPTIONAL_STRING_FIELDS: ReadonlyArray<keyof AgentRunV1> = [
   "errorMessage",
   "summary",
   "pendingApproval",
+  "sessionId",
   "targetWorkspaceId",
 ];
 

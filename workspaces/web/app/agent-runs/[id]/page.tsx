@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getServerEnv } from "@/lib/env";
 import { EmptyState, EmptyTerminal } from "@/components/ui/EmptyState";
 import { AgentRunDetail } from "@/components/agent-runs/AgentRunDetail";
+import { AgentRunLive } from "@/components/agent-runs/AgentRunLive";
 import { loadAgentRun } from "@/lib/agent-runs/load-runs";
 import { CLOUD_DEFERRED_BODY } from "@/app/agent-runs/_consts";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -30,11 +31,13 @@ export default async function AgentRunDetailPage({
   const run = await loadAgentRun(id);
   if (!run) notFound();
 
+  const isLive = run.status === "running" && !!run.sessionId;
+
   return (
     <div className="p-8 max-w-[1400px] animate-fade-in">
       <PageHeader title="agent run" subtitle="detail" description={`Run ${id}`} />
       <TerminalBar path={`agent-runs/${id}`} />
-      <AgentRunDetail run={run} />
+      {isLive ? <AgentRunLive run={run} /> : <AgentRunDetail run={run} />}
     </div>
   );
 }

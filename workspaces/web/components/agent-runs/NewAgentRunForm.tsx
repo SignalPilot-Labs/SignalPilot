@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { saveAgentRun } from "@/lib/agent-runs/save-run";
+import { startAgentRun } from "@/lib/agent-runs/start-run";
 import {
   FIELD_INPUT_CLASS,
   LABEL_CLASS,
@@ -38,7 +38,7 @@ export function NewAgentRunForm() {
       const fd = new FormData();
       fd.append("prompt", prompt);
 
-      const res = await saveAgentRun(fd);
+      const res = await startAgentRun(fd);
       if (res.ok) {
         router.push(`/agent-runs/${res.id}`);
       } else {

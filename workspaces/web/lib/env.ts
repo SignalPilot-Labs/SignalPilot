@@ -9,8 +9,12 @@ export type ServerEnv =
       localApiKey: string;
       localWorkspaceIds: string[];
       localChartsDir: string;
+      localDashboardsDir: string;
       localDbtLinksDir: string;
       localAgentRunsDir: string;
+      sandboxUrl: string;
+      sandboxSecret: string;
+      sandboxMcpUrl: string;
     }
   | { mode: "cloud"; apiUrl: string; clerkPublishableKey: string; clerkSecretKey: string };
 
@@ -27,8 +31,12 @@ export function getServerEnv(): ServerEnv {
       localApiKey: required("SP_LOCAL_API_KEY"),
       localWorkspaceIds: parseCsv(process.env["WORKSPACES_LOCAL_IDS"] ?? ""),
       localChartsDir: required("WORKSPACES_LOCAL_CHARTS_DIR"),
+      localDashboardsDir: required("WORKSPACES_LOCAL_DASHBOARDS_DIR"),
       localDbtLinksDir: required("WORKSPACES_LOCAL_DBT_LINKS_DIR"),
       localAgentRunsDir: required("WORKSPACES_LOCAL_AGENT_RUNS_DIR"),
+      sandboxUrl: required("SANDBOX_URL"),
+      sandboxSecret: required("SANDBOX_SECRET"),
+      sandboxMcpUrl: required("SANDBOX_MCP_URL"),
     };
   }
   return {

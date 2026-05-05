@@ -40,9 +40,11 @@ services:
       SP_DEPLOYMENT_MODE: local
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
       SP_MCP_ALLOWED_HOSTS: gateway
+      SP_DASHBOARDS_DIR: /dashboards
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
+      - /tmp/sp-workspaces/dashboards:/dashboards
     command: >
       sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"

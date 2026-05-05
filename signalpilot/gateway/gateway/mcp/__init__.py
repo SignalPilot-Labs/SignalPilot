@@ -49,12 +49,17 @@ from gateway.mcp.tools.model_verify import (
 )
 from gateway.mcp.tools.notebooks import (
     analyze_notebook,
+    batch_analyze_notebooks,
+    batch_delete_notebooks,
     delete_notebook,
     get_notebook,
     get_notebook_cell,
+    get_notebook_file,
     get_notebook_outputs,
+    get_notebooks_summary,
     list_notebooks,
     search_notebooks,
+    update_notebook_metadata,
     upload_notebook,
 )
 from gateway.mcp.tools.projects import get_project, list_projects
@@ -136,12 +141,17 @@ __all__ = [
     "compare_join_types",
     "list_notebooks",
     "upload_notebook",
+    "update_notebook_metadata",
     "get_notebook",
     "get_notebook_cell",
     "analyze_notebook",
     "get_notebook_outputs",
+    "get_notebook_file",
+    "get_notebooks_summary",
     "search_notebooks",
     "delete_notebook",
+    "batch_analyze_notebooks",
+    "batch_delete_notebooks",
     "list_projects",
     "get_project",
     # Internal context helpers

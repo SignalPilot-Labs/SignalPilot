@@ -75,6 +75,13 @@ class NotebookAnalysis(BaseModel):
     analyzed_at: float = Field(default_factory=time.time)
 
 
+class ImportCount(BaseModel):
+    """Import name paired with its occurrence count across notebooks."""
+
+    name: str
+    count: int
+
+
 class NotebookSummary(BaseModel):
     """Aggregate statistics across all notebooks."""
 
@@ -87,7 +94,7 @@ class NotebookSummary(BaseModel):
     pending_count: int
     notebooks_with_errors: int
     total_error_cells: int
-    top_imports: list[str]
+    top_imports: list[ImportCount]
 
 
 class BatchNotebookRequest(BaseModel):

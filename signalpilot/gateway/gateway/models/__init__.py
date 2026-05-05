@@ -37,6 +37,7 @@ from .notebooks import (
     BatchNotebookRequest,
     BatchResult,
     BatchResultItem,
+    ImportCount,
     NotebookAnalysis,
     NotebookInfo,
     NotebookSummary,

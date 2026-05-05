@@ -2,6 +2,7 @@
 
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
 import { NotebookList } from "@/components/notebooks/notebook-list";
+import { TopImportsChart } from "@/components/notebooks/top-imports-chart";
 import { useNotebooks, useNotebooksSummary } from "@/lib/hooks/use-gateway-data";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -74,6 +75,10 @@ export default function NotebooksPage() {
             </>
           ) : null}
         </div>
+      )}
+
+      {summary?.top_imports && summary.top_imports.length > 0 && (
+        <TopImportsChart imports={summary.top_imports} />
       )}
 
       {isLoading && (

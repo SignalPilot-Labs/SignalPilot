@@ -199,6 +199,11 @@ export interface NotebookCell {
   metadata?: Record<string, unknown>;
 }
 
+export interface ImportCount {
+  name: string;
+  count: number;
+}
+
 export interface NotebookSummary {
   total_notebooks: number;
   total_cells: number;
@@ -209,7 +214,7 @@ export interface NotebookSummary {
   pending_count: number;
   notebooks_with_errors: number;
   total_error_cells: number;
-  top_imports: string[];
+  top_imports: ImportCount[];
 }
 
 export interface BatchResultItem {

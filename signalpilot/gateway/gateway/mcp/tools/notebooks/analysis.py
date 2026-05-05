@@ -1,0 +1,276 @@
+"""Notebook analysis MCP tools: summary, analyze, outputs, cell, search, file."""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+
+from gateway.mcp.audit import audited_tool
+from gateway.mcp.context import _store_session
+from gateway.mcp.server import mcp
+from gateway.store.notebook_files import (
+    _analyze_notebook_content,
+    _cell_source,
+    _load_notebook_file,
+    _now_iso,
+)
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+_MAX_OUTPUT_CHARS = 1000
+_MAX_CELL_PREVIEW_CHARS = 500
+
+
+@audited_tool(mcp)
+async def get_notebooks_summary() -> str:
+    """
+    Get aggregate statistics across all notebooks: totals, analysis status, error counts, and top imports.
+
+    Returns:
+        Summary text with total notebooks, cells, analysis status breakdown, error counts, and top imports.
+    """
+    async with _store_session() as store:
+        summary = await store.get_notebooks_summary()
+
+    lines = [
+        "Notebooks summary:",
+        f"  Total notebooks: {summary.total_notebooks}",
+        f"  Total cells: {summary.total_cells} ({summary.total_code_cells} code, {summary.total_markdown_cells} markdown)",
+        f"  Total code lines: {summary.total_code_lines}",
+        f"  Analyzed: {summary.analyzed_count} | Pending: {summary.pending_count}",
+        f"  Notebooks with errors: {summary.notebooks_with_errors}",
+        f"  Total error cells: {summary.total_error_cells}",
+        f"  Top imports: {', '.join(f'{i.name} ({i.count})' for i in summary.top_imports[:10]) if summary.top_imports else '(none)'}",
+    ]
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def analyze_notebook(notebook_id: str) -> str:
+    """
+    Analyze a notebook: scan imports, detect errors, summarize outputs, find function definitions.
+
+    Args:
+        notebook_id: UUID of the notebook
+
+    Returns:
+        Formatted analysis text including imports, errors, execution gaps, and output summary.
+    """
+    if not _UUID_RE.match(notebook_id):
+        return f"Error: Invalid notebook ID '{notebook_id}'."
+
+    nb = _load_notebook_file(notebook_id)
+    if not nb:
+        return f"Error: Notebook '{notebook_id}' not found."
+
+    analysis = _analyze_notebook_content(nb)
+    analyzed_at = time.time()
+    analysis_json = {**analysis, "notebook_id": notebook_id, "analyzed_at": analyzed_at}
+
+    async with _store_session() as store:
+        await store.update_notebook_analysis(
+            notebook_id=notebook_id,
+            analysis_json=analysis_json,
+            analyzed_at=analyzed_at,
+        )
+
+    lines = [
+        f"Analysis for notebook: {notebook_id}",
+        f"Analyzed at: {_now_iso()}",
+        "",
+        f"Cell counts: {analysis['cell_counts']}",
+        f"Total code lines: {analysis['total_code_lines']}",
+        f"Imports ({len(analysis['imports'])}): {', '.join(analysis['imports'][:20]) or '(none)'}",
+        f"Functions defined ({len(analysis['functions_defined'])}): "
+        f"{', '.join(analysis['functions_defined'][:20]) or '(none)'}",
+        f"Error cells (indices): {analysis['error_cells'] or '(none)'}",
+        f"Execution order gaps: {analysis['execution_order_gaps'] or '(none)'}",
+        f"Output summary: {analysis['output_summary'] or '(none)'}",
+        f"Kernel: {analysis['kernel_info'] or 'unknown'}",
+    ]
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def get_notebook_outputs(notebook_id: str) -> str:
+    """
+    Get all cell outputs from a notebook, including text, errors, and image placeholders.
+
+    Args:
+        notebook_id: UUID of the notebook
+
+    Returns:
+        Formatted text of all code cell outputs.
+    """
+    if not _UUID_RE.match(notebook_id):
+        return f"Error: Invalid notebook ID '{notebook_id}'."
+
+    nb = _load_notebook_file(notebook_id)
+    if not nb:
+        return f"Error: Notebook '{notebook_id}' not found."
+
+    cells = nb.get("cells", [])
+    lines = []
+
+    for i, cell in enumerate(cells):
+        if cell.get("cell_type") != "code":
+            continue
+        outputs = cell.get("outputs", [])
+        if not outputs:
+            continue
+        lines.append(f"Cell [{i}] outputs:")
+        for output in outputs:
+            output_type = output.get("output_type", "unknown")
+            if output_type in ("stream", "display_data", "execute_result"):
+                text_data = output.get("text", output.get("data", {}).get("text/plain", ""))
+                if isinstance(text_data, list):
+                    text_data = "".join(text_data)
+                text_data = text_data[:_MAX_OUTPUT_CHARS]
+                if output.get("data") and "image/png" in output["data"]:
+                    lines.append(f"  [{output_type}]: [image: image/png]")
+                elif output.get("data") and "image/svg+xml" in output["data"]:
+                    lines.append(f"  [{output_type}]: [image: image/svg+xml]")
+                else:
+                    lines.append(f"  [{output_type}]: {text_data}")
+            elif output_type == "error":
+                ename = output.get("ename", "Error")
+                evalue = output.get("evalue", "")
+                traceback = output.get("traceback", [])
+                tb_str = "\n".join(traceback[:5]) if traceback else ""
+                lines.append(f"  [error] {ename}: {evalue}")
+                if tb_str:
+                    lines.append(f"  Traceback:\n{tb_str[:_MAX_OUTPUT_CHARS]}")
+            else:
+                lines.append(f"  [{output_type}]")
+
+    if not lines:
+        return f"No outputs found in notebook '{notebook_id}'."
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def get_notebook_cell(notebook_id: str, cell_index: int = -1, cell_type: str = "") -> str:
+    """
+    Get specific cell(s) from a notebook.
+
+    Args:
+        notebook_id: UUID of the notebook
+        cell_index: Zero-based cell index to retrieve. Use -1 to retrieve all cells.
+        cell_type: Filter by cell type: "code", "markdown", or "raw". Empty means no filter.
+
+    Returns:
+        Cell source and metadata. If cell_index >= 0, returns that single cell.
+        If cell_type is set, returns all cells of that type.
+        If neither, returns all cells with their indices.
+    """
+    if not _UUID_RE.match(notebook_id):
+        return f"Error: Invalid notebook ID '{notebook_id}'."
+
+    nb = _load_notebook_file(notebook_id)
+    if not nb:
+        return f"Error: Notebook '{notebook_id}' not found."
+
+    cells = nb.get("cells", [])
+
+    if cell_index >= 0:
+        if cell_index >= len(cells):
+            return f"Error: Cell index {cell_index} out of range (notebook has {len(cells)} cells)."
+        cell = cells[cell_index]
+        source = _cell_source(cell)
+        exec_count = cell.get("execution_count", "")
+        return (
+            f"Cell [{cell_index}] ({cell.get('cell_type', 'unknown')})"
+            + (f" exec#{exec_count}" if exec_count else "")
+            + f":\n{source}"
+        )
+
+    filtered = [
+        (i, c) for i, c in enumerate(cells)
+        if not cell_type or c.get("cell_type") == cell_type
+    ]
+
+    if not filtered:
+        type_msg = f" of type '{cell_type}'" if cell_type else ""
+        return f"No cells{type_msg} found in notebook '{notebook_id}'."
+
+    lines = [f"Found {len(filtered)} cell(s):\n"]
+    for i, cell in filtered:
+        cell_type_val = cell.get("cell_type", "unknown")
+        source = _cell_source(cell)
+        preview = source[:_MAX_CELL_PREVIEW_CHARS]
+        if len(source) > _MAX_CELL_PREVIEW_CHARS:
+            preview += "..."
+        lines.append(f"  [{i}] ({cell_type_val}): {preview}\n")
+
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def search_notebooks(query: str, limit: int = 50, offset: int = 0) -> str:
+    """
+    Search notebooks by name, description, or tags.
+
+    Args:
+        query: Search string (case-insensitive)
+        limit: Maximum number of results to return (default 50, max 100)
+        offset: Number of results to skip for pagination (default 0)
+
+    Returns:
+        Matching notebooks with IDs and metadata.
+    """
+    query = query.strip()
+    if not query:
+        return "Error: Query must not be empty."
+
+    async with _store_session() as store:
+        results = await store.search_notebooks(query=query, limit=limit, offset=offset)
+
+    if not results:
+        return f"No notebooks found matching '{query}'."
+
+    if offset > 0:
+        header = f"Found {len(results)} notebook(s) matching '{query}' (showing from offset {offset}):\n"
+    else:
+        header = f"Found {len(results)} notebook(s) matching '{query}':\n"
+
+    lines = [header]
+    for nb in results:
+        lines.append(
+            f"  - {nb.name} (id: {nb.id}, {nb.cell_count} cells, updated: {nb.updated_at})"
+        )
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def get_notebook_file(notebook_id: str) -> str:
+    """
+    Get the raw .ipynb JSON content of a notebook file.
+
+    Args:
+        notebook_id: UUID of the notebook
+
+    Returns:
+        The full notebook JSON content as a string, suitable for saving as .ipynb.
+    """
+    if not _UUID_RE.match(notebook_id):
+        return f"Error: Invalid notebook ID '{notebook_id}'."
+
+    nb = _load_notebook_file(notebook_id)
+    if not nb:
+        return f"Error: Notebook '{notebook_id}' not found."
+
+    return json.dumps(nb, indent=1)
+
+
+__all__ = [
+    "get_notebooks_summary",
+    "analyze_notebook",
+    "get_notebook_outputs",
+    "get_notebook_cell",
+    "search_notebooks",
+    "get_notebook_file",
+]

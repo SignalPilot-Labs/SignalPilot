@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import ColumnElement
 
 from gateway.db.models import GatewayNotebook
-from gateway.models.notebooks import NotebookInfo, NotebookSummary, NotebookUpload
+from gateway.models.notebooks import ImportCount, NotebookInfo, NotebookSummary, NotebookUpload
 
 _MAX_LIMIT = 100
 
@@ -322,7 +322,7 @@ async def get_notebooks_summary(
         for imp in aj.get("imports", []):
             import_counter[imp] += 1
 
-    top_imports = [imp for imp, _ in import_counter.most_common(10)]
+    top_imports = [ImportCount(name=imp, count=cnt) for imp, cnt in import_counter.most_common(10)]
     pending_count = total_notebooks - analyzed_count
 
     return NotebookSummary(

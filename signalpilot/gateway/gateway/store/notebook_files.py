@@ -169,7 +169,7 @@ def _analyze_notebook_content(nb: dict) -> dict:
     kernelspec = nb.get("metadata", {}).get("kernelspec")
     kernel_info: dict | None = dict(kernelspec) if kernelspec else None
 
-    return {
+    result = {
         "cell_counts": cell_counts,
         "imports": imports,
         "execution_order_gaps": execution_order_gaps,
@@ -179,6 +179,53 @@ def _analyze_notebook_content(nb: dict) -> dict:
         "functions_defined": functions_defined,
         "kernel_info": kernel_info,
     }
+    result["quality_score"] = _compute_quality_score(result)
+    return result
+
+
+def _compute_quality_score(analysis: dict) -> int:
+    """Compute a 0-100 quality score from analysis data.
+
+    Pure function — no side effects, no external dependencies.
+    Score starts at 100 and deductions are applied for quality issues.
+    """
+    score = 100
+
+    cell_counts: dict[str, int] = analysis.get("cell_counts", {})
+    total_cells = sum(cell_counts.values())
+    error_cells: list = analysis.get("error_cells", [])
+    error_count = len(error_cells)
+
+    # Error penalty: up to -40 points (20% error rate = -40)
+    if total_cells > 0:
+        error_rate = error_count / total_cells
+        score -= min(40, int(error_rate * 200))
+
+    # Documentation penalty: up to -20 points (0% markdown = -20)
+    markdown_count = cell_counts.get("markdown", 0)
+    if total_cells > 0:
+        doc_ratio = markdown_count / total_cells
+        if doc_ratio < 0.2:
+            score -= int((0.2 - doc_ratio) * 100)
+
+    # Code organisation penalty: up to -20 points
+    code_lines: int = analysis.get("total_code_lines", 0)
+    functions_defined: list = analysis.get("functions_defined", [])
+    functions_count = len(functions_defined)
+    if code_lines > 20 and functions_count == 0:
+        score -= 20
+    elif code_lines > 50:
+        ratio = functions_count / (code_lines / 20)
+        if ratio < 0.3:
+            score -= 10
+
+    # Cell balance penalty: up to -10 points
+    if total_cells < 2:
+        score -= 10
+    elif total_cells > 100:
+        score -= 10
+
+    return max(0, min(100, score))
 
 
 _MAX_REPORT_CELLS = 50

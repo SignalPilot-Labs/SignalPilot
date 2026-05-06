@@ -59,6 +59,7 @@ class NotebookInfo(BaseModel):
     created_at: float
     updated_at: float
     analyzed_at: float | None
+    quality_score: int | None = None
 
 
 class NotebookAnalysis(BaseModel):
@@ -74,6 +75,7 @@ class NotebookAnalysis(BaseModel):
     functions_defined: list[str]
     kernel_info: dict | None
     analyzed_at: float = Field(default_factory=time.time)
+    quality_score: int | None = None
 
 
 class ImportCount(BaseModel):
@@ -221,6 +223,15 @@ class NotebookActivityInfo(BaseModel):
     details: dict | None
     created_at: float
     user_id: str | None
+
+
+class NotebookQualityItem(BaseModel):
+    """Quality score summary for a single analyzed notebook."""
+
+    notebook_id: str
+    name: str
+    quality_score: int
+    analyzed_at: float
 
 
 class NotebookVersionInfo(BaseModel):

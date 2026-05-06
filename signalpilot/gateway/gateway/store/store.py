@@ -41,6 +41,7 @@ from gateway.models import (
 from gateway.models.notebooks import (
     NotebookActivityInfo,
     NotebookInfo,
+    NotebookQualityItem,
     NotebookSummary,
     NotebookUpload,
     NotebookVersionInfo,
@@ -693,6 +694,10 @@ class Store:
     async def get_notebooks_summary(self) -> NotebookSummary:
         oid = self._require_org_id()
         return await notebooks_store.get_notebooks_summary(self.session, org_id=oid)
+
+    async def list_analyzed_notebooks(self) -> list[NotebookQualityItem]:
+        oid = self._require_org_id()
+        return await notebooks_store.list_analyzed_notebooks(self.session, org_id=oid)
 
     async def batch_get_notebook_ids(self, notebook_ids: list[str]) -> list[str]:
         oid = self._require_org_id()

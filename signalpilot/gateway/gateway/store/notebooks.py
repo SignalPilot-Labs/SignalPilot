@@ -15,7 +15,7 @@ from sqlalchemy.sql.expression import ColumnElement
 
 import gateway.store.notebook_versions as notebook_versions
 from gateway.db.models import GatewayNotebook
-from gateway.models.notebooks import ImportCount, NotebookInfo, NotebookSummary, NotebookUpload
+from gateway.models.notebooks import ImportCount, NotebookInfo, NotebookQualityItem, NotebookSummary, NotebookUpload
 
 if TYPE_CHECKING:
     from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -59,6 +59,11 @@ def _status_filter(status: str) -> ColumnElement[bool] | None:
 
 
 def _row_to_info(row: GatewayNotebook) -> NotebookInfo:
+    quality_score: int | None = None
+    if isinstance(row.analysis_json, dict):
+        raw_score = row.analysis_json.get("quality_score")
+        if isinstance(raw_score, int):
+            quality_score = raw_score
     return NotebookInfo(
         id=row.id,
         name=row.name,
@@ -71,6 +76,7 @@ def _row_to_info(row: GatewayNotebook) -> NotebookInfo:
         created_at=row.created_at,
         updated_at=row.updated_at,
         analyzed_at=row.analyzed_at,
+        quality_score=quality_score,
     )
 
 
@@ -410,6 +416,49 @@ async def get_notebooks_summary(
         total_error_cells=total_error_cells,
         top_imports=top_imports,
     )
+
+
+_MAX_ANALYZED_LIMIT = 500
+
+
+async def list_analyzed_notebooks(
+    session: AsyncSession,
+    *,
+    org_id: str,
+) -> list[NotebookQualityItem]:
+    """Return quality data for analyzed notebooks in the org (max 500).
+
+    Fetches id, name, analysis_json, and analyzed_at for rows where
+    analyzed_at IS NOT NULL. Bounded to _MAX_ANALYZED_LIMIT rows to
+    prevent unbounded memory usage.
+    """
+    result = await session.execute(
+        select(GatewayNotebook)
+        .where(
+            GatewayNotebook.org_id == org_id,
+            GatewayNotebook.analyzed_at.isnot(None),
+            GatewayNotebook.analysis_json.isnot(None),
+        )
+        .limit(_MAX_ANALYZED_LIMIT)
+    )
+    rows = result.scalars().all()
+    items: list[NotebookQualityItem] = []
+    for row in rows:
+        if not isinstance(row.analysis_json, dict):
+            continue
+        raw_score = row.analysis_json.get("quality_score")
+        quality_score: int = raw_score if isinstance(raw_score, int) else 0
+        # analyzed_at is guaranteed non-None by the WHERE clause above.
+        analyzed_at: float = row.analyzed_at  # type: ignore[assignment]
+        items.append(
+            NotebookQualityItem(
+                notebook_id=row.id,
+                name=row.name,
+                quality_score=quality_score,
+                analyzed_at=analyzed_at,
+            )
+        )
+    return items
 
 
 async def batch_get_notebook_ids(

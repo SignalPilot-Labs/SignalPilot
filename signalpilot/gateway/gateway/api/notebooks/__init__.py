@@ -26,6 +26,7 @@ from .compare import router as compare_router
 from .crud import router as crud_router
 from .download import router as download_router
 from .list import router as list_router
+from .quality import router as quality_router
 from .search import router as search_router
 from .versions import router as versions_router
 
@@ -34,6 +35,7 @@ router = APIRouter(prefix="/api")
 # Static routes registered before any parameterized {notebook_id} routes.
 router.include_router(list_router)       # GET /notebooks
 router.include_router(search_router)     # GET /notebooks/search
+router.include_router(quality_router)    # GET /notebooks/quality
 router.include_router(batch_router)      # POST /notebooks/batch/analyze, POST /notebooks/batch/delete
 router.include_router(analysis_router)   # GET /notebooks/summary (static) + /notebooks/{notebook_id}/analysis etc.
 # Parameterized-only routes — after static paths.

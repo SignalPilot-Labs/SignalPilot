@@ -23,6 +23,7 @@ import {
 import { analyzeNotebook, deleteNotebook, updateNotebook, getNotebookDownloadUrl, getNotebookReportUrl, getAuthHeaders } from "@/lib/api";
 import { NotebookActivityTimeline } from "@/components/notebooks/notebook-activity-timeline";
 import { NotebookVersionHistory } from "@/components/notebooks/notebook-version-history";
+import { QualityBadge } from "@/components/notebooks/quality-badge";
 import { useToast } from "@/components/ui/toast";
 import type { NotebookInfo } from "@/lib/types";
 
@@ -265,6 +266,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
               <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">
                 notebook
               </span>
+              <QualityBadge score={notebook.quality_score} size="md" />
             </div>
 
             {/* Editable description */}

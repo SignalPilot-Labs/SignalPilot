@@ -9,6 +9,7 @@ import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { NotebookListToolbar } from "./notebook-list-toolbar";
 import { useNotebookList } from "./use-notebook-list";
+import { QualityBadge } from "./quality-badge";
 
 interface NotebookListProps {
   notebooks: NotebookInfo[];
@@ -107,13 +108,16 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
                       {nb.tags.length > 4 && <span className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-dim)]">+{nb.tags.length - 4}</span>}
                     </div>
                   )}
-                  <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                  <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)] tracking-wider flex-wrap">
                     <span>{nb.cell_count} cell{nb.cell_count !== 1 ? "s" : ""}</span>
                     {nb.code_cell_count > 0 && (<><span>&middot;</span><span>{nb.code_cell_count} code</span></>)}
                     {nb.kernel_name && (<><span>&middot;</span><span className="font-mono">{nb.kernel_name}</span></>)}
                     <span>&middot;</span>
                     <TimeAgo timestamp={nb.updated_at} />
                     {nb.analyzed_at && (<><span>&middot;</span><span className="text-[var(--color-success)] opacity-70">analyzed <TimeAgo timestamp={nb.analyzed_at} /></span></>)}
+                    {nb.quality_score !== null && nb.quality_score !== undefined && (
+                      <><span>&middot;</span><QualityBadge score={nb.quality_score} size="sm" /></>
+                    )}
                   </div>
                 </Link>
               </div>

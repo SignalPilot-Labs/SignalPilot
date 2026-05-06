@@ -175,6 +175,7 @@ export interface NotebookInfo {
   created_at: number;
   updated_at: number;
   analyzed_at: number | null;
+  quality_score: number | null;
 }
 
 export interface NotebookAnalysis {
@@ -188,6 +189,7 @@ export interface NotebookAnalysis {
   functions_defined: string[];
   kernel_info: Record<string, unknown> | null;
   analyzed_at: number;
+  quality_score?: number | null;
 }
 
 export interface NotebookCell {

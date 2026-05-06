@@ -174,6 +174,95 @@ cloud-only and env-gated.
 - **Mode:** Both.
 - **Fix:** Reject `ndigits > 1000` (a real NUMERIC has at most ~131k digits in Postgres but `ndigits` of base-10000 limbs is small).
 
+### M-9 — dbt-proxy: no socket read timeout (slowloris) (Round 4)
+- File: `gateway/dbt_proxy/protocol.py:read_exact`
+- `asyncio.StreamReader.readexactly` has no timeout. An attacker who
+  writes the 5-byte frame header but no body holds the connection
+  slot indefinitely, repeated across many TCP connects to exhaust
+  the listener. Reachable pre-auth on the startup path.
+- **Severity:** Medium — DoS, requires sustained connections; bounded
+  by OS fd limits and the existing 16 MiB / 64 KiB frame caps but
+  amplifies their cost.
+- **Mode:** Both — universal hardening (R3 lesson #2).
+- **Fix (Round 4, applied):** `READ_TIMEOUT_SECONDS = 30.0` wrapping
+  every `readexactly` via `asyncio.wait_for`; on timeout, raise
+  `ValueError("read timed out…")` so existing handlers emit
+  ErrorResponse and close. 30 s is ~4.4 Mbps minimum for a 16 MiB
+  frame — well below any real link.
+- **Tests:** `tests/test_dbt_proxy_protocol_timeout.py` — 5 cases:
+  startup slowloris, frontend slowloris, header-only slowloris,
+  fast-path regression (small + near-cap). Wall-clock asserts prove
+  timeout fires before allocation completes.
+
+### M-10 — dbt-proxy: unbounded named-statement / named-portal dicts per session (Round 4)
+- File: `gateway/dbt_proxy/session.py:_handle_parse`,
+  `gateway/dbt_proxy/session.py:_handle_bind`
+- An authenticated session can issue up to 65535 distinct named
+  Parse messages, each retained in `self._named_stmts` until session
+  close. Same for `_named_portals`. With each entry up to 16 MiB
+  (frame cap), worst-case memory per session is unbounded for
+  practical purposes.
+- **Severity:** Medium — post-auth, but amplification per session.
+- **Mode:** Both — universal.
+- **Fix (Round 4, applied):** `MAX_NAMED_STATEMENTS_PER_SESSION = 256`
+  / `MAX_NAMED_PORTALS_PER_SESSION = 256`. Adding a *new* key past
+  the cap → ErrorResponse with SQLSTATE `53000`
+  (insufficient_resources); re-Parse of an existing name still
+  overwrites (no false-positive on legitimate reuse). Connection is
+  not closed. Portal cap is checked *before* `_substitute_params` to
+  reject cheaply.
+- **Tests:** `tests/test_dbt_proxy_session_limits.py` — 4 cases:
+  256 succeed, 257th rejected, overwrite at full cap succeeds,
+  portal-side parity.
+
+### M-11 — dbt-proxy: NUMERIC binary parsing does not bound `weight` (Round 4)
+- File: `gateway/dbt_proxy/protocol.py:_parse_numeric_binary`,
+  `gateway/dbt_proxy/session.py:_handle_bind`, `session.py:run()`
+- Companion to M-8: `ndigits` was capped at 1000 in R1, but `weight`
+  (base-10000 exponent, `!h`, range ±32767) was not. The inner loop
+  computes `Decimal(10000) ** (weight - i)`; an extreme `weight`
+  produces a Decimal with up to ~131,000 digits, multiplied by each
+  of up to 1000 digits — large CPU/memory cost per Bind value.
+- **Severity:** Medium — post-auth, but amplifies a 16 MiB frame into
+  a much larger CPU/memory workload.
+- **Mode:** Both — universal.
+- **Fix (Round 4, applied):** `MAX_NUMERIC_WEIGHT = 1000`; reject
+  `|weight| > 1000` with `ValueError`. Together with the existing
+  `ndigits <= 1000` cap, the inner loop is bounded at 10^6
+  decimal-digit operations.
+  **Cross-ref to M-8 — two-layer ValueError catch (Fix 3-bis, complete):**
+  - *Per-iteration catch (session.py:_handle_bind)*: `try/except ValueError`
+    around `parse_bind_value(raw, oid, fmt)` converts `ValueError` from
+    `_parse_numeric_binary` (both `ndigits` and `weight` caps) into an
+    ErrorResponse with SQLSTATE `22P03`, drain, and return without close.
+    This covers the inner parse loop.
+  - *Loop-level safety net (session.py:run())*: a broader `try/except
+    ValueError` wraps the entire handler dispatch block. This catches any
+    `ValueError` (including `UnicodeDecodeError`, a `ValueError` subclass)
+    that escapes a handler — specifically: (a) `UnicodeDecodeError` from
+    malformed UTF-8 in portal/statement name fields decoded in
+    `parse_bind_message` before the inner try/except, and (b) `ValueError`
+    from `_format_param` (NaN/Inf binary float8, NUL-byte binary text)
+    raised after `parse_bind_value` returns successfully. Both paths
+    previously propagated to `server.py:101` with no ErrorResponse and an
+    abrupt close. The loop-level catch emits ErrorResponse SQLSTATE `22P03`
+    and continues — allowing Sync/recovery per the Postgres protocol.
+    Programmer errors (TypeError, AttributeError) are not caught.
+  Together these two layers fully close the M-8 propagation gap claimed in
+  Round 4 build report.
+- **Tests:**
+  - `tests/test_dbt_proxy_numeric_bounds.py` — 7 cases: weight +32767
+    and -32768 rejected, at-cap weight=1000 accepted, weight=1001
+    rejected, ndigits regression, plus `_handle_bind`-level tests
+    asserting ErrorResponse SQLSTATE `22P03` for weight-overflow and
+    ndigits-overflow Bind payloads.
+  - `tests/test_dbt_proxy_session_limits.py::TestRunLoopValueErrorSafetyNet`
+    — 3 cases covering the loop-level catch: (1) `_handle_bind` propagates
+    `UnicodeDecodeError` for invalid portal UTF-8 (confirming no inner catch
+    suppresses it), (2) `run()` catches that error, emits 22P03, and
+    continues (Sync produces ReadyForQuery after the error), (3) binary
+    float8 NaN Bind emits 22P03 and loop continues to Sync.
+
 ---
 
 ## High

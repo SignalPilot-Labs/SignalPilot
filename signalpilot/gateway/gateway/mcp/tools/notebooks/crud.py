@@ -19,6 +19,7 @@ from gateway.store.notebook_files import (
     _parse_notebook,
     _save_notebook_file,
 )
+from gateway.store.notebooks import NOTEBOOK_SORT_KEYS, NOTEBOOK_STATUS_VALUES
 
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -29,15 +30,30 @@ _MAX_CELL_PREVIEW_CHARS = 500
 
 
 @audited_tool(mcp)
-async def list_notebooks() -> str:
+async def list_notebooks(
+    sort_by: str = "updated_at",
+    sort_dir: str = "desc",
+    status: str = "all",
+) -> str:
     """
     List all uploaded notebooks.
+
+    Args:
+        sort_by: Column to sort by. Allowed: 'updated_at', 'created_at', 'name', 'cell_count'. Default: 'updated_at'.
+        sort_dir: Sort direction: 'asc' or 'desc'. Default: 'desc'.
+        status: Filter by analysis status: 'all', 'analyzed', or 'pending'. Default: 'all'.
 
     Returns:
         Notebook names, IDs, cell counts, and last updated timestamps.
     """
+    if sort_by not in NOTEBOOK_SORT_KEYS:
+        return f"Error: Invalid sort_by '{sort_by}'. Allowed: {sorted(NOTEBOOK_SORT_KEYS)}"
+    if sort_dir not in {"asc", "desc"}:
+        return "Error: Invalid sort_dir. Allowed: 'asc', 'desc'"
+    if status not in NOTEBOOK_STATUS_VALUES:
+        return f"Error: Invalid status '{status}'. Allowed: {sorted(NOTEBOOK_STATUS_VALUES)}"
     async with _store_session() as store:
-        notebooks = await store.list_notebooks()
+        notebooks = await store.list_notebooks(sort_by=sort_by, sort_dir=sort_dir, status=status)
     if not notebooks:
         return "No notebooks found. Use upload_notebook to add one."
     lines = [f"Found {len(notebooks)} notebook(s):\n"]

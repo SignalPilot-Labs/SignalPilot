@@ -566,13 +566,28 @@ class Store:
 
     # ─── Notebooks ───────────────────────────────────────────────────────
 
-    async def list_notebooks(self, limit: int = 50, offset: int = 0) -> list[NotebookInfo]:
+    async def list_notebooks(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_dir: str = "desc",
+        status: str = "all",
+    ) -> list[NotebookInfo]:
         oid = self._require_org_id()
-        return await notebooks_store.list_notebooks(self.session, org_id=oid, limit=limit, offset=offset)
+        return await notebooks_store.list_notebooks(
+            self.session,
+            org_id=oid,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            status=status,
+        )
 
-    async def count_notebooks(self) -> int:
+    async def count_notebooks(self, status: str = "all") -> int:
         oid = self._require_org_id()
-        return await notebooks_store.count_notebooks(self.session, org_id=oid)
+        return await notebooks_store.count_notebooks(self.session, org_id=oid, status=status)
 
     async def get_notebook_meta(self, notebook_id: str) -> NotebookInfo | None:
         oid = self._require_org_id()
@@ -640,13 +655,32 @@ class Store:
         oid = self._require_org_id()
         return await notebooks_store.get_notebook_analysis_json(self.session, org_id=oid, notebook_id=notebook_id)
 
-    async def search_notebooks(self, query: str, limit: int = 50, offset: int = 0) -> list[NotebookInfo]:
+    async def search_notebooks(
+        self,
+        query: str,
+        limit: int = 50,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_dir: str = "desc",
+        status: str = "all",
+    ) -> list[NotebookInfo]:
         oid = self._require_org_id()
-        return await notebooks_store.search_notebooks(self.session, org_id=oid, query=query, limit=limit, offset=offset)
+        return await notebooks_store.search_notebooks(
+            self.session,
+            org_id=oid,
+            query=query,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            status=status,
+        )
 
-    async def count_search_notebooks(self, query: str) -> int:
+    async def count_search_notebooks(self, query: str, status: str = "all") -> int:
         oid = self._require_org_id()
-        return await notebooks_store.count_search_notebooks(self.session, org_id=oid, query=query)
+        return await notebooks_store.count_search_notebooks(
+            self.session, org_id=oid, query=query, status=status
+        )
 
     async def get_notebooks_summary(self) -> NotebookSummary:
         oid = self._require_org_id()

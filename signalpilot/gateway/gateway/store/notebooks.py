@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Text, case, cast, delete, or_, select
 from sqlalchemy import func as sa_func
@@ -14,7 +15,43 @@ from sqlalchemy.sql.expression import ColumnElement
 from gateway.db.models import GatewayNotebook
 from gateway.models.notebooks import ImportCount, NotebookInfo, NotebookSummary, NotebookUpload
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm.attributes import InstrumentedAttribute
+
 _MAX_LIMIT = 100
+
+_SORT_COLUMNS: dict[str, InstrumentedAttribute] = {
+    "updated_at": GatewayNotebook.updated_at,
+    "created_at": GatewayNotebook.created_at,
+    "name": GatewayNotebook.name,
+    "cell_count": GatewayNotebook.cell_count,
+}
+
+NOTEBOOK_SORT_KEYS: frozenset[str] = frozenset(_SORT_COLUMNS.keys())
+NOTEBOOK_STATUS_VALUES: frozenset[str] = frozenset({"all", "analyzed", "pending"})
+
+
+def _build_order_clause(sort_by: str, sort_dir: str):  # type: ignore[return]
+    """Return a SQLAlchemy order clause for the given sort_by/sort_dir pair."""
+    if sort_by not in _SORT_COLUMNS:
+        raise ValueError(f"Invalid sort_by '{sort_by}'. Allowed: {sorted(NOTEBOOK_SORT_KEYS)}")
+    col = _SORT_COLUMNS[sort_by]
+    if sort_dir == "asc":
+        return col.asc()
+    if sort_dir == "desc":
+        return col.desc()
+    raise ValueError(f"Invalid sort_dir '{sort_dir}'. Allowed: 'asc', 'desc'")
+
+
+def _status_filter(status: str) -> ColumnElement[bool] | None:
+    """Return an optional WHERE clause for the given status filter."""
+    if status == "all":
+        return None
+    if status == "analyzed":
+        return GatewayNotebook.analyzed_at.isnot(None)
+    if status == "pending":
+        return GatewayNotebook.analyzed_at.is_(None)
+    raise ValueError(f"Invalid status '{status}'. Allowed: {sorted(NOTEBOOK_STATUS_VALUES)}")
 
 
 def _row_to_info(row: GatewayNotebook) -> NotebookInfo:
@@ -39,16 +76,23 @@ async def list_notebooks(
     org_id: str,
     limit: int = 50,
     offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_dir: str = "desc",
+    status: str = "all",
 ) -> list[NotebookInfo]:
     limit = min(limit, _MAX_LIMIT)
     offset = max(offset, 0)
-    result = await session.execute(
+    stmt = (
         select(GatewayNotebook)
         .where(GatewayNotebook.org_id == org_id)
-        .order_by(GatewayNotebook.updated_at.desc())
+        .order_by(_build_order_clause(sort_by, sort_dir))
         .limit(limit)
         .offset(offset)
     )
+    status_clause = _status_filter(status)
+    if status_clause is not None:
+        stmt = stmt.where(status_clause)
+    result = await session.execute(stmt)
     return [_row_to_info(r) for r in result.scalars().all()]
 
 
@@ -56,10 +100,13 @@ async def count_notebooks(
     session: AsyncSession,
     *,
     org_id: str,
+    status: str = "all",
 ) -> int:
-    result = await session.execute(
-        select(sa_func.count()).select_from(GatewayNotebook).where(GatewayNotebook.org_id == org_id)
-    )
+    stmt = select(sa_func.count()).select_from(GatewayNotebook).where(GatewayNotebook.org_id == org_id)
+    status_clause = _status_filter(status)
+    if status_clause is not None:
+        stmt = stmt.where(status_clause)
+    result = await session.execute(stmt)
     return result.scalar_one()
 
 
@@ -240,16 +287,23 @@ async def search_notebooks(
     query: str,
     limit: int = 50,
     offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_dir: str = "desc",
+    status: str = "all",
 ) -> list[NotebookInfo]:
     limit = min(limit, _MAX_LIMIT)
     offset = max(offset, 0)
-    result = await session.execute(
+    stmt = (
         select(GatewayNotebook)
         .where(*_search_filter(query, org_id))
-        .order_by(GatewayNotebook.updated_at.desc())
+        .order_by(_build_order_clause(sort_by, sort_dir))
         .limit(limit)
         .offset(offset)
     )
+    status_clause = _status_filter(status)
+    if status_clause is not None:
+        stmt = stmt.where(status_clause)
+    result = await session.execute(stmt)
     return [_row_to_info(r) for r in result.scalars().all()]
 
 
@@ -258,10 +312,13 @@ async def count_search_notebooks(
     *,
     org_id: str,
     query: str,
+    status: str = "all",
 ) -> int:
-    result = await session.execute(
-        select(sa_func.count()).select_from(GatewayNotebook).where(*_search_filter(query, org_id))
-    )
+    stmt = select(sa_func.count()).select_from(GatewayNotebook).where(*_search_filter(query, org_id))
+    status_clause = _status_filter(status)
+    if status_clause is not None:
+        stmt = stmt.where(status_clause)
+    result = await session.execute(stmt)
     return result.scalar_one()
 
 

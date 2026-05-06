@@ -11,11 +11,16 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { getNotebooks, searchNotebooks, batchAnalyzeNotebooks, batchDeleteNotebooks } from "@/lib/api";
 import { invalidateNotebooks } from "@/lib/hooks/use-gateway-data";
 import { useToast } from "@/components/ui/toast";
+import { NotebookListToolbar } from "./notebook-list-toolbar";
 
 interface NotebookListProps {
   notebooks: NotebookInfo[];
   total: number;
 }
+
+const DEFAULT_SORT_BY = "updated_at";
+const DEFAULT_SORT_DIR = "desc";
+const DEFAULT_STATUS_FILTER = "all";
 
 export function NotebookList({ notebooks, total }: NotebookListProps) {
   const { toast } = useToast();
@@ -29,6 +34,15 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
   const [extra, setExtra] = useState<NotebookInfo[]>([]);
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Sort/filter state
+  const [sortBy, setSortBy] = useState(DEFAULT_SORT_BY);
+  const [sortDir, setSortDir] = useState(DEFAULT_SORT_DIR);
+  const [statusFilter, setStatusFilter] = useState(DEFAULT_STATUS_FILTER);
+
+  // Client-fetched list override (used when sort/filter differ from defaults after search is cleared)
+  const [fetchedItems, setFetchedItems] = useState<NotebookInfo[] | null>(null);
+  const [fetchedTotal, setFetchedTotal] = useState(0);
 
   // Multi-select state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -53,6 +67,35 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
       setPage(0);
       // Clear selection when search query changes (prevents stale counts)
       setSelectedIds(new Set());
+
+      // Search-clear edge case: if sort/filter differ from defaults, the SSR
+      // prop reflects the server's default ordering — we need a fresh fetch.
+      const nonDefault =
+        sortBy !== DEFAULT_SORT_BY ||
+        sortDir !== DEFAULT_SORT_DIR ||
+        statusFilter !== DEFAULT_STATUS_FILTER;
+
+      if (nonDefault) {
+        let cancelled = false;
+        (async () => {
+          try {
+            const response = await getNotebooks(50, 0, sortBy, sortDir, statusFilter);
+            if (!cancelled) {
+              setFetchedItems(response.items);
+              setFetchedTotal(response.total);
+            }
+          } catch {
+            if (!cancelled) {
+              setFetchedItems(null);
+            }
+          }
+        })();
+        return () => { cancelled = true; };
+      } else {
+        // Back to defaults — fall through to SSR prop
+        setFetchedItems(null);
+        setFetchedTotal(0);
+      }
       return;
     }
 
@@ -65,20 +108,22 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     // Clear selection when search query changes
     setSelectedIds(new Set());
 
+    // Only debounce the search text; sort/filter changes run immediately (no timer wrapping)
     const timer = setTimeout(async () => {
+      const q = latestQueryRef.current;
       try {
-        const response = await searchNotebooks(trimmed, 50, 0);
-        if (latestQueryRef.current === trimmed) {
+        const response = await searchNotebooks(q, 50, 0, sortBy, sortDir, statusFilter);
+        if (latestQueryRef.current === q) {
           setSearchResults(response.items);
           setSearchTotal(response.total);
         }
       } catch {
-        if (latestQueryRef.current === trimmed) {
+        if (latestQueryRef.current === q) {
           setSearchResults(null);
           setSearchTotal(0);
         }
       } finally {
-        if (latestQueryRef.current === trimmed) {
+        if (latestQueryRef.current === q) {
           setIsSearching(false);
         }
       }
@@ -87,9 +132,35 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     return () => {
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, sortBy, sortDir, statusFilter]);
 
-  const allItems = [...notebooks, ...extra];
+  // resetList: clears pagination/selection state; called on sort/filter change
+  function resetList() {
+    setExtra([]);
+    setPage(0);
+    setSelectedIds(new Set());
+  }
+
+  function handleSortByChange(value: string) {
+    setSortBy(value);
+    resetList();
+    // useEffect [query, sortBy, sortDir, statusFilter] handles re-fetch automatically
+  }
+
+  function handleSortDirChange(value: string) {
+    setSortDir(value);
+    resetList();
+  }
+
+  function handleStatusFilterChange(value: string) {
+    setStatusFilter(value);
+    resetList();
+  }
+
+  // Base list: fetchedItems overrides SSR prop when sort/filter are non-default
+  const baseItems = fetchedItems !== null ? fetchedItems : notebooks;
+  const baseTotal = fetchedItems !== null ? fetchedTotal : total;
+  const allItems = [...baseItems, ...extra];
 
   // When server search is active, use its results; otherwise use accumulated items
   const isServerSearch = searchResults !== null;
@@ -109,7 +180,7 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
   // Counter copy: show result count during server search; "X of Y" otherwise
   const counterText = isServerSearch
     ? `${filtered.length} result${filtered.length !== 1 ? "s" : ""}`
-    : `${filtered.length} of ${total} notebook${total !== 1 ? "s" : ""}`;
+    : `${filtered.length} of ${baseTotal} notebook${baseTotal !== 1 ? "s" : ""}`;
 
   // Selection helpers
   function toggleSelect(id: string) {
@@ -179,7 +250,7 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     setLoadingMore(true);
     try {
       const nextPage = page + 1;
-      const response = await getNotebooks(50, nextPage * 50);
+      const response = await getNotebooks(50, nextPage * 50, sortBy, sortDir, statusFilter);
       setExtra((prev) => [...prev, ...response.items]);
       setPage(nextPage);
     } catch {
@@ -195,7 +266,7 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     try {
       const trimmed = query.trim();
       const nextOffset = searchResults.length;
-      const response = await searchNotebooks(trimmed, 50, nextOffset);
+      const response = await searchNotebooks(trimmed, 50, nextOffset, sortBy, sortDir, statusFilter);
       if (latestQueryRef.current === trimmed) {
         setSearchResults((prev) => [...(prev ?? []), ...response.items]);
         setSearchTotal(response.total);
@@ -207,12 +278,12 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
     }
   }
 
-  const showLoadMore = !isSearching_ && allItems.length < total;
+  const showLoadMore = !isSearching_ && allItems.length < baseTotal;
   const showSearchLoadMore = isServerSearch && searchResults !== null && searchResults.length < searchTotal;
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6 gap-4">
+      <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
         {/* Search */}
         <div className="flex items-center gap-2 flex-1 max-w-xs">
           {isSearching ? (
@@ -248,6 +319,16 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
             className="flex-1 bg-transparent text-[12px] text-[var(--color-text-muted)] placeholder:text-[var(--color-text-dim)] outline-none border-b border-[var(--color-border)] focus:border-[var(--color-border-hover)] pb-0.5 transition-colors tracking-wider"
           />
         </div>
+
+        {/* Sort/filter toolbar */}
+        <NotebookListToolbar
+          sortBy={sortBy}
+          sortDir={sortDir}
+          statusFilter={statusFilter}
+          onSortByChange={handleSortByChange}
+          onSortDirChange={handleSortDirChange}
+          onStatusFilterChange={handleStatusFilterChange}
+        />
 
         <div className="flex items-center gap-3">
           <p className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
@@ -382,8 +463,8 @@ export function NotebookList({ notebooks, total }: NotebookListProps) {
             className="px-6 py-2 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50"
           >
             {loadingMore
-              ? `loading... (${allItems.length} of ${total})`
-              : `load more (${allItems.length} of ${total})`}
+              ? `loading... (${allItems.length} of ${baseTotal})`
+              : `load more (${allItems.length} of ${baseTotal})`}
           </button>
         </div>
       )}

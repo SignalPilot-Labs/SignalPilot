@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 import uuid
@@ -29,6 +28,7 @@ from gateway.store.notebook_files import (
     _parse_notebook,
     _save_notebook_file,
 )
+from gateway.store.notebooks import NOTEBOOK_SORT_KEYS, NOTEBOOK_STATUS_VALUES
 
 from .deps import StoreD
 
@@ -43,12 +43,19 @@ async def list_notebooks(
     store: StoreD,
     limit: int = 50,
     offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_dir: str = "desc",
+    status: str = "all",
 ) -> dict:
-    """List all notebooks with pagination."""
-    items, total = await asyncio.gather(
-        store.list_notebooks(limit=limit, offset=offset),
-        store.count_notebooks(),
-    )
+    """List all notebooks with pagination, sorting, and status filtering."""
+    if sort_by not in NOTEBOOK_SORT_KEYS:
+        raise HTTPException(status_code=400, detail=f"Invalid sort_by '{sort_by}'. Allowed: {sorted(NOTEBOOK_SORT_KEYS)}")
+    if sort_dir not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="Invalid sort_dir. Allowed: 'asc', 'desc'")
+    if status not in NOTEBOOK_STATUS_VALUES:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Allowed: {sorted(NOTEBOOK_STATUS_VALUES)}")
+    items = await store.list_notebooks(limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir, status=status)
+    total = await store.count_notebooks(status=status)
     return {"items": items, "total": total}
 
 
@@ -100,14 +107,21 @@ async def search_notebooks(
     q: str = "",
     limit: int = 50,
     offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_dir: str = "desc",
+    status: str = "all",
 ) -> dict:
     """Search notebooks by name, description, or tags."""
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query parameter 'q' must not be empty.")
-    results, total = await asyncio.gather(
-        store.search_notebooks(query=q, limit=limit, offset=offset),
-        store.count_search_notebooks(query=q),
-    )
+    if sort_by not in NOTEBOOK_SORT_KEYS:
+        raise HTTPException(status_code=400, detail=f"Invalid sort_by '{sort_by}'. Allowed: {sorted(NOTEBOOK_SORT_KEYS)}")
+    if sort_dir not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="Invalid sort_dir. Allowed: 'asc', 'desc'")
+    if status not in NOTEBOOK_STATUS_VALUES:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Allowed: {sorted(NOTEBOOK_STATUS_VALUES)}")
+    results = await store.search_notebooks(query=q, limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir, status=status)
+    total = await store.count_search_notebooks(query=q, status=status)
     return {"items": results, "total": total}
 
 

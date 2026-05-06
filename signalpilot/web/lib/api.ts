@@ -568,8 +568,13 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
 };
 
 // Notebooks
-export const getNotebooks = (limit = 50, offset = 0) =>
-  request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks?limit=${limit}&offset=${offset}`);
+export const getNotebooks = (limit = 50, offset = 0, sortBy?: string, sortDir?: string, status?: string) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (sortBy && sortBy !== "updated_at") params.set("sort_by", sortBy);
+  if (sortDir && sortDir !== "desc") params.set("sort_dir", sortDir);
+  if (status && status !== "all") params.set("status", status);
+  return request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks?${params.toString()}`);
+};
 
 export const getNotebook = (id: string) =>
   request<import("./types").NotebookInfo>(`/api/notebooks/${id}`);
@@ -600,8 +605,13 @@ export const updateNotebook = (id: string, payload: { name?: string; description
     body: JSON.stringify(payload),
   });
 
-export const searchNotebooks = (query: string, limit = 50, offset = 0) =>
-  request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
+export const searchNotebooks = (query: string, limit = 50, offset = 0, sortBy?: string, sortDir?: string, status?: string) => {
+  const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) });
+  if (sortBy && sortBy !== "updated_at") params.set("sort_by", sortBy);
+  if (sortDir && sortDir !== "desc") params.set("sort_dir", sortDir);
+  if (status && status !== "all") params.set("status", status);
+  return request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks/search?${params.toString()}`);
+};
 
 export function getNotebookDownloadUrl(id: string): string {
   return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/download`;

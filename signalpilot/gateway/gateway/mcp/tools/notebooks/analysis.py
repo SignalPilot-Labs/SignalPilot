@@ -15,6 +15,7 @@ from gateway.store.notebook_files import (
     _load_notebook_file,
     _now_iso,
 )
+from gateway.store.notebooks import NOTEBOOK_SORT_KEYS, NOTEBOOK_STATUS_VALUES
 
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -229,7 +230,14 @@ async def get_notebook_cell(notebook_id: str, cell_index: int = -1, cell_type: s
 
 
 @audited_tool(mcp)
-async def search_notebooks(query: str, limit: int = 50, offset: int = 0) -> str:
+async def search_notebooks(
+    query: str,
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_dir: str = "desc",
+    status: str = "all",
+) -> str:
     """
     Search notebooks by name, description, or tags.
 
@@ -237,6 +245,9 @@ async def search_notebooks(query: str, limit: int = 50, offset: int = 0) -> str:
         query: Search string (case-insensitive)
         limit: Maximum number of results to return (default 50, max 100)
         offset: Number of results to skip for pagination (default 0)
+        sort_by: Column to sort by. Allowed: 'updated_at', 'created_at', 'name', 'cell_count'. Default: 'updated_at'.
+        sort_dir: Sort direction: 'asc' or 'desc'. Default: 'desc'.
+        status: Filter by analysis status: 'all', 'analyzed', or 'pending'. Default: 'all'.
 
     Returns:
         Matching notebooks with IDs and metadata.
@@ -244,9 +255,17 @@ async def search_notebooks(query: str, limit: int = 50, offset: int = 0) -> str:
     query = query.strip()
     if not query:
         return "Error: Query must not be empty."
+    if sort_by not in NOTEBOOK_SORT_KEYS:
+        return f"Error: Invalid sort_by '{sort_by}'. Allowed: {sorted(NOTEBOOK_SORT_KEYS)}"
+    if sort_dir not in {"asc", "desc"}:
+        return "Error: Invalid sort_dir. Allowed: 'asc', 'desc'"
+    if status not in NOTEBOOK_STATUS_VALUES:
+        return f"Error: Invalid status '{status}'. Allowed: {sorted(NOTEBOOK_STATUS_VALUES)}"
 
     async with _store_session() as store:
-        results = await store.search_notebooks(query=query, limit=limit, offset=offset)
+        results = await store.search_notebooks(
+            query=query, limit=limit, offset=offset, sort_by=sort_by, sort_dir=sort_dir, status=status
+        )
 
     if not results:
         return f"No notebooks found matching '{query}'."

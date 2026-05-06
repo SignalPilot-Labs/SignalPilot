@@ -318,6 +318,7 @@ export interface NotebookVersionInfo {
   functions_count: number;
   imports_count: number;
   analyzed_at: number;
+  created_at: number;
 }
 
 export interface MetricsSnapshot {

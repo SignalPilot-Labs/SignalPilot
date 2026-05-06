@@ -1,9 +1,10 @@
-"""Notebook Pydantic models: upload payload, metadata, and analysis results."""
+"""Notebook Pydantic models: upload payload, metadata, analysis results, and report."""
 
 from __future__ import annotations
 
 import re
 import time
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -125,3 +126,40 @@ class BatchResult(BaseModel):
     results: list[BatchResultItem]
     succeeded: int
     failed: int
+
+
+class NotebookReportCell(BaseModel):
+    """Per-cell summary within a notebook report."""
+
+    index: int
+    cell_type: str
+    source_line_count: int
+    has_output: bool
+    execution_count: int | None
+
+
+class NotebookReportOutputsSummary(BaseModel):
+    """Outputs summary section of a notebook report."""
+
+    total_outputs: int
+    by_type: dict[str, int]
+
+
+class NotebookReportMetadata(BaseModel):
+    """Notebook format metadata section of a notebook report."""
+
+    nbformat: int | None
+    nbformat_minor: int | None
+    kernel_info: dict | None
+
+
+class NotebookReport(BaseModel):
+    """Structured analysis report for a single notebook."""
+
+    report_version: Literal["1.0"]
+    generated_at: float
+    notebook: NotebookInfo
+    analysis: NotebookAnalysis | None
+    cell_details: list[NotebookReportCell]
+    outputs_summary: NotebookReportOutputsSummary
+    metadata: NotebookReportMetadata

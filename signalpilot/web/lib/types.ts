@@ -229,6 +229,35 @@ export interface BatchResult {
   failed: number;
 }
 
+export interface NotebookReportCell {
+  index: number;
+  cell_type: string;
+  source_line_count: number;
+  has_output: boolean;
+  execution_count: number | null;
+}
+
+export interface NotebookReportOutputsSummary {
+  total_outputs: number;
+  by_type: Record<string, number>;
+}
+
+export interface NotebookReportMetadata {
+  nbformat: number | null;
+  nbformat_minor: number | null;
+  kernel_info: Record<string, unknown> | null;
+}
+
+export interface NotebookReport {
+  report_version: string;
+  generated_at: number;
+  notebook: NotebookInfo;
+  analysis: NotebookAnalysis | null;
+  cell_details: NotebookReportCell[];
+  outputs_summary: NotebookReportOutputsSummary;
+  metadata: NotebookReportMetadata;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

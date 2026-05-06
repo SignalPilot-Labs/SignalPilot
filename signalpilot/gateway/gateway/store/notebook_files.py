@@ -172,6 +172,70 @@ def _analyze_notebook_content(nb: dict) -> dict:
     }
 
 
+_MAX_REPORT_CELLS = 50
+
+
+def _build_report_data(
+    analysis_json: dict | None,
+    nb_content: dict,
+) -> dict:
+    """Assemble raw report data from notebook metadata, analysis, and file content.
+
+    Returns a dict with keys: cell_details, outputs_summary, metadata.
+    Both the API endpoint (wraps in NotebookReport) and MCP tool (formats as text) use this.
+    """
+    cells = nb_content.get("cells", [])
+    nb_metadata = nb_content.get("metadata", {})
+
+    cell_details: list[dict] = []
+    total_outputs = 0
+    by_type: dict[str, int] = {}
+
+    for idx, cell in enumerate(cells[:_MAX_REPORT_CELLS]):
+        cell_type = cell.get("cell_type", "unknown")
+        source = _cell_source(cell)
+        source_line_count = len(source.splitlines())
+        outputs = cell.get("outputs", [])
+        has_output = bool(outputs)
+
+        for output in outputs:
+            output_type = output.get("output_type", "unknown")
+            by_type[output_type] = by_type.get(output_type, 0) + 1
+            total_outputs += 1
+
+        exec_count = cell.get("execution_count")
+        cell_details.append({
+            "index": idx,
+            "cell_type": cell_type,
+            "source_line_count": source_line_count,
+            "has_output": has_output,
+            "execution_count": exec_count,
+        })
+
+    # Count outputs from cells beyond the preview limit too
+    for cell in cells[_MAX_REPORT_CELLS:]:
+        for output in cell.get("outputs", []):
+            output_type = output.get("output_type", "unknown")
+            by_type[output_type] = by_type.get(output_type, 0) + 1
+            total_outputs += 1
+
+    kernelspec = nb_metadata.get("kernelspec")
+    kernel_info: dict | None = dict(kernelspec) if kernelspec else None
+
+    return {
+        "cell_details": cell_details,
+        "outputs_summary": {
+            "total_outputs": total_outputs,
+            "by_type": by_type,
+        },
+        "metadata": {
+            "nbformat": nb_content.get("nbformat"),
+            "nbformat_minor": nb_content.get("nbformat_minor"),
+            "kernel_info": kernel_info,
+        },
+    }
+
+
 def _now_iso() -> str:
     """Return current UTC time as ISO 8601 string."""
     return datetime.now(UTC).isoformat()

@@ -20,7 +20,7 @@ import {
   invalidateNotebook,
   invalidateNotebooks,
 } from "@/lib/hooks/use-gateway-data";
-import { analyzeNotebook, deleteNotebook, updateNotebook, getNotebookDownloadUrl, getAuthHeaders } from "@/lib/api";
+import { analyzeNotebook, deleteNotebook, updateNotebook, getNotebookDownloadUrl, getNotebookReportUrl, getAuthHeaders } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { NotebookInfo } from "@/lib/types";
 
@@ -46,6 +46,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [exportingReport, setExportingReport] = useState(false);
 
   // ── Tag editing ──────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState("");
@@ -144,6 +145,27 @@ export default function NotebookDetailPage({ params }: PageProps) {
       console.error("Delete failed:", err);
       toast("failed to delete notebook", "error");
       setDeleting(false);
+    }
+  }
+
+  async function handleExportReport() {
+    if (!notebook) return;
+    setExportingReport(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(getNotebookReportUrl(id), { headers });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${notebook.name}-report.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast("export failed", "error");
+    } finally {
+      setExportingReport(false);
     }
   }
 
@@ -261,6 +283,13 @@ export default function NotebookDetailPage({ params }: PageProps) {
           {/* Action buttons */}
           <div className="flex items-center gap-2">
             <button
+              onClick={handleExportReport}
+              disabled={exportingReport}
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exportingReport ? "exporting..." : "export report"}
+            </button>
+            <button
               onClick={handleDownload}
               disabled={downloading}
               className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
@@ -270,7 +299,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
-              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50"
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {analyzing
                 ? notebook.analyzed_at
@@ -283,7 +312,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
             <button
               onClick={() => setDeleteOpen(true)}
               disabled={deleting}
-              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-error)]/40 text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all disabled:opacity-50"
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-error)]/40 text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               delete
             </button>

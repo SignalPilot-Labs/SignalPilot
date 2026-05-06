@@ -617,6 +617,13 @@ export function getNotebookDownloadUrl(id: string): string {
   return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/download`;
 }
 
+export function getNotebookReportUrl(id: string): string {
+  return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/report`;
+}
+
+export const getNotebookReport = (id: string) =>
+  request<import("./types").NotebookReport>(`/api/notebooks/${encodeURIComponent(id)}/report`);
+
 export const getNotebooksSummary = () =>
   request<import("./types").NotebookSummary>("/api/notebooks/summary");
 

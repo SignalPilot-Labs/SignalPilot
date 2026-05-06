@@ -15,6 +15,10 @@ from gateway.models.notebooks import (
     BatchResultItem,
     NotebookAnalysis,
     NotebookInfo,
+    NotebookReport,
+    NotebookReportCell,
+    NotebookReportMetadata,
+    NotebookReportOutputsSummary,
     NotebookSummary,
     NotebookUpdate,
     NotebookUpload,
@@ -22,6 +26,7 @@ from gateway.models.notebooks import (
 from gateway.security.scope_guard import RequireScope
 from gateway.store.notebook_files import (
     _analyze_notebook_content,
+    _build_report_data,
     _delete_notebook_file,
     _load_notebook_file,
     _load_notebook_file_raw,
@@ -199,6 +204,51 @@ async def download_notebook(notebook_id: NotebookIdP, store: StoreD) -> Response
         content=content,
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.ipynb"'},
+    )
+
+
+@router.get("/notebooks/{notebook_id}/report", dependencies=[RequireScope("read")])
+async def get_notebook_report(notebook_id: NotebookIdP, store: StoreD) -> NotebookReport:
+    """Get a structured analysis report for a notebook, including cell details and output summary."""
+    meta = await store.get_notebook_meta(notebook_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+
+    analysis_json = await store.get_notebook_analysis_json(notebook_id)
+
+    nb_content = _load_notebook_file(notebook_id)
+    if not nb_content:
+        raise HTTPException(status_code=404, detail=f"Notebook file for '{notebook_id}' not found")
+
+    report_data = _build_report_data(
+        analysis_json=analysis_json,
+        nb_content=nb_content,
+    )
+
+    analysis: NotebookAnalysis | None = None
+    if analysis_json is not None:
+        aj = analysis_json
+        analysis = NotebookAnalysis(
+            notebook_id=notebook_id,
+            cell_counts=aj.get("cell_counts", {}),
+            imports=aj.get("imports", []),
+            execution_order_gaps=aj.get("execution_order_gaps", []),
+            error_cells=aj.get("error_cells", []),
+            output_summary=aj.get("output_summary", {}),
+            total_code_lines=aj.get("total_code_lines", 0),
+            functions_defined=aj.get("functions_defined", []),
+            kernel_info=aj.get("kernel_info"),
+            analyzed_at=aj.get("analyzed_at", time.time()),
+        )
+
+    return NotebookReport(
+        report_version="1.0",
+        generated_at=time.time(),
+        notebook=meta,
+        analysis=analysis,
+        cell_details=[NotebookReportCell(**c) for c in report_data["cell_details"]],
+        outputs_summary=NotebookReportOutputsSummary(**report_data["outputs_summary"]),
+        metadata=NotebookReportMetadata(**report_data["metadata"]),
     )
 
 

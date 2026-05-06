@@ -14,6 +14,7 @@ from gateway.models.notebooks import (
     BatchResult,
     BatchResultItem,
     NotebookAnalysis,
+    NotebookComparison,
     NotebookInfo,
     NotebookReport,
     NotebookReportCell,
@@ -32,6 +33,7 @@ from gateway.store.notebook_files import (
     _load_notebook_file_raw,
     _parse_notebook,
     _save_notebook_file,
+    build_notebook_comparison,
 )
 from gateway.store.notebooks import NOTEBOOK_SORT_KEYS, NOTEBOOK_STATUS_VALUES
 
@@ -249,6 +251,45 @@ async def get_notebook_report(notebook_id: NotebookIdP, store: StoreD) -> Notebo
         cell_details=[NotebookReportCell(**c) for c in report_data["cell_details"]],
         outputs_summary=NotebookReportOutputsSummary(**report_data["outputs_summary"]),
         metadata=NotebookReportMetadata(**report_data["metadata"]),
+    )
+
+
+@router.get("/notebooks/{notebook_id}/compare/{other_id}", dependencies=[RequireScope("read")])
+async def compare_notebooks(
+    notebook_id: NotebookIdP,
+    other_id: NotebookIdP,
+    store: StoreD,
+) -> NotebookComparison:
+    """Compare two notebooks side-by-side, returning cell-level diffs and analysis differences."""
+    if notebook_id == other_id:
+        raise HTTPException(status_code=400, detail="Cannot compare a notebook with itself.")
+
+    left_meta = await store.get_notebook_meta(notebook_id)
+    if not left_meta:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+
+    right_meta = await store.get_notebook_meta(other_id)
+    if not right_meta:
+        raise HTTPException(status_code=404, detail=f"Notebook '{other_id}' not found")
+
+    left_analysis_json = await store.get_notebook_analysis_json(notebook_id)
+    right_analysis_json = await store.get_notebook_analysis_json(other_id)
+
+    left_nb = _load_notebook_file(notebook_id)
+    if not left_nb:
+        raise HTTPException(status_code=404, detail=f"Notebook file for '{notebook_id}' not found")
+
+    right_nb = _load_notebook_file(other_id)
+    if not right_nb:
+        raise HTTPException(status_code=404, detail=f"Notebook file for '{other_id}' not found")
+
+    return build_notebook_comparison(
+        left_meta=left_meta,
+        right_meta=right_meta,
+        left_nb=left_nb,
+        right_nb=right_nb,
+        left_analysis=left_analysis_json,
+        right_analysis=right_analysis_json,
     )
 
 

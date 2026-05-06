@@ -51,6 +51,7 @@ from gateway.mcp.tools.notebooks import (
     analyze_notebook,
     batch_analyze_notebooks,
     batch_delete_notebooks,
+    compare_notebooks,
     delete_notebook,
     get_notebook,
     get_notebook_cell,
@@ -156,6 +157,7 @@ __all__ = [
     "delete_notebook",
     "batch_analyze_notebooks",
     "batch_delete_notebooks",
+    "compare_notebooks",
     "list_projects",
     "get_project",
     # Internal context helpers

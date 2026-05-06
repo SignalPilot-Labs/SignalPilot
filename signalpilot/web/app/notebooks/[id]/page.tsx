@@ -282,6 +282,12 @@ export default function NotebookDetailPage({ params }: PageProps) {
 
           {/* Action buttons */}
           <div className="flex items-center gap-2">
+            <Link
+              href={`/notebooks/compare?left=${id}`}
+              className="px-3 py-1.5 text-[12px] uppercase tracking-[0.15em] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all"
+            >
+              compare
+            </Link>
             <button
               onClick={handleExportReport}
               disabled={exportingReport}

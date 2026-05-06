@@ -163,3 +163,50 @@ class NotebookReport(BaseModel):
     cell_details: list[NotebookReportCell]
     outputs_summary: NotebookReportOutputsSummary
     metadata: NotebookReportMetadata
+
+
+class CellDiff(BaseModel):
+    """Comparison result for a single cell position."""
+
+    index: int
+    status: Literal["unchanged", "modified", "added", "removed"]
+    left_type: str | None = None
+    right_type: str | None = None
+    left_source_lines: int | None = None
+    right_source_lines: int | None = None
+
+
+class ComparisonSummary(BaseModel):
+    """Counts of diff outcomes across all compared cell positions."""
+
+    added: int = 0
+    removed: int = 0
+    modified: int = 0
+    unchanged: int = 0
+
+
+class AnalysisComparison(BaseModel):
+    """Differences in analysis results between two notebooks."""
+
+    left_imports: list[str]
+    right_imports: list[str]
+    added_imports: list[str]
+    removed_imports: list[str]
+    left_functions: list[str]
+    right_functions: list[str]
+    added_functions: list[str]
+    removed_functions: list[str]
+    left_error_cells: list[int]
+    right_error_cells: list[int]
+    left_code_lines: int
+    right_code_lines: int
+
+
+class NotebookComparison(BaseModel):
+    """Full comparison result between two notebooks."""
+
+    left_notebook: NotebookInfo
+    right_notebook: NotebookInfo
+    analysis: AnalysisComparison | None
+    cell_diffs: list[CellDiff]
+    summary: ComparisonSummary

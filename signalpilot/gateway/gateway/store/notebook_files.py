@@ -1,7 +1,8 @@
-"""Notebook file I/O helpers and analysis logic.
+"""Notebook file I/O helpers, analysis logic, and comparison utilities.
 
 Shared between MCP tools and API router. Handles reading, writing, and
-deleting .ipynb files from the notebooks directory, plus content analysis.
+deleting .ipynb files from the notebooks directory, plus content analysis
+and diff computation.
 """
 
 from __future__ import annotations
@@ -11,6 +12,14 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+
+from gateway.models.notebooks import (
+    AnalysisComparison,
+    CellDiff,
+    ComparisonSummary,
+    NotebookComparison,
+    NotebookInfo,
+)
 
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -239,3 +248,133 @@ def _build_report_data(
 def _now_iso() -> str:
     """Return current UTC time as ISO 8601 string."""
     return datetime.now(UTC).isoformat()
+
+
+def _build_analysis_comparison(
+    left_analysis: dict,
+    right_analysis: dict,
+) -> AnalysisComparison:
+    """Compute the diff between two analysis result dicts."""
+    left_imports: list[str] = left_analysis.get("imports", [])
+    right_imports: list[str] = right_analysis.get("imports", [])
+    left_functions: list[str] = left_analysis.get("functions_defined", [])
+    right_functions: list[str] = right_analysis.get("functions_defined", [])
+
+    left_import_set = set(left_imports)
+    right_import_set = set(right_imports)
+    left_func_set = set(left_functions)
+    right_func_set = set(right_functions)
+
+    return AnalysisComparison(
+        left_imports=left_imports,
+        right_imports=right_imports,
+        added_imports=sorted(right_import_set - left_import_set),
+        removed_imports=sorted(left_import_set - right_import_set),
+        left_functions=left_functions,
+        right_functions=right_functions,
+        added_functions=sorted(right_func_set - left_func_set),
+        removed_functions=sorted(left_func_set - right_func_set),
+        left_error_cells=left_analysis.get("error_cells", []),
+        right_error_cells=right_analysis.get("error_cells", []),
+        left_code_lines=left_analysis.get("total_code_lines", 0),
+        right_code_lines=right_analysis.get("total_code_lines", 0),
+    )
+
+
+def _compare_cells(left_nb: dict, right_nb: dict) -> list[CellDiff]:
+    """Compute per-cell diffs between two notebooks by index position."""
+    left_cells: list[dict] = left_nb.get("cells", [])
+    right_cells: list[dict] = right_nb.get("cells", [])
+    total = max(len(left_cells), len(right_cells))
+    diffs: list[CellDiff] = []
+
+    for idx in range(total):
+        has_left = idx < len(left_cells)
+        has_right = idx < len(right_cells)
+
+        if has_left and not has_right:
+            cell = left_cells[idx]
+            src = _cell_source(cell)
+            diffs.append(CellDiff(
+                index=idx,
+                status="removed",
+                left_type=cell.get("cell_type"),
+                right_type=None,
+                left_source_lines=len(src.splitlines()),
+                right_source_lines=None,
+            ))
+        elif has_right and not has_left:
+            cell = right_cells[idx]
+            src = _cell_source(cell)
+            diffs.append(CellDiff(
+                index=idx,
+                status="added",
+                left_type=None,
+                right_type=cell.get("cell_type"),
+                left_source_lines=None,
+                right_source_lines=len(src.splitlines()),
+            ))
+        else:
+            lc = left_cells[idx]
+            rc = right_cells[idx]
+            left_src = _cell_source(lc)
+            right_src = _cell_source(rc)
+            left_type: str | None = lc.get("cell_type")
+            right_type: str | None = rc.get("cell_type")
+            is_same = left_src == right_src and left_type == right_type
+            diffs.append(CellDiff(
+                index=idx,
+                status="unchanged" if is_same else "modified",
+                left_type=left_type,
+                right_type=right_type,
+                left_source_lines=len(left_src.splitlines()),
+                right_source_lines=len(right_src.splitlines()),
+            ))
+
+    return diffs
+
+
+def build_notebook_comparison(
+    left_meta: NotebookInfo,
+    right_meta: NotebookInfo,
+    left_nb: dict,
+    right_nb: dict,
+    left_analysis: dict | None,
+    right_analysis: dict | None,
+) -> NotebookComparison:
+    """Compute a full diff between two notebooks.
+
+    Pure function — no DB access. Compares cells by index position and
+    computes analysis diffs when both notebooks have been analyzed.
+
+    Args:
+        left_meta: Persisted metadata for the left notebook.
+        right_meta: Persisted metadata for the right notebook.
+        left_nb: Parsed notebook JSON dict for the left notebook.
+        right_nb: Parsed notebook JSON dict for the right notebook.
+        left_analysis: Analysis result dict for the left notebook, or None.
+        right_analysis: Analysis result dict for the right notebook, or None.
+
+    Returns:
+        NotebookComparison with cell_diffs, optional analysis diff, and summary counts.
+    """
+    cell_diffs = _compare_cells(left_nb, right_nb)
+
+    analysis: AnalysisComparison | None = None
+    if left_analysis is not None and right_analysis is not None:
+        analysis = _build_analysis_comparison(left_analysis, right_analysis)
+
+    summary = ComparisonSummary(
+        added=sum(1 for d in cell_diffs if d.status == "added"),
+        removed=sum(1 for d in cell_diffs if d.status == "removed"),
+        modified=sum(1 for d in cell_diffs if d.status == "modified"),
+        unchanged=sum(1 for d in cell_diffs if d.status == "unchanged"),
+    )
+
+    return NotebookComparison(
+        left_notebook=left_meta,
+        right_notebook=right_meta,
+        analysis=analysis,
+        cell_diffs=cell_diffs,
+        summary=summary,
+    )

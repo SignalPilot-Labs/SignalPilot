@@ -639,6 +639,11 @@ export const batchDeleteNotebooks = (notebookIds: string[]) =>
     body: JSON.stringify({ notebook_ids: notebookIds }),
   });
 
+export const getNotebookComparison = (leftId: string, rightId: string) =>
+  request<import("./types").NotebookComparison>(
+    `/api/notebooks/${encodeURIComponent(leftId)}/compare/${encodeURIComponent(rightId)}`
+  );
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

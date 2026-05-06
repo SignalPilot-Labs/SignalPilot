@@ -258,6 +258,45 @@ export interface NotebookReport {
   metadata: NotebookReportMetadata;
 }
 
+export interface CellDiff {
+  index: number;
+  status: "unchanged" | "modified" | "added" | "removed";
+  left_type: string | null;
+  right_type: string | null;
+  left_source_lines: number | null;
+  right_source_lines: number | null;
+}
+
+export interface ComparisonSummary {
+  added: number;
+  removed: number;
+  modified: number;
+  unchanged: number;
+}
+
+export interface AnalysisComparison {
+  left_imports: string[];
+  right_imports: string[];
+  added_imports: string[];
+  removed_imports: string[];
+  left_functions: string[];
+  right_functions: string[];
+  added_functions: string[];
+  removed_functions: string[];
+  left_error_cells: number[];
+  right_error_cells: number[];
+  left_code_lines: number;
+  right_code_lines: number;
+}
+
+export interface NotebookComparison {
+  left_notebook: NotebookInfo;
+  right_notebook: NotebookInfo;
+  analysis: AnalysisComparison | null;
+  cell_diffs: CellDiff[];
+  summary: ComparisonSummary;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

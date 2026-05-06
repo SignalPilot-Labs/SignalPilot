@@ -15,7 +15,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gateway.mcp import mcp_org_id_var, mcp_user_id_var
-from gateway.models.notebooks import ImportCount, NotebookInfo, NotebookSummary
+from gateway.models.notebooks import (
+    ImportCount,
+    NotebookActivityInfo,
+    NotebookInfo,
+    NotebookQualityItem,
+    NotebookSummary,
+    NotebookVersionInfo,
+)
 
 _VALID_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 _SECOND_UUID = "11111111-2222-3333-4444-555555555555"
@@ -83,6 +90,11 @@ def _make_mock_store() -> MagicMock:
         top_imports=[ImportCount(name="numpy", count=3)],
     ))
     store.batch_delete_notebooks = AsyncMock(return_value=[])
+    store.get_notebook_activities = AsyncMock(return_value=[])
+    store.count_notebook_activities = AsyncMock(return_value=0)
+    store.list_notebook_versions = AsyncMock(return_value=[])
+    store.count_notebook_versions = AsyncMock(return_value=0)
+    store.list_analyzed_notebooks = AsyncMock(return_value=[])
     return store
 
 
@@ -575,3 +587,178 @@ class TestMCPUpdateNotebookMetadata:
             mcp_user_id_var.reset(token_user)
 
         assert "Error" in result
+
+
+class TestMCPGetNotebookActivities:
+    @pytest.mark.asyncio
+    async def test_get_activities_success(self) -> None:
+        from gateway.mcp.tools.notebooks.activities import get_notebook_activities
+
+        mock_store = _make_mock_store()
+        mock_store.get_notebook_meta.return_value = _make_notebook_info()
+        activity = NotebookActivityInfo(
+            id=_SECOND_UUID,
+            notebook_id=_VALID_UUID,
+            action="upload",
+            details={"size": 1024},
+            created_at=1_000_000.0,
+            user_id="user-1",
+        )
+        mock_store.get_notebook_activities.return_value = [activity]
+        mock_store.count_notebook_activities.return_value = 1
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        p1, p2 = _make_store_patches(mock_store)
+        try:
+            with p1, p2:
+                result = await get_notebook_activities(_VALID_UUID, limit=50, action="")
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "Activity log for" in result
+
+    @pytest.mark.asyncio
+    async def test_get_activities_invalid_uuid(self) -> None:
+        from gateway.mcp.tools.notebooks.activities import get_notebook_activities
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        try:
+            result = await get_notebook_activities("bad-id", limit=50, action="")
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_get_activities_invalid_action(self) -> None:
+        from gateway.mcp.tools.notebooks.activities import get_notebook_activities
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        try:
+            result = await get_notebook_activities(_VALID_UUID, limit=50, action="bogus")
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "Error" in result
+
+
+class TestMCPGetNotebookVersions:
+    @pytest.mark.asyncio
+    async def test_get_versions_success(self) -> None:
+        from gateway.mcp.tools.notebooks.versions import get_notebook_versions
+
+        mock_store = _make_mock_store()
+        mock_store.get_notebook_meta.return_value = _make_notebook_info()
+        version = NotebookVersionInfo(
+            id=_SECOND_UUID,
+            notebook_id=_VALID_UUID,
+            version_number=1,
+            total_cells=5,
+            code_cells=3,
+            markdown_cells=2,
+            error_cells=0,
+            total_code_lines=20,
+            functions_count=2,
+            imports_count=3,
+            analyzed_at=1_000_000.0,
+            created_at=1_000_000.0,
+        )
+        mock_store.list_notebook_versions.return_value = [version]
+        mock_store.count_notebook_versions.return_value = 1
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        p1, p2 = _make_store_patches(mock_store)
+        try:
+            with p1, p2:
+                result = await get_notebook_versions(_VALID_UUID)
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "Version history for" in result
+
+    @pytest.mark.asyncio
+    async def test_get_versions_not_found(self) -> None:
+        from gateway.mcp.tools.notebooks.versions import get_notebook_versions
+
+        mock_store = _make_mock_store()
+        mock_store.get_notebook_meta.return_value = None
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        p1, p2 = _make_store_patches(mock_store)
+        try:
+            with p1, p2:
+                result = await get_notebook_versions(_VALID_UUID)
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_versions_invalid_uuid(self) -> None:
+        from gateway.mcp.tools.notebooks.versions import get_notebook_versions
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        try:
+            result = await get_notebook_versions("bad-id")
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "Error" in result
+
+
+class TestMCPGetLowQualityNotebooks:
+    @pytest.mark.asyncio
+    async def test_get_low_quality_success(self) -> None:
+        from gateway.mcp.tools.notebooks.quality import get_low_quality_notebooks
+
+        mock_store = _make_mock_store()
+        item = NotebookQualityItem(
+            notebook_id=_VALID_UUID,
+            name="Low Quality Notebook",
+            quality_score=30,
+            analyzed_at=1_000_000.0,
+        )
+        mock_store.list_analyzed_notebooks.return_value = [item]
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        p1, p2 = _make_store_patches(mock_store)
+        try:
+            with p1, p2:
+                result = await get_low_quality_notebooks(max_score=50, limit=20)
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "Low-quality notebooks" in result
+
+    @pytest.mark.asyncio
+    async def test_get_low_quality_none_found(self) -> None:
+        from gateway.mcp.tools.notebooks.quality import get_low_quality_notebooks
+
+        mock_store = _make_mock_store()
+        mock_store.list_analyzed_notebooks.return_value = []
+
+        token_org = mcp_org_id_var.set("test-org")
+        token_user = mcp_user_id_var.set("test-user")
+        p1, p2 = _make_store_patches(mock_store)
+        try:
+            with p1, p2:
+                result = await get_low_quality_notebooks(max_score=50, limit=20)
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_user_id_var.reset(token_user)
+
+        assert "No analyzed notebooks found" in result

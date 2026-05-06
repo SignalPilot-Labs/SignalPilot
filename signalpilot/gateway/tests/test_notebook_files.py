@@ -14,10 +14,12 @@ from gateway.store.notebook_files import (
     _analyze_notebook_content,
     _build_report_data,
     _cell_source,
+    _compute_quality_score,
     _parse_notebook,
     _safe_notebook_path,
     build_notebook_comparison,
 )
+from gateway.store.notebook_versions import _extract_metrics
 
 _VALID_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 _SECOND_UUID = "11111111-2222-3333-4444-555555555555"
@@ -278,3 +280,123 @@ class TestSafeNotebookPath:
         with patch("gateway.store.notebook_files._notebooks_dir", return_value=tmp_path):
             with pytest.raises(ValueError):
                 _safe_notebook_path("not-a-uuid")
+
+
+class TestComputeQualityScore:
+    def _make_analysis(
+        self,
+        code: int = 5,
+        markdown: int = 2,
+        error_cells: list | None = None,
+        total_code_lines: int = 10,
+        functions_defined: list | None = None,
+    ) -> dict:
+        return {
+            "cell_counts": {"code": code, "markdown": markdown},
+            "error_cells": error_cells if error_cells is not None else [],
+            "total_code_lines": total_code_lines,
+            "functions_defined": functions_defined if functions_defined is not None else [],
+        }
+
+    def test_perfect_score(self) -> None:
+        analysis = self._make_analysis(
+            code=4,
+            markdown=4,
+            error_cells=[],
+            total_code_lines=10,
+            functions_defined=["foo", "bar"],
+        )
+        score = _compute_quality_score(analysis)
+        # Balanced code+markdown (50% markdown > 20% threshold), no errors, functions defined
+        assert score >= 90
+
+    def test_all_error_cells(self) -> None:
+        # 5 code cells all have errors => error_rate = 5/5 = 1.0 => penalty = min(40, 200) = 40
+        analysis = self._make_analysis(
+            code=5,
+            markdown=0,
+            error_cells=[0, 1, 2, 3, 4],
+            total_code_lines=10,
+            functions_defined=[],
+        )
+        score = _compute_quality_score(analysis)
+        # Maximum error penalty applied
+        assert score <= 60
+
+    def test_no_markdown_documentation(self) -> None:
+        # 0 markdown cells => doc_ratio = 0.0 => penalty = int(0.2 * 100) = 20
+        analysis = self._make_analysis(
+            code=5,
+            markdown=0,
+            error_cells=[],
+            total_code_lines=5,
+            functions_defined=["f"],
+        )
+        score = _compute_quality_score(analysis)
+        # Should have -20 documentation penalty
+        assert score <= 80
+
+    def test_no_functions_many_lines(self) -> None:
+        # >20 code lines, 0 functions => -20 organisation penalty
+        analysis = self._make_analysis(
+            code=5,
+            markdown=2,
+            error_cells=[],
+            total_code_lines=30,
+            functions_defined=[],
+        )
+        score = _compute_quality_score(analysis)
+        assert score <= 80
+
+    def test_too_few_cells(self) -> None:
+        # total_cells = 1 < 2 => -10 cell balance penalty
+        analysis = self._make_analysis(
+            code=1,
+            markdown=0,
+            error_cells=[],
+            total_code_lines=5,
+            functions_defined=[],
+        )
+        score = _compute_quality_score(analysis)
+        assert score <= 70  # -10 (balance) + -20 (doc) = 70
+
+    def test_too_many_cells(self) -> None:
+        # total_cells > 100 => -10 cell balance penalty
+        analysis = self._make_analysis(
+            code=80,
+            markdown=30,
+            error_cells=[],
+            total_code_lines=5,
+            functions_defined=["f"],
+        )
+        score = _compute_quality_score(analysis)
+        assert score <= 90  # -10 cell balance penalty applied
+
+
+class TestExtractMetrics:
+    def test_extract_full_metrics(self) -> None:
+        analysis = {
+            "cell_counts": {"code": 3, "markdown": 2},
+            "error_cells": [0, 2],
+            "total_code_lines": 15,
+            "functions_defined": ["foo", "bar", "baz"],
+            "imports": ["numpy", "pandas"],
+        }
+        metrics = _extract_metrics(analysis)
+        assert metrics["total_cells"] == 5
+        assert metrics["code_cells"] == 3
+        assert metrics["markdown_cells"] == 2
+        assert metrics["error_cells"] == 2
+        assert metrics["total_code_lines"] == 15
+        assert metrics["functions_count"] == 3
+        assert metrics["imports_count"] == 2
+
+    def test_extract_empty_analysis(self) -> None:
+        metrics = _extract_metrics({})
+        assert metrics["total_cells"] == 0
+        assert metrics["code_cells"] == 0
+        assert metrics["markdown_cells"] == 0
+        assert metrics["error_cells"] == 0
+        assert metrics["total_code_lines"] == 0
+        assert metrics["functions_count"] == 0
+        assert metrics["imports_count"] == 0

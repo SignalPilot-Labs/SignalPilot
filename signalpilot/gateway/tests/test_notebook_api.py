@@ -16,12 +16,15 @@ from gateway.main import app
 from gateway.models.notebooks import (
     BatchResult,
     BatchResultItem,
+    NotebookActivityInfo,
     NotebookAnalysis,
     NotebookInfo,
+    NotebookQualityItem,
     NotebookReport,
     NotebookReportMetadata,
     NotebookReportOutputsSummary,
     NotebookSummary,
+    NotebookVersionInfo,
 )
 
 _VALID_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -81,6 +84,11 @@ def _make_mock_store() -> MagicMock:
     ))
     store.batch_get_notebook_ids = AsyncMock(return_value=[])
     store.batch_delete_notebooks = AsyncMock(return_value=[])
+    store.get_notebook_activities = AsyncMock(return_value=[])
+    store.count_notebook_activities = AsyncMock(return_value=0)
+    store.list_notebook_versions = AsyncMock(return_value=[])
+    store.count_notebook_versions = AsyncMock(return_value=0)
+    store.list_analyzed_notebooks = AsyncMock(return_value=[])
     return store
 
 
@@ -369,3 +377,99 @@ class TestNotebookReport:
         mock_store.get_notebook_meta.return_value = None
         response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/report")
         assert response.status_code == 404
+
+
+class TestNotebookActivities:
+    def test_get_activities_success(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        mock_store.get_notebook_meta.return_value = _make_notebook_info()
+        activity = NotebookActivityInfo(
+            id=_SECOND_UUID,
+            notebook_id=_VALID_UUID,
+            action="upload",
+            details={"size": 1024},
+            created_at=1_000_000.0,
+            user_id="user-1",
+        )
+        mock_store.get_notebook_activities.return_value = [activity]
+        mock_store.count_notebook_activities.return_value = 1
+        response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/activities")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 1
+        assert data["total"] == 1
+        assert data["items"][0]["action"] == "upload"
+
+    def test_get_activities_not_found(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        mock_store.get_notebook_meta.return_value = None
+        response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/activities")
+        assert response.status_code == 404
+
+    def test_get_activities_invalid_action(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        mock_store.get_notebook_meta.return_value = _make_notebook_info()
+        response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/activities?action=invalid")
+        assert response.status_code == 400
+
+
+class TestNotebookVersions:
+    def test_get_versions_success(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        mock_store.get_notebook_meta.return_value = _make_notebook_info()
+        version = NotebookVersionInfo(
+            id=_SECOND_UUID,
+            notebook_id=_VALID_UUID,
+            version_number=1,
+            total_cells=5,
+            code_cells=3,
+            markdown_cells=2,
+            error_cells=0,
+            total_code_lines=20,
+            functions_count=2,
+            imports_count=3,
+            analyzed_at=1_000_000.0,
+            created_at=1_000_000.0,
+        )
+        mock_store.list_notebook_versions.return_value = [version]
+        mock_store.count_notebook_versions.return_value = 1
+        response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/versions")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 1
+        assert data["total"] == 1
+        assert data["items"][0]["version_number"] == 1
+
+    def test_get_versions_not_found(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        mock_store.get_notebook_meta.return_value = None
+        response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/versions")
+        assert response.status_code == 404
+
+    def test_get_versions_invalid_uuid(self, notebook_client: TestClient) -> None:
+        response = notebook_client.get("/api/notebooks/not-a-uuid/versions")
+        assert response.status_code == 422
+
+
+class TestNotebookQuality:
+    def test_get_quality_success(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        item_low = NotebookQualityItem(
+            notebook_id=_VALID_UUID,
+            name="Low Quality Notebook",
+            quality_score=30,
+            analyzed_at=1_000_000.0,
+        )
+        item_high = NotebookQualityItem(
+            notebook_id=_SECOND_UUID,
+            name="High Quality Notebook",
+            quality_score=80,
+            analyzed_at=1_000_001.0,
+        )
+        mock_store.list_analyzed_notebooks.return_value = [item_low, item_high]
+        response = notebook_client.get("/api/notebooks/quality")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert len(data["items"]) == 2
+        # Default sort is desc, so highest score first
+        assert data["items"][0]["quality_score"] == 80
+        assert data["items"][1]["quality_score"] == 30
+
+    def test_get_quality_invalid_max_score(self, notebook_client: TestClient) -> None:
+        response = notebook_client.get("/api/notebooks/quality?max_score=101")
+        assert response.status_code == 422

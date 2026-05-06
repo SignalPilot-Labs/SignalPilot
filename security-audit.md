@@ -148,7 +148,7 @@ cloud-only and env-gated.
 - File: `gateway/engine/dbt_validation.py:212-213`
 - Prefix check uses `sql_lower.startswith(prefix)` and `f" {prefix}"` / `f"\n{prefix}"` membership. A statement like `;\tCOPY foo FROM PROGRAM ...` (tab between the semicolon and `COPY`) is not matched by the prefix check. The AST walk WOULD catch a `Command` node, so this is defence-in-depth, not a true bypass — but the prefix check should match any whitespace.
 - **Mode:** Both.
-- **Fix:** Match `\s+{prefix}` via regex instead of three explicit cases.
+- **Fix:** Match `\s+{prefix}` via regex instead of three explicit cases. (Round 1 fix was the regex; Round 2 found this class was in fact exploitable — see H-1 below.)
 
 ### M-5 — `propose_knowledge` MCP is unauthenticated in stdio mode
 - File: `gateway/mcp/server.py:58-64`, `gateway/mcp/tools/knowledge.py:198-260`
@@ -178,7 +178,37 @@ cloud-only and env-gated.
 
 ## High
 
-(none in the changed code beyond the items above)
+### H-1 — `dbt_validation` whitespace/comment evasion of denied SQL prefixes (Round 2)
+- File: `gateway/engine/dbt_validation.py` (Round 1 regex `_DENIED_PREFIX_RE`)
+- Round 1 replaced the substring check with `re.escape(prefix)` joined by literal spaces. Postgres tokenization accepts ANY whitespace run, comments, or nested block comments between keywords. PoCs against the Round 1 code that returned `blocked=False`:
+  - `CREATE  ROLE evil` (double space)
+  - `CREATE\tROLE evil` (tab)
+  - `CREATE/*c*/ROLE evil` (block comment)
+  - `CREATE/*/*x*/*/ROLE evil` (nested block comment)
+  - Equivalents for `DROP USER`, `CREATE EXTENSION`, `CREATE DATABASE`, `CREATE LANGUAGE`, `DROP TABLESPACE`.
+- Both layers were defeated: `_DENIED_PREFIX_RE` (Layer A) by literal-space requirement; AST deny-list (Layer B) because sqlglot returns `Command` for these forms and `_DENIED_CREATE_KINDS` lacked ROLE/USER/DATABASE/TABLESPACE, with no DROP/ALTER kind check.
+- **Severity:** High — direct privilege escalation against the warehouse if the validator was the only check.
+- **Mode:** Both.
+- **Fix (Round 2, applied):** Two-layer hardening in `dbt_validation.py`:
+  - Layer A: `_normalize_for_prefix_scan` — `_strip_block_comments` (character-level scanner handling nested `/* /* */ */`) + line-comment strip + whitespace collapse, fed only to the prefix scan; `ValidatedStatement.sql` always carries the original input.
+  - Layer B: `_DENIED_CREATE_KINDS` extended with ROLE/USER/DATABASE/TABLESPACE; new `_DENIED_DROP_ALTER_KINDS` + `_check_drop_alter_node`; `_check_command_node` builds `this+expression`, normalizes, and matches `_COMMAND_ADMIN_RE`.
+  - Tests: `tests/test_dbt_validation_prefix_bypass.py` — 21 cases (15 blocked bypasses + 3 negative controls + 3 `sql` byte-identity assertions).
+
+### H-2 — GRANT / REVOKE role-membership bypass (Round 2)
+- File: `gateway/engine/dbt_validation.py`
+- `GRANT admin TO evil` and `REVOKE admin FROM evil` were not blocked. sqlglot returns a `Command` node (not `exp.Grant`) for role-membership grants, and `_check_command_node` had no GRANT/REVOKE branch.
+- **Severity:** High — direct privilege escalation.
+- **Mode:** Both.
+- **Fix (Round 2, applied):** Added `grant `/`revoke ` to `_DENIED_PREFIXES` (Layer A) and `GRANT|REVOKE` to `_COMMAND_ADMIN_RE` (Layer B). Negative regression: `GRANT SELECT ON t TO evil` is still blocked by the same denied class — acceptable because dbt-proxy is not the surface that issues object-level grants.
+
+### H-3 — `SET [LOCAL|SESSION] ROLE` / `SESSION AUTHORIZATION` qualifier bypass (Round 2)
+- File: `gateway/engine/dbt_validation.py`
+- The Round 1 `_DENIED_SET_PATTERNS` substring `"set role"` did not match `SET LOCAL ROLE admin` or `SET SESSION ROLE admin` (qualifier between `SET` and `ROLE`). PG treats these as identical to `SET ROLE`.
+- **Severity:** High — direct privilege escalation.
+- **Mode:** Both.
+- **Fix (Round 2, applied):** `_DENIED_SET_PATTERNS` replaced with `_DENIED_SET_REGEXES`: `\bset\s+(?:local\s+|session\s+)?role\b`, `\bset\s+(?:local\s+|session\s+)?session\s+authorization\b`, plus `RESET ROLE` / `RESET SESSION AUTHORIZATION`. Negative controls: `SET search_path`, `SET LOCAL statement_timeout`, `SET SESSION CHARACTERISTICS …` all pass.
+
+All H-1, H-2, H-3 verified closed by re-attack: 34 bypass tests pass; security-reviewer ran multi-pass attack including unicode whitespace, dollar-quoted strings, CTE prefix evasion, multi-statement-after-benign-first, and qualifier permutations — no new bypass found.
 
 ---
 

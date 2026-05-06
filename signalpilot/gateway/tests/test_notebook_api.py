@@ -145,14 +145,14 @@ class TestNotebookUpload:
         mock_store.get_notebook_meta.return_value = info
 
         with (
-            patch("gateway.api.notebooks._save_notebook_file"),
-            patch("gateway.api.notebooks._parse_notebook", return_value={
+            patch("gateway.api.notebooks.crud._save_notebook_file"),
+            patch("gateway.api.notebooks.crud._parse_notebook", return_value={
                 "cell_count": 1,
                 "code_cell_count": 1,
                 "markdown_cell_count": 0,
                 "kernel_name": "python3",
             }),
-            patch("gateway.api.notebooks._analyze_notebook_content", return_value={
+            patch("gateway.api.notebooks.crud._analyze_notebook_content", return_value={
                 "cell_counts": {"code": 1},
                 "imports": ["os"],
                 "execution_order_gaps": [],
@@ -208,7 +208,7 @@ class TestNotebookDelete:
         mock_store.get_notebook_meta.return_value = _make_notebook_info()
         mock_store.delete_notebook_meta.return_value = True
         mock_store.log_notebook_activity = AsyncMock()
-        with patch("gateway.api.notebooks._delete_notebook_file"):
+        with patch("gateway.api.notebooks.crud._delete_notebook_file"):
             response = notebook_client.delete(f"/api/notebooks/{_VALID_UUID}")
         assert response.status_code == 204
 
@@ -254,8 +254,8 @@ class TestNotebookCompare:
         mock_store.get_notebook_analysis_json.return_value = None
 
         nb_dict = json.loads(_SAMPLE_NOTEBOOK_JSON)
-        with patch("gateway.api.notebooks._load_notebook_file", return_value=nb_dict):
-            with patch("gateway.api.notebooks.build_notebook_comparison") as mock_cmp:
+        with patch("gateway.api.notebooks.compare._load_notebook_file", return_value=nb_dict):
+            with patch("gateway.api.notebooks.compare.build_notebook_comparison") as mock_cmp:
                 from gateway.models.notebooks import ComparisonSummary, NotebookComparison
                 mock_cmp.return_value = NotebookComparison(
                     left_notebook=left_meta,
@@ -280,7 +280,7 @@ class TestNotebookCompare:
 class TestNotebookDownload:
     def test_download_success(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
         mock_store.get_notebook_meta.return_value = _make_notebook_info()
-        with patch("gateway.api.notebooks._load_notebook_file_raw", return_value=_SAMPLE_NOTEBOOK_JSON):
+        with patch("gateway.api.notebooks.download._load_notebook_file_raw", return_value=_SAMPLE_NOTEBOOK_JSON):
             response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/download")
         assert response.status_code == 200
         assert "Content-Disposition" in response.headers
@@ -303,8 +303,8 @@ class TestNotebookAnalyze:
             "kernel_info": None,
         }
         with (
-            patch("gateway.api.notebooks._load_notebook_file", return_value=nb_dict),
-            patch("gateway.api.notebooks._analyze_notebook_content", return_value=analysis_result),
+            patch("gateway.api.notebooks.analysis._load_notebook_file", return_value=nb_dict),
+            patch("gateway.api.notebooks.analysis._analyze_notebook_content", return_value=analysis_result),
         ):
             response = notebook_client.post(f"/api/notebooks/{_VALID_UUID}/analyze")
         assert response.status_code == 200
@@ -321,7 +321,7 @@ class TestNotebookCells:
     def test_get_cells_success(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
         mock_store.get_notebook_meta.return_value = _make_notebook_info()
         nb_dict = json.loads(_SAMPLE_NOTEBOOK_JSON)
-        with patch("gateway.api.notebooks._load_notebook_file", return_value=nb_dict):
+        with patch("gateway.api.notebooks.analysis._load_notebook_file", return_value=nb_dict):
             response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/cells")
         assert response.status_code == 200
         data = response.json()
@@ -340,7 +340,7 @@ class TestNotebookCells:
             "nbformat": 4,
             "nbformat_minor": 5,
         }
-        with patch("gateway.api.notebooks._load_notebook_file", return_value=nb_dict):
+        with patch("gateway.api.notebooks.analysis._load_notebook_file", return_value=nb_dict):
             response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/cells?cell_type=code")
         assert response.status_code == 200
         data = response.json()
@@ -358,7 +358,7 @@ class TestNotebookReport:
         mock_store.get_notebook_meta.return_value = info
         mock_store.get_notebook_analysis_json.return_value = None
         nb_dict = json.loads(_SAMPLE_NOTEBOOK_JSON)
-        with patch("gateway.api.notebooks._load_notebook_file", return_value=nb_dict):
+        with patch("gateway.api.notebooks.analysis._load_notebook_file", return_value=nb_dict):
             response = notebook_client.get(f"/api/notebooks/{_VALID_UUID}/report")
         assert response.status_code == 200
         data = response.json()

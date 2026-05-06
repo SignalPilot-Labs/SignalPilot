@@ -201,6 +201,15 @@ cloud-only and env-gated.
 - **Mode:** Both.
 - **Fix (Round 2, applied):** Added `grant `/`revoke ` to `_DENIED_PREFIXES` (Layer A) and `GRANT|REVOKE` to `_COMMAND_ADMIN_RE` (Layer B). Negative regression: `GRANT SELECT ON t TO evil` is still blocked by the same denied class — acceptable because dbt-proxy is not the surface that issues object-level grants.
 
+### H-4 — Attacker-controlled uint32 frame length causes OOM via readexactly() (Round 3)
+- File: `gateway/dbt_proxy/protocol.py` (`read_startup_message`, `read_frontend_message`)
+- Both functions read a uint32 length field from the wire and pass it directly to `asyncio.StreamReader.readexactly()` with no upper bound. A 5-byte attacker payload (`X` + `0xFFFFFFFF`) coerces the proxy into a ~4 GiB allocation per connection. Concurrent connections trivially OOM-kill the gateway process, taking down dbt-proxy for all tenants.
+- The StartupMessage path (`read_startup_message`) is reachable **pre-auth** — anyone with TCP access to the listener can trigger it. The frontend message path (`read_frontend_message`) is reachable **post-auth** from any authenticated dbt client.
+- **Severity:** High — network-accessible DoS, zero authentication required on the startup path.
+- **Mode:** Both — localhost dbt traffic does not approach these limits; no behavioral change for legitimate clients.
+- **Fix (Round 3, applied):** Added module-level constants `MAX_STARTUP_MESSAGE_LEN = 64 KiB` and `MAX_FRONTEND_MESSAGE_LEN = 16 MiB`. Both functions now raise `ValueError` if the declared length exceeds the cap **before** calling `readexactly()`, so no allocation occurs on oversize input. The cap check is ordered after the existing minimum-length check (`< 8` / `< 4`) and before the `read_exact` call (fail-fast, no fallback). The existing `try/except Exception` in `auth.py:handle_startup` and the session loop break in `session.py:run()` already propagate these `ValueError`s to ErrorResponse and connection close with no further changes needed.
+- **Tests:** `tests/test_dbt_proxy_protocol_limits.py` — 5 cases: oversize rejection on both paths (read hangs if cap fires after allocation — structural proof), realistic-size regression, at-cap boundary acceptance, and `< 4` regression.
+
 ### H-3 — `SET [LOCAL|SESSION] ROLE` / `SESSION AUTHORIZATION` qualifier bypass (Round 2)
 - File: `gateway/engine/dbt_validation.py`
 - The Round 1 `_DENIED_SET_PATTERNS` substring `"set role"` did not match `SET LOCAL ROLE admin` or `SET SESSION ROLE admin` (qualifier between `SET` and `ROLE`). PG treats these as identical to `SET ROLE`.

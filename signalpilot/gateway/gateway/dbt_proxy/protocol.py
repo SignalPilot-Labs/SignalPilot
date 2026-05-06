@@ -54,6 +54,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+# ─── Wire-frame size limits (DoS hardening) ──────────────────────────────────
+#
+# The pg-wire length field is a uint32 (max 4 GiB). Without an upper bound,
+# a 5-byte header coerces readexactly() into a multi-GiB allocation. Real
+# libpq StartupMessages are < 10 KiB and real query frames from dbt are well
+# under 1 MiB; these caps are generous and universal (not cloud-gated).
+
+MAX_STARTUP_MESSAGE_LEN = 64 * 1024          # 64 KiB; libpq sends ~few hundred bytes
+MAX_FRONTEND_MESSAGE_LEN = 16 * 1024 * 1024  # 16 MiB; covers large Parse/Bind payloads
+
 # ─── OID constants ────────────────────────────────────────────────────────────
 
 OID_INT4 = 23
@@ -107,6 +117,10 @@ async def read_startup_message(reader) -> dict[str, str]:
     total_length = struct.unpack("!I", length_bytes)[0]
     if total_length < 8:
         raise ValueError(f"StartupMessage too short: {total_length}")
+    if total_length > MAX_STARTUP_MESSAGE_LEN:
+        raise ValueError(
+            f"StartupMessage too large: {total_length} > {MAX_STARTUP_MESSAGE_LEN}"
+        )
     body = await read_exact(reader, total_length - 4)
     proto_version = struct.unpack("!I", body[:4])[0]
     if proto_version != 0x00030000:
@@ -144,6 +158,10 @@ async def read_frontend_message(reader) -> tuple[str, bytes]:
     length = struct.unpack("!I", length_bytes)[0]
     if length < 4:
         raise ValueError(f"Invalid message length: {length}")
+    if length > MAX_FRONTEND_MESSAGE_LEN:
+        raise ValueError(
+            f"Frontend message too large: {length} > {MAX_FRONTEND_MESSAGE_LEN}"
+        )
     payload = await read_exact(reader, length - 4)
     return msg_type, payload
 
@@ -385,6 +403,8 @@ def parse_bind_message(payload: bytes) -> tuple[str, str, list[int], list[bytes 
 
 
 __all__ = [
+    "MAX_STARTUP_MESSAGE_LEN",
+    "MAX_FRONTEND_MESSAGE_LEN",
     "UnsupportedOID",
     "SUPPORTED_OIDS",
     "OID_INT4", "OID_INT8", "OID_TEXT", "OID_VARCHAR",

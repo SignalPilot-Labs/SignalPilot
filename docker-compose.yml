@@ -87,6 +87,36 @@ services:
       - ${HOST_DATA_DIR:-~}:/host-data:ro
     restart: unless-stopped
 
+  workspaces-api:
+    build:
+      context: ./workspaces/api
+      dockerfile: Dockerfile
+    ports:
+      - "3400:3400"
+    environment:
+      WORKSPACES_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
+      SP_DEPLOYMENT_MODE: ${SP_DEPLOYMENT_MODE:-local}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      SP_GATEWAY_URL: http://gateway:3300
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  workspaces-web:
+    build:
+      context: .
+      dockerfile: workspaces/web/Dockerfile
+    ports:
+      - "3500:3500"
+    environment:
+      WORKSPACES_API_URL: http://workspaces-api:3400
+    volumes:
+      - signalpilot-shared:/shared:ro
+    depends_on:
+      - workspaces-api
+    restart: unless-stopped
+
 volumes:
   signalpilot-pg-data:
   signalpilot-data:

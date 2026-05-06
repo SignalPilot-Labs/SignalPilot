@@ -32,6 +32,16 @@ from .connections import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from .knowledge import (
+    KnowledgeCategory,
+    KnowledgeDoc,
+    KnowledgeDocCreate,
+    KnowledgeDocUpdate,
+    KnowledgeEdit,
+    KnowledgeScope,
+    KnowledgeStatus,
+    KnowledgeUsage,
+)
 from .mcp import MCPToolCall
 from .projects import (
     ProjectCreate,
@@ -83,4 +93,12 @@ __all__ = [
     "SandboxCreate",
     "SandboxInfo",
     "SandboxProvider",
+    "KnowledgeCategory",
+    "KnowledgeDoc",
+    "KnowledgeDocCreate",
+    "KnowledgeDocUpdate",
+    "KnowledgeEdit",
+    "KnowledgeScope",
+    "KnowledgeStatus",
+    "KnowledgeUsage",
 ]

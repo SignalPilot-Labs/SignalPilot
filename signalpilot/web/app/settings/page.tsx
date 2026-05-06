@@ -226,6 +226,28 @@ export default function SettingsPage() {
               ))}
             </div>
 
+            {/* Knowledge history versions — local-mode only */}
+            <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">knowledge history versions</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={settings.knowledge_history_versions_override ?? ""}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const val = raw === "" ? null : Math.max(0, parseInt(raw, 10));
+                      setSettings({ ...settings, knowledge_history_versions_override: isNaN(val as number) ? null : val });
+                    }}
+                    placeholder="plan default"
+                    className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums"
+                  />
+                  <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">0 = unlimited, blank = follow plan default</p>
+                </div>
+              </div>
+            </div>
+
             {/* Blocked Tables */}
             <div className="mt-6 pt-6 border-t border-[var(--color-border)]">
               <div className="flex items-center gap-2 mb-3">

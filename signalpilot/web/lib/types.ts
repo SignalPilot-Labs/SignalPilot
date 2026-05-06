@@ -9,6 +9,44 @@ export interface GatewaySettings {
   blocked_tables: string[];
   gateway_url: string;
   api_key: string | null;
+  knowledge_history_versions_override: number | null;
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  org_id: string;
+  scope: "org" | "project" | "connection";
+  scope_ref: string | null;
+  category: "understanding" | "conventions" | "decisions" | "domain-rules" | "debugging" | "quirks";
+  title: string;
+  body: string | null;
+  status: "active" | "pending" | "archived";
+  bytes: number;
+  view_count: number;
+  created_at: number;
+  updated_at: number;
+  created_by: string | null;
+  updated_by: string | null;
+  proposed_by_agent: string | null;
+}
+
+export interface KnowledgeEdit {
+  id: string;
+  doc_id: string;
+  org_id: string;
+  body_before: string;
+  bytes_before: number;
+  edited_at: number;
+  edited_by: string | null;
+  edit_kind: string;
+}
+
+export interface KnowledgeUsage {
+  org_id: string;
+  active_docs: number;
+  active_bytes: number;
+  storage_limit_bytes: number;
+  storage_limit_mb: number;
 }
 
 export type DBType =

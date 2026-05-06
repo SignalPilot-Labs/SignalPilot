@@ -18,9 +18,12 @@ from .drivers.snowflake import SnowflakeConnector
 from .drivers.sqlite import SQLiteConnector
 from .drivers.trino import TrinoConnector
 
-# Local mode: use sandboxed connectors for file-based DBs
+# Local mode: use sandboxed connectors for file-based DBs.
+# SP_DISABLE_SANDBOX=1 forces direct connectors (e.g. benchmark containers
+# where the DuckDB file is local and no sandbox is available).
 _is_local = os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud"
-if _is_local:
+_sandbox_disabled = os.environ.get("SP_DISABLE_SANDBOX", "") == "1"
+if _is_local and not _sandbox_disabled:
     from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
     from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
 

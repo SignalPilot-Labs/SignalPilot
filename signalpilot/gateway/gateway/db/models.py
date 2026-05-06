@@ -320,6 +320,20 @@ class GatewayApiKey(GatewayBase):
     )
 
 
+class GatewayNotebookActivity(GatewayBase):
+    __tablename__ = "gateway_notebook_activities"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    notebook_id: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("ix_gw_nb_activity_org_nb_ts", "org_id", "notebook_id", "created_at"),)
+
+
 class GatewayNotebook(GatewayBase):
     __tablename__ = "gateway_notebooks"
 

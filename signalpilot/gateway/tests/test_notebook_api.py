@@ -205,13 +205,15 @@ class TestNotebookGet:
 
 class TestNotebookDelete:
     def test_delete_notebook_found(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
+        mock_store.get_notebook_meta.return_value = _make_notebook_info()
         mock_store.delete_notebook_meta.return_value = True
+        mock_store.log_notebook_activity = AsyncMock()
         with patch("gateway.api.notebooks._delete_notebook_file"):
             response = notebook_client.delete(f"/api/notebooks/{_VALID_UUID}")
         assert response.status_code == 204
 
     def test_delete_notebook_not_found(self, notebook_client: TestClient, mock_store: MagicMock) -> None:
-        mock_store.delete_notebook_meta.return_value = False
+        mock_store.get_notebook_meta.return_value = None
         response = notebook_client.delete(f"/api/notebooks/{_VALID_UUID}")
         assert response.status_code == 404
 

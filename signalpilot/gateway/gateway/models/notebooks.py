@@ -210,3 +210,14 @@ class NotebookComparison(BaseModel):
     analysis: AnalysisComparison | None
     cell_diffs: list[CellDiff]
     summary: ComparisonSummary
+
+
+class NotebookActivityInfo(BaseModel):
+    """A single notebook lifecycle event record."""
+
+    id: str
+    notebook_id: str
+    action: str
+    details: dict | None
+    created_at: float
+    user_id: str | None

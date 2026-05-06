@@ -297,6 +297,15 @@ export interface NotebookComparison {
   summary: ComparisonSummary;
 }
 
+export interface NotebookActivity {
+  id: string;
+  notebook_id: string;
+  action: string;
+  user_id: string | null;
+  details: Record<string, unknown> | null;
+  created_at: number;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

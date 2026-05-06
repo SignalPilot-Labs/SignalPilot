@@ -25,6 +25,7 @@ from gateway.models.notebooks import (
     NotebookUpload,
 )
 from gateway.security.scope_guard import RequireScope
+from gateway.store.notebook_activities import NOTEBOOK_ACTION_VALUES
 from gateway.store.notebook_files import (
     _analyze_notebook_content,
     _build_report_data,
@@ -105,6 +106,10 @@ async def upload_notebook(upload: NotebookUpload, store: StoreD) -> NotebookInfo
     )
 
     updated = await store.get_notebook_meta(notebook_id)
+    try:
+        await store.log_notebook_activity(notebook_id, "upload", {"name": info.name})
+    except Exception:
+        pass
     return updated or info
 
 
@@ -202,6 +207,10 @@ async def download_notebook(notebook_id: NotebookIdP, store: StoreD) -> Response
     if not content:
         raise HTTPException(status_code=404, detail=f"Notebook file for '{notebook_id}' not found")
     safe_name = meta.name.replace('"', "'").replace("\r", "").replace("\n", "")
+    try:
+        await store.log_notebook_activity(notebook_id, "download", None)
+    except Exception:
+        pass
     return Response(
         content=content,
         media_type="application/json",
@@ -243,7 +252,7 @@ async def get_notebook_report(notebook_id: NotebookIdP, store: StoreD) -> Notebo
             analyzed_at=aj.get("analyzed_at", time.time()),
         )
 
-    return NotebookReport(
+    report = NotebookReport(
         report_version="1.0",
         generated_at=time.time(),
         notebook=meta,
@@ -252,6 +261,11 @@ async def get_notebook_report(notebook_id: NotebookIdP, store: StoreD) -> Notebo
         outputs_summary=NotebookReportOutputsSummary(**report_data["outputs_summary"]),
         metadata=NotebookReportMetadata(**report_data["metadata"]),
     )
+    try:
+        await store.log_notebook_activity(notebook_id, "export_report", None)
+    except Exception:
+        pass
+    return report
 
 
 @router.get("/notebooks/{notebook_id}/compare/{other_id}", dependencies=[RequireScope("read")])
@@ -283,7 +297,7 @@ async def compare_notebooks(
     if not right_nb:
         raise HTTPException(status_code=404, detail=f"Notebook file for '{other_id}' not found")
 
-    return build_notebook_comparison(
+    result = build_notebook_comparison(
         left_meta=left_meta,
         right_meta=right_meta,
         left_nb=left_nb,
@@ -291,6 +305,35 @@ async def compare_notebooks(
         left_analysis=left_analysis_json,
         right_analysis=right_analysis_json,
     )
+    try:
+        await store.log_notebook_activity(notebook_id, "compare", {"other_id": other_id})
+    except Exception:
+        pass
+    return result
+
+
+@router.get("/notebooks/{notebook_id}/activities", dependencies=[RequireScope("read")])
+async def get_notebook_activities(
+    notebook_id: NotebookIdP,
+    store: StoreD,
+    limit: int = 50,
+    offset: int = 0,
+    action: str | None = None,
+) -> dict:
+    """Get paginated activity log for a notebook."""
+    meta = await store.get_notebook_meta(notebook_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+    if action is not None and action not in NOTEBOOK_ACTION_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid action '{action}'. Allowed: {sorted(NOTEBOOK_ACTION_VALUES)}",
+        )
+    items = await store.get_notebook_activities(
+        notebook_id, limit=limit, offset=offset, action=action
+    )
+    total = await store.count_notebook_activities(notebook_id, action=action)
+    return {"items": [i.model_dump() for i in items], "total": total}
 
 
 @router.patch("/notebooks/{notebook_id}", dependencies=[RequireScope("write")])
@@ -309,6 +352,17 @@ async def update_notebook(notebook_id: NotebookIdP, update: NotebookUpdate, stor
         raise HTTPException(status_code=409, detail=str(e)) from e
     if result is None:
         raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+    changed: dict[str, object] = {}
+    if update.name is not None:
+        changed["name"] = update.name
+    if update.description is not None:
+        changed["description"] = update.description
+    if update.tags is not None:
+        changed["tags"] = update.tags
+    try:
+        await store.log_notebook_activity(notebook_id, "update", changed)
+    except Exception:
+        pass
     return result
 
 
@@ -390,6 +444,13 @@ async def analyze_notebook(notebook_id: NotebookIdP, store: StoreD) -> NotebookA
         analyzed_at=analyzed_at,
     )
 
+    try:
+        await store.log_notebook_activity(
+            notebook_id, "analyze", {"reanalysis": meta.analyzed_at is not None}
+        )
+    except Exception:
+        pass
+
     return NotebookAnalysis(
         notebook_id=notebook_id,
         analyzed_at=analyzed_at,
@@ -400,7 +461,15 @@ async def analyze_notebook(notebook_id: NotebookIdP, store: StoreD) -> NotebookA
 @router.delete("/notebooks/{notebook_id}", status_code=204, dependencies=[RequireScope("write")])
 async def delete_notebook(notebook_id: NotebookIdP, store: StoreD) -> None:
     """Delete a notebook. DB row is deleted first, then the file."""
+    meta = await store.get_notebook_meta(notebook_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
+    notebook_name = meta.name
     deleted = await store.delete_notebook_meta(notebook_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
     _delete_notebook_file(notebook_id)
+    try:
+        await store.log_notebook_activity(notebook_id, "delete", {"name": notebook_name})
+    except Exception:
+        pass

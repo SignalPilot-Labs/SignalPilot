@@ -15,6 +15,7 @@ import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
+import gateway.store.notebook_activities as notebook_activities
 import gateway.store.notebooks as notebooks_store
 import gateway.store.paths as paths
 import gateway.store.projects as projects
@@ -36,7 +37,7 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
-from gateway.models.notebooks import NotebookInfo, NotebookSummary, NotebookUpload
+from gateway.models.notebooks import NotebookActivityInfo, NotebookInfo, NotebookSummary, NotebookUpload
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
@@ -693,6 +694,52 @@ class Store:
     async def batch_delete_notebooks(self, notebook_ids: list[str]) -> list[tuple[str, bool, str | None]]:
         oid = self._require_org_id()
         return await notebooks_store.batch_delete_notebooks(self.session, org_id=oid, notebook_ids=notebook_ids)
+
+    async def log_notebook_activity(
+        self,
+        notebook_id: str,
+        action: str,
+        details: dict | None,
+    ) -> None:
+        oid = self._require_org_id()
+        await notebook_activities.log_activity(
+            self.session,
+            org_id=oid,
+            user_id=self.user_id,
+            notebook_id=notebook_id,
+            action=action,
+            details=details,
+        )
+
+    async def get_notebook_activities(
+        self,
+        notebook_id: str,
+        limit: int,
+        offset: int,
+        action: str | None,
+    ) -> list[NotebookActivityInfo]:
+        oid = self._require_org_id()
+        return await notebook_activities.get_activities(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
+            limit=limit,
+            offset=offset,
+            action=action,
+        )
+
+    async def count_notebook_activities(
+        self,
+        notebook_id: str,
+        action: str | None,
+    ) -> int:
+        oid = self._require_org_id()
+        return await notebook_activities.count_activities(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
+            action=action,
+        )
 
     # ─── Audit ───────────────────────────────────────────────────────────
 

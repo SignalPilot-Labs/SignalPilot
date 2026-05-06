@@ -644,6 +644,19 @@ export const getNotebookComparison = (leftId: string, rightId: string) =>
     `/api/notebooks/${encodeURIComponent(leftId)}/compare/${encodeURIComponent(rightId)}`
   );
 
+export const getNotebookActivities = (
+  id: string,
+  limit = 50,
+  offset = 0,
+  action?: string,
+) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (action) params.set("action", action);
+  return request<{ items: import("./types").NotebookActivity[]; total: number }>(
+    `/api/notebooks/${encodeURIComponent(id)}/activities?${params.toString()}`
+  );
+};
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

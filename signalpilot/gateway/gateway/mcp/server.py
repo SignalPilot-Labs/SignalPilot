@@ -58,6 +58,11 @@ def main():
         authenticated_app = MCPAuthMiddleware(starlette_app)
         uvicorn.run(authenticated_app, host="0.0.0.0", port=port, server_header=False)
     else:
+        # stdio mode has no auth middleware — set context vars for local access
+        from gateway.mcp.context import mcp_org_id_var, mcp_user_id_var
+
+        mcp_org_id_var.set(_os.environ.get("SP_ORG_ID", "local"))
+        mcp_user_id_var.set("local")
         mcp.run(transport="stdio")
 
 

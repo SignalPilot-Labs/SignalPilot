@@ -25,6 +25,8 @@ from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import close_db, get_session_factory, init_db
+from .dbt_proxy import DbtProxyServer, RunTokenStore
+from .dbt_proxy.config import DbtProxyConfig
 from .governance.context import current_org_id_var
 from .http import (
     APIKeyAuthMiddleware,
@@ -245,11 +247,36 @@ async def lifespan(app: FastAPI):
         mcp_ctx = _mcp_session_manager.run()
         await mcp_ctx.__aenter__()
 
+    # Start dbt-proxy TCP listener
+    dbt_proxy_config = DbtProxyConfig()
+    dbt_proxy_config.warn_if_non_loopback()
+
+    # Fail closed: if secret is absent, token store is not created and the
+    # server.start() context manager will log an error and skip binding.
+    if dbt_proxy_config.sp_gateway_run_token_secret:
+        dbt_proxy_token_store: RunTokenStore | None = RunTokenStore(dbt_proxy_config.sp_gateway_run_token_secret)
+    else:
+        dbt_proxy_token_store = None
+    app.state.dbt_proxy_config = dbt_proxy_config
+    app.state.dbt_proxy_token_store = dbt_proxy_token_store
+
+    # DbtProxyServer.start() handles both disabled and secret-missing cases by
+    # yielding _DisabledProxyServer without binding a port. When token_store is
+    # None, the server checks config.sp_gateway_run_token_secret and aborts.
+    dbt_proxy_ctx = DbtProxyServer.start(
+        dbt_proxy_config,
+        token_store=dbt_proxy_token_store,
+        store_factory=get_session_factory,
+    )
+    dbt_proxy_server = await dbt_proxy_ctx.__aenter__()
+    app.state.dbt_proxy_server = dbt_proxy_server
+
     try:
         yield
     finally:
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
+        await dbt_proxy_ctx.__aexit__(None, None, None)
         # Flush any remaining health events before shutdown
         await health_monitor.flush_to_db()
         health_flush_task.cancel()

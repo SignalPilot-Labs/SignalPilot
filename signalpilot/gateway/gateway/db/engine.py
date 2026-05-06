@@ -260,6 +260,52 @@ async def _ensure_audit_indexes(engine) -> None:
     logger.info("Ensured performance indexes on gateway_audit_logs")
 
 
+async def _ensure_knowledge_columns(engine) -> None:
+    """Create partial unique indexes and optional trigram index for knowledge docs.
+
+    SQLAlchemy create_all cannot express partial unique indexes, so they are
+    created here idempotently.  The trigram index is wrapped in a try/except
+    because pg_trgm may not be installed on all deployments.
+    """
+    async with engine.begin() as conn:
+        # Try to create pg_trgm extension (no-op if already exists)
+        try:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        except Exception:
+            logger.info("pg_trgm extension not available — trigram search disabled")
+
+        # Partial unique index: uniqueness when scope_ref IS NULL (org-scoped docs)
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_doc_org_null "
+                "ON gateway_knowledge_docs (org_id, scope, category, title) "
+                "WHERE scope_ref IS NULL"
+            )
+        )
+        # Partial unique index: uniqueness when scope_ref IS NOT NULL (project/connection-scoped docs)
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_doc_scoped "
+                "ON gateway_knowledge_docs (org_id, scope, scope_ref, category, title) "
+                "WHERE scope_ref IS NOT NULL"
+            )
+        )
+
+    # Trigram index: best-effort, requires pg_trgm
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_knowledge_title_trgm "
+                    "ON gateway_knowledge_docs USING gin (title gin_trgm_ops)"
+                )
+            )
+    except Exception:
+        logger.info("Could not create trigram index on knowledge docs — pg_trgm likely unavailable")
+
+    logger.info("Ensured knowledge doc indexes")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -275,6 +321,7 @@ async def init_db() -> None:
     await _ensure_audit_parent_id_column(engine)
     await _ensure_audit_user_id_nullable(engine)
     await _ensure_audit_indexes(engine)
+    await _ensure_knowledge_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

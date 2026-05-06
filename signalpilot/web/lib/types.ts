@@ -306,6 +306,20 @@ export interface NotebookActivity {
   created_at: number;
 }
 
+export interface NotebookVersionInfo {
+  id: string;
+  notebook_id: string;
+  version_number: number;
+  total_cells: number;
+  code_cells: number;
+  markdown_cells: number;
+  error_cells: number;
+  total_code_lines: number;
+  functions_count: number;
+  imports_count: number;
+  analyzed_at: number;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

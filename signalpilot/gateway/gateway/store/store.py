@@ -16,6 +16,7 @@ import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
 import gateway.store.notebook_activities as notebook_activities
+import gateway.store.notebook_versions as notebook_versions
 import gateway.store.notebooks as notebooks_store
 import gateway.store.paths as paths
 import gateway.store.projects as projects
@@ -37,7 +38,13 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
-from gateway.models.notebooks import NotebookActivityInfo, NotebookInfo, NotebookSummary, NotebookUpload
+from gateway.models.notebooks import (
+    NotebookActivityInfo,
+    NotebookInfo,
+    NotebookSummary,
+    NotebookUpload,
+    NotebookVersionInfo,
+)
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
@@ -739,6 +746,45 @@ class Store:
             org_id=oid,
             notebook_id=notebook_id,
             action=action,
+        )
+
+    async def list_notebook_versions(
+        self,
+        notebook_id: str,
+        limit: int,
+        offset: int,
+    ) -> list[NotebookVersionInfo]:
+        oid = self._require_org_id()
+        return await notebook_versions.list_versions(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def get_notebook_version(
+        self,
+        notebook_id: str,
+        version_number: int,
+    ) -> NotebookVersionInfo | None:
+        oid = self._require_org_id()
+        return await notebook_versions.get_version(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
+            version_number=version_number,
+        )
+
+    async def count_notebook_versions(
+        self,
+        notebook_id: str,
+    ) -> int:
+        oid = self._require_org_id()
+        return await notebook_versions.count_versions(
+            self.session,
+            org_id=oid,
+            notebook_id=notebook_id,
         )
 
     # ─── Audit ───────────────────────────────────────────────────────────

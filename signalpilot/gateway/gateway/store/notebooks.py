@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from typing import TYPE_CHECKING
@@ -12,11 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import ColumnElement
 
+import gateway.store.notebook_versions as notebook_versions
 from gateway.db.models import GatewayNotebook
 from gateway.models.notebooks import ImportCount, NotebookInfo, NotebookSummary, NotebookUpload
 
 if TYPE_CHECKING:
     from sqlalchemy.orm.attributes import InstrumentedAttribute
+
+logger = logging.getLogger(__name__)
 
 _MAX_LIMIT = 100
 
@@ -189,6 +193,18 @@ async def update_notebook_analysis(
     row.analyzed_at = analyzed_at
     row.updated_at = time.time()
     await session.commit()
+    try:
+        await notebook_versions.create_version(
+            session,
+            org_id=org_id,
+            notebook_id=notebook_id,
+            analysis_json=analysis_json,
+            analyzed_at=analyzed_at,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to create version snapshot for %s", notebook_id, exc_info=True
+        )
     return True
 
 

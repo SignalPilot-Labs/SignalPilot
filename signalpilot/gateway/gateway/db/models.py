@@ -334,6 +334,29 @@ class GatewayNotebookActivity(GatewayBase):
     __table_args__ = (Index("ix_gw_nb_activity_org_nb_ts", "org_id", "notebook_id", "created_at"),)
 
 
+class GatewayNotebookVersion(GatewayBase):
+    __tablename__ = "gateway_notebook_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    notebook_id: Mapped[str] = mapped_column(String, nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_cells: Mapped[int] = mapped_column(Integer, default=0)
+    code_cells: Mapped[int] = mapped_column(Integer, default=0)
+    markdown_cells: Mapped[int] = mapped_column(Integer, default=0)
+    error_cells: Mapped[int] = mapped_column(Integer, default=0)
+    total_code_lines: Mapped[int] = mapped_column(Integer, default=0)
+    functions_count: Mapped[int] = mapped_column(Integer, default=0)
+    imports_count: Mapped[int] = mapped_column(Integer, default=0)
+    analyzed_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_nb_ver_org_nb", "org_id", "notebook_id", "version_number"),
+        UniqueConstraint("org_id", "notebook_id", "version_number", name="uq_gw_nb_ver_org_nb_num"),
+    )
+
+
 class GatewayNotebook(GatewayBase):
     __tablename__ = "gateway_notebooks"
 

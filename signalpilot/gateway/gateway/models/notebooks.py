@@ -221,3 +221,20 @@ class NotebookActivityInfo(BaseModel):
     details: dict | None
     created_at: float
     user_id: str | None
+
+
+class NotebookVersionInfo(BaseModel):
+    """A versioned snapshot of analysis metrics."""
+
+    id: str
+    notebook_id: str
+    version_number: int
+    total_cells: int
+    code_cells: int
+    markdown_cells: int
+    error_cells: int
+    total_code_lines: int
+    functions_count: int
+    imports_count: int
+    analyzed_at: float
+    created_at: float

@@ -20,6 +20,7 @@ import {
   getNotebookAnalysis,
   getNotebooksSummary,
   getNotebookActivities,
+  getNotebookVersions,
 } from "@/lib/api";
 import type { PlanUsage } from "@/lib/api";
 import type {
@@ -31,6 +32,7 @@ import type {
   NotebookCell,
   NotebookSummary,
   NotebookActivity,
+  NotebookVersionInfo,
 } from "@/lib/types";
 
 // ── Cache keys (exported for manual invalidation) ────────────────────────────
@@ -54,6 +56,7 @@ export const SWR_KEYS = {
   notebookCells: (id: string) => `/api/notebooks/${id}/cells`,
   notebookAnalysis: (id: string) => `/api/notebooks/${id}/analysis`,
   notebookActivities: (id: string) => `/api/notebooks/${id}/activities`,
+  notebookVersions: (id: string) => `/api/notebooks/${id}/versions`,
 } as const;
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -238,6 +241,15 @@ export function useNotebookActivities(id: string | null) {
   );
 }
 
+/** Notebook version history — 30s dedup. */
+export function useNotebookVersions(id: string | null) {
+  return useSWR<{ items: NotebookVersionInfo[]; total: number }>(
+    id ? SWR_KEYS.notebookVersions(id) : null,
+    () => getNotebookVersions(id!),
+    { dedupingInterval: 30_000 },
+  );
+}
+
 export function invalidateNotebooks() {
   return Promise.all([
     mutate(SWR_KEYS.notebooks),
@@ -251,6 +263,7 @@ export function invalidateNotebook(id: string) {
     mutate(SWR_KEYS.notebookCells(id)),
     mutate(SWR_KEYS.notebookAnalysis(id)),
     mutate(SWR_KEYS.notebookActivities(id)),
+    mutate(SWR_KEYS.notebookVersions(id)),
   ]);
 }
 

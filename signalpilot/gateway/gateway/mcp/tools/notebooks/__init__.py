@@ -15,13 +15,14 @@ Do not add ``__getattr__`` proxy or ``_common.py`` re-export helpers — see r9 
 
 from __future__ import annotations
 
-# Side-effect imports — order matches logical grouping (crud → analysis → batch → report → compare → activities).
+# Side-effect imports — order matches logical grouping (crud → analysis → batch → report → compare → activities → versions).
 from gateway.mcp.tools.notebooks import crud as _crud  # noqa: F401
 from gateway.mcp.tools.notebooks import analysis as _analysis  # noqa: F401
 from gateway.mcp.tools.notebooks import batch as _batch  # noqa: F401
 from gateway.mcp.tools.notebooks import report as _report  # noqa: F401
 from gateway.mcp.tools.notebooks import compare as _compare  # noqa: F401
 from gateway.mcp.tools.notebooks import activities as _activities  # noqa: F401
+from gateway.mcp.tools.notebooks import versions as _versions  # noqa: F401
 
 # Re-exports for gateway.mcp package re-exports and named imports.
 from gateway.mcp.tools.notebooks.crud import (
@@ -47,6 +48,7 @@ from gateway.mcp.tools.notebooks.batch import (
 from gateway.mcp.tools.notebooks.report import get_notebook_report
 from gateway.mcp.tools.notebooks.compare import compare_notebooks
 from gateway.mcp.tools.notebooks.activities import get_notebook_activities
+from gateway.mcp.tools.notebooks.versions import get_notebook_versions
 
 __all__ = [
     "list_notebooks",
@@ -66,4 +68,5 @@ __all__ = [
     "get_notebook_report",
     "compare_notebooks",
     "get_notebook_activities",
+    "get_notebook_versions",
 ]

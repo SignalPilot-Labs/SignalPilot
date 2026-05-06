@@ -657,6 +657,13 @@ export const getNotebookActivities = (
   );
 };
 
+export const getNotebookVersions = (id: string, limit = 50, offset = 0) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return request<{ items: import("./types").NotebookVersionInfo[]; total: number }>(
+    `/api/notebooks/${encodeURIComponent(id)}/versions?${params.toString()}`
+  );
+};
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

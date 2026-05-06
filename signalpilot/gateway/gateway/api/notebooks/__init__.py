@@ -27,6 +27,7 @@ from .crud import router as crud_router
 from .download import router as download_router
 from .list import router as list_router
 from .search import router as search_router
+from .versions import router as versions_router
 
 router = APIRouter(prefix="/api")
 
@@ -40,3 +41,4 @@ router.include_router(crud_router)       # POST /notebooks, GET/DELETE/PATCH /no
 router.include_router(download_router)   # GET /notebooks/{notebook_id}/download
 router.include_router(activities_router) # GET /notebooks/{notebook_id}/activities
 router.include_router(compare_router)    # GET /notebooks/{notebook_id}/compare/{other_id}
+router.include_router(versions_router)   # GET /notebooks/{notebook_id}/versions

@@ -52,6 +52,7 @@ from .notebooks import (
     NotebookSummary,
     NotebookUpdate,
     NotebookUpload,
+    NotebookVersionInfo,
 )
 from .projects import (
     ProjectCreate,
@@ -110,6 +111,7 @@ __all__ = [
     "NotebookSummary",
     "NotebookUpdate",
     "NotebookUpload",
+    "NotebookVersionInfo",
     "ProjectCreate",
     "ProjectInfo",
     "ProjectSource",

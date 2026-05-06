@@ -22,12 +22,13 @@ import {
 } from "@/lib/hooks/use-gateway-data";
 import { analyzeNotebook, deleteNotebook, updateNotebook, getNotebookDownloadUrl, getNotebookReportUrl, getAuthHeaders } from "@/lib/api";
 import { NotebookActivityTimeline } from "@/components/notebooks/notebook-activity-timeline";
+import { NotebookVersionHistory } from "@/components/notebooks/notebook-version-history";
 import { useToast } from "@/components/ui/toast";
 import type { NotebookInfo } from "@/lib/types";
 
 const MAX_CELLS = 200;
 
-type TabId = "cells" | "analysis" | "outputs" | "activity";
+type TabId = "cells" | "analysis" | "outputs" | "activity" | "versions";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -236,6 +237,7 @@ export default function NotebookDetailPage({ params }: PageProps) {
     { id: "analysis", label: "analysis" },
     { id: "outputs", label: "outputs", count: outputCells.length },
     { id: "activity", label: "activity" },
+    { id: "versions", label: "versions" },
   ];
 
   return (
@@ -488,6 +490,13 @@ export default function NotebookDetailPage({ params }: PageProps) {
       {activeTab === "activity" && (
         <div role="tabpanel" id="tabpanel-activity" aria-labelledby="tab-activity">
           <NotebookActivityTimeline notebookId={id} />
+        </div>
+      )}
+
+      {/* Versions tab */}
+      {activeTab === "versions" && (
+        <div role="tabpanel" id="tabpanel-versions" aria-labelledby="tab-versions">
+          <NotebookVersionHistory notebookId={id} />
         </div>
       )}
 

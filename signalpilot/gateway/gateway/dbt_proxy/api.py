@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..auth import OrgID, UserID
+from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .config import DbtProxyConfig
 from .errors import ProxyDisabled, RunTokenAlreadyExists
@@ -38,7 +39,7 @@ router = APIRouter(prefix="/api/dbt-proxy/run-tokens", tags=["dbt-proxy"])
 
 class MintRequest(BaseModel):
     run_id: uuid.UUID
-    connector_name: str = Field(..., min_length=1, max_length=64)
+    connector_name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     ttl_seconds: int = Field(..., ge=60, le=86400)
 
 
@@ -107,6 +108,11 @@ async def mint_run_token(
     _check_proxy_enabled(config)
     _check_secret_configured(config)
 
+    # Cloud-only: cap TTL to 1h regardless of request value.
+    # Localhost keeps the documented 24h max.
+    if is_cloud_mode():
+        body = body.model_copy(update={"ttl_seconds": min(body.ttl_seconds, 3600)})
+
     token_store = _get_token_store(request)
 
     try:
@@ -124,7 +130,7 @@ async def mint_run_token(
         )
 
     expires_at_str = datetime.fromtimestamp(claims.expires_at, tz=UTC).isoformat()
-    logger.info("dbt_proxy mint run_id=%s org=%s connector=%s", body.run_id, org_id, body.connector_name)
+    logger.info("dbt_proxy mint run_id=%s", body.run_id)
     return MintResponse(
         token=token_hex,
         host_port=config.sp_dbt_proxy_port,

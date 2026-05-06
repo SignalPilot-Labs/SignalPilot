@@ -7,6 +7,7 @@ import os as _os
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_mcp_settings
+from ..runtime.mode import is_cloud_mode
 
 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
 _allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
@@ -58,6 +59,10 @@ def main():
         authenticated_app = MCPAuthMiddleware(starlette_app)
         uvicorn.run(authenticated_app, host="0.0.0.0", port=port, server_header=False)
     else:
+        if is_cloud_mode():
+            raise SystemExit(
+                "Refusing to start MCP stdio transport in cloud mode — stdio bypasses MCPAuthMiddleware."
+            )
         # stdio mode has no auth middleware — set context vars for local access
         from gateway.mcp.context import mcp_org_id_var, mcp_user_id_var
 

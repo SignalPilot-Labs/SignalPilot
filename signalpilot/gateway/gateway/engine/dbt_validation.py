@@ -21,6 +21,7 @@ module raises ImportError at import time (fail closed — do not skip validation
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -125,6 +126,11 @@ _DENIED_PREFIXES: tuple[str, ...] = (
     "security definer",
 )
 
+_DENIED_PREFIX_RE = re.compile(
+    r"(?:^|[\s;])(" + "|".join(re.escape(p.strip()) for p in _DENIED_PREFIXES) + r")(?=\s|;|\(|$)",
+    re.IGNORECASE,
+)
+
 # SET commands that are always denied (privilege escalation)
 _DENIED_SET_PATTERNS: tuple[str, ...] = (
     "set session authorization",
@@ -159,9 +165,24 @@ _DENIED_FUNCTION_NAMES: frozenset[str] = frozenset({
     "dblink_build_sql_insert",
     "dblink_build_sql_delete",
     "dblink_build_sql_update",
-    "current_setting",
-    "set_config",
 })
+
+# Settings prefixes that are blocked in current_setting / set_config
+_SENSITIVE_SETTING_PREFIXES: tuple[str, ...] = (
+    "ssl_",
+    "data_directory",
+    "config_file",
+    "hba_file",
+    "ident_file",
+    "external_pid_file",
+    "dynamic_library_path",
+    "local_preload_libraries",
+    "session_preload_libraries",
+    "shared_preload_libraries",
+)
+
+# Names of the setting-accessor functions to handle with arg-aware logic
+_SETTING_FUNC_NAMES: frozenset[str] = frozenset({"current_setting", "set_config"})
 
 
 @dataclass
@@ -209,14 +230,14 @@ def validate_dbt_statement(sql: str, *, claims: RunTokenClaims) -> ValidatedStat
     # Deny-list: quick case-insensitive prefix check on the normalised SQL.
     # This is defence-in-depth; the AST walk below is authoritative.
     sql_lower = sql.strip().lower()
-    for prefix in _DENIED_PREFIXES:
-        if sql_lower.startswith(prefix) or f" {prefix}" in sql_lower or f"\n{prefix}" in sql_lower:
-            return ValidatedStatement(
-                sql=sql,
-                kind="admin",
-                blocked=True,
-                block_reason=_deny_reason_for_prefix(sql_lower),
-            )
+    m = _DENIED_PREFIX_RE.search(sql)
+    if m:
+        return ValidatedStatement(
+            sql=sql,
+            kind="admin",
+            blocked=True,
+            block_reason=_deny_reason_for_prefix(sql_lower),
+        )
 
     # Deny-list: SET … privilege-escalation patterns
     for pattern in _DENIED_SET_PATTERNS:
@@ -358,6 +379,40 @@ def _check_create_node(stmt: exp.Expr, original_sql: str) -> ValidatedStatement 
     return None
 
 
+def _check_setting_func_node(node: exp.Anonymous | exp.Func, func_name: str, original_sql: str) -> ValidatedStatement | None:
+    """Arg-aware check for current_setting / set_config calls.
+
+    Allows calls where the first argument is a string literal with a safe
+    setting name; blocks sensitive prefixes and non-literal first arguments.
+    """
+    args = node.args.get("expressions") or []
+    if not args:
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason=f"denied_function_{func_name}",
+        )
+    first_arg = args[0]
+    if not (isinstance(first_arg, exp.Literal) and first_arg.is_string):
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason="current_setting/set_config with non-literal name is not allowed — pass a constant string",
+        )
+    setting_name = first_arg.this.lower()
+    for prefix in _SENSITIVE_SETTING_PREFIXES:
+        if setting_name.startswith(prefix):
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"reading {setting_name} via current_setting is restricted",
+            )
+    return None
+
+
 def _check_dangerous_functions(stmt: exp.Expr, original_sql: str) -> ValidatedStatement | None:
     """Walk the AST for calls to dangerous built-in functions.
 
@@ -367,7 +422,11 @@ def _check_dangerous_functions(stmt: exp.Expr, original_sql: str) -> ValidatedSt
     # Walk all Anonymous nodes (covers functions sqlglot doesn't know about)
     for node in stmt.find_all(exp.Anonymous):
         func_name = (node.name or "").lower()
-        if func_name in _DENIED_FUNCTION_NAMES:
+        if func_name in _SETTING_FUNC_NAMES:
+            result = _check_setting_func_node(node, func_name, original_sql)
+            if result is not None:
+                return result
+        elif func_name in _DENIED_FUNCTION_NAMES:
             return ValidatedStatement(
                 sql=original_sql,
                 kind="admin",
@@ -382,7 +441,12 @@ def _check_dangerous_functions(stmt: exp.Expr, original_sql: str) -> ValidatedSt
         # avoid the loop-variable closure capture issue (ruff B023).
         sql_name_raw = node.sql_name() if callable(getattr(node, "sql_name", None)) else func_name
         sql_name = sql_name_raw.lower() if isinstance(sql_name_raw, str) else func_name
-        if func_name in _DENIED_FUNCTION_NAMES or sql_name in _DENIED_FUNCTION_NAMES:
+        if func_name in _SETTING_FUNC_NAMES or sql_name in _SETTING_FUNC_NAMES:
+            canonical = func_name if func_name in _SETTING_FUNC_NAMES else sql_name
+            result = _check_setting_func_node(node, canonical, original_sql)
+            if result is not None:
+                return result
+        elif func_name in _DENIED_FUNCTION_NAMES or sql_name in _DENIED_FUNCTION_NAMES:
             return ValidatedStatement(
                 sql=original_sql,
                 kind="admin",

@@ -19,6 +19,11 @@ from gateway.mcp.server import mcp
 from gateway.mcp.validation import _MODEL_NAME_RE, _quote_table, _validate_connection_name
 
 
+def _qid(name: str) -> str:
+    """Quote a SQL identifier with double-quote doubling."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 # ---------------------------------------------------------------------------
 # Filesystem helpers
 # ---------------------------------------------------------------------------
@@ -287,9 +292,10 @@ async def generate_model_blueprint(
     table_columns: dict[str, list[str]] = {}
     for tbl in all_tables:
         try:
+            safe_tbl = tbl.replace("'", "''")
             col_rows = await _query(
                 f"SELECT column_name FROM information_schema.columns "
-                f"WHERE table_name = '{tbl}' ORDER BY ordinal_position"
+                f"WHERE table_name = '{safe_tbl}' ORDER BY ordinal_position"
             )
             table_columns[tbl] = [r["column_name"] for r in col_rows]
         except Exception:
@@ -378,9 +384,8 @@ async def generate_model_blueprint(
                     if raw_col in src_cols or raw_col.lower() in {c.lower() for c in src_cols}:
                         # Query the actual values from the raw source
                         try:
-                            safe_col = raw_col.replace('"', '""')
                             rows = await _query(
-                                f'SELECT DISTINCT "{safe_col}" AS val '
+                                f'SELECT DISTINCT {_qid(raw_col)} AS val '
                                 f'FROM {_quote_table(src_tbl)} ORDER BY 1 LIMIT 20'
                             )
                             values = [r["val"] for r in rows] if rows else []
@@ -502,10 +507,10 @@ async def generate_model_blueprint(
                         # Use a join to count distinct customers per status
                         try:
                             count_rows = await _query(
-                                f'SELECT "{src_col_match}" AS status_val, '
+                                f'SELECT {_qid(src_col_match)} AS status_val, '
                                 f'COUNT(DISTINCT o.o_custkey) AS entity_count '
                                 f'FROM {_quote_table(src_tbl)} s '
-                                f'JOIN {_quote_table(orders_tbl)} o ON s."{order_key}" = o.o_orderkey '
+                                f'JOIN {_quote_table(orders_tbl)} o ON s.{_qid(order_key)} = o.o_orderkey '
                                 f'GROUP BY 1 ORDER BY 2 DESC'
                             )
                             if count_rows:
@@ -519,8 +524,8 @@ async def generate_model_blueprint(
                                         ex_row = await _query(
                                             f'SELECT COUNT(DISTINCT o.o_custkey) AS cnt '
                                             f'FROM {_quote_table(src_tbl)} s '
-                                            f'JOIN {_quote_table(orders_tbl)} o ON s."{order_key}" = o.o_orderkey '
-                                            f"""WHERE s."{src_col_match}" != '{safe_val}'"""
+                                            f'JOIN {_quote_table(orders_tbl)} o ON s.{_qid(order_key)} = o.o_orderkey '
+                                            f"WHERE s.{_qid(src_col_match)} != '{safe_val}'"
                                         )
                                         if ex_row:
                                             lines.append(
@@ -536,8 +541,8 @@ async def generate_model_blueprint(
                     continue
                 try:
                     count_rows = await _query(
-                        f'SELECT "{src_col_match}" AS status_val, '
-                        f'COUNT(DISTINCT "{key_match}") AS entity_count '
+                        f'SELECT {_qid(src_col_match)} AS status_val, '
+                        f'COUNT(DISTINCT {_qid(key_match)}) AS entity_count '
                         f'FROM {_quote_table(src_tbl)} '
                         f'GROUP BY 1 ORDER BY 2 DESC'
                     )
@@ -553,9 +558,9 @@ async def generate_model_blueprint(
                             try:
                                 safe_val = str(r["status_val"]).replace("'", "''")
                                 ex_row = await _query(
-                                    f'SELECT COUNT(DISTINCT "{key_match}") AS cnt '
+                                    f'SELECT COUNT(DISTINCT {_qid(key_match)}) AS cnt '
                                     f'FROM {_quote_table(src_tbl)} '
-                                    f"""WHERE "{src_col_match}" != '{safe_val}'"""
+                                    f"WHERE {_qid(src_col_match)} != '{safe_val}'"
                                 )
                                 if ex_row:
                                     lines.append(

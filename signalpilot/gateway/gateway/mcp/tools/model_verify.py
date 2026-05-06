@@ -12,6 +12,11 @@ from gateway.mcp.server import mcp
 from gateway.mcp.validation import _MODEL_NAME_RE, _quote_table, _validate_connection_name, _validate_sql
 
 
+def _qid(name: str) -> str:
+    """Quote a SQL identifier with double-quote doubling."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 @audited_tool(mcp)
 async def check_model_schema(connection_name: str, model_name: str, yml_columns: str) -> str:
     """
@@ -793,9 +798,10 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
                 return rows[0] if rows else None
 
             # Get model columns
+            safe_model = model_name.replace("'", "''")
             col_rows = await _query(
                 f"SELECT column_name, data_type FROM information_schema.columns "
-                f"WHERE table_name = '{model_name}' ORDER BY ordinal_position"
+                f"WHERE table_name = '{safe_model}' ORDER BY ordinal_position"
             )
             if not col_rows:
                 return f"Error: Table '{model_name}' not found or has no columns."
@@ -813,7 +819,7 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
             # Get top row by first metric
             first_metric = metric_cols[0][0]
             top = await _query_one(
-                f'SELECT * FROM {_quote_table(model_name)} ORDER BY "{first_metric}" DESC LIMIT 1'
+                f'SELECT * FROM {_quote_table(model_name)} ORDER BY {_qid(first_metric)} DESC LIMIT 1'
             )
             if not top:
                 return f"No rows in '{model_name}'."
@@ -839,9 +845,10 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
                 try:
                     row = await _query_one(f'SELECT COUNT(*) AS cnt FROM {_quote_table(tbl)}')
                     cnt = row["cnt"] if row else 0
+                    safe_tbl = tbl.replace("'", "''")
                     tbl_col_rows = await _query(
                         f"SELECT column_name FROM information_schema.columns "
-                        f"WHERE table_name = '{tbl}'"
+                        f"WHERE table_name = '{safe_tbl}'"
                     )
                     tbl_cols = [r["column_name"] for r in tbl_col_rows]
                     table_info.append((tbl, cnt, tbl_cols))
@@ -864,7 +871,7 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
                 # Direct match: candidate has the slice column
                 cand_col_match = next((c for c in cand_cols if c.lower() == slice_col.lower()), None)
                 if cand_col_match:
-                    return f"""WHERE "{cand_col_match}" = '{safe_val}'""", ""
+                    return f"WHERE {_qid(cand_col_match)} = '{safe_val}'", ""
                 # Indirect: find a dimension table with the slice column, join via shared key
                 for dim_name, _, dim_cols in table_info:
                     if dim_name in (model_name, cand_name):
@@ -884,8 +891,8 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
                         cand_key, dim_key = shared_keys[0]
                         return (
                             f'INNER JOIN {_quote_table(dim_name)} _dim '
-                            f'ON _cand."{cand_key}" = _dim."{dim_key}" '
-                            f"""WHERE _dim."{dim_match}" = '{safe_val}'""",
+                            f'ON _cand.{_qid(cand_key)} = _dim.{_qid(dim_key)} '
+                            f"WHERE _dim.{_qid(dim_match)} = '{safe_val}'",
                             "_cand",
                         )
                 return "", ""
@@ -934,9 +941,9 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
                     for key in id_cols:
                         try:
                             if cand_prefix:
-                                q = f'SELECT COUNT(DISTINCT _cand."{key}") AS cnt FROM {_quote_table(cand_name)} _cand {cand_slice}'
+                                q = f'SELECT COUNT(DISTINCT _cand.{_qid(key)}) AS cnt FROM {_quote_table(cand_name)} _cand {cand_slice}'
                             else:
-                                q = f'SELECT COUNT(DISTINCT "{key}") AS cnt FROM {_quote_table(cand_name)} {cand_slice}'
+                                q = f'SELECT COUNT(DISTINCT {_qid(key)}) AS cnt FROM {_quote_table(cand_name)} {cand_slice}'
                             row = await _query_one(q)
                             if row:
                                 lines.append(f"    COUNT(DISTINCT {key}): {row['cnt']}")

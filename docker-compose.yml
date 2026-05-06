@@ -4,6 +4,10 @@
 #
 # Starts: Postgres + Gateway + Web + Sandbox
 # No external dependencies, no .env required.
+#
+# HOST_DATA_DIR defaults to ~ (home directory) for the sandbox host-data mount.
+# For production or shared environments, set HOST_DATA_DIR to a narrower path
+# such as ./host-data to avoid exposing the entire home directory read-only.
 
 name: signalpilot
 
@@ -15,7 +19,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
       POSTGRES_DB: ${POSTGRES_DB:-signalpilot}
     ports:
-      - "5601:5432"
+      - "127.0.0.1:5601:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:

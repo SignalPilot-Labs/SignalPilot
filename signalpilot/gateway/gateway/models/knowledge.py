@@ -8,6 +8,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,118}[a-z0-9])?$")
+_SCOPE_REF_RE = re.compile(r"^[A-Za-z0-9_./:-]{1,200}$")
 
 # Category × scope whitelist
 _SCOPE_CATEGORIES: dict[str, set[str]] = {
@@ -91,8 +92,8 @@ class KnowledgeDocCreate(BaseModel):
         else:
             if not self.scope_ref:
                 raise ValueError(f"scope_ref is required for scope '{scope_val}'")
-            if len(self.scope_ref) > 200:
-                raise ValueError("scope_ref must be <= 200 characters")
+            if not _SCOPE_REF_RE.match(self.scope_ref):
+                raise ValueError("scope_ref must match [A-Za-z0-9_./:-]{1,200}")
 
         return self
 

@@ -150,8 +150,13 @@ class TestKnowledgeDetailEndpoint:
 
         monkeypatch.setattr(Store, "get_knowledge_doc", AsyncMock(return_value=None))
 
-        resp = auth_client.get("/api/knowledge/missing-id")
+        missing_uuid = str(uuid.uuid4())
+        resp = auth_client.get(f"/api/knowledge/{missing_uuid}")
         assert resp.status_code == 404
+
+    def test_get_doc_invalid_uuid_returns_422(self, auth_client):
+        resp = auth_client.get("/api/knowledge/not-a-uuid")
+        assert resp.status_code == 422
 
 
 class TestKnowledgeCreateEndpoint:
@@ -260,8 +265,9 @@ class TestKnowledgeUpdateEndpoint:
             AsyncMock(side_effect=KnowledgeNotFound("not found")),
         )
 
+        missing_uuid = str(uuid.uuid4())
         resp = auth_client.put(
-            "/api/knowledge/missing-id",
+            f"/api/knowledge/{missing_uuid}",
             json={"body": "new body"},
         )
         assert resp.status_code == 404
@@ -273,7 +279,8 @@ class TestKnowledgeDeleteEndpoint:
 
         monkeypatch.setattr(Store, "archive_knowledge_doc", AsyncMock(return_value=True))
 
-        resp = auth_client.delete("/api/knowledge/some-id")
+        some_uuid = str(uuid.uuid4())
+        resp = auth_client.delete(f"/api/knowledge/{some_uuid}")
         assert resp.status_code == 204
 
     def test_delete_not_found_returns_404(self, auth_client, monkeypatch):
@@ -281,7 +288,8 @@ class TestKnowledgeDeleteEndpoint:
 
         monkeypatch.setattr(Store, "archive_knowledge_doc", AsyncMock(return_value=False))
 
-        resp = auth_client.delete("/api/knowledge/missing-id")
+        missing_uuid = str(uuid.uuid4())
+        resp = auth_client.delete(f"/api/knowledge/{missing_uuid}")
         assert resp.status_code == 404
 
 
@@ -292,7 +300,8 @@ class TestKnowledgeApproveEndpoint:
 
         monkeypatch.setattr(Store, "approve_knowledge_doc", AsyncMock(return_value=doc))
 
-        resp = auth_client.post("/api/knowledge/some-id/approve")
+        some_uuid = str(uuid.uuid4())
+        resp = auth_client.post(f"/api/knowledge/{some_uuid}/approve")
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
 
@@ -305,7 +314,8 @@ class TestKnowledgeApproveEndpoint:
             AsyncMock(side_effect=KnowledgeNotFound("not found")),
         )
 
-        resp = auth_client.post("/api/knowledge/missing-id/approve")
+        missing_uuid = str(uuid.uuid4())
+        resp = auth_client.post(f"/api/knowledge/{missing_uuid}/approve")
         assert resp.status_code == 404
 
     def test_approve_wrong_state_returns_409(self, auth_client, monkeypatch):
@@ -317,7 +327,8 @@ class TestKnowledgeApproveEndpoint:
             AsyncMock(side_effect=KnowledgeStateConflict("wrong state")),
         )
 
-        resp = auth_client.post("/api/knowledge/some-id/approve")
+        some_uuid = str(uuid.uuid4())
+        resp = auth_client.post(f"/api/knowledge/{some_uuid}/approve")
         assert resp.status_code == 409
 
 
@@ -326,9 +337,10 @@ class TestKnowledgeEditsEndpoint:
         from gateway.models.knowledge import KnowledgeEdit
         from gateway.store import Store
 
+        doc_uuid = str(uuid.uuid4())
         edit = KnowledgeEdit(
             id=str(uuid.uuid4()),
-            doc_id="doc-1",
+            doc_id=doc_uuid,
             org_id="test-org",
             body_before="old body",
             bytes_before=8,
@@ -338,12 +350,27 @@ class TestKnowledgeEditsEndpoint:
         )
         monkeypatch.setattr(Store, "list_knowledge_edits", AsyncMock(return_value=[edit]))
 
-        resp = auth_client.get("/api/knowledge/doc-1/edits")
+        resp = auth_client.get(f"/api/knowledge/{doc_uuid}/edits")
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
         assert len(data) == 1
         assert data[0]["edit_kind"] == "human"
+
+
+class TestKnowledgeScopeRefValidation:
+    def test_create_rejects_scope_ref_with_control_char(self, auth_client):
+        resp = auth_client.post(
+            "/api/knowledge",
+            json={
+                "scope": "project",
+                "scope_ref": "my\nproject",
+                "category": "conventions",
+                "title": "test-doc",
+                "body": "Some content.",
+            },
+        )
+        assert resp.status_code == 422
 
 
 class TestKnowledgeAdminScopeEnforcement:

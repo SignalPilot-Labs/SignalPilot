@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncGenerator
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -42,9 +43,25 @@ def _get_database_url() -> str:
 
 
 def _requires_ssl() -> bool:
-    """Check if the original DATABASE_URL had sslmode (e.g. Neon)."""
-    raw = os.environ.get("DATABASE_URL", "")
-    return "sslmode=" in raw
+    """Check if the original DATABASE_URL requested SSL via sslmode, ssl, or channel_binding."""
+    raw = os.environ.get("DATABASE_URL", "") or ""
+    if not raw:
+        return False
+    try:
+        q = parse_qs(urlparse(raw).query)
+    except Exception:
+        return False
+    sslmode = (q.get("sslmode", [""])[0] or "").lower()
+    if sslmode in {"require", "verify-ca", "verify-full"}:
+        return True
+    ssl_param = (q.get("ssl", [""])[0] or "").lower()
+    if ssl_param in {"true", "require"}:
+        return True
+    if q.get("channel_binding"):
+        cb = (q.get("channel_binding", [""])[0] or "").lower()
+        if cb in {"require", "prefer"}:
+            return True
+    return False
 
 
 def get_engine():

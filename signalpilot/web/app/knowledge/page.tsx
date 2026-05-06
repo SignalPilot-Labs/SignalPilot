@@ -1231,6 +1231,9 @@ export default function KnowledgePage() {
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
+// SAFE_URL anchors the link allowlist for renderInline below.
+// DO NOT broaden to allow `javascript:`, `data:`, `vbscript:`, or `file:` —
+// the markdown renderer would expose XSS via knowledge body content.
 const SAFE_URL = /^https?:\/\//;
 
 // Priority order for wikilink resolution when multiple docs share the same title

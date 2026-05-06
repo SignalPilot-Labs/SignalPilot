@@ -321,6 +321,8 @@ def _parse_numeric_binary(raw: bytes) -> Decimal:
     if len(raw) < 8:
         return Decimal(0)
     ndigits, weight, sign, dscale = struct.unpack("!HhHH", raw[:8])
+    if ndigits > 1000:
+        raise ValueError(f"NUMERIC ndigits {ndigits} exceeds bound (1000)")
     digits = struct.unpack(f"!{ndigits}H", raw[8:8 + 2 * ndigits])
     # Reconstruct the decimal
     value = Decimal(0)

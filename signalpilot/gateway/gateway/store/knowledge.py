@@ -6,6 +6,7 @@ delegates to these functions via thin wrapper methods.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 
@@ -21,6 +22,9 @@ from gateway.models.knowledge import (
     KnowledgeStatus,
     KnowledgeUsage,
 )
+from gateway.runtime.mode import is_cloud_mode
+
+logger = logging.getLogger(__name__)
 
 # ── Typed exceptions ──────────────────────────────────────────────────────────
 
@@ -239,6 +243,10 @@ async def insert_knowledge_doc(
         # e.g. understanding — caller should have rejected; fall back to payload
         status_val = payload.status.value
 
+    # Cloud-only: agent-proposed knowledge requires admin approval regardless of category.
+    if agent is not None and is_cloud_mode():
+        status_val = KnowledgeStatus.pending.value
+
     now = time.time()
     doc_id = str(uuid.uuid4())
 
@@ -343,6 +351,10 @@ async def upsert_knowledge_doc(
         else:
             status_val = payload.status.value
 
+        # Cloud-only: agent-proposed knowledge requires admin approval regardless of category.
+        if agent is not None and is_cloud_mode():
+            status_val = KnowledgeStatus.pending.value
+
         doc_id = str(uuid.uuid4())
         row = GatewayKnowledgeDoc(
             id=doc_id,
@@ -377,6 +389,10 @@ async def upsert_knowledge_doc(
             edit_kind="human" if agent is None else "agent",
         )
         session.add(edit)
+
+        # Cloud-only: agent-driven update of an active doc must be re-reviewed.
+        if agent is not None and is_cloud_mode():
+            existing.status = KnowledgeStatus.pending.value
 
         existing.body = payload.body
         existing.bytes = body_bytes
@@ -599,5 +615,5 @@ async def increment_knowledge_view(session: AsyncSession, *, org_id: str, doc_id
             .values(view_count=GatewayKnowledgeDoc.view_count + 1)
         )
         await session.commit()
-    except Exception:
-        pass
+    except Exception as exc:  # best-effort counter — log but do not raise
+        logger.debug("increment_knowledge_view failed doc_id=%s exc=%r", doc_id, exc)

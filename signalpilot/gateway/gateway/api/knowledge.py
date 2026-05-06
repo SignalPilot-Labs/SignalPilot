@@ -6,6 +6,8 @@ review by design. Do not lower to write without product sign-off.
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, HTTPException
 
 from ..models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeDocUpdate, KnowledgeEdit, KnowledgeUsage
@@ -83,9 +85,9 @@ async def get_knowledge_usage(store: StoreD):
     response_model=KnowledgeDoc,
     dependencies=[RequireScope("read")],
 )
-async def get_knowledge_doc(doc_id: str, store: StoreD):
+async def get_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Get a single knowledge doc by ID, including body."""
-    doc = await store.get_knowledge_doc(doc_id, include_body=True, bump_view=True)
+    doc = await store.get_knowledge_doc(str(doc_id), include_body=True, bump_view=True)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Knowledge doc '{doc_id}' not found")
     return doc
@@ -110,18 +112,18 @@ async def create_knowledge_doc(payload: KnowledgeDocCreate, store: StoreD):
     response_model=KnowledgeDoc,
     dependencies=[RequireScope("admin")],
 )
-async def update_knowledge_doc(doc_id: str, body_update: KnowledgeDocUpdate, store: StoreD):
+async def update_knowledge_doc(doc_id: uuid.UUID, body_update: KnowledgeDocUpdate, store: StoreD):
     """Update the body of a knowledge doc (admin only). Appends edit history."""
     try:
-        return await store.update_knowledge_body(doc_id, body=body_update.body, user_id=store.user_id)
+        return await store.update_knowledge_body(str(doc_id), body=body_update.body, user_id=store.user_id)
     except (KnowledgeSizeExceeded, KnowledgeOrgQuotaExceeded, KnowledgeNotFound) as exc:
         raise _map_knowledge_exc(exc) from exc
 
 
 @router.delete("/knowledge/{doc_id}", status_code=204, dependencies=[RequireScope("admin")])
-async def archive_knowledge_doc(doc_id: str, store: StoreD):
+async def archive_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Archive a knowledge doc (admin only)."""
-    archived = await store.archive_knowledge_doc(doc_id)
+    archived = await store.archive_knowledge_doc(str(doc_id))
     if not archived:
         raise HTTPException(status_code=404, detail=f"Knowledge doc '{doc_id}' not found")
 
@@ -131,10 +133,10 @@ async def archive_knowledge_doc(doc_id: str, store: StoreD):
     response_model=KnowledgeDoc,
     dependencies=[RequireScope("admin")],
 )
-async def approve_knowledge_doc(doc_id: str, store: StoreD):
+async def approve_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Approve a pending knowledge doc (admin only). Flips status from pending to active."""
     try:
-        return await store.approve_knowledge_doc(doc_id, user_id=store.user_id)
+        return await store.approve_knowledge_doc(str(doc_id), user_id=store.user_id)
     except (KnowledgeNotFound, KnowledgeStateConflict) as exc:
         raise _map_knowledge_exc(exc) from exc
 
@@ -144,6 +146,6 @@ async def approve_knowledge_doc(doc_id: str, store: StoreD):
     response_model=list[KnowledgeEdit],
     dependencies=[RequireScope("read")],
 )
-async def list_knowledge_edits(doc_id: str, store: StoreD, limit: int = 20):
+async def list_knowledge_edits(doc_id: uuid.UUID, store: StoreD, limit: int = 20):
     """Get the edit history for a knowledge doc."""
-    return await store.list_knowledge_edits(doc_id, limit=max(1, min(limit, 100)))
+    return await store.list_knowledge_edits(str(doc_id), limit=max(1, min(limit, 100)))

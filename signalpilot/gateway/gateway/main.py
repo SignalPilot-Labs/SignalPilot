@@ -12,7 +12,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,7 +32,6 @@ from .http import (
     RequestBodySizeLimitMiddleware,
     RequestCorrelationMiddleware,
     SecurityHeadersMiddleware,
-    enforce_principal_rate_limit,
 )
 from .models import ConnectionUpdate
 from .runtime.mode import is_cloud_mode
@@ -273,7 +272,6 @@ app = FastAPI(
     version="0.1.0",
     description="Governed MCP server for AI database access",
     lifespan=lifespan,
-    dependencies=[Depends(enforce_principal_rate_limit)],
 )
 
 
@@ -345,6 +343,9 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
 # Register all API routers
 register_routers(app)
 
+# Jupyter WebSocket interceptor is installed at the bottom of this file (after all mounts).
+from .api.jupyter_adapter import jupyter_ws_asgi  # noqa: E402
+
 # Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
 _mcp_session_manager = None
 try:
@@ -363,3 +364,24 @@ try:
     logger.info("MCP streamable-http endpoint mounted at /mcp (also / for backward compat)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)
+
+
+# ─── Jupyter WebSocket ASGI interceptor ──────────────────────────────────────
+# BaseHTTPMiddleware corrupts WebSocket lifecycle. This wrapper sits outside
+# FastAPI's middleware stack and routes Jupyter WS directly to a raw handler.
+_fastapi_app = app
+
+
+class _Application:
+    """Outermost ASGI callable. Intercepts Jupyter WS before FastAPI middleware."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket" and scope.get("path", "").startswith("/jupyter/api/kernels/"):
+            scope = dict(scope)
+            scope["path"] = scope["path"][len("/jupyter/api/kernels"):]
+            await jupyter_ws_asgi(scope, receive, send)
+        else:
+            await _fastapi_app(scope, receive, send)
+
+
+app = _Application()

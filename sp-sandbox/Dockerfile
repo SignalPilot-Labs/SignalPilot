@@ -29,10 +29,25 @@ RUN mkdir -p /opt/signalpilot
 COPY pyproject.toml /opt/signalpilot/
 RUN pip install --no-cache-dir /opt/signalpilot/
 
+# Pre-install ipykernel spec so jupyter_client can find it
+RUN python3 -m ipykernel install --name python3 --display-name "SignalPilot Python 3"
+
+# Pre-configure matplotlib for headless rendering
+ENV MPLBACKEND=agg
+
 COPY constants.py /opt/signalpilot/
 COPY models.py /opt/signalpilot/
 COPY executor.py /opt/signalpilot/
+COPY audit.py /opt/signalpilot/
 COPY sandbox_manager.py /opt/signalpilot/
+COPY sandbox_exec.sh /opt/signalpilot/
+RUN chmod +x /opt/signalpilot/sandbox_exec.sh
+COPY kernel_runner.py /opt/signalpilot/
+COPY kernel_session.py /opt/signalpilot/
+COPY kernel_exec.sh /opt/signalpilot/
+RUN chmod +x /opt/signalpilot/kernel_exec.sh
+COPY session_manager.py /opt/signalpilot/
+COPY sp_helper.py /opt/signalpilot/
 
 WORKDIR /opt/signalpilot
 

@@ -41,6 +41,12 @@ from gateway.store.sandboxes import (
     list_sandboxes,
     upsert_sandbox,
 )
+from gateway.store.sessions import (
+    delete_session,
+    get_session as get_session_info,
+    list_sessions,
+    upsert_session,
+)
 from gateway.store.store import Store
 
 __all__ = [
@@ -76,6 +82,11 @@ __all__ = [
     "get_sandbox",
     "list_sandboxes",
     "upsert_sandbox",
+    # Sessions
+    "delete_session",
+    "get_session_info",
+    "list_sessions",
+    "upsert_session",
     # Local API key
     "get_local_api_key",
 ]

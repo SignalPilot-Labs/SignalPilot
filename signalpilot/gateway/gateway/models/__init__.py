@@ -47,6 +47,13 @@ from .sandboxes import (
     SandboxCreate,
     SandboxInfo,
 )
+from .sessions import (
+    CellResultResponse,
+    SessionCreate,
+    SessionExecuteRequest,
+    SessionHistoryResponse,
+    SessionInfoResponse,
+)
 from .settings import GatewaySettings, SandboxProvider
 
 __all__ = [
@@ -83,4 +90,9 @@ __all__ = [
     "SandboxCreate",
     "SandboxInfo",
     "SandboxProvider",
+    "CellResultResponse",
+    "SessionCreate",
+    "SessionExecuteRequest",
+    "SessionHistoryResponse",
+    "SessionInfoResponse",
 ]

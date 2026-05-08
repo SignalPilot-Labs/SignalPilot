@@ -85,6 +85,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # BaseHTTPMiddleware breaks WebSocket upgrades — skip WS paths
+        if "/kernels/" in request.url.path and request.url.path.endswith("/channels"):
+            return await call_next(request)
+
         total_tracked = len(self._general_hits) + len(self._expensive_hits) + len(self._auth_hits)
         if total_tracked > 100:
             self._cleanup_stale_ips()

@@ -26,6 +26,7 @@ from aiohttp import web
 import audit
 from constants import HOST, MAX_CODE_LENGTH, MAX_TIMEOUT, MAX_VMS, MIN_TIMEOUT, PORT
 from executor import GVisorExecutor
+from session_manager import KernelSessionManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger("sandbox_manager")
 
 executor = GVisorExecutor()
+session_mgr = KernelSessionManager()
 active_sessions: dict[str, str] = {}  # session_token -> vm_id
 
 SANDBOX_AUTH_TOKEN = os.environ.get("SP_SANDBOX_TOKEN", "")
@@ -261,12 +263,6 @@ async def kill_vm_handler(request: web.Request) -> web.Response:
     return web.json_response({"status": "not_found"}, status=404)
 
 
-async def on_shutdown(app: web.Application) -> None:
-    """Clean up all sandbox resources on shutdown."""
-    logger.info("shutting down — cleaning up sandboxes")
-    await executor.cleanup()
-
-
 async def browse_files_handler(request: web.Request) -> web.Response:
     """GET /files — browse host filesystem for local DB files.
 
@@ -325,14 +321,266 @@ async def browse_files_handler(request: web.Request) -> web.Response:
     })
 
 
+# ─── Kernel session endpoints ────────────────────────────────────────────────
+
+
+async def create_session_handler(request: web.Request) -> web.Response:
+    """POST /sessions — create a new kernel session."""
+    if not _check_auth(request):
+        return _auth_denied()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    session_token = body.get("session_token")
+    gateway_url = body.get("gateway_url")
+    session_id = body.get("session_id")
+
+    try:
+        session = await session_mgr.create_session(
+            session_id=session_id,
+            session_token=session_token,
+            gateway_url=gateway_url,
+        )
+    except RuntimeError as e:
+        return web.json_response({"error": str(e)}, status=429)
+
+    return web.json_response({
+        "session_id": session.id,
+        "status": session.status,
+        "created_at": session.created_at,
+    }, status=201)
+
+
+async def execute_session_handler(request: web.Request) -> web.Response:
+    """POST /sessions/{session_id}/execute — execute a cell."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    session = session_mgr.get_session(session_id)
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    code = body.get("code", "")
+    if not code:
+        return web.json_response({"error": "Missing required field: code"}, status=400)
+
+    timeout = min(max(int(body.get("timeout", 30)), MIN_TIMEOUT), MAX_TIMEOUT)
+    cell_id = body.get("cell_id")
+
+    result = await session.execute(code, timeout=timeout, cell_id=cell_id)
+
+    return web.json_response({
+        "success": result.success,
+        "output": result.output,
+        "outputs": result.outputs or [],
+        "error": result.error,
+        "execution_ms": round(result.execution_ms, 2),
+        "execution_count": result.execution_count,
+        "cell_id": result.cell_id,
+        "cell_count": session.cell_count,
+        "session_status": session.status,
+    })
+
+
+async def get_session_handler(request: web.Request) -> web.Response:
+    """GET /sessions/{session_id} — get session info."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    session = session_mgr.get_session(session_id)
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    return web.json_response({
+        "session_id": session.id,
+        "status": session.status,
+        "created_at": session.created_at,
+        "last_active": session.last_active,
+        "cell_count": session.cell_count,
+    })
+
+
+async def session_history_handler(request: web.Request) -> web.Response:
+    """GET /sessions/{session_id}/history — cell execution history."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    session = session_mgr.get_session(session_id)
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    cells = [
+        {
+            "success": c.success,
+            "output": c.output,
+            "outputs": c.outputs or [],
+            "error": c.error,
+            "execution_ms": round(c.execution_ms, 2),
+            "execution_count": c.execution_count,
+            "cell_id": c.cell_id,
+        }
+        for c in session.history
+    ]
+    return web.json_response({"session_id": session_id, "cells": cells})
+
+
+async def delete_session_handler(request: web.Request) -> web.Response:
+    """DELETE /sessions/{session_id} — terminate a session."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    deleted = await session_mgr.delete_session(session_id)
+    if not deleted:
+        return web.json_response({"error": "Session not found"}, status=404)
+    return web.json_response({"status": "deleted"})
+
+
+async def complete_session_handler(request: web.Request) -> web.Response:
+    """POST /sessions/{session_id}/complete — tab completion."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    session = session_mgr.get_session(session_id)
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    code = body.get("code", "")
+    cursor_pos = body.get("cursor_pos", len(code))
+
+    try:
+        result = await session.complete(code, cursor_pos)
+    except Exception:
+        result = {"matches": [], "cursor_start": cursor_pos, "cursor_end": cursor_pos}
+
+    return web.json_response(result)
+
+
+async def inspect_session_handler(request: web.Request) -> web.Response:
+    """POST /sessions/{session_id}/inspect — object inspection."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    session = session_mgr.get_session(session_id)
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    code = body.get("code", "")
+    cursor_pos = body.get("cursor_pos", len(code))
+    detail_level = body.get("detail_level", 0)
+
+    try:
+        result = await session.inspect(code, cursor_pos, detail_level=detail_level)
+    except Exception:
+        result = {"found": False, "data": {}, "metadata": {}}
+
+    return web.json_response(result)
+
+
+async def interrupt_session_handler(request: web.Request) -> web.Response:
+    """POST /sessions/{session_id}/interrupt — interrupt running cell."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+    session = session_mgr.get_session(session_id)
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    await session.interrupt()
+    return web.json_response({"status": "ok"})
+
+
+async def restart_session_handler(request: web.Request) -> web.Response:
+    """POST /sessions/{session_id}/restart — restart a session."""
+    if not _check_auth(request):
+        return _auth_denied()
+    session_id = request.match_info["session_id"]
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    session = await session_mgr.restart_session(
+        session_id=session_id,
+        session_token=body.get("session_token"),
+        gateway_url=body.get("gateway_url"),
+    )
+
+    return web.json_response({
+        "session_id": session.id,
+        "status": session.status,
+    })
+
+
+async def list_sessions_handler(request: web.Request) -> web.Response:
+    """GET /sessions — list active kernel sessions."""
+    if not _check_auth(request):
+        return _auth_denied()
+    sessions = session_mgr.list_sessions()
+    return web.json_response({
+        "sessions": [
+            {
+                "id": s.id,
+                "status": s.status,
+                "created_at": s.created_at,
+                "last_active": s.last_active,
+                "cell_count": s.cell_count,
+            }
+            for s in sessions
+        ]
+    })
+
+
+async def on_startup(app: web.Application) -> None:
+    """Start the session manager's idle reaper."""
+    await session_mgr.start()
+
+
+async def on_shutdown(app: web.Application) -> None:
+    """Clean up all sandbox and session resources on shutdown."""
+    logger.info("shutting down — cleaning up sandboxes and sessions")
+    await executor.cleanup()
+    await session_mgr.cleanup()
+
+
 def create_app() -> web.Application:
     """Create the aiohttp application."""
     app = web.Application()
+    # One-shot execution endpoints
     app.router.add_get("/health", health_handler)
     app.router.add_get("/vms", list_vms_handler)
     app.router.add_post("/execute", execute_handler)
     app.router.add_delete("/vm/{vm_id}", kill_vm_handler)
     app.router.add_get("/files", browse_files_handler)
+    # Kernel session endpoints
+    app.router.add_get("/sessions", list_sessions_handler)
+    app.router.add_post("/sessions", create_session_handler)
+    app.router.add_get("/sessions/{session_id}", get_session_handler)
+    app.router.add_post("/sessions/{session_id}/execute", execute_session_handler)
+    app.router.add_get("/sessions/{session_id}/history", session_history_handler)
+    app.router.add_delete("/sessions/{session_id}", delete_session_handler)
+    app.router.add_post("/sessions/{session_id}/restart", restart_session_handler)
+    app.router.add_post("/sessions/{session_id}/complete", complete_session_handler)
+    app.router.add_post("/sessions/{session_id}/inspect", inspect_session_handler)
+    app.router.add_post("/sessions/{session_id}/interrupt", interrupt_session_handler)
+    app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     return app
 

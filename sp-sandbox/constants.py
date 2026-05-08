@@ -13,6 +13,11 @@ PYTHON_PATH = os.environ.get("SANDBOX_PYTHON", "python3")
 MAX_OUTPUT_BYTES = 1_000_000  # 1 MB stdout cap
 GVISOR_WARNING_PREFIX = "*** Warning:"
 
+# --- Kernel sessions ---
+KERNEL_IDLE_TIMEOUT = int(os.environ.get("SP_KERNEL_IDLE_TIMEOUT", "600"))
+MAX_SESSIONS = int(os.environ.get("SP_MAX_SESSIONS", "10"))
+KERNEL_EXEC_PATH = os.environ.get("KERNEL_EXEC_PATH", "/opt/signalpilot/kernel_exec.sh")
+
 # --- Validation ---
 MAX_CODE_LENGTH = 1_000_000
 MIN_TIMEOUT = 1

@@ -232,5 +232,103 @@ class SandboxClient:
         except Exception:
             return False
 
+    # ─── Kernel session methods ────────────────────────────────────────────
+
+    async def create_kernel_session(
+        self,
+        session_token: str,
+        gateway_url: str | None = None,
+        session_id: str | None = None,
+    ) -> dict:
+        payload: dict = {"session_token": session_token}
+        if gateway_url:
+            payload["gateway_url"] = gateway_url
+        if session_id:
+            payload["session_id"] = session_id
+        resp = await self._client.post("/sessions", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def execute_in_session(
+        self,
+        session_id: str,
+        code: str,
+        timeout: int = 30,
+        cell_id: str | None = None,
+    ) -> dict:
+        payload: dict = {"code": code, "timeout": timeout}
+        if cell_id:
+            payload["cell_id"] = cell_id
+        resp = await self._client.post(
+            f"/sessions/{session_id}/execute",
+            json=payload,
+            timeout=timeout + 10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_kernel_session(self, session_id: str) -> dict:
+        resp = await self._client.get(f"/sessions/{session_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_session_history(self, session_id: str) -> dict:
+        resp = await self._client.get(f"/sessions/{session_id}/history")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def delete_kernel_session(self, session_id: str) -> bool:
+        resp = await self._client.delete(f"/sessions/{session_id}")
+        return resp.status_code == 200
+
+    async def restart_kernel_session(
+        self,
+        session_id: str,
+        session_token: str | None = None,
+        gateway_url: str | None = None,
+    ) -> dict:
+        payload: dict = {}
+        if session_token:
+            payload["session_token"] = session_token
+        if gateway_url:
+            payload["gateway_url"] = gateway_url
+        resp = await self._client.post(
+            f"/sessions/{session_id}/restart",
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def complete_in_session(
+        self, session_id: str, code: str, cursor_pos: int,
+    ) -> dict:
+        resp = await self._client.post(
+            f"/sessions/{session_id}/complete",
+            json={"code": code, "cursor_pos": cursor_pos},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def inspect_in_session(
+        self, session_id: str, code: str, cursor_pos: int, detail_level: int = 0,
+    ) -> dict:
+        resp = await self._client.post(
+            f"/sessions/{session_id}/inspect",
+            json={"code": code, "cursor_pos": cursor_pos, "detail_level": detail_level},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def interrupt_session(self, session_id: str) -> bool:
+        resp = await self._client.post(f"/sessions/{session_id}/interrupt")
+        return resp.status_code == 200
+
+    async def list_kernel_sessions(self) -> list[dict]:
+        resp = await self._client.get("/sessions")
+        resp.raise_for_status()
+        return resp.json().get("sessions", [])
+
     async def close(self):
         await self._client.aclose()

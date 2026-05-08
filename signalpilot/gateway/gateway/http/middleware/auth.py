@@ -43,6 +43,10 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/mcp"):
             return await call_next(request)
 
+        # Jupyter WebSocket channels — BaseHTTPMiddleware breaks WS upgrades
+        if "/kernels/" in request.url.path and request.url.path.endswith("/channels"):
+            return await call_next(request)
+
         from ...store import get_local_api_key
 
         local_key = get_local_api_key()

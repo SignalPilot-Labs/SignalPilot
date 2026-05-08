@@ -18,17 +18,42 @@ RUN ARCH=$(uname -m) && \
 
 RUN mkdir -p /opt/signalpilot && mkdir -p /tmp && chmod 1777 /tmp
 
-# Copy sandbox manager modules
-COPY constants.py /opt/signalpilot/
-COPY models.py /opt/signalpilot/
-COPY executor.py /opt/signalpilot/
-COPY audit.py /opt/signalpilot/
-COPY sandbox_manager.py /opt/signalpilot/
-COPY sandbox_exec.sh /opt/signalpilot/
-RUN sed -i 's/\r$//' /opt/signalpilot/sandbox_exec.sh && chmod +x /opt/signalpilot/sandbox_exec.sh
+# Install the sp SDK package first (cacheable layer)
+COPY packages/sp /tmp/sp-sdk/
+RUN pip3 install --no-cache-dir /tmp/sp-sdk/ && rm -rf /tmp/sp-sdk/
 
-# Install Python deps for sandbox manager + DuckDB for local file queries
-RUN pip3 install --no-cache-dir "aiohttp==3.9.0" duckdb
+# Copy sandbox manager modules
+COPY sp-sandbox/constants.py /opt/signalpilot/
+COPY sp-sandbox/models.py /opt/signalpilot/
+COPY sp-sandbox/executor.py /opt/signalpilot/
+COPY sp-sandbox/audit.py /opt/signalpilot/
+COPY sp-sandbox/sandbox_manager.py /opt/signalpilot/
+COPY sp-sandbox/sandbox_exec.sh /opt/signalpilot/
+RUN sed -i 's/\r$//' /opt/signalpilot/sandbox_exec.sh && chmod +x /opt/signalpilot/sandbox_exec.sh
+COPY sp-sandbox/kernel_runner.py /opt/signalpilot/
+COPY sp-sandbox/kernel_session.py /opt/signalpilot/
+COPY sp-sandbox/kernel_exec.sh /opt/signalpilot/
+RUN sed -i 's/\r$//' /opt/signalpilot/kernel_exec.sh && chmod +x /opt/signalpilot/kernel_exec.sh
+COPY sp-sandbox/session_manager.py /opt/signalpilot/
+COPY sp-sandbox/sp_helper.py /opt/signalpilot/
+
+# Install Python deps: sandbox manager + kernel (ipykernel) + data science libs
+RUN pip3 install --no-cache-dir \
+    "aiohttp==3.9.0" \
+    duckdb \
+    ipykernel \
+    jupyter_client \
+    pandas \
+    matplotlib \
+    seaborn \
+    numpy \
+    scipy
+
+# Pre-configure matplotlib for headless rendering
+ENV MPLBACKEND=agg
+
+# Install ipykernel spec so jupyter_client can launch it
+RUN python3 -m ipykernel install --name python3 --display-name "SignalPilot Python 3"
 
 EXPOSE 8080
 

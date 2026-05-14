@@ -15,10 +15,12 @@ assert type(_mcp).tool is FastMCP.tool, (
 # Side-effect imports: each submodule registers its tools via @audited_tool(mcp).
 # The "as X" form tells ruff these are explicit re-exports (not unused imports).
 from gateway.mcp.tools import connections as connections  # noqa: E402
+from gateway.mcp.tools import dashboards as dashboards  # noqa: E402
 from gateway.mcp.tools import dbt_project as dbt_project  # noqa: E402
 from gateway.mcp.tools import knowledge as knowledge  # noqa: E402
 from gateway.mcp.tools import model_blueprint as model_blueprint  # noqa: E402
 from gateway.mcp.tools import model_verify as model_verify  # noqa: E402
+from gateway.mcp.tools import notebooks as notebooks  # noqa: E402
 from gateway.mcp.tools import projects as projects  # noqa: E402
 from gateway.mcp.tools import query as query  # noqa: E402
 from gateway.mcp.tools import schema as schema  # noqa: E402

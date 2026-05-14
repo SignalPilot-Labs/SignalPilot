@@ -6,6 +6,8 @@ CLAUDE.md
 .env
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
 *.tsbuildinfo
 .next/
 node_modules/
@@ -78,3 +80,9 @@ build/
 .gstack/
 autocode-auth/.next/
 autocode-auth/node_modules/
+
+# Workspaces web
+workspaces/web/.next/
+workspaces/web/node_modules/
+workspaces/web/next-env.d.ts
+workspaces/web/tsconfig.tsbuildinfo

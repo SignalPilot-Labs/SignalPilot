@@ -48,30 +48,11 @@ R3 limits (documented here per spec):
 
 from __future__ import annotations
 
-import asyncio
 import struct
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-
-# ─── Wire-frame size limits (DoS hardening) ──────────────────────────────────
-#
-# The pg-wire length field is a uint32 (max 4 GiB). Without an upper bound,
-# a 5-byte header coerces readexactly() into a multi-GiB allocation. Real
-# libpq StartupMessages are < 10 KiB and real query frames from dbt are well
-# under 1 MiB; these caps are generous and universal (not cloud-gated).
-
-MAX_STARTUP_MESSAGE_LEN = 64 * 1024          # 64 KiB; libpq sends ~few hundred bytes
-MAX_FRONTEND_MESSAGE_LEN = 16 * 1024 * 1024  # 16 MiB; covers large Parse/Bind payloads
-
-# ─── Read timeout (slowloris hardening) ──────────────────────────────────────
-#
-# A connection that writes the frame header but stalls the body holds the
-# connection slot indefinitely. 30 s gives ~4.4 Mbps minimum throughput for
-# a 16 MiB frame — well below any real link. Universal: no env gate.
-
-READ_TIMEOUT_SECONDS = 30.0  # generous: 16 MiB at 30s = 4.4 Mbps min
 
 # ─── OID constants ────────────────────────────────────────────────────────────
 
@@ -107,15 +88,8 @@ class UnsupportedOID:
 
 
 async def read_exact(reader, n: int) -> bytes:
-    """Read exactly n bytes, with a per-read timeout to defeat slowloris."""
-    try:
-        return await asyncio.wait_for(
-            reader.readexactly(n), timeout=READ_TIMEOUT_SECONDS
-        )
-    except TimeoutError as exc:
-        raise ValueError(
-            f"read timed out after {READ_TIMEOUT_SECONDS}s waiting for {n} bytes"
-        ) from exc
+    """Read exactly n bytes from the reader, raising EOFError on premature close."""
+    return await reader.readexactly(n)
 
 
 async def read_startup_message(reader) -> dict[str, str]:
@@ -133,10 +107,6 @@ async def read_startup_message(reader) -> dict[str, str]:
     total_length = struct.unpack("!I", length_bytes)[0]
     if total_length < 8:
         raise ValueError(f"StartupMessage too short: {total_length}")
-    if total_length > MAX_STARTUP_MESSAGE_LEN:
-        raise ValueError(
-            f"StartupMessage too large: {total_length} > {MAX_STARTUP_MESSAGE_LEN}"
-        )
     body = await read_exact(reader, total_length - 4)
     proto_version = struct.unpack("!I", body[:4])[0]
     if proto_version != 0x00030000:
@@ -174,10 +144,6 @@ async def read_frontend_message(reader) -> tuple[str, bytes]:
     length = struct.unpack("!I", length_bytes)[0]
     if length < 4:
         raise ValueError(f"Invalid message length: {length}")
-    if length > MAX_FRONTEND_MESSAGE_LEN:
-        raise ValueError(
-            f"Frontend message too large: {length} > {MAX_FRONTEND_MESSAGE_LEN}"
-        )
     payload = await read_exact(reader, length - 4)
     return msg_type, payload
 
@@ -346,9 +312,6 @@ def _parse_timestamptz_text(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-MAX_NUMERIC_WEIGHT = 1000  # base-10000 limbs; 1000 → 4000-digit magnitude
-
-
 def _parse_numeric_binary(raw: bytes) -> Decimal:
     """Parse Postgres binary NUMERIC into a Python Decimal.
 
@@ -358,12 +321,6 @@ def _parse_numeric_binary(raw: bytes) -> Decimal:
     if len(raw) < 8:
         return Decimal(0)
     ndigits, weight, sign, dscale = struct.unpack("!HhHH", raw[:8])
-    if ndigits > 1000:
-        raise ValueError(f"NUMERIC ndigits {ndigits} exceeds bound (1000)")
-    if weight > MAX_NUMERIC_WEIGHT or weight < -MAX_NUMERIC_WEIGHT:
-        raise ValueError(
-            f"NUMERIC weight {weight} exceeds bound (±{MAX_NUMERIC_WEIGHT})"
-        )
     digits = struct.unpack(f"!{ndigits}H", raw[8:8 + 2 * ndigits])
     # Reconstruct the decimal
     value = Decimal(0)
@@ -426,10 +383,6 @@ def parse_bind_message(payload: bytes) -> tuple[str, str, list[int], list[bytes 
 
 
 __all__ = [
-    "MAX_STARTUP_MESSAGE_LEN",
-    "MAX_FRONTEND_MESSAGE_LEN",
-    "READ_TIMEOUT_SECONDS",
-    "MAX_NUMERIC_WEIGHT",
     "UnsupportedOID",
     "SUPPORTED_OIDS",
     "OID_INT4", "OID_INT8", "OID_TEXT", "OID_VARCHAR",

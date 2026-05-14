@@ -1,0 +1,12 @@
+dbt_learn:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: db
+      port: 5432
+      user: signalpilot
+      password: changeme_dev_only
+      dbname: signalpilot
+      schema: dbt_learn
+      threads: 4

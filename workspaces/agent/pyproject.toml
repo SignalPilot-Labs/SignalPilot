@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workspaces-agent-resume-wait"
+version = "0.1.0"
+description = "SignalPilot approval-marker consumer CLI for sandboxed agents"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+signalpilot-resume-wait = "workspaces_agent_resume_wait.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["workspaces_agent_resume_wait*"]

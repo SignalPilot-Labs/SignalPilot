@@ -201,6 +201,166 @@ export interface ConnectionHealthStats {
   latency_avg_ms: number | null;
 }
 
+export interface NotebookInfo {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  cell_count: number;
+  code_cell_count: number;
+  markdown_cell_count: number;
+  kernel_name: string | null;
+  created_at: number;
+  updated_at: number;
+  analyzed_at: number | null;
+  quality_score: number | null;
+}
+
+export interface NotebookAnalysis {
+  notebook_id: string;
+  cell_counts: Record<string, number>;
+  imports: string[];
+  execution_order_gaps: number[];
+  error_cells: number[];
+  output_summary: Record<string, number>;
+  total_code_lines: number;
+  functions_defined: string[];
+  kernel_info: Record<string, unknown> | null;
+  analyzed_at: number;
+  quality_score?: number | null;
+}
+
+export interface NotebookCell {
+  index: number;
+  cell_type: string;
+  source: string | string[];
+  outputs?: unknown[];
+  execution_count?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ImportCount {
+  name: string;
+  count: number;
+}
+
+export interface NotebookSummary {
+  total_notebooks: number;
+  total_cells: number;
+  total_code_cells: number;
+  total_markdown_cells: number;
+  total_code_lines: number;
+  analyzed_count: number;
+  pending_count: number;
+  notebooks_with_errors: number;
+  total_error_cells: number;
+  top_imports: ImportCount[];
+}
+
+export interface BatchResultItem {
+  notebook_id: string;
+  success: boolean;
+  error: string | null;
+}
+
+export interface BatchResult {
+  results: BatchResultItem[];
+  succeeded: number;
+  failed: number;
+}
+
+export interface NotebookReportCell {
+  index: number;
+  cell_type: string;
+  source_line_count: number;
+  has_output: boolean;
+  execution_count: number | null;
+}
+
+export interface NotebookReportOutputsSummary {
+  total_outputs: number;
+  by_type: Record<string, number>;
+}
+
+export interface NotebookReportMetadata {
+  nbformat: number | null;
+  nbformat_minor: number | null;
+  kernel_info: Record<string, unknown> | null;
+}
+
+export interface NotebookReport {
+  report_version: string;
+  generated_at: number;
+  notebook: NotebookInfo;
+  analysis: NotebookAnalysis | null;
+  cell_details: NotebookReportCell[];
+  outputs_summary: NotebookReportOutputsSummary;
+  metadata: NotebookReportMetadata;
+}
+
+export interface CellDiff {
+  index: number;
+  status: "unchanged" | "modified" | "added" | "removed";
+  left_type: string | null;
+  right_type: string | null;
+  left_source_lines: number | null;
+  right_source_lines: number | null;
+}
+
+export interface ComparisonSummary {
+  added: number;
+  removed: number;
+  modified: number;
+  unchanged: number;
+}
+
+export interface AnalysisComparison {
+  left_imports: string[];
+  right_imports: string[];
+  added_imports: string[];
+  removed_imports: string[];
+  left_functions: string[];
+  right_functions: string[];
+  added_functions: string[];
+  removed_functions: string[];
+  left_error_cells: number[];
+  right_error_cells: number[];
+  left_code_lines: number;
+  right_code_lines: number;
+}
+
+export interface NotebookComparison {
+  left_notebook: NotebookInfo;
+  right_notebook: NotebookInfo;
+  analysis: AnalysisComparison | null;
+  cell_diffs: CellDiff[];
+  summary: ComparisonSummary;
+}
+
+export interface NotebookActivity {
+  id: string;
+  notebook_id: string;
+  action: string;
+  user_id: string | null;
+  details: Record<string, unknown> | null;
+  created_at: number;
+}
+
+export interface NotebookVersionInfo {
+  id: string;
+  notebook_id: string;
+  version_number: number;
+  total_cells: number;
+  code_cells: number;
+  markdown_cells: number;
+  error_cells: number;
+  total_code_lines: number;
+  functions_count: number;
+  imports_count: number;
+  analyzed_at: number;
+  created_at: number;
+}
+
 export interface MetricsSnapshot {
   timestamp: number;
   sandbox_manager: string;

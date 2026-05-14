@@ -51,15 +51,6 @@ from .tokens import RunTokenClaims
 
 logger = logging.getLogger(__name__)
 
-# ─── Per-session resource caps (DoS hardening) ────────────────────────────────
-#
-# Each Parse/Bind adds to per-session dicts. Without caps, an authenticated
-# session can fill ~65k entries (each up to 16 MiB), exhausting gateway memory.
-# 256 is far above any legitimate dbt workload (typically <10 named statements).
-
-MAX_NAMED_STATEMENTS_PER_SESSION = 256
-MAX_NAMED_PORTALS_PER_SESSION = 256
-
 # Sent at the start of each extended query cycle
 _PARSE_COMPLETE = b"1" + b"\x00\x00\x00\x04"
 _BIND_COMPLETE = b"2" + b"\x00\x00\x00\x04"
@@ -143,50 +134,28 @@ class DbtProxySession:
                 logger.info("dbt_proxy connection closed run_id=%s: %s", self._claims.run_id, exc)
                 break
 
-            try:
-                if msg_type == "Q":
-                    await self._handle_simple_query(payload)
-                elif msg_type == "P":
-                    await self._handle_parse(payload)
-                elif msg_type == "B":
-                    await self._handle_bind(payload)
-                elif msg_type == "D":
-                    await self._handle_describe(payload)
-                elif msg_type == "E":
-                    await self._handle_execute(payload)
-                elif msg_type == "S":
-                    await self._handle_sync()
-                elif msg_type == "X":
-                    break
-                else:
-                    self._writer.write(
-                        write_error_response(
-                            f"Unsupported message type: {msg_type!r}",
-                            sqlstate="0A000",
-                        )
+            if msg_type == "Q":
+                await self._handle_simple_query(payload)
+            elif msg_type == "P":
+                await self._handle_parse(payload)
+            elif msg_type == "B":
+                await self._handle_bind(payload)
+            elif msg_type == "D":
+                await self._handle_describe(payload)
+            elif msg_type == "E":
+                await self._handle_execute(payload)
+            elif msg_type == "S":
+                await self._handle_sync()
+            elif msg_type == "X":
+                break
+            else:
+                self._writer.write(
+                    write_error_response(
+                        f"Unsupported message type: {msg_type!r}",
+                        sqlstate="0A000",
                     )
-                    await self._writer.drain()
-            except ValueError as exc:
-                # Safety net: any ValueError that escapes a handler (e.g.
-                # UnicodeDecodeError from malformed portal/stmt UTF-8 in
-                # parse_bind_message, or _format_param rejecting NaN/Inf/NUL
-                # after parse_bind_value succeeds) is caught here instead of
-                # propagating to server.py and closing without an ErrorResponse.
-                # The per-handler try/except in _handle_bind (SQLSTATE 22P03)
-                # still fires for parse_bind_value errors; this catch is the
-                # loop-level safety net for any remaining paths.
-                # Programmer errors (TypeError, AttributeError) are NOT caught —
-                # they still escape and close the connection as before.
-                logger.warning(
-                    "dbt_proxy handler ValueError run_id=%s msg=%r exc=%r",
-                    self._claims.run_id,
-                    msg_type,
-                    exc,
                 )
-                self._writer.write(write_error_response(str(exc), sqlstate="22P03"))
                 await self._writer.drain()
-                # Continue the loop — Postgres protocol allows error-then-Sync
-                # recovery. The client can send Sync and resume.
 
         self._writer.close()
 
@@ -198,21 +167,6 @@ class DbtProxySession:
 
     async def _handle_parse(self, payload: bytes) -> None:
         stmt_name, query, oids = parse_parse_message(payload)
-        # Reject when adding a new key would exceed the cap. Re-Parse of an
-        # existing name (overwrite) is allowed without counting against the cap
-        # so legitimate clients that reuse names keep working.
-        if (
-            stmt_name not in self._named_stmts
-            and len(self._named_stmts) >= MAX_NAMED_STATEMENTS_PER_SESSION
-        ):
-            self._writer.write(
-                write_error_response(
-                    f"too many prepared statements (max {MAX_NAMED_STATEMENTS_PER_SESSION})",
-                    sqlstate="53000",
-                )
-            )
-            await self._writer.drain()
-            return
         self._named_stmts[stmt_name] = (query, oids)
         self._writer.write(_PARSE_COMPLETE)
         await self._writer.drain()
@@ -241,14 +195,7 @@ class DbtProxySession:
             if raw is None:
                 params.append(None)
                 continue
-            try:
-                parsed = parse_bind_value(raw, oid, _fmt(i))
-            except ValueError as exc:
-                self._writer.write(
-                    write_error_response(str(exc), sqlstate="22P03")
-                )
-                await self._writer.drain()
-                return
+            parsed = parse_bind_value(raw, oid, _fmt(i))
             if isinstance(parsed, UnsupportedOID):
                 self._writer.write(
                     write_error_response(
@@ -259,21 +206,6 @@ class DbtProxySession:
                 await self._writer.drain()
                 return
             params.append(parsed)
-
-        # Cap check before _substitute_params — reject cheaply before non-trivial work.
-        # Re-Bind of an existing portal name (overwrite) is allowed without counting.
-        if (
-            portal not in self._named_portals
-            and len(self._named_portals) >= MAX_NAMED_PORTALS_PER_SESSION
-        ):
-            self._writer.write(
-                write_error_response(
-                    f"too many open portals (max {MAX_NAMED_PORTALS_PER_SESSION})",
-                    sqlstate="53000",
-                )
-            )
-            await self._writer.drain()
-            return
 
         resolved_sql = _substitute_params(query, params)
         self._named_portals[portal] = resolved_sql

@@ -16,6 +16,7 @@ from .health import router as health_router
 from .keys import router as keys_router
 from .knowledge import router as knowledge_router
 from .metrics import router as metrics_router
+from .notebooks import router as notebooks_router
 from .projects import router as projects_router
 from .query import router as query_router
 from .sandboxes import router as sandboxes_router
@@ -36,6 +37,7 @@ def register_routers(app: FastAPI) -> None:
         app.include_router(sandboxes_router)
         app.include_router(projects_router)
         app.include_router(files_router)
+        app.include_router(notebooks_router)
     else:
         logger.info("Cloud mode: skipping registration of files, projects, sandboxes routers")
     app.include_router(query_router)

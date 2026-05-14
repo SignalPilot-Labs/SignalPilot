@@ -366,3 +366,65 @@ class GatewayKnowledgeEdit(GatewayBase):
         Index("idx_knowledge_edits_doc", "doc_id", "edited_at"),
         Index("idx_knowledge_edits_org", "org_id"),
     )
+
+
+class GatewayNotebookActivity(GatewayBase):
+    __tablename__ = "gateway_notebook_activities"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    notebook_id: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("ix_gw_nb_activity_org_nb_ts", "org_id", "notebook_id", "created_at"),)
+
+
+class GatewayNotebookVersion(GatewayBase):
+    __tablename__ = "gateway_notebook_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    notebook_id: Mapped[str] = mapped_column(String, nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_cells: Mapped[int] = mapped_column(Integer, default=0)
+    code_cells: Mapped[int] = mapped_column(Integer, default=0)
+    markdown_cells: Mapped[int] = mapped_column(Integer, default=0)
+    error_cells: Mapped[int] = mapped_column(Integer, default=0)
+    total_code_lines: Mapped[int] = mapped_column(Integer, default=0)
+    functions_count: Mapped[int] = mapped_column(Integer, default=0)
+    imports_count: Mapped[int] = mapped_column(Integer, default=0)
+    analyzed_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_nb_ver_org_nb", "org_id", "notebook_id", "version_number"),
+        UniqueConstraint("org_id", "notebook_id", "version_number", name="uq_gw_nb_ver_org_nb_num"),
+    )
+
+
+class GatewayNotebook(GatewayBase):
+    __tablename__ = "gateway_notebooks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[list | None] = mapped_column(JSON)
+    filename: Mapped[str | None] = mapped_column(String(500))
+    cell_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    code_cell_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    markdown_cell_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    kernel_name: Mapped[str | None] = mapped_column(String(100))
+    analysis_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    analyzed_at: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_gw_nb_org_name"),
+        Index("ix_gw_nb_org_id", "org_id"),
+    )

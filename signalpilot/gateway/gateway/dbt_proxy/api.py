@@ -130,7 +130,7 @@ async def mint_run_token(
         )
 
     expires_at_str = datetime.fromtimestamp(claims.expires_at, tz=UTC).isoformat()
-    logger.info("dbt_proxy mint run_id=%s", body.run_id)
+    logger.info("dbt_proxy mint run_id=%s org=%s connector=%s", body.run_id, org_id, body.connector_name)
     return MintResponse(
         token=token_hex,
         host_port=config.sp_dbt_proxy_port,

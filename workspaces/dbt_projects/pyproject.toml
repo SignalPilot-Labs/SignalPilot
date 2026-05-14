@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "workspaces-dbt-projects"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "sqlalchemy>=2.0",
+    "httpx",
+    "gitpython",
+]

@@ -1,0 +1,131 @@
+# Workspaces Sandbox — gVisor execution environment
+#
+# All code execution happens here: Claude SDK sessions, dbt runs, MCP tools.
+# Build context = repo root (needed for plugin/ and sandbox/ paths).
+#
+# Versions pinned below. Defaults are fallbacks for standalone docker build.
+
+ARG PYTHON_VERSION=3.12
+ARG NODE_VERSION=22
+ARG GVISOR_VERSION=20260323.0
+ARG UV_VERSION=0.11
+
+FROM docker.io/astral/uv:${UV_VERSION} AS uv
+FROM python:${PYTHON_VERSION}-slim
+
+# uv for fast Python installs
+COPY --from=uv /uv /usr/local/bin/uv
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG GVISOR_VERSION
+ARG NODE_VERSION
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    jq \
+    rsync \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install gVisor (runsc) — pinned version, auto-detect architecture
+RUN ARCH=$(uname -m) && \
+    curl -fsSL "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}/runsc" \
+    -o /usr/local/bin/runsc && \
+    chmod +x /usr/local/bin/runsc
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (required for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Frontend dev tools
+RUN npm install -g \
+    typescript \
+    eslint \
+    prettier
+
+# Docker CLI (inert without socket mount)
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg \
+    | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+    > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/workspaces
+
+# Create non-root user BEFORE copying app files (avoids slow chown -R)
+RUN useradd -m agentuser \
+    && mkdir -p /home/agentuser/.claude /home/agentuser/repo /home/agentuser/workdir /home/agentuser/.dbt \
+    && echo '{}' > /home/agentuser/.claude.json \
+    && chown -R agentuser:agentuser /home/agentuser
+
+# ── Python dependencies (layer-cached separately from source) ──
+
+# Sandbox server deps
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/pyproject.toml /opt/workspaces/pyproject.toml
+RUN uv pip install --system --no-cache "/opt/workspaces/[dev]"
+
+# dbt + connectors
+RUN uv pip install --system --no-cache \
+    "dbt-core>=1.9.0,<2" \
+    "dbt-postgres>=1.9.0,<2"
+
+# Pre-download Fivetran dbt packages (SQL packages, not pip)
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/dbt_packages.yml /tmp/fivetran/packages.yml
+RUN printf 'name: fivetran_deps\nversion: "1.0.0"\nprofile: default\n' > /tmp/fivetran/dbt_project.yml \
+    && cd /tmp/fivetran \
+    && dbt deps --no-version-check \
+    && mv dbt_packages /opt/workspaces/fivetran_packages \
+    && rm -rf /tmp/fivetran
+
+# ── Application code ──
+
+# Config (for sandbox config loading)
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/config/ /opt/workspaces/config/
+
+# Sandbox server source
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/server.py /opt/workspaces/server.py
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/models.py /opt/workspaces/models.py
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/constants.py /opt/workspaces/constants.py
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/__init__.py /opt/workspaces/__init__.py
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/handlers/ /opt/workspaces/handlers/
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/session/ /opt/workspaces/session/
+
+# Skills — baked from plugin/ at repo root
+COPY --chown=agentuser:agentuser plugin/ /opt/workspaces/.claude/skills/
+
+# Hardcoded dbt project for testing
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/dbt_project/ /home/agentuser/workdir/
+COPY --chown=agentuser:agentuser workspaces/agent/sandbox/dbt_project/profiles.yml /home/agentuser/.dbt/profiles.yml
+
+RUN chown agentuser:agentuser /opt/workspaces
+
+USER agentuser
+
+# Git config
+RUN git config --global user.name "SignalPilot Bot" \
+    && git config --global user.email "signalpilot-bot@noreply.github.com" \
+    && git config --global --add safe.directory '*'
+
+WORKDIR /opt/workspaces
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=3s \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["python3", "server.py"]

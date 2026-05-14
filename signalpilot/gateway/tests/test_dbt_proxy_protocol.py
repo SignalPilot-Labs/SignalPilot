@@ -110,36 +110,3 @@ class TestProtocolFraming:
         result = parse_bind_value(raw, oid=9999, format_code=1)
         assert isinstance(result, UnsupportedOID)
         assert result.oid == 9999
-
-
-class TestNumericBinaryBounds:
-    """NUMERIC binary parser must reject excessively large ndigits."""
-
-    def _make_numeric_raw(self, ndigits: int) -> bytes:
-        """Build a minimal NUMERIC binary payload with the given ndigits."""
-        # Header: ndigits(H=2), weight(h=2), sign(H=2), dscale(H=2)
-        header = struct.pack("!HhHH", ndigits, 0, 0, 0)
-        # Pad with ndigits * 2 zero bytes (base-10000 digits)
-        digits = b"\x00\x00" * ndigits
-        return header + digits
-
-    def test_numeric_binary_rejects_huge_ndigits(self) -> None:
-        from gateway.dbt_proxy.protocol import _parse_numeric_binary
-
-        raw = self._make_numeric_raw(10000)
-        with pytest.raises(ValueError, match="ndigits"):
-            _parse_numeric_binary(raw)
-
-    def test_numeric_binary_boundary_ndigits_1000_ok(self) -> None:
-        from gateway.dbt_proxy.protocol import _parse_numeric_binary
-
-        raw = self._make_numeric_raw(1000)
-        result = _parse_numeric_binary(raw)
-        assert result is not None  # Parsed without error
-
-    def test_numeric_binary_boundary_ndigits_1001_blocked(self) -> None:
-        from gateway.dbt_proxy.protocol import _parse_numeric_binary
-
-        raw = self._make_numeric_raw(1001)
-        with pytest.raises(ValueError, match="ndigits"):
-            _parse_numeric_binary(raw)

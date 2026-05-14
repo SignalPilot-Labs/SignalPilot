@@ -70,7 +70,7 @@ export default function SignUpPage() {
   // ── Guard 1: Hash route tasks → redirect to dashboard ──────────────────
   useEffect(() => {
     if (typeof window !== "undefined" && window.location.hash.includes("tasks/")) {
-      router.push("/dashboard");
+      router.push("/general");
     }
   }, [router]);
 
@@ -81,7 +81,7 @@ export default function SignUpPage() {
     if (!isLoaded) return;
     if (isSignedIn) {
       setRedirecting(true);
-      router.push("/dashboard");
+      router.push("/general");
     }
   }, [isLoaded, isSignedIn, router]);
 
@@ -95,7 +95,7 @@ export default function SignUpPage() {
       router.push(`/sign-in?__clerk_ticket=${ticket}`);
     } else if (clerkStatus === "complete") {
       setRedirecting(true);
-      router.push("/dashboard");
+      router.push("/general");
     }
   }, [isLoaded, isSignedIn, clerkStatus, ticket, router]);
 
@@ -112,7 +112,7 @@ export default function SignUpPage() {
       .then(async (result) => {
         if (result.status === "complete" || result.createdSessionId) {
           await setActive!({ session: result.createdSessionId });
-          router.push("/dashboard");
+          router.push("/general");
         } else {
           // Needs more info (e.g. password)
           if (result.emailAddress) setEmail(result.emailAddress);
@@ -154,7 +154,7 @@ export default function SignUpPage() {
       await signUp!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sign-in/sso-callback",
-        redirectUrlComplete: "/dashboard",
+        redirectUrlComplete: "/general",
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Social sign-up failed");
@@ -193,7 +193,7 @@ export default function SignUpPage() {
       const result = await signUp!.attemptEmailAddressVerification({ code });
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
-        router.push("/dashboard");
+        router.push("/general");
       } else {
         setError("Verification incomplete — please try again");
       }

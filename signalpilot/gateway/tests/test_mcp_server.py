@@ -180,6 +180,20 @@ class TestFixNondeterminismHazardsOrgScoping:
             )
 
 
+class TestStdioRefusesCloudMode:
+    def test_stdio_refuses_cloud_mode(self, monkeypatch) -> None:
+        """main() must raise SystemExit when SP_DEPLOYMENT_MODE=cloud and transport is stdio."""
+        from unittest.mock import patch
+
+        # Patch is_cloud_mode at the server module to avoid triggering
+        # the cloud auth import-time guard (which requires CLERK_PUBLISHABLE_KEY).
+        with patch("gateway.mcp.server.is_cloud_mode", return_value=True):
+            with patch.dict("os.environ", {"SP_MCP_TRANSPORT": "stdio"}):
+                from gateway.mcp.server import main
+                with pytest.raises(SystemExit, match="Refusing to start MCP stdio transport in cloud mode"):
+                    main()
+
+
 class TestMCPProjectToolsOrgScoping:
     """MCP project tools use Store methods instead of legacy project_store."""
 

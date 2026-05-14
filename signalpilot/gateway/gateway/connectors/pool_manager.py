@@ -259,30 +259,9 @@ class PoolManager:
                 if db_type == "duckdb" and connection_string and not connection_string.startswith("md:"):
                     raise RuntimeError("Only MotherDuck (md:) DuckDB connections are available in cloud mode")
 
-            # Use sandboxed connectors for file-based databases only when sandbox is enabled
-            # (i.e., running inside Docker with the sandbox service).
-            _sandbox_on = os.environ.get("SP_SANDBOX_ENABLED", "false").lower() == "true"
-            if (
-                _sandbox_on
-                and db_type == "duckdb"
-                and connection_string
-                and not connection_string.startswith("md:")
-                and connection_string != ":memory:"
-            ):
-                from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
-
-                connector = SandboxedDuckDBConnector()
-            elif (
-                _sandbox_on
-                and db_type == "sqlite"
-                and connection_string
-                and connection_string != ":memory:"
-            ):
-                from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
-
-                connector = SandboxedSQLiteConnector()
-            else:
-                connector = get_connector(db_type)
+            # Use the registry to get the right connector — it respects
+            # SP_SANDBOX_ENABLED and SP_DISABLE_SANDBOX for file-based DBs.
+            connector = get_connector(db_type)
 
             # Pass credential extras to connector via standardized interface.
             # Each connector's set_credential_extras() extracts what it needs

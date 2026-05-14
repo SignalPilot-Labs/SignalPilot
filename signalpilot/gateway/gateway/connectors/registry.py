@@ -20,9 +20,11 @@ from .drivers.trino import TrinoConnector
 
 # Use sandboxed connectors only when running inside Docker with the sandbox service.
 # SP_SANDBOX_ENABLED=false (or unset) skips sandboxing so file-based DBs open directly.
+# SP_DISABLE_SANDBOX=1 is also supported as a legacy/benchmark override.
 _is_local = os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud"
 _sandbox_enabled = os.environ.get("SP_SANDBOX_ENABLED", "false").lower() == "true"
-if _is_local and _sandbox_enabled:
+_sandbox_disabled = os.environ.get("SP_DISABLE_SANDBOX", "") == "1"
+if _is_local and _sandbox_enabled and not _sandbox_disabled:
     from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
     from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
 

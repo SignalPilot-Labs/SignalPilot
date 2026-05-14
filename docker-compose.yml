@@ -4,6 +4,10 @@
 #
 # Starts: Postgres + Gateway + Web + Sandbox
 # No external dependencies, no .env required.
+#
+# HOST_DATA_DIR defaults to ~ (home directory) for the sandbox host-data mount.
+# For production or shared environments, set HOST_DATA_DIR to a narrower path
+# such as ./host-data to avoid exposing the entire home directory read-only.
 
 name: signalpilot
 
@@ -15,7 +19,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
       POSTGRES_DB: ${POSTGRES_DB:-signalpilot}
     ports:
-      - "5601:5432"
+      - "127.0.0.1:5601:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -86,6 +90,36 @@ services:
       SP_MAX_VMS: "10"
     volumes:
       - ${HOST_DATA_DIR:-~}:/host-data:ro
+    restart: unless-stopped
+
+  workspaces-api:
+    build:
+      context: ./workspaces/api
+      dockerfile: Dockerfile
+    ports:
+      - "3400:3400"
+    environment:
+      WORKSPACES_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
+      SP_DEPLOYMENT_MODE: ${SP_DEPLOYMENT_MODE:-local}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      SP_GATEWAY_URL: http://gateway:3300
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  workspaces-web:
+    build:
+      context: .
+      dockerfile: workspaces/web/Dockerfile
+    ports:
+      - "3500:3500"
+    environment:
+      WORKSPACES_API_URL: http://workspaces-api:3400
+    volumes:
+      - signalpilot-shared:/shared:ro
+    depends_on:
+      - workspaces-api
     restart: unless-stopped
 
 volumes:

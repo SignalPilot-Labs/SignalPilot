@@ -1,7 +1,5 @@
 """Model verification tools: check_model_schema, analyze_grain, validate_model_output, etc."""
 
-from __future__ import annotations
-
 import re
 
 from gateway.errors.mcp import sanitize_mcp_error

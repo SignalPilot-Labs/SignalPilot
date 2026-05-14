@@ -1,7 +1,5 @@
 """Schema dates tool: get_date_boundaries (tool 3)."""
 
-from __future__ import annotations
-
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool

@@ -28,6 +28,9 @@ dependencies = [
     "pymssql>=2.3.0",
     "psycopg2-binary>=2.9.0",
     "sshtunnel>=0.4.0",
+    "python-dotenv>=1.0.0",
+    # File-based connectors (installed in Dockerfile, needed for local dev without sandbox)
+    "duckdb>=1.0.0",
 ]
 
 [project.optional-dependencies]

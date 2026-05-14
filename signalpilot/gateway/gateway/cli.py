@@ -1,9 +1,15 @@
 """SignalPilot CLI — sp command."""
 
 import os
+from pathlib import Path
 
 import typer
 import uvicorn
+from dotenv import load_dotenv
+
+_env_local = Path.cwd() / ".env.local"
+_env = Path.cwd() / ".env"
+load_dotenv(_env_local if _env_local.exists() else _env, override=False)
 
 app = typer.Typer(name="sp", help="SignalPilot — governed sandbox for AI database access")
 
@@ -16,7 +22,7 @@ def serve(
 ):
     """Start the SignalPilot gateway server."""
     typer.echo(f"Starting SignalPilot gateway on {host}:{port}")
-    uvicorn.run(
+    config = uvicorn.Config(
         "gateway.main:app",
         host=host,
         port=port,
@@ -24,6 +30,9 @@ def serve(
         log_level="info",
         server_header=False,
     )
+    server = uvicorn.Server(config)
+    server.force_exit = True
+    server.run()
 
 
 @app.command()

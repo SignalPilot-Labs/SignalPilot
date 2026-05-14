@@ -1,7 +1,5 @@
 """Schema exploration tool: explore_table (tool 6)."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_proxy_response

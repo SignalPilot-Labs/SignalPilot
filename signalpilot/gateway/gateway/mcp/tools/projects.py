@@ -1,7 +1,5 @@
 """Project management tools: list_projects, get_project."""
 
-from __future__ import annotations
-
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session

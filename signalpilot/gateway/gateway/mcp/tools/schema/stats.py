@@ -1,7 +1,5 @@
 """Schema statistics tool: schema_statistics (tool 12)."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response

@@ -49,7 +49,9 @@ function applySecurityHeaders(
   // is generated in middleware but Next.js renders inline scripts at build time).
   // 'unsafe-eval' is REMOVED — this is the main XSS hardening win, blocking
   // eval(), new Function(), setTimeout(string), etc.
-  let scriptSrc = "'self' 'unsafe-inline'";
+  let scriptSrc = process.env.NODE_ENV === "development"
+    ? "'self' 'unsafe-inline' 'unsafe-eval'"
+    : "'self' 'unsafe-inline'";
   let imgSrc = "'self' data: blob:";
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 

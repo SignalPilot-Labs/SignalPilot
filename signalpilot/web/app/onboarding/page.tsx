@@ -41,7 +41,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (isLoaded && !isCloudMode) {
-      router.push("/general");
+      router.push("/dashboard");
     }
   }, [isLoaded, isCloudMode, router]);
 

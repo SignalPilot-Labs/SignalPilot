@@ -1,9 +1,0 @@
-__pycache__/
-.venv/
-node_modules/
-.next/
-*.duckdb
-*.sqlite
-target/
-dbt_packages/
-.DS_Store

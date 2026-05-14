@@ -567,102 +567,33 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
-// Notebooks
-export const getNotebooks = (limit = 50, offset = 0, sortBy?: string, sortDir?: string, status?: string) => {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (sortBy && sortBy !== "updated_at") params.set("sort_by", sortBy);
-  if (sortDir && sortDir !== "desc") params.set("sort_dir", sortDir);
-  if (status && status !== "all") params.set("status", status);
-  return request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks?${params.toString()}`);
+// Knowledge Base
+import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+
+export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
+  const qs = params ? new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][]
+  ).toString() : "";
+  return request<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`);
 };
-
-export const getNotebook = (id: string) =>
-  request<import("./types").NotebookInfo>(`/api/notebooks/${id}`);
-
-export const uploadNotebook = (payload: { name: string; content: string; description: string; tags: string[] }) =>
-  request<import("./types").NotebookInfo>("/api/notebooks", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-export const getNotebookCells = (id: string, cellType?: string) => {
-  const qs = cellType ? `?cell_type=${encodeURIComponent(cellType)}` : "";
-  return request<import("./types").NotebookCell[]>(`/api/notebooks/${id}/cells${qs}`);
-};
-
-export const getNotebookAnalysis = (id: string) =>
-  request<import("./types").NotebookAnalysis>(`/api/notebooks/${id}/analysis`);
-
-export const analyzeNotebook = (id: string) =>
-  request<import("./types").NotebookAnalysis>(`/api/notebooks/${id}/analyze`, { method: "POST" });
-
-export const deleteNotebook = (id: string) =>
-  request<void>(`/api/notebooks/${id}`, { method: "DELETE" });
-
-export const updateNotebook = (id: string, payload: { name?: string; description?: string; tags?: string[] }) =>
-  request<import("./types").NotebookInfo>(`/api/notebooks/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
-
-export const searchNotebooks = (query: string, limit = 50, offset = 0, sortBy?: string, sortDir?: string, status?: string) => {
-  const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) });
-  if (sortBy && sortBy !== "updated_at") params.set("sort_by", sortBy);
-  if (sortDir && sortDir !== "desc") params.set("sort_dir", sortDir);
-  if (status && status !== "all") params.set("status", status);
-  return request<{ items: import("./types").NotebookInfo[]; total: number }>(`/api/notebooks/search?${params.toString()}`);
-};
-
-export function getNotebookDownloadUrl(id: string): string {
-  return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/download`;
-}
-
-export function getNotebookReportUrl(id: string): string {
-  return `${GATEWAY_URL}/api/notebooks/${encodeURIComponent(id)}/report`;
-}
-
-export const getNotebookReport = (id: string) =>
-  request<import("./types").NotebookReport>(`/api/notebooks/${encodeURIComponent(id)}/report`);
-
-export const getNotebooksSummary = () =>
-  request<import("./types").NotebookSummary>("/api/notebooks/summary");
-
-export const batchAnalyzeNotebooks = (notebookIds: string[]) =>
-  request<import("./types").BatchResult>("/api/notebooks/batch/analyze", {
-    method: "POST",
-    body: JSON.stringify({ notebook_ids: notebookIds }),
-  });
-
-export const batchDeleteNotebooks = (notebookIds: string[]) =>
-  request<import("./types").BatchResult>("/api/notebooks/batch/delete", {
-    method: "POST",
-    body: JSON.stringify({ notebook_ids: notebookIds }),
-  });
-
-export const getNotebookComparison = (leftId: string, rightId: string) =>
-  request<import("./types").NotebookComparison>(
-    `/api/notebooks/${encodeURIComponent(leftId)}/compare/${encodeURIComponent(rightId)}`
-  );
-
-export const getNotebookActivities = (
-  id: string,
-  limit = 50,
-  offset = 0,
-  action?: string,
-) => {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (action) params.set("action", action);
-  return request<{ items: import("./types").NotebookActivity[]; total: number }>(
-    `/api/notebooks/${encodeURIComponent(id)}/activities?${params.toString()}`
-  );
-};
-
-export const getNotebookVersions = (id: string, limit = 50, offset = 0) => {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  return request<{ items: import("./types").NotebookVersionInfo[]; total: number }>(
-    `/api/notebooks/${encodeURIComponent(id)}/versions?${params.toString()}`
-  );
-};
+export const getKnowledgeUsage = () => request<KnowledgeUsage>("/api/knowledge/usage");
+export const getKnowledgeDoc = (id: string) => request<KnowledgeDoc>(`/api/knowledge/${id}`);
+export const createKnowledgeDoc = (payload: {
+  scope: KnowledgeDoc["scope"];
+  scope_ref: string | null;
+  category: KnowledgeDoc["category"];
+  title: string;
+  body: string;
+  status?: KnowledgeDoc["status"];
+}) => request<KnowledgeDoc>("/api/knowledge", { method: "POST", body: JSON.stringify(payload) });
+export const updateKnowledgeDoc = (id: string, body: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}`, { method: "PUT", body: JSON.stringify({ body }) });
+export const archiveKnowledgeDoc = (id: string) =>
+  request<void>(`/api/knowledge/${id}`, { method: "DELETE" });
+export const approveKnowledgeDoc = (id: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}/approve`, { method: "POST" });
+export const listKnowledgeEdits = (id: string, limit = 20) =>
+  request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
 
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {

@@ -71,3 +71,27 @@ class TestDbtValidation:
     def test_create_extension_blocked(self) -> None:
         result = validate_dbt_statement("CREATE EXTENSION pg_stat_statements", claims=_claims())
         assert result.blocked
+
+    def test_prefix_block_after_semicolon_with_tab(self) -> None:
+        result = validate_dbt_statement("SELECT 1;\tCOPY foo FROM PROGRAM 'evil'", claims=_claims())
+        assert result.blocked
+
+    def test_prefix_does_not_block_identifier_with_prefix(self) -> None:
+        result = validate_dbt_statement("BEGIN; double_thing()", claims=_claims())
+        assert not result.blocked
+
+    def test_current_setting_search_path_allowed(self) -> None:
+        result = validate_dbt_statement("SELECT current_setting('search_path')", claims=_claims())
+        assert not result.blocked
+
+    def test_current_setting_ssl_cert_blocked(self) -> None:
+        result = validate_dbt_statement("SELECT current_setting('ssl_cert_file')", claims=_claims())
+        assert result.blocked
+
+    def test_current_setting_non_literal_blocked(self) -> None:
+        result = validate_dbt_statement("SELECT current_setting(my_var)", claims=_claims())
+        assert result.blocked
+
+    def test_set_config_ssl_blocked(self) -> None:
+        result = validate_dbt_statement("SELECT set_config('ssl_cert_file', 'x', false)", claims=_claims())
+        assert result.blocked

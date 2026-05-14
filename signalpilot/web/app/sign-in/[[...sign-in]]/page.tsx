@@ -74,7 +74,7 @@ export default function SignInPage() {
       if (!orgId) {
         window.location.href = "/onboarding";
       } else {
-        window.location.href = "/general";
+        window.location.href = "/dashboard";
       }
       return;
     }
@@ -110,7 +110,7 @@ export default function SignInPage() {
       await signIn!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sign-in/sso-callback",
-        redirectUrlComplete: "/general",
+        redirectUrlComplete: "/dashboard",
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Social sign-in failed";
@@ -172,7 +172,7 @@ export default function SignInPage() {
 
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
-        router.push("/general");
+        router.push("/dashboard");
       } else if (result.status === "needs_second_factor") {
         setStep("totp");
       } else {
@@ -200,7 +200,7 @@ export default function SignInPage() {
 
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
-        router.push("/general");
+        router.push("/dashboard");
       } else {
         setError("Verification failed");
       }
@@ -226,7 +226,7 @@ export default function SignInPage() {
 
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
-        window.location.href = "/general";
+        window.location.href = "/dashboard";
       } else {
         setError("Verification failed");
       }

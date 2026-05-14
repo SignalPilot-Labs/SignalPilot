@@ -70,7 +70,7 @@ export function CommandPalette() {
 
   const commands: CommandItem[] = useMemo(() => [
     // Navigation
-    { id: "nav-general", label: "general", description: "overview and metrics", shortcut: "^1", action: () => router.push("/general"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-dashboard", label: "dashboard", description: "overview and metrics", shortcut: "^1", action: () => router.push("/dashboard"), icon: <IconNav />, category: "navigate" },
     { id: "nav-query", label: "query explorer", description: "governed sql queries", shortcut: "^2", action: () => router.push("/query"), icon: <IconNav />, category: "navigate" },
     { id: "nav-schema", label: "schema explorer", description: "browse tables and columns", shortcut: "^3", action: () => router.push("/schema"), icon: <IconNav />, category: "navigate" },
     { id: "nav-projects", label: "projects", description: "dbt project management", shortcut: "^4", action: () => router.push("/projects"), icon: <IconNav />, category: "navigate" },

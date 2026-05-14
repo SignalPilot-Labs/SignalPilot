@@ -550,14 +550,14 @@ function DashboardContent() {
   return (
     <div className="p-8 max-w-[1400px] animate-fade-in">
       <PageHeader
-        title="general"
+        title="dashboard"
         subtitle="live overview"
         description="signalpilot gateway status and metrics"
       />
 
       {/* ── System status bar ── */}
       <TerminalBar
-        path="general --watch"
+        path="dashboard --watch"
         status={
           <StatusDot
             status={metrics?.sandbox_health === "healthy" && metrics?.sandbox_available ? "healthy" : metrics ? "error" : "unknown"}

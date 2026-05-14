@@ -69,9 +69,9 @@ class DbtProxyServer:
             return
 
         if not config.sp_gateway_run_token_secret:
-            logger.error(
-                "dbt_proxy STARTUP ABORTED: SP_GATEWAY_RUN_TOKEN_SECRET is not set. "
-                "The TCP listener will NOT bind. Set the secret to enable the proxy."
+            logger.info(
+                "dbt_proxy: SP_GATEWAY_RUN_TOKEN_SECRET not set — proxy disabled. "
+                "Set the secret to enable the dbt proxy."
             )
             yield _DisabledProxyServer(config)  # type: ignore[misc]
             return

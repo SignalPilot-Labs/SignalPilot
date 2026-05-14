@@ -32,7 +32,10 @@ def serve(
     )
     server = uvicorn.Server(config)
     server.force_exit = True
-    server.run()
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        os._exit(0)
 
 
 @app.command()

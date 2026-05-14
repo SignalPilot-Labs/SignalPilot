@@ -5,8 +5,6 @@ pattern reading, and status/flag column discovery into one deterministic output.
 Replaces the non-deterministic researcher subagent with a reproducible tool call.
 """
 
-from __future__ import annotations
-
 import os
 import re
 from pathlib import Path

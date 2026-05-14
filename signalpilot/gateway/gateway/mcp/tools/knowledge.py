@@ -1,7 +1,5 @@
 """Knowledge Base MCP tools: get_knowledge, search_knowledge, propose_knowledge."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 

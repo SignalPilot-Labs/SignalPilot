@@ -138,7 +138,7 @@ async def mint_run_token(
     )
 
 
-@router.delete("/{run_id}", status_code=204, dependencies=[RequireScope("dbt_proxy")])
+@router.delete("/{run_id}", status_code=204, response_model=None, dependencies=[RequireScope("dbt_proxy")])
 async def revoke_run_token(run_id: uuid.UUID, request: Request) -> None:
     """Revoke a run-token. No-op if the token does not exist."""
     token_store = _get_token_store(request)

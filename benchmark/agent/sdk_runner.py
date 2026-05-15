@@ -44,6 +44,8 @@ SKILL_TOOL_NAMES = (
     "snowflake-sql",
     "bigquery-sql",
     "sqlite-sql",
+    "notion-context",
+    "notion-setup",
 )
 
 

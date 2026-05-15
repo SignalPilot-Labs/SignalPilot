@@ -51,7 +51,9 @@ DBT_BIN = shutil.which("dbt") or "/home/agentuser/.local/bin/dbt"
 
 _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_text()
 
-_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-debugging", "duckdb-sql")
+_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-debugging", "duckdb-sql", "notion-context", "notion-setup")
+
+_NOTION_VERIFY_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "notion_verify_subagent.md").read_text()
 
 
 def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
@@ -177,6 +179,18 @@ async def run_agent(
         maxTurns=80,
     )
 
+    notion_verify_prompt_text = (
+        _NOTION_VERIFY_PROMPT_TEMPLATE
+        .replace("${work_dir}", str(work_dir))
+        .replace("${instance_id}", instance_id)
+    )
+    notion_verify_agent = AgentDefinition(
+        description="Notion verification agent that writes a traceability report documenting how Notion context influenced the build.",
+        prompt=notion_verify_prompt_text,
+        model="claude-sonnet-4-6",
+        maxTurns=30,
+    )
+
     result = await run_sdk_agent(
         prompt,
         work_dir,
@@ -186,7 +200,10 @@ async def run_agent(
         label="main-agent",
         skill_names=_DBT_SKILL_NAMES,
         system_prompt=system_prompt,
-        agents={"verifier": verify_agent},
+        agents={
+            "verifier": verify_agent,
+            "notion-verify": notion_verify_agent,
+        },
     )
 
     transcript_path = work_dir / "agent_output.json"
@@ -729,6 +746,17 @@ async def execute_dbt_task(
                 model="claude-sonnet-4-6",
                 maxTurns=80,
             )
+            notion_verify_prompt_text = (
+                _NOTION_VERIFY_PROMPT_TEMPLATE
+                .replace("${work_dir}", str(work_dir))
+                .replace("${instance_id}", instance_id)
+            )
+            notion_verify_agent = AgentDefinition(
+                description="Notion verification agent that writes a traceability report documenting how Notion context influenced the build.",
+                prompt=notion_verify_prompt_text,
+                model="claude-sonnet-4-6",
+                maxTurns=30,
+            )
             agent_result = await run_sdk_agent(
                 prompt,
                 work_dir,
@@ -738,7 +766,10 @@ async def execute_dbt_task(
                 label="main-agent",
                 skill_names=_DBT_SKILL_NAMES,
                 system_prompt=system_prompt,
-                agents={"verifier": verify_agent},
+                agents={
+                    "verifier": verify_agent,
+                    "notion-verify": notion_verify_agent,
+                },
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({

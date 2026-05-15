@@ -1,10 +1,31 @@
 ---
 name: dbt-workflow
-description: "Load at Step 1 before exploring the project. Covers output shape inference, incremental model handling, and what to trust in YML."
+description: "Load at Step 1 before exploring the project. Covers Notion context gathering, output shape inference, incremental model handling, and what to trust in YML."
 type: skill
 ---
 
 # dbt Workflow Skill — Explore and Plan
+
+## 0. Notion Context — Gather Business Context BEFORE Planning
+
+Check if `.claude/notion-config.md` exists in the working directory.
+
+**If config exists:** Load the `notion-context` skill and run it. The skill
+searches configured Notion pages (meeting notes, product specs, data
+dictionaries) for context relevant to the current task. It returns a structured
+NOTION CONTEXT block with definitions, decisions, and constraints.
+
+After gathering context:
+1. Write the full NOTION CONTEXT block to `notion_context.md` in the working
+   directory (the notion-verify subagent reads this after the build).
+2. Keep the context in your working memory — reference it when making decisions
+   about grain, joins, filters, and column logic in later steps.
+3. If Notion context conflicts with YML, prefer YML for column names but prefer
+   Notion for business logic (grain, filter rules, metric definitions).
+
+**If config does not exist:** Skip this step — Notion is optional. Proceed to
+Section 1. If the user asks about Notion context later, point them to
+`/notion-setup`.
 
 ## 1. Output Shape — Read YML Description BEFORE Writing SQL
 

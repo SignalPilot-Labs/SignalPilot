@@ -71,7 +71,16 @@ wait and retry until it succeeds — dbt may still be flushing writes.
 
 Then use the Agent tool with `subagent_type="verifier"` to check all models you built.
 
-### STOP when: the verifier subagent completes successfully.
+### Step 6 — Notion Verification Report (if Notion is configured)
+After the verifier subagent completes, check if `notion_context.md` exists in the
+working directory. If it does, use the Agent tool with `subagent_type="notion-verify"`
+to write a traceability report to Notion documenting which context items influenced
+the build and how.
+
+If `notion_context.md` does not exist, skip this step.
+
+### STOP when: the verifier subagent completes successfully (Step 5), and the
+notion-verify subagent completes if applicable (Step 6).
 
 ## Rules
 - NEVER run `dbt` commands with `run_in_background` or `&` — dbt holds a database write

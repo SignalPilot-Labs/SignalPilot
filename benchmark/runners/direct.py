@@ -53,7 +53,35 @@ _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_te
 
 _DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-debugging", "duckdb-sql", "notion-context", "notion-setup")
 
-_NOTION_VERIFY_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "notion_verify_subagent.md").read_text()
+
+def _build_agents(work_dir: Path, instance_id: str, instruction: str) -> dict[str, AgentDefinition]:
+    """Build verifier + notion-verify agent definitions for the main agent."""
+    verify_prompt_text = (
+        (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
+        .replace("${work_dir}", str(work_dir))
+        .replace("${instance_id}", instance_id)
+        .replace("${dbt_bin}", DBT_BIN)
+    )
+    notion_verify_prompt_text = (
+        (PROMPTS_DIR / "notion_verify_subagent.md").read_text()
+        .replace("${work_dir}", str(work_dir))
+        .replace("${instance_id}", instance_id)
+        .replace("${instruction}", instruction)
+    )
+    return {
+        "verifier": AgentDefinition(
+            description="Verification agent that checks dbt model output for correctness after the build is complete.",
+            prompt=verify_prompt_text,
+            model="claude-sonnet-4-6",
+            maxTurns=80,
+        ),
+        "notion-verify": AgentDefinition(
+            description="Notion verification agent that writes a traceability report documenting how Notion context influenced the build.",
+            prompt=notion_verify_prompt_text,
+            model="claude-sonnet-4-6",
+            maxTurns=30,
+        ),
+    }
 
 
 def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
@@ -165,32 +193,6 @@ async def run_agent(
     print(system_prompt, flush=True)
     print("--- SYSTEM PROMPT END ---", flush=True)
 
-    verify_prompt_template = (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
-    verify_prompt_text = (
-        verify_prompt_template
-        .replace("${work_dir}", str(work_dir))
-        .replace("${instance_id}", instance_id)
-        .replace("${dbt_bin}", DBT_BIN)
-    )
-    verify_agent = AgentDefinition(
-        description="Verification agent that checks dbt model output for correctness after the build is complete.",
-        prompt=verify_prompt_text,
-        model="claude-sonnet-4-6",
-        maxTurns=80,
-    )
-
-    notion_verify_prompt_text = (
-        _NOTION_VERIFY_PROMPT_TEMPLATE
-        .replace("${work_dir}", str(work_dir))
-        .replace("${instance_id}", instance_id)
-    )
-    notion_verify_agent = AgentDefinition(
-        description="Notion verification agent that writes a traceability report documenting how Notion context influenced the build.",
-        prompt=notion_verify_prompt_text,
-        model="claude-sonnet-4-6",
-        maxTurns=30,
-    )
-
     result = await run_sdk_agent(
         prompt,
         work_dir,
@@ -200,10 +202,7 @@ async def run_agent(
         label="main-agent",
         skill_names=_DBT_SKILL_NAMES,
         system_prompt=system_prompt,
-        agents={
-            "verifier": verify_agent,
-            "notion-verify": notion_verify_agent,
-        },
+        agents=_build_agents(work_dir, instance_id, instruction),
     )
 
     transcript_path = work_dir / "agent_output.json"
@@ -733,30 +732,6 @@ async def execute_dbt_task(
                 .replace("${instruction}", instruction)
                 .replace("${dbt_bin}", DBT_BIN)
             )
-            verify_prompt_template = (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
-            verify_prompt_text = (
-                verify_prompt_template
-                .replace("${work_dir}", str(work_dir))
-                .replace("${instance_id}", instance_id)
-                .replace("${dbt_bin}", DBT_BIN)
-            )
-            verify_agent = AgentDefinition(
-                description="Verification agent that checks dbt model output for correctness after the build is complete.",
-                prompt=verify_prompt_text,
-                model="claude-sonnet-4-6",
-                maxTurns=80,
-            )
-            notion_verify_prompt_text = (
-                _NOTION_VERIFY_PROMPT_TEMPLATE
-                .replace("${work_dir}", str(work_dir))
-                .replace("${instance_id}", instance_id)
-            )
-            notion_verify_agent = AgentDefinition(
-                description="Notion verification agent that writes a traceability report documenting how Notion context influenced the build.",
-                prompt=notion_verify_prompt_text,
-                model="claude-sonnet-4-6",
-                maxTurns=30,
-            )
             agent_result = await run_sdk_agent(
                 prompt,
                 work_dir,
@@ -766,10 +741,7 @@ async def execute_dbt_task(
                 label="main-agent",
                 skill_names=_DBT_SKILL_NAMES,
                 system_prompt=system_prompt,
-                agents={
-                    "verifier": verify_agent,
-                    "notion-verify": notion_verify_agent,
-                },
+                agents=_build_agents(work_dir, instance_id, instruction),
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({

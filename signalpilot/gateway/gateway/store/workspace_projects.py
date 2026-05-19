@@ -59,7 +59,7 @@ async def create_project(
         org_id=org_id,
         name="main",
         created_from=None,
-        is_protected=True,
+        is_protected=False,
         is_default=True,
         status="active",
         file_count=0,

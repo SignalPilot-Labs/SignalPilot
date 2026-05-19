@@ -9,17 +9,21 @@ Gather business context from Notion using SignalPilot's governed Notion tools.
 
 ## 1. Find the Integration
 
-Call `notion_search` with `integration_name` and a test query. If it fails with
-"integration not found", list available integrations:
+Call `list_database_connections` — this also lists Notion integrations. Pick
+the integration to use:
+
+- If the user named one in the task instruction, use that.
+- If only one Notion integration exists, use it.
+- If multiple exist and none was specified, list them and ask the user.
+- If none exist, skip — Notion context is optional. Do not block the workflow.
+
+Verify the integration works with a test search:
 
 ```
 notion_search
   integration_name: "<name>"
   query: "test"
 ```
-
-If no Notion integration exists, skip — Notion context is optional. Do not block
-the workflow.
 
 Save the working `integration_name` for all subsequent calls.
 
@@ -40,7 +44,7 @@ notion_search
 3. Individual terms
 
 If still nothing -> write `No relevant Notion context found.` to
-`notion_context.md` and return.
+`notion_context.md` (include the `# Integration:` header) and return.
 
 ## 3. Fetch and Navigate
 
@@ -71,6 +75,7 @@ Scan page content for three categories:
 For each item record:
 - Verbatim excerpt (under 200 chars) or paraphrase
 - Source page title and ID
+- Category tag (DEFINITION / DECISION / CONSTRAINT)
 
 Check for **contradictions** between items. If two sources disagree, flag both
 with `CONFLICT:`. Do NOT silently pick one.
@@ -86,15 +91,15 @@ Write `notion_context.md` in the working directory:
 # Sources: <N> pages searched, <M> items extracted
 
 ## DEFINITIONS
-- "<term>" = <definition>
+- [DEF-1] "<term>" = <definition>
   Source: <page_title> — https://notion.so/<page_id>
 
 ## DECISIONS
-- <decision statement>
+- [DEC-1] <decision statement>
   Source: <page_title> — https://notion.so/<page_id>
 
 ## CONSTRAINTS
-- <constraint>
+- [CON-1] <constraint>
   Source: <page_title> — https://notion.so/<page_id>
 
 ## CONFLICTS
@@ -104,14 +109,17 @@ Write `notion_context.md` in the working directory:
 - <page_title> — https://notion.so/<page_id> — <N> items extracted
 ```
 
-This file is read by the notion-verify subagent after the build.
+Each item gets a stable ID (DEF-1, DEC-1, CON-1, etc.) so the verify agent can
+reference them in the traceability matrix. This file is read by the notion-verify
+subagent after the build.
 
 ## 6. Return to Agent
 
 Return DEFINITIONS, DECISIONS, and CONSTRAINTS to the calling agent. The agent
 MUST:
 - Reference items when making grain, join, filter, and column decisions
-- Write `-- NOTION: <source>` comments in SQL for decisions influenced by context
+- Write `-- NOTION: [DEF-1] <brief reason>` comments in SQL for every decision
+  influenced by Notion context. Use the item ID from `notion_context.md`.
 - Flag CONFLICT items and explain which side was chosen
 
 ## Rules

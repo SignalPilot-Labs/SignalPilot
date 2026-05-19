@@ -1,4 +1,4 @@
-"""Notion integration tools: notion_search, notion_fetch_page, notion_create_page."""
+"""Notion integration tools: list, search, fetch, create."""
 
 from __future__ import annotations
 
@@ -30,12 +30,40 @@ async def _resolve_integration(store: object, integration_name: str) -> _Resolve
 
 
 @audited_tool(mcp)
+async def list_notion_integrations() -> str:
+    """
+    List all configured Notion integrations.
+
+    Returns integration names and their configuration (search scope count,
+    report destination). Use the integration name with notion_search,
+    notion_fetch_page, and notion_create_page.
+
+    Returns:
+        Integration names and config as formatted text, or a message if none exist.
+    """
+    async with _store_session() as store:
+        integrations = await store.list_notion_integrations()  # type: ignore[union-attr]
+
+    if not integrations:
+        return "No Notion integrations configured. Add one via the SignalPilot UI at /integrations"
+
+    lines: list[str] = []
+    for i in integrations:
+        search_count = len(i.search_page_ids)
+        report = "configured" if i.report_parent_page_id else "not set"
+        lines.append(f"- {i.name}")
+        lines.append(f"  search scope: {search_count} page{'s' if search_count != 1 else ''}")
+        lines.append(f"  report destination: {report}")
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
 async def notion_search(integration_name: str, query: str) -> str:
     """
     Search Notion pages within the configured search scope.
 
-    Searches pages under the root pages configured for this integration.
-    Use list_database_connections to see available Notion integrations.
+    Searches pages visible to this integration's access token.
+    Use list_notion_integrations to see available integrations.
 
     Args:
         integration_name: Name of a configured Notion integration

@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   Plus,
-  Trash2,
   Loader2,
   FolderOpen,
   Database,
@@ -13,7 +12,7 @@ import {
   FileText,
   HardDrive,
 } from "lucide-react";
-import { getWorkspaceProjects, createWorkspaceProject, deleteWorkspaceProject, getConnections } from "@/lib/api";
+import { getWorkspaceProjects, createWorkspaceProject, getConnections } from "@/lib/api";
 import type { WorkspaceProjectInfo, ConnectionInfo } from "@/lib/types";
 import { EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -84,13 +83,6 @@ export default function ProjectsPage() {
       setCreateForm({ name: "", display_name: "", description: "", connection_name: "" });
     } catch (e) { toast(String(e), "error"); }
     finally { setCreating(false); }
-  }
-
-  async function handleDelete(id: string) {
-    try {
-      await deleteWorkspaceProject(id);
-      setProjects((prev) => prev.filter((p) => p.id !== id));
-    } catch (e) { toast(String(e), "error"); }
   }
 
   return (
@@ -222,18 +214,7 @@ export default function ProjectsPage() {
                   <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
                 </div>
                 <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{proj.status}</span>
-                <div className="flex items-center gap-1">
-                  <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      handleDelete(proj.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] transition-all"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
+                <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
 
               <div className="p-4 space-y-2.5">

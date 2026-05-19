@@ -21,7 +21,7 @@ import type { WorkspaceProjectInfo, WorkspaceFileInfo } from "@/lib/types";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
 import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm";
 import { TimeAgo } from "@/components/ui/time-ago";
 import Link from "next/link";
 
@@ -165,14 +165,12 @@ export default function ProjectDetailPage() {
         )}
       </div>
 
-      <ConfirmDialog
+      <DestructiveConfirmDialog
         open={showDelete}
-        title="delete project"
-        message={`this will archive project "${project.display_name}" and delete all its files from S3. this action cannot be undone.`}
-        confirmLabel={deleting ? "deleting..." : "delete"}
-        variant="danger"
+        projectName={project.display_name}
         onConfirm={handleDelete}
         onCancel={() => setShowDelete(false)}
+        confirming={deleting}
       />
     </div>
   );

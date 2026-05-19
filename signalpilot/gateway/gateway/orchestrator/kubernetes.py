@@ -52,7 +52,7 @@ def _pod_manifest(
         "spec": {
             "containers": [{
                 "name": "notebook",
-                "image": image,
+                "image": f"docker.io/library/{image}" if ":" in image and "/" not in image else image,
                 "imagePullPolicy": "IfNotPresent",
                 "ports": [{"containerPort": 2718}],
                 "env": env,
@@ -61,15 +61,16 @@ def _pod_manifest(
                     "limits": {"memory": "2Gi", "cpu": "2"},
                 },
                 "readinessProbe": {
-                    "httpGet": {"path": "/api/health", "port": 2718},
+                    "tcpSocket": {"port": 2718},
                     "initialDelaySeconds": 5,
                     "periodSeconds": 5,
-                    "failureThreshold": 12,
+                    "failureThreshold": 20,
                 },
                 "livenessProbe": {
-                    "httpGet": {"path": "/api/health", "port": 2718},
-                    "initialDelaySeconds": 15,
+                    "tcpSocket": {"port": 2718},
+                    "initialDelaySeconds": 30,
                     "periodSeconds": 30,
+                    "failureThreshold": 5,
                 },
             }],
             "restartPolicy": "Never",
@@ -79,12 +80,14 @@ def _pod_manifest(
 
 
 def _parse_pod_status(pod: dict) -> str:
-    phase = pod.get("status", {}).get("phase", "Unknown")
+    status = pod.get("status", {})
+    phase = status.get("phase") or status.get("Phase") or "Unknown"
     return phase.lower()
 
 
 def _parse_pod_ip(pod: dict) -> str | None:
-    return pod.get("status", {}).get("podIP")
+    status = pod.get("status", {})
+    return status.get("pod_ip") or status.get("podIP")
 
 
 class KubernetesOrchestrator(NotebookOrchestrator):

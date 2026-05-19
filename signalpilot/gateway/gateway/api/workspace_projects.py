@@ -123,3 +123,111 @@ async def delete_file(project_id: str, file_path: str, store: StoreD, s3: S3D):
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
     await s3.delete_object(f"{proj.s3_prefix}/{file_path}")
+
+
+# ─── Rename / Copy / Move / Search ──────────────────────────────────────────
+
+from pydantic import BaseModel as _BaseModel
+
+
+class _FileOp(_BaseModel):
+    source: str
+    destination: str
+
+
+@router.post("/workspace-projects/{project_id}/files:rename", dependencies=[RequireScope("write")])
+async def rename_file(project_id: str, body: _FileOp, store: StoreD, s3: S3D):
+    """Rename/move a file or folder. For folders, all children are moved."""
+    proj = await store.get_workspace_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    prefix = proj.s3_prefix
+    moved = await _copy_and_delete(s3, prefix, body.source, body.destination)
+    return {"moved": moved}
+
+
+@router.post("/workspace-projects/{project_id}/files:copy", dependencies=[RequireScope("write")])
+async def copy_file(project_id: str, body: _FileOp, store: StoreD, s3: S3D):
+    """Copy a file or folder."""
+    proj = await store.get_workspace_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    prefix = proj.s3_prefix
+    copied = await _copy_tree(s3, prefix, body.source, body.destination)
+    return {"copied": copied}
+
+
+@router.post("/workspace-projects/{project_id}/files:move", dependencies=[RequireScope("write")])
+async def move_file(project_id: str, body: _FileOp, store: StoreD, s3: S3D):
+    """Move a file or folder (same as rename)."""
+    proj = await store.get_workspace_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    prefix = proj.s3_prefix
+    moved = await _copy_and_delete(s3, prefix, body.source, body.destination)
+    return {"moved": moved}
+
+
+class _SearchQuery(_BaseModel):
+    q: str
+    max_results: int = 50
+
+
+@router.post("/workspace-projects/{project_id}/files:search", dependencies=[RequireScope("read")])
+async def search_files(project_id: str, body: _SearchQuery, store: StoreD, s3: S3D):
+    """Search files by name/path substring."""
+    proj = await store.get_workspace_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    all_files = await s3.list_objects(proj.s3_prefix, max_keys=5000)
+    query = body.q.lower()
+    prefix_len = len(f"{proj.s3_prefix}/")
+    matches = []
+    for f in all_files:
+        rel_key = f["key"][prefix_len:] if f["key"].startswith(f"{proj.s3_prefix}/") else f["key"]
+        if query in rel_key.lower():
+            matches.append(FileInfo(key=rel_key, size=f["size"], last_modified=f["last_modified"]))
+            if len(matches) >= body.max_results:
+                break
+    return {"query": body.q, "results": matches}
+
+
+async def _copy_tree(s3, prefix: str, source: str, destination: str) -> int:
+    """Copy a file or all files under a folder prefix.
+
+    All paths are relative to org_id/ (the S3Client handles org prefixing).
+    prefix = "projects/{project_id}", source/destination are relative to that.
+    """
+    src = f"{prefix}/{source}"
+    dst = f"{prefix}/{destination}"
+    # Try single file first
+    head = await s3.head_object(src)
+    if head:
+        data = await s3.get_object(src)
+        await s3.put_object(dst, data, head.get("content_type", "application/octet-stream"))
+        return 1
+    # Folder: list all objects under source prefix
+    objects = await s3.list_objects(src, max_keys=5000)
+    if not objects:
+        raise HTTPException(status_code=404, detail=f"Source not found: {source}")
+    count = 0
+    src_rel = f"{src}/"
+    for obj in objects:
+        # obj["key"] is relative to org_id/, e.g. "projects/{id}/models/a.sql"
+        suffix = obj["key"][len(src_rel):] if obj["key"].startswith(src_rel) else obj["key"][len(src):]
+        data = await s3.get_object(obj["key"])
+        await s3.put_object(f"{dst}/{suffix}", data)
+        count += 1
+    return count
+
+
+async def _copy_and_delete(s3, prefix: str, source: str, destination: str) -> int:
+    """Copy then delete source (rename/move)."""
+    count = await _copy_tree(s3, prefix, source, destination)
+    src = f"{prefix}/{source}"
+    head = await s3.head_object(src)
+    if head:
+        await s3.delete_object(src)
+    else:
+        await s3.delete_prefix(src)
+    return count

@@ -567,6 +567,18 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
+// Notion Integrations
+export type NotionIntegration = { id: string; name: string; search_page_ids: string[]; report_parent_page_id: string | null; status: string; created_at: number; org_id: string | null };
+export const getNotionIntegrations = () => request<NotionIntegration[]>("/api/integrations/notion");
+export const createNotionIntegration = (payload: { name: string; api_key: string; search_page_ids: string[]; report_parent_page_id?: string }) =>
+  request<NotionIntegration>("/api/integrations/notion", { method: "POST", body: JSON.stringify(payload) });
+export const updateNotionIntegration = (name: string, updates: Record<string, unknown>) =>
+  request<NotionIntegration>(`/api/integrations/notion/${name}`, { method: "PUT", body: JSON.stringify(updates) });
+export const deleteNotionIntegration = (name: string) =>
+  request<void>(`/api/integrations/notion/${name}`, { method: "DELETE" });
+export const testNotionIntegration = (name: string) =>
+  request<{ status: string; message: string }>(`/api/integrations/notion/${name}/test`, { method: "POST" });
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

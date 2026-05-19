@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Tools Reference
 
-All 32 SignalPilot MCP tools, grouped by category. Click a category for full parameter and example documentation.
+All 35 SignalPilot MCP tools, grouped by category. Click a category for full parameter and example documentation.
 
 ## Data Exploration (9 tools)
 
@@ -70,6 +70,14 @@ See [Operational tools](/docs/reference/tools-ops).
 | `connection_health` | Latency percentiles (p50/p95/p99), error rates, status per connection |
 | `connector_capabilities` | Connector tier classification (Tier 1/2/3) and available features |
 | `check_budget` | Remaining query budget for a session |
+
+## Notion Integration (3 tools)
+
+| Tool | Description |
+|------|-------------|
+| `notion_search` | Search Notion pages within configured search scope (root pages) |
+| `notion_fetch_page` | Fetch full content of a Notion page by ID |
+| `notion_create_page` | Create a page under the configured report destination |
 
 ## Project Management (2 tools)
 

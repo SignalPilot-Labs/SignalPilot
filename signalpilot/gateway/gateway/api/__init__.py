@@ -22,6 +22,9 @@ from .sandboxes import router as sandboxes_router
 from .schema import router as schema_router
 from .security import router as security_router
 from .settings import router as settings_router
+from .workspace_projects import router as workspace_projects_router
+from .chat import router as chat_router
+from .agent_runs import router as agent_runs_router
 
 logger = logging.getLogger(__name__)
 
@@ -47,4 +50,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(security_router)
     app.include_router(byok_router)
     app.include_router(knowledge_router)
+    app.include_router(workspace_projects_router)
+    app.include_router(chat_router)
+    app.include_router(agent_runs_router)
     app.include_router(dbt_proxy_router)

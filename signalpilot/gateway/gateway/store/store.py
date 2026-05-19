@@ -838,3 +838,105 @@ class Store:
         factory = get_session_factory()
         async with factory() as session:
             await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)
+
+    # ─── Workspace Projects ─────────────────────────────────────────────────
+
+    async def create_workspace_project(self, **kwargs):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.create_project(self.session, org_id=oid, user_id=self.user_id, **kwargs)
+
+    async def list_workspace_projects(self, **kwargs):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.list_projects(self.session, org_id=oid, **kwargs)
+
+    async def get_workspace_project(self, project_id: str):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.get_project(self.session, org_id=oid, project_id=project_id)
+
+    async def update_workspace_project(self, project_id: str, updates: dict):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.update_project(self.session, org_id=oid, project_id=project_id, updates=updates)
+
+    async def delete_workspace_project(self, project_id: str):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.delete_project(self.session, org_id=oid, project_id=project_id)
+
+    # ─── Chat ────────────────────────────────────────────────────────────────
+
+    async def create_conversation(self, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.create_conversation(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def list_conversations(self, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.list_conversations(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def get_conversation(self, conversation_id: str):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.get_conversation(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id
+        )
+
+    async def delete_conversation(self, conversation_id: str):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.delete_conversation(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id
+        )
+
+    async def append_message(self, conversation_id: str, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.append_message(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
+        )
+
+    async def list_messages(self, conversation_id: str, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.list_messages(self.session, org_id=oid, conversation_id=conversation_id, **kwargs)
+
+    # ─── Agent Runs ──────────────────────────────────────────────────────────
+
+    async def create_agent_run(self, **kwargs):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.create_run(self.session, org_id=oid, user_id=self.user_id, **kwargs)
+
+    async def list_agent_runs(self, **kwargs):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.list_runs(self.session, org_id=oid, **kwargs)
+
+    async def get_agent_run(self, run_id: str):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.get_run(self.session, org_id=oid, run_id=run_id)
+
+    async def update_agent_run(self, run_id: str, updates: dict):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.update_run(self.session, org_id=oid, run_id=run_id, updates=updates)

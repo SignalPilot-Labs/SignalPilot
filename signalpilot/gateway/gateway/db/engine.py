@@ -323,6 +323,20 @@ async def _ensure_knowledge_columns(engine) -> None:
     logger.info("Ensured knowledge doc indexes")
 
 
+async def _ensure_chat_columns(engine) -> None:
+    """Add columns to gateway_chat_conversations that were added after initial table creation."""
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS agent_session_id VARCHAR"))
+        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS model VARCHAR(50)"))
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_tokens INTEGER NOT NULL DEFAULT 0")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0")
+        )
+    logger.info("Ensured chat conversation columns")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -339,6 +353,7 @@ async def init_db() -> None:
     await _ensure_audit_user_id_nullable(engine)
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
+    await _ensure_chat_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

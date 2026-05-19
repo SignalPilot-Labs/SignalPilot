@@ -29,6 +29,24 @@ services:
       retries: 10
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-signalpilot}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme_dev_only}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - signalpilot-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   gateway:
     build:
       context: ./signalpilot/gateway
@@ -43,6 +61,11 @@ services:
       SP_SANDBOX_ENABLED: "true"
       SP_DEPLOYMENT_MODE: local
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
+      SP_S3_ENDPOINT_URL: http://minio:9000
+      SP_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-signalpilot}
+      SP_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme_dev_only}
+      SP_S3_BUCKET: signalpilot-data
+      SP_S3_REGION: us-east-1
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
@@ -51,6 +74,8 @@ services:
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       sandbox:
         condition: service_healthy
@@ -126,3 +151,4 @@ volumes:
   signalpilot-pg-data:
   signalpilot-data:
   signalpilot-shared:
+  signalpilot-minio-data:

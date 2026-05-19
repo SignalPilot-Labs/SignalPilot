@@ -54,6 +54,11 @@ async def lifespan(app: FastAPI):
     # Initialize gateway DB tables
     await init_db()
 
+    # Initialize S3 storage (MinIO locally, real S3 in production)
+    from .s3 import init_s3
+
+    await init_s3()
+
     # Load persisted health state into in-memory cache
     await health_monitor.load_from_db()
 

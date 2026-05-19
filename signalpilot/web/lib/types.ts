@@ -141,6 +141,30 @@ export interface ProjectInfo {
   tags: string[];
 }
 
+export interface WorkspaceProjectInfo {
+  id: string;
+  org_id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  connection_name: string | null;
+  s3_prefix: string;
+  status: "active" | "archived";
+  tags: string[] | null;
+  settings: Record<string, unknown> | null;
+  file_count: number;
+  total_bytes: number;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkspaceFileInfo {
+  key: string;
+  size: number;
+  last_modified: number;
+}
+
 export interface SandboxInfo {
   id: string;
   vm_id: string | null;

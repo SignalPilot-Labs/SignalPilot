@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
-import { getSandboxes, getProjects } from "@/lib/api";
+import { getSandboxes, getProjects, getWorkspaceProjects } from "@/lib/api";
 import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
 import { TierWordmark } from "@/components/branding/tier-wordmark";
 import { TierAccent } from "@/components/branding/tier-accent";
@@ -383,7 +383,7 @@ export default function Sidebar() {
     if (isCloudMode) return;
     const fetch = () => {
       getSandboxes().then((s) => setActiveSandboxes(s.filter((x) => x.status === "running").length)).catch(() => {});
-      getProjects().then((p) => setProjectCount(p.length)).catch(() => {});
+      getWorkspaceProjects().then((res) => setProjectCount(res.total)).catch(() => getProjects().then((p) => setProjectCount(p.length)).catch(() => {}));
     };
     fetch();
     const i = setInterval(fetch, 30000);

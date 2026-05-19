@@ -291,7 +291,7 @@ export const importConnections = (manifest: Record<string, unknown>) =>
     errors: { name: string; error: string }[];
   }>("/api/connections/import", { method: "POST", body: JSON.stringify(manifest) });
 
-// Projects
+// Projects (legacy dbt projects)
 export const getProjects = () => request<import("./types").ProjectInfo[]>("/api/projects");
 export const getProject = (name: string) => request<import("./types").ProjectInfo>(`/api/projects/${name}`);
 export const createProject = (p: Record<string, unknown>) =>
@@ -305,6 +305,36 @@ export const discoverDbtCloudProjects = (token: string, account_id: string, host
     method: "POST",
     body: JSON.stringify({ token, account_id, host }),
   });
+
+// Workspace Projects (S3-backed)
+export const getWorkspaceProjects = (status?: string) =>
+  request<{ projects: import("./types").WorkspaceProjectInfo[]; total: number }>(
+    `/api/workspace-projects${status ? `?status=${status}` : ""}`
+  );
+export const getWorkspaceProject = (id: string) =>
+  request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`);
+export const createWorkspaceProject = (p: { name: string; display_name: string; description?: string; connection_name?: string; tags?: string[] }) =>
+  request<import("./types").WorkspaceProjectInfo>("/api/workspace-projects", { method: "POST", body: JSON.stringify(p) });
+export const updateWorkspaceProject = (id: string, p: Record<string, unknown>) =>
+  request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`, { method: "PUT", body: JSON.stringify(p) });
+export const deleteWorkspaceProject = (id: string) =>
+  request<void>(`/api/workspace-projects/${id}`, { method: "DELETE" });
+
+// Workspace Project Files
+export const getWorkspaceFiles = (projectId: string, prefix?: string) =>
+  request<{ project_id: string; prefix: string; files: import("./types").WorkspaceFileInfo[] }>(
+    `/api/workspace-projects/${projectId}/files${prefix ? `?prefix=${prefix}` : ""}`
+  );
+export const getWorkspaceFile = (projectId: string, path: string) =>
+  request<string>(`/api/workspace-projects/${projectId}/files/${path}`, {}, true);
+export const uploadWorkspaceFile = (projectId: string, path: string, content: string) =>
+  request<{ key: string; size: number }>(`/api/workspace-projects/${projectId}/files/${path}`, {
+    method: "PUT",
+    body: content,
+    headers: { "Content-Type": "text/plain" },
+  });
+export const deleteWorkspaceFile = (projectId: string, path: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/files/${path}`, { method: "DELETE" });
 
 // API Keys (org-scoped)
 export const getApiKeys = () =>

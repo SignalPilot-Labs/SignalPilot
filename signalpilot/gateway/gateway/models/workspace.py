@@ -41,6 +41,9 @@ class WorkspaceProjectInfo(BaseModel):
     settings: dict | None = None
     file_count: int = 0
     total_bytes: int = 0
+    default_branch: str = "main"
+    protected_branches: list[str] | None = None
+    git_remote: str | None = None
     created_by: str | None = None
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
@@ -50,6 +53,41 @@ class FileInfo(BaseModel):
     key: str
     size: int
     last_modified: float
+
+
+# ─── Branches ────────────────────────────────────────────────────────────────
+
+
+class BranchCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    from_branch: str = "main"
+
+
+class BranchInfo(BaseModel):
+    id: str
+    project_id: str
+    org_id: str
+    name: str
+    created_from: str | None = None
+    is_protected: bool = False
+    is_default: bool = False
+    status: str = "active"
+    file_count: int = 0
+    total_bytes: int = 0
+    created_by: str | None = None
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
+class UserSessionInfo(BaseModel):
+    user_id: str
+    project_id: str
+    active_branch: str = "main"
+    updated_at: float = Field(default_factory=time.time)
+
+
+class UserSessionUpdate(BaseModel):
+    branch: str = Field(..., min_length=1, max_length=100)
 
 
 # ─── Chat ────────────────────────────────────────────────────────────────────

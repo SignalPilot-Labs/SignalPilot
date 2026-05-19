@@ -46,6 +46,25 @@ async def create_project(
         updated_at=now,
     )
     session.add(row)
+
+    from ..db.models import GatewayProjectBranch
+
+    main_branch = GatewayProjectBranch(
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        org_id=org_id,
+        name="main",
+        created_from=None,
+        is_protected=True,
+        is_default=True,
+        status="active",
+        file_count=0,
+        total_bytes=0,
+        created_by=user_id,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(main_branch)
     await session.commit()
     return _to_info(row)
 
@@ -131,6 +150,9 @@ def _to_info(row: GatewayWorkspaceProject) -> WorkspaceProjectInfo:
         settings=row.settings,
         file_count=row.file_count,
         total_bytes=row.total_bytes,
+        default_branch=row.default_branch,
+        protected_branches=row.protected_branches,
+        git_remote=row.git_remote,
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,

@@ -90,6 +90,18 @@ class S3Client:
         )
         return len(delete_keys)
 
+    async def copy_object(self, source_path: str, dest_path: str) -> str:
+        """Server-side S3 copy within the same bucket/org."""
+        src_key = self._key(source_path)
+        dst_key = self._key(dest_path)
+        await self._run(
+            self._client.copy_object,
+            Bucket=self._bucket,
+            CopySource={"Bucket": self._bucket, "Key": src_key},
+            Key=dst_key,
+        )
+        return dst_key
+
     async def head_object(self, path: str) -> dict | None:
         key = self._key(path)
         try:

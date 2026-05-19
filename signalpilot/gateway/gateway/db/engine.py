@@ -337,6 +337,21 @@ async def _ensure_chat_columns(engine) -> None:
     logger.info("Ensured chat conversation columns")
 
 
+async def _ensure_branch_columns(engine) -> None:
+    """Add branch columns to gateway_workspace_projects."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS default_branch VARCHAR(100) NOT NULL DEFAULT 'main'")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS protected_branches JSONB")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS git_remote VARCHAR(500)")
+        )
+    logger.info("Ensured branch columns on gateway_workspace_projects")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -354,6 +369,7 @@ async def init_db() -> None:
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
+    await _ensure_branch_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

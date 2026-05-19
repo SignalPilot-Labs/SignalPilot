@@ -10,11 +10,13 @@ import {
   AlertTriangle,
   X,
   TestTube,
+  Pencil,
 } from "lucide-react";
 import { useAppAuth } from "@/lib/auth-context";
 import {
   getNotionIntegrations,
   createNotionIntegration,
+  updateNotionIntegration,
   deleteNotionIntegration,
   testNotionIntegration,
   type NotionIntegration,
@@ -68,6 +70,9 @@ function IntegrationsContent() {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Edit
+  const [editingName, setEditingName] = useState<string | null>(null);
+
   // Test / delete
   const [testingName, setTestingName] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { status: string; message: string }>>({});
@@ -101,7 +106,7 @@ function IntegrationsContent() {
   // ── Create ──
   async function handleCreate() {
     if (!formName.trim()) { setFormError("name is required"); return; }
-    if (!formApiKey.trim()) { setFormError("api key is required"); return; }
+    if (!formApiKey.trim()) { setFormError("access token is required"); return; }
     if (!formReportPage.trim()) { setFormError("report destination is required"); return; }
 
     setCreating(true);
@@ -115,6 +120,47 @@ function IntegrationsContent() {
       });
       toast("notion integration created", "success");
       setShowForm(false);
+      setFormName("");
+      setFormApiKey("");
+      setFormSearchPages([]);
+      setFormPageInput("");
+      setFormReportPage("");
+      await fetchIntegrations();
+    } catch (e) {
+      setFormError(String(e));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function handleStartEdit(integration: NotionIntegration) {
+    setEditingName(integration.name);
+    setShowForm(true);
+    setFormName(integration.name);
+    setFormApiKey("");
+    setFormSearchPages([...integration.search_page_ids]);
+    setFormReportPage(integration.report_parent_page_id || "");
+    setFormError(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingName) return;
+    if (!formReportPage.trim()) { setFormError("report destination is required"); return; }
+
+    setCreating(true);
+    setFormError(null);
+    const updates: Record<string, unknown> = {
+      search_page_ids: formSearchPages,
+      report_parent_page_id: parsePageId(formReportPage),
+    };
+    if (formApiKey.trim()) {
+      updates.api_key = formApiKey.trim();
+    }
+    try {
+      await updateNotionIntegration(editingName, updates);
+      toast("integration updated", "success");
+      setShowForm(false);
+      setEditingName(null);
       setFormName("");
       setFormApiKey("");
       setFormSearchPages([]);
@@ -199,21 +245,22 @@ function IntegrationsContent() {
                   type="text"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Escape") setShowForm(false); }}
+                  onKeyDown={(e) => { if (e.key === "Escape") { setShowForm(false); setEditingName(null); setFormName(""); setFormApiKey(""); setFormSearchPages([]); setFormPageInput(""); setFormReportPage(""); setFormError(null); } }}
                   placeholder="e.g. data-team"
-                  autoFocus
-                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] focus:outline-none focus:border-[var(--color-text-dim)] tracking-wider"
+                  autoFocus={!editingName}
+                  readOnly={!!editingName}
+                  className={`w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] focus:outline-none focus:border-[var(--color-text-dim)] tracking-wider ${editingName ? "opacity-50 cursor-not-allowed" : ""}`}
                 />
               </div>
 
-              {/* API Key */}
+              {/* Access Token */}
               <div>
-                <label className="block text-[11px] text-[var(--color-text-dim)] mb-1.5 tracking-[0.15em] uppercase">api key</label>
+                <label className="block text-[11px] text-[var(--color-text-dim)] mb-1.5 tracking-[0.15em] uppercase">access token</label>
                 <input
                   type="password"
                   value={formApiKey}
                   onChange={(e) => setFormApiKey(e.target.value)}
-                  placeholder="ntn_..."
+                  placeholder={editingName ? "leave blank to keep current" : "ntn_..."}
                   className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] focus:outline-none focus:border-[var(--color-text-dim)] tracking-wider font-mono"
                 />
               </div>
@@ -279,15 +326,15 @@ function IntegrationsContent() {
               {/* Actions */}
               <div className="flex gap-3">
                 <button
-                  onClick={handleCreate}
+                  onClick={editingName ? handleSaveEdit : handleCreate}
                   disabled={creating}
                   className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
                 >
-                  {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-                  create
+                  {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : editingName ? <Pencil className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                  {editingName ? "save" : "create"}
                 </button>
                 <button
-                  onClick={() => { setShowForm(false); setFormError(null); }}
+                  onClick={() => { setShowForm(false); setFormError(null); setEditingName(null); setFormName(""); setFormApiKey(""); setFormSearchPages([]); setFormPageInput(""); setFormReportPage(""); }}
                   disabled={creating}
                   className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
                 >
@@ -348,6 +395,13 @@ function IntegrationsContent() {
                   >
                     {testingName === integration.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" />}
                     test
+                  </button>
+                  <button
+                    onClick={() => handleStartEdit(integration)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                  >
+                    <Pencil className="w-3 h-3" />
+                    edit
                   </button>
                   {deletingName === integration.name ? (
                     <div className="flex items-center gap-1.5">

@@ -81,7 +81,9 @@ async def create_project(body: WorkspaceProjectCreate, store: StoreD):
             name=body.name,
             display_name=body.display_name,
             description=body.description,
+            source=body.source,
             connection_name=body.connection_name,
+            git_remote=body.git_remote,
             tags=body.tags,
             settings=body.settings,
         )

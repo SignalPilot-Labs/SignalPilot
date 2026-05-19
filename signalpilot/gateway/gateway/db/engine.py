@@ -349,6 +349,9 @@ async def _ensure_branch_columns(engine) -> None:
         await conn.execute(
             text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS git_remote VARCHAR(500)")
         )
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'managed'")
+        )
     logger.info("Ensured branch columns on gateway_workspace_projects")
 
 

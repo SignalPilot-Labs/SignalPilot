@@ -382,6 +382,7 @@ class GatewayWorkspaceProject(GatewayBase):
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     connection_name: Mapped[str | None] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="managed")
     s3_prefix: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     tags: Mapped[list | None] = mapped_column(JSON)

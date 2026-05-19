@@ -14,7 +14,9 @@ class WorkspaceProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     display_name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
+    source: str = Field(default="managed", pattern=r"^(managed|github|dbt-cloud)$")
     connection_name: str | None = None
+    git_remote: str | None = Field(None, max_length=500)
     tags: list[str] = Field(default_factory=list)
     settings: dict | None = None
 
@@ -34,6 +36,7 @@ class WorkspaceProjectInfo(BaseModel):
     name: str
     display_name: str
     description: str | None = None
+    source: str = "managed"
     connection_name: str | None = None
     s3_prefix: str
     status: str = "active"

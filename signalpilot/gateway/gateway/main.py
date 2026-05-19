@@ -240,11 +240,36 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 
+    async def _notebook_cleanup_loop():
+        """Kill notebook pods with no ping for the configured idle timeout."""
+        from .config.k8s import get_k8s_settings
+        from .orchestrator.kubernetes import KubernetesOrchestrator
+        from .store import notebook_sessions as ns
+
+        k8s_settings = get_k8s_settings()
+        orch = KubernetesOrchestrator()
+        while True:
+            await asyncio.sleep(300)
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    stale = await ns.list_stale_sessions(
+                        session, max_idle_seconds=k8s_settings.sp_notebook_idle_timeout
+                    )
+                    for s in stale:
+                        logger.info("Cleaning up stale notebook session %s (pod=%s)", s.id, s.pod_name)
+                        if s.pod_name:
+                            await orch.delete_pod(s.pod_name)
+                        await ns.mark_stopped(session, session_id=s.id)
+            except Exception as e:
+                logger.warning("Notebook cleanup loop error: %s", e)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
+    notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -289,6 +314,7 @@ async def lifespan(app: FastAPI):
         health_ping_task.cancel()
         cleanup_task.cancel()
         refresh_task.cancel()
+        notebook_cleanup_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

@@ -18,6 +18,7 @@ from .knowledge import router as knowledge_router
 from .metrics import router as metrics_router
 from .projects import router as projects_router
 from .query import router as query_router
+from .notebook_sessions import router as notebook_sessions_router
 from .sandboxes import router as sandboxes_router
 from .schema import router as schema_router
 from .security import router as security_router
@@ -53,4 +54,5 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(workspace_projects_router)
     app.include_router(chat_router)
     app.include_router(agent_runs_router)
+    app.include_router(notebook_sessions_router)
     app.include_router(dbt_proxy_router)

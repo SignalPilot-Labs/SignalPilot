@@ -33,6 +33,8 @@ dependencies = [
     "duckdb>=1.0.0",
     # S3 storage (MinIO locally, real AWS in production)
     "boto3>=1.34.0",
+    # Kubernetes orchestrator (K3s locally, EKS in production)
+    "kubernetes-asyncio>=31.0.0",
 ]
 
 [project.optional-dependencies]

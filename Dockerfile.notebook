@@ -1,0 +1,38 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/sp-notebook
+
+# Install marimo from the signalpilot-notebook fork
+COPY sp-notebook/pyproject.toml sp-notebook/README.md ./
+COPY sp-notebook/signalpilot/ ./signalpilot/
+COPY sp-notebook/frontend/dist/ ./frontend/dist/
+RUN pip install --no-cache-dir -e .
+
+# Common data packages + SP SDK
+RUN pip install --no-cache-dir \
+    httpx \
+    duckdb \
+    polars \
+    pandas \
+    pyarrow
+
+# Non-root user
+RUN groupadd -g 10001 notebook && \
+    useradd -r -u 10001 -g notebook notebook && \
+    mkdir -p /workspace /home/notebook/.sp && \
+    chown -R notebook:notebook /workspace /home/notebook /opt/sp-notebook
+
+USER notebook
+WORKDIR /workspace
+
+EXPOSE 2718
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s \
+    CMD curl -f http://localhost:2718/api/health || exit 1
+
+CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "/workspace"]

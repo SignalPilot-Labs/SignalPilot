@@ -2,16 +2,27 @@
 #
 # Usage: docker compose up --build
 #
-# Starts: Postgres + Gateway + Web + Sandbox
+# Starts: Postgres + MinIO + K3s + Gateway + Web + Sandbox
 # No external dependencies, no .env required.
-#
-# HOST_DATA_DIR defaults to ~ (home directory) for the sandbox host-data mount.
-# For production or shared environments, set HOST_DATA_DIR to a narrower path
-# such as ./host-data to avoid exposing the entire home directory read-only.
 
 name: signalpilot
 
 services:
+  # ─── K3s (local Kubernetes) ──────────────────────────────────────────────
+  k3s:
+    image: rancher/k3s:v1.31.4-k3s1
+    command: server --disable=traefik,metrics-server --tls-san=k3s
+    privileged: true
+    ports:
+      - "127.0.0.1:6443:6443"
+    environment:
+      K3S_TOKEN: ${K3S_TOKEN:-signalpilot-dev}
+      K3S_KUBECONFIG_MODE: "644"
+    volumes:
+      - k3s-server:/var/lib/rancher/k3s
+      - k3s-config:/etc/rancher/k3s
+    restart: unless-stopped
+
   db:
     image: postgres:17
     environment:
@@ -60,15 +71,19 @@ services:
       SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_SANDBOX_ENABLED: "true"
       SP_DEPLOYMENT_MODE: local
-      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
+      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:2718
       SP_S3_ENDPOINT_URL: http://minio:9000
       SP_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-signalpilot}
       SP_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme_dev_only}
       SP_S3_BUCKET: signalpilot-data
       SP_S3_REGION: us-east-1
+      SP_K8S_NAMESPACE: default
+      SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
+      KUBECONFIG: /k3s/k3s.yaml
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
+      - k3s-config:/k3s:ro
     command: >
       sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
@@ -77,6 +92,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      k3s:
+        condition: service_started
       sandbox:
         condition: service_healthy
     restart: unless-stopped
@@ -152,3 +169,5 @@ volumes:
   signalpilot-data:
   signalpilot-shared:
   signalpilot-minio-data:
+  k3s-server:
+  k3s-config:

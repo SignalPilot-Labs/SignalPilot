@@ -530,3 +530,28 @@ class GatewayAgentRun(GatewayBase):
         Index("ix_gw_arun_org_created", "org_id", "created_at"),
         Index("ix_gw_arun_conversation", "conversation_id"),
     )
+
+
+# ─── Notebook Sessions ──────────────────────────────────────────────────────
+
+
+class GatewayNotebookSession(GatewayBase):
+    """One active notebook pod per user."""
+
+    __tablename__ = "gateway_notebook_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String)
+    branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    pod_name: Mapped[str | None] = mapped_column(String)
+    pod_ip: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
+    last_ping: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_gw_nbsession_org_user"),
+        Index("ix_gw_nbsession_org_status", "org_id", "status"),
+    )

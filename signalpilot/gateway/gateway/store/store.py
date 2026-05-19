@@ -15,6 +15,7 @@ import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
+import gateway.store.notion as notion_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
 import gateway.store.settings as settings_mod
@@ -616,6 +617,42 @@ class Store:
     async def apply_endorsement_filter(self, name: str, schema: dict) -> dict:
         oid = self._require_org_id()
         return await endorsements_mod.apply_endorsement_filter(self.session, org_id=oid, name=name, schema=schema)
+
+    # ─── Notion Integrations ─────────────────────────────────────────────
+
+    async def list_notion_integrations(self) -> list[notion_mod.NotionIntegrationInfo]:
+        """List all Notion integrations for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.list_integrations(self.session, org_id=oid)
+
+    async def get_notion_integration(self, name: str) -> notion_mod.NotionIntegrationInfo | None:
+        """Get a Notion integration by name."""
+        oid = self._require_org_id()
+        return await notion_mod.get_integration(self.session, org_id=oid, name=name)
+
+    async def create_notion_integration(
+        self, integration: notion_mod.NotionIntegrationCreate,
+    ) -> notion_mod.NotionIntegrationInfo:
+        """Create a Notion integration with encrypted API key."""
+        oid = self._require_org_id()
+        return await notion_mod.create_integration(self.session, org_id=oid, integration=integration)
+
+    async def update_notion_integration(
+        self, name: str, update: notion_mod.NotionIntegrationUpdate,
+    ) -> notion_mod.NotionIntegrationInfo | None:
+        """Update a Notion integration."""
+        oid = self._require_org_id()
+        return await notion_mod.update_integration(self.session, org_id=oid, name=name, update=update)
+
+    async def delete_notion_integration(self, name: str) -> bool:
+        """Delete a Notion integration."""
+        oid = self._require_org_id()
+        return await notion_mod.delete_integration(self.session, org_id=oid, name=name)
+
+    async def get_notion_api_key(self, name: str) -> str | None:
+        """Get the decrypted API key for a Notion integration."""
+        oid = self._require_org_id()
+        return await notion_mod.get_api_key(self.session, org_id=oid, name=name)
 
     # ─── API Keys ───────────────────────────────────────────────────────
     async def list_api_keys(self) -> list[ApiKeyRecord]:

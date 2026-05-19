@@ -204,7 +204,7 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 
 ## MCP Tools
 
-32 governed tools across query execution, schema discovery, dbt intelligence, and model verification.
+35 governed tools across query execution, schema discovery, dbt intelligence, model verification, and Notion integration.
 
 | Category | Tools |
 |----------|-------|
@@ -212,6 +212,7 @@ Supported: DuckDB, PostgreSQL, SQLite, Snowflake, BigQuery.
 | **Schema** | `list_tables`, `describe_table`, `explore_table`, `explore_column`, `explore_columns`, `schema_overview`, `schema_ddl`, `schema_link`, `schema_diff`, `schema_statistics` |
 | **Relationships** | `get_relationships`, `find_join_path`, `compare_join_types` |
 | **dbt** | `dbt_error_parser`, `generate_sql_skeleton`, `check_model_schema`, `validate_model_output`, `audit_model_sources`, `analyze_grain` |
+| **Notion** | `notion_search`, `notion_fetch_page`, `notion_create_page` |
 | **Operational** | `list_database_connections`, `connection_health`, `connector_capabilities`, `get_date_boundaries`, `check_budget`, `query_history`, `list_projects`, `get_project` |
 
 See the [full tools reference](https://SignalPilot-Labs.github.io/SignalPilot/docs/reference/tools-overview) in the docs.

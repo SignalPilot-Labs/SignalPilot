@@ -84,7 +84,7 @@ services:
       SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_MAX_VMS: "10"
     volumes:
-      - ${HOST_DATA_DIR:-~}:/host-data:ro
+      - ${HOST_DATA_DIR:-/tmp}:/host-data:ro
     restart: unless-stopped
 
 volumes:

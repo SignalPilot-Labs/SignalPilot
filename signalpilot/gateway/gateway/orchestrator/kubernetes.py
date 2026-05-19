@@ -101,9 +101,12 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         from kubernetes_asyncio import client, config
 
         kubeconfig = os.getenv("KUBECONFIG")
+        k8s_host = os.getenv("SP_K8S_HOST")
         try:
             if kubeconfig and os.path.exists(kubeconfig):
                 await config.load_kube_config(config_file=kubeconfig)
+                if k8s_host:
+                    client.Configuration.get_default_copy().host = k8s_host
             else:
                 config.load_incluster_config()
         except Exception as e:

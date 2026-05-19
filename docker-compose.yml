@@ -78,6 +78,7 @@ services:
       SP_S3_BUCKET: signalpilot-data
       SP_S3_REGION: us-east-1
       SP_K8S_NAMESPACE: default
+      SP_K8S_HOST: https://k3s:6443
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       KUBECONFIG: /k3s/k3s.yaml
     volumes:

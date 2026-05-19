@@ -10,7 +10,12 @@ WORKDIR /opt/sp-notebook
 # Clone the signalpilot-notebook fork at build time
 ARG NOTEBOOK_REPO=https://github.com/SignalPilot-Labs/signalpilot-notebook.git
 ARG NOTEBOOK_BRANCH=feature/cloud-filesystem
-RUN git clone --depth 1 --branch ${NOTEBOOK_BRANCH} ${NOTEBOOK_REPO} .
+ARG GIT_TOKEN=""
+RUN if [ -n "$GIT_TOKEN" ]; then \
+      git clone --depth 1 --branch ${NOTEBOOK_BRANCH} https://${GIT_TOKEN}@github.com/SignalPilot-Labs/signalpilot-notebook.git . ; \
+    else \
+      git clone --depth 1 --branch ${NOTEBOOK_BRANCH} ${NOTEBOOK_REPO} . ; \
+    fi
 
 # Install marimo
 RUN pip install --no-cache-dir -e .

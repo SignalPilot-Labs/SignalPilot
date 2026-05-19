@@ -313,7 +313,15 @@ export const getWorkspaceProjects = (status?: string) =>
   );
 export const getWorkspaceProject = (id: string) =>
   request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`);
-export const createWorkspaceProject = (p: { name: string; display_name: string; description?: string; connection_name?: string; tags?: string[] }) =>
+export const createWorkspaceProject = (p: {
+  name: string;
+  display_name: string;
+  description?: string;
+  source?: "managed" | "github" | "dbt-cloud";
+  connection_name?: string;
+  git_remote?: string;
+  tags?: string[];
+}) =>
   request<import("./types").WorkspaceProjectInfo>("/api/workspace-projects", { method: "POST", body: JSON.stringify(p) });
 export const updateWorkspaceProject = (id: string, p: Record<string, unknown>) =>
   request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`, { method: "PUT", body: JSON.stringify(p) });

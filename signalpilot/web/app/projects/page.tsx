@@ -11,6 +11,9 @@ import {
   ArrowRight,
   FileText,
   HardDrive,
+  GitBranch,
+  Cloud,
+  Server,
 } from "lucide-react";
 import { getWorkspaceProjects, createWorkspaceProject, getConnections } from "@/lib/api";
 import type { WorkspaceProjectInfo, ConnectionInfo } from "@/lib/types";
@@ -31,6 +34,13 @@ function EmptyProject({ className = "" }: { className?: string }) {
 }
 
 const NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+type Source = "managed" | "github" | "dbt-cloud";
+
+const SOURCE_LABELS: Record<Source, { label: string; icon: typeof Server; desc: string }> = {
+  managed: { label: "new project", icon: Server, desc: "empty project stored on S3" },
+  github: { label: "from github", icon: GitBranch, desc: "import from a github repo" },
+  "dbt-cloud": { label: "from dbt cloud", icon: Cloud, desc: "connect a dbt cloud project" },
+};
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -40,13 +50,26 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
+function sourceIcon(source: string) {
+  if (source === "github") return <GitBranch className="w-3 h-3" strokeWidth={1.5} />;
+  if (source === "dbt-cloud") return <Cloud className="w-3 h-3" strokeWidth={1.5} />;
+  return <Server className="w-3 h-3" strokeWidth={1.5} />;
+}
+
 export default function ProjectsPage() {
   const { toast } = useToast();
   const [projects, setProjects] = useState<WorkspaceProjectInfo[]>([]);
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: "", display_name: "", description: "", connection_name: "" });
+  const [source, setSource] = useState<Source>("managed");
+  const [form, setForm] = useState({
+    name: "",
+    display_name: "",
+    description: "",
+    connection_name: "",
+    git_remote: "",
+  });
 
   const refresh = useCallback(() => {
     getWorkspaceProjects("active")
@@ -61,26 +84,37 @@ export default function ProjectsPage() {
     return () => clearInterval(i);
   }, [refresh]);
 
+  function resetForm() {
+    setForm({ name: "", display_name: "", description: "", connection_name: "", git_remote: "" });
+    setSource("managed");
+    setShowCreate(false);
+  }
+
   async function handleCreate() {
-    if (!createForm.name || !NAME_PATTERN.test(createForm.name)) {
+    if (!form.name || !NAME_PATTERN.test(form.name)) {
       toast("name must match [a-zA-Z0-9_-]", "error");
       return;
     }
-    if (!createForm.display_name) {
+    if (!form.display_name) {
       toast("display name is required", "error");
+      return;
+    }
+    if (source === "github" && !form.git_remote) {
+      toast("github repo url is required", "error");
       return;
     }
     setCreating(true);
     try {
       const p = await createWorkspaceProject({
-        name: createForm.name,
-        display_name: createForm.display_name,
-        description: createForm.description || undefined,
-        connection_name: createForm.connection_name || undefined,
+        name: form.name,
+        display_name: form.display_name,
+        description: form.description || undefined,
+        source,
+        connection_name: form.connection_name || undefined,
+        git_remote: form.git_remote || undefined,
       });
       setProjects((prev) => [p, ...prev]);
-      setShowCreate(false);
-      setCreateForm({ name: "", display_name: "", description: "", connection_name: "" });
+      resetForm();
     } catch (e) { toast(String(e), "error"); }
     finally { setCreating(false); }
   }
@@ -90,7 +124,7 @@ export default function ProjectsPage() {
       <PageHeader
         title="projects"
         subtitle="workspace"
-        description="S3-backed project management"
+        description="branch-based project management"
         actions={
           <button
             onClick={() => setShowCreate(true)}
@@ -118,14 +152,36 @@ export default function ProjectsPage() {
             <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">new project</span>
           </div>
           <div className="p-5">
+            {/* Source selector */}
+            <div className="flex items-center gap-2 mb-5">
+              {(Object.keys(SOURCE_LABELS) as Source[]).map((s) => {
+                const { label, icon: Icon, desc } = SOURCE_LABELS[s];
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setSource(s)}
+                    className={`flex items-center gap-2 px-4 py-2.5 text-xs tracking-wider border transition-all ${
+                      source === s
+                        ? "border-[var(--color-text)] text-[var(--color-text)] bg-[var(--color-bg-input)]"
+                        : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" strokeWidth={1.5} />
+                    <span className="uppercase">{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Common fields */}
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">name (slug)</label>
                 <input
                   type="text"
                   placeholder="my-project"
-                  value={createForm.name}
-                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
                   className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                 />
               </div>
@@ -134,28 +190,43 @@ export default function ProjectsPage() {
                 <input
                   type="text"
                   placeholder="My Project"
-                  value={createForm.display_name}
-                  onChange={(e) => setCreateForm({ ...createForm, display_name: e.target.value })}
+                  value={form.display_name}
+                  onChange={(e) => setForm({ ...form, display_name: e.target.value })}
                   className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                 />
               </div>
             </div>
+
+            {/* GitHub-specific field */}
+            {source === "github" && (
+              <div className="mb-4">
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">github repo url</label>
+                <input
+                  type="text"
+                  placeholder="https://github.com/org/repo.git"
+                  value={form.git_remote}
+                  onChange={(e) => setForm({ ...form, git_remote: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">description</label>
                 <input
                   type="text"
                   placeholder="optional description"
-                  value={createForm.description}
-                  onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
                   className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
                 />
               </div>
               <div>
                 <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection (optional)</label>
                 <select
-                  value={createForm.connection_name}
-                  onChange={(e) => setCreateForm({ ...createForm, connection_name: e.target.value })}
+                  value={form.connection_name}
+                  onChange={(e) => setForm({ ...form, connection_name: e.target.value })}
                   className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                 >
                   <option value="">none</option>
@@ -165,6 +236,7 @@ export default function ProjectsPage() {
                 </select>
               </div>
             </div>
+
             <div className="flex items-center gap-3">
               <button
                 onClick={handleCreate}
@@ -172,10 +244,10 @@ export default function ProjectsPage() {
                 className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
               >
                 {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                create
+                {source === "managed" ? "create" : source === "github" ? "import" : "connect"}
               </button>
               <button
-                onClick={() => setShowCreate(false)}
+                onClick={resetForm}
                 className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
               >
                 cancel
@@ -213,17 +285,16 @@ export default function ProjectsPage() {
                   <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-20" />
                   <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
                 </div>
-                <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{proj.status}</span>
+                <div className="flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 border border-[var(--color-border)] text-[10px] tracking-wider uppercase">{proj.source}</span>
+                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{proj.status}</span>
+                </div>
                 <ArrowRight className="w-3 h-3 text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
 
               <div className="p-4 space-y-2.5">
                 <div className="flex items-center gap-2">
-                  <StatusDot
-                    status={proj.status === "active" ? "healthy" : "warning"}
-                    size={4}
-                    pulse={false}
-                  />
+                  {sourceIcon(proj.source)}
                   <span className="text-xs text-[var(--color-text)] font-bold uppercase tracking-wider group-hover:text-white transition-colors">
                     {proj.display_name}
                   </span>

@@ -7,10 +7,12 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /opt/sp-notebook
 
-# Install marimo from the signalpilot-notebook fork
-COPY sp-notebook/pyproject.toml sp-notebook/README.md ./
-COPY sp-notebook/signalpilot/ ./signalpilot/
-COPY sp-notebook/frontend/dist/ ./frontend/dist/
+# Clone the signalpilot-notebook fork at build time
+ARG NOTEBOOK_REPO=https://github.com/SignalPilot-Labs/signalpilot-notebook.git
+ARG NOTEBOOK_BRANCH=feature/cloud-filesystem
+RUN git clone --depth 1 --branch ${NOTEBOOK_BRANCH} ${NOTEBOOK_REPO} .
+
+# Install marimo
 RUN pip install --no-cache-dir -e .
 
 # Common data packages + SP SDK

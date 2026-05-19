@@ -112,8 +112,7 @@ async def delete_project(
     row = (await session.execute(q)).scalar_one_or_none()
     if not row:
         return False
-    row.status = "archived"
-    row.updated_at = time.time()
+    await session.delete(row)
     await session.commit()
     return True
 

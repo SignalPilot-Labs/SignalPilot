@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
-import { getSandboxes, getProjects, getWorkspaceProjects } from "@/lib/api";
+import { getProjects, getWorkspaceProjects } from "@/lib/api";
 import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
 import { TierWordmark } from "@/components/branding/tier-wordmark";
 import { TierAccent } from "@/components/branding/tier-accent";
@@ -117,7 +117,7 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
-  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "5" },
+  // sandboxes removed — replaced by managed notebook sessions
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
   { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },
@@ -367,7 +367,6 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
-  const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [projectCount, setProjectCount] = useState(0);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
@@ -382,7 +381,6 @@ export default function Sidebar() {
   useEffect(() => {
     if (isCloudMode) return;
     const fetch = () => {
-      getSandboxes().then((s) => setActiveSandboxes(s.filter((x) => x.status === "running").length)).catch(() => {});
       getWorkspaceProjects().then((res) => setProjectCount(res.total)).catch(() => getProjects().then((p) => setProjectCount(p.length)).catch(() => {}));
     };
     fetch();
@@ -390,7 +388,7 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/sandboxes" || href === "/settings")));
+  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/settings")));
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -466,7 +464,7 @@ export default function Sidebar() {
         {filteredNav.map(({ href, label, icon: Icon }, filteredIdx) => {
           const shortcut = String(filteredIdx + 1);
           const active = pathname.startsWith(href);
-          const badge = href === "/sandboxes" ? activeSandboxes : href === "/projects" ? projectCount : 0;
+          const badge = href === "/projects" ? projectCount : 0;
           return (
             <Link
               key={href}

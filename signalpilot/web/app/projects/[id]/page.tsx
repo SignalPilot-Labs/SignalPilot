@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Trash2,
@@ -11,12 +11,20 @@ import {
   FileText,
   HardDrive,
   ArrowLeft,
-  Upload,
-  Download,
+  Play,
+  Square,
   File,
   X,
+  GitBranch,
 } from "lucide-react";
-import { getWorkspaceProject, deleteWorkspaceProject, getWorkspaceFiles, deleteWorkspaceFile, getWorkspaceBranches, getUserSession } from "@/lib/api";
+import {
+  getWorkspaceProject,
+  deleteWorkspaceProject,
+  getWorkspaceFiles,
+  deleteWorkspaceFile,
+  getWorkspaceBranches,
+  getUserSession,
+} from "@/lib/api";
 import type { WorkspaceProjectInfo, WorkspaceFileInfo } from "@/lib/types";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
@@ -41,16 +49,24 @@ function fileIcon(key: string) {
   return <File className="w-3 h-3 text-[var(--color-text-dim)]" />;
 }
 
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+
 export default function ProjectDetailPage() {
   const { toast } = useToast();
   const router = useRouter();
   const params = useParams();
   const projectId = params.id as string;
+
   const [project, setProject] = useState<WorkspaceProjectInfo | null>(null);
   const [files, setFiles] = useState<WorkspaceFileInfo[]>([]);
   const [activeBranch, setActiveBranch] = useState("main");
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Notebook session state
+  const [notebookStatus, setNotebookStatus] = useState<"idle" | "starting" | "running" | "error">("idle");
+  const [notebookProxy, setNotebookProxy] = useState<string | null>(null);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(() => {
     getWorkspaceProject(projectId).then(setProject).catch(() => {});
@@ -62,13 +78,90 @@ export default function ProjectDetailPage() {
     });
   }, [projectId]);
 
+  // Check for existing notebook session on load
   useEffect(() => {
     refresh();
+    checkNotebookSession();
   }, [refresh]);
+
+  // Cleanup ping on unmount
+  useEffect(() => {
+    return () => {
+      if (pingRef.current) clearInterval(pingRef.current);
+    };
+  }, []);
+
+  async function checkNotebookSession() {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
+        headers: await getAuthHeaders(),
+      });
+      if (res.ok) {
+        const session = await res.json();
+        if (session && session.status === "running") {
+          setNotebookStatus("running");
+          setNotebookProxy(`${GATEWAY_URL}${session.proxy_base}`);
+          startPing();
+        }
+      }
+    } catch {}
+  }
+
+  async function launchNotebook() {
+    setNotebookStatus("starting");
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
+        method: "POST",
+        headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectId, branch: activeBranch }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        toast(`Failed to start notebook: ${err}`, "error");
+        setNotebookStatus("error");
+        return;
+      }
+      const session = await res.json();
+      setNotebookStatus("running");
+      setNotebookProxy(`${GATEWAY_URL}${session.proxy_base}`);
+      startPing();
+    } catch (e) {
+      toast(String(e), "error");
+      setNotebookStatus("error");
+    }
+  }
+
+  async function stopNotebook() {
+    try {
+      await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
+        method: "DELETE",
+        headers: await getAuthHeaders(),
+      });
+    } catch {}
+    setNotebookStatus("idle");
+    setNotebookProxy(null);
+    if (pingRef.current) {
+      clearInterval(pingRef.current);
+      pingRef.current = null;
+    }
+  }
+
+  function startPing() {
+    if (pingRef.current) clearInterval(pingRef.current);
+    pingRef.current = setInterval(async () => {
+      try {
+        await fetch(`${GATEWAY_URL}/api/notebook-sessions/ping`, {
+          method: "POST",
+          headers: await getAuthHeaders(),
+        });
+      } catch {}
+    }, 60000);
+  }
 
   async function handleDelete() {
     setDeleting(true);
     try {
+      await stopNotebook();
       await deleteWorkspaceProject(projectId);
       router.push("/projects");
     } catch (e) { toast(String(e), "error"); setDeleting(false); }
@@ -92,6 +185,44 @@ export default function ProjectDetailPage() {
     );
   }
 
+  // When notebook is running, show it full-screen with a thin header
+  if (notebookStatus === "running" && notebookProxy) {
+    return (
+      <div className="flex flex-col h-screen">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/projects"
+              className="text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+            </Link>
+            <span className="text-xs font-bold uppercase tracking-wider text-[var(--color-text)]">
+              {project.display_name}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <GitBranch className="w-3 h-3 text-[var(--color-text-dim)]" />
+              <span className="text-[11px] text-[var(--color-text-dim)]">{activeBranch}</span>
+            </div>
+            <StatusDot status="healthy" size={4} pulse />
+            <span className="text-[11px] text-[var(--color-success)]">running</span>
+          </div>
+          <button
+            onClick={stopNotebook}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+          >
+            <Square className="w-3 h-3" /> stop
+          </button>
+        </div>
+        <iframe
+          src={`${notebookProxy}/`}
+          className="flex-1 w-full border-0"
+          allow="clipboard-read; clipboard-write"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="p-8 animate-fade-in">
       <Link
@@ -106,24 +237,45 @@ export default function ProjectDetailPage() {
         subtitle="workspace"
         description={project.description || project.name}
         actions={
-          <button
-            onClick={() => setShowDelete(true)}
-            className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
-          >
-            <Trash2 className="w-3.5 h-3.5" /> delete
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={launchNotebook}
+              disabled={notebookStatus === "starting"}
+              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+            >
+              {notebookStatus === "starting" ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> starting...</>
+              ) : (
+                <><Play className="w-3.5 h-3.5" /> launch notebook</>
+              )}
+            </button>
+            <button
+              onClick={() => setShowDelete(true)}
+              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> delete
+            </button>
+          </div>
         }
       />
+
+      {notebookStatus === "error" && (
+        <div className="mb-4 px-4 py-3 border border-[var(--color-error)] bg-[var(--color-error)]/10 text-xs text-[var(--color-error)]">
+          Failed to start notebook. Check that K3s is running and the notebook image is built.
+        </div>
+      )}
 
       <div className="flex items-center gap-3 mb-6">
         <StatusDot status={project.status === "active" ? "healthy" : "warning"} size={6} pulse={false} />
         <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">{project.status}</span>
+        <span className="px-1.5 py-0.5 border border-[var(--color-border)] text-[11px] tracking-wider">{project.source}</span>
         {project.connection_name && (
           <span className="px-1.5 py-0.5 border border-[var(--color-border)] text-[11px] tracking-wider">{project.connection_name}</span>
         )}
-        {project.tags?.map((tag) => (
-          <span key={tag} className="px-1.5 py-0.5 border border-[var(--color-border)] text-[11px] tracking-wider">{tag}</span>
-        ))}
+        <div className="flex items-center gap-1.5">
+          <GitBranch className="w-3 h-3 text-[var(--color-text-dim)]" />
+          <span className="text-[11px] text-[var(--color-text-dim)]">{activeBranch}</span>
+        </div>
       </div>
 
       {/* Project info */}
@@ -146,11 +298,13 @@ export default function ProjectDetailPage() {
       {/* File browser */}
       <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
         <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
-          <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">files</span>
+          <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">files ({activeBranch})</span>
           <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">{files.length} files</span>
         </div>
         {files.length === 0 ? (
-          <div className="p-8 text-center text-xs text-[var(--color-text-dim)]">no files yet</div>
+          <div className="p-8 text-center text-xs text-[var(--color-text-dim)]">
+            no files yet — launch the notebook to start editing
+          </div>
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {files.map((file) => (
@@ -190,4 +344,11 @@ function InfoRow({ icon, label, value, mono = false }: { icon: React.ReactNode; 
       <span className={`text-[var(--color-text)] ${mono ? "font-mono" : ""}`}>{value}</span>
     </div>
   );
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const h: Record<string, string> = {};
+  const key = typeof window !== "undefined" ? sessionStorage.getItem("sp_api_key") : null;
+  if (key) h["Authorization"] = `Bearer ${key}`;
+  return h;
 }

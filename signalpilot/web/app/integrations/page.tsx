@@ -245,7 +245,7 @@ function IntegrationsContent() {
                   type="text"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Escape") { setShowForm(false); setEditingName(null); } }}
+                  onKeyDown={(e) => { if (e.key === "Escape") { setShowForm(false); setEditingName(null); setFormName(""); setFormApiKey(""); setFormSearchPages([]); setFormPageInput(""); setFormReportPage(""); setFormError(null); } }}
                   placeholder="e.g. data-team"
                   autoFocus={!editingName}
                   readOnly={!!editingName}
@@ -330,11 +330,11 @@ function IntegrationsContent() {
                   disabled={creating}
                   className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
                 >
-                  {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                  {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : editingName ? <Pencil className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
                   {editingName ? "save" : "create"}
                 </button>
                 <button
-                  onClick={() => { setShowForm(false); setFormError(null); setEditingName(null); }}
+                  onClick={() => { setShowForm(false); setFormError(null); setEditingName(null); setFormName(""); setFormApiKey(""); setFormSearchPages([]); setFormPageInput(""); setFormReportPage(""); }}
                   disabled={creating}
                   className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
                 >

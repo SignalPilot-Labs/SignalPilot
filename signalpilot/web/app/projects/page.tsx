@@ -49,7 +49,7 @@ export default function ProjectsPage() {
   const [createForm, setCreateForm] = useState({ name: "", display_name: "", description: "", connection_name: "" });
 
   const refresh = useCallback(() => {
-    getWorkspaceProjects()
+    getWorkspaceProjects("active")
       .then((res) => setProjects(res.projects))
       .catch(() => {});
   }, []);

@@ -16,7 +16,7 @@ import {
   File,
   X,
 } from "lucide-react";
-import { getWorkspaceProject, deleteWorkspaceProject, getWorkspaceFiles, deleteWorkspaceFile } from "@/lib/api";
+import { getWorkspaceProject, deleteWorkspaceProject, getWorkspaceFiles, deleteWorkspaceFile, getWorkspaceBranches, getUserSession } from "@/lib/api";
 import type { WorkspaceProjectInfo, WorkspaceFileInfo } from "@/lib/types";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusDot } from "@/components/ui/data-viz";
@@ -48,12 +48,18 @@ export default function ProjectDetailPage() {
   const projectId = params.id as string;
   const [project, setProject] = useState<WorkspaceProjectInfo | null>(null);
   const [files, setFiles] = useState<WorkspaceFileInfo[]>([]);
+  const [activeBranch, setActiveBranch] = useState("main");
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(() => {
     getWorkspaceProject(projectId).then(setProject).catch(() => {});
-    getWorkspaceFiles(projectId).then((res) => setFiles(res.files)).catch(() => {});
+    getUserSession(projectId).then((s) => {
+      setActiveBranch(s.active_branch);
+      getWorkspaceFiles(projectId, s.active_branch).then((res) => setFiles(res.files)).catch(() => {});
+    }).catch(() => {
+      getWorkspaceFiles(projectId, "main").then((res) => setFiles(res.files)).catch(() => {});
+    });
   }, [projectId]);
 
   useEffect(() => {
@@ -70,7 +76,7 @@ export default function ProjectDetailPage() {
 
   async function handleDeleteFile(key: string) {
     try {
-      await deleteWorkspaceFile(projectId, key);
+      await deleteWorkspaceFile(projectId, activeBranch, key);
       setFiles((prev) => prev.filter((f) => f.key !== key));
       toast(`deleted ${key}`, "success");
     } catch (e) { toast(String(e), "error"); }

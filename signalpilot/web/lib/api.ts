@@ -320,21 +320,42 @@ export const updateWorkspaceProject = (id: string, p: Record<string, unknown>) =
 export const deleteWorkspaceProject = (id: string) =>
   request<void>(`/api/workspace-projects/${id}`, { method: "DELETE" });
 
-// Workspace Project Files
-export const getWorkspaceFiles = (projectId: string, prefix?: string) =>
-  request<{ project_id: string; prefix: string; files: import("./types").WorkspaceFileInfo[] }>(
-    `/api/workspace-projects/${projectId}/files${prefix ? `?prefix=${prefix}` : ""}`
+// Workspace Project Branches
+export const getWorkspaceBranches = (projectId: string) =>
+  request<{ branches: import("./types").WorkspaceBranchInfo[] }>(`/api/workspace-projects/${projectId}/branches`);
+export const createWorkspaceBranch = (projectId: string, name: string, fromBranch = "main") =>
+  request<import("./types").WorkspaceBranchInfo>(`/api/workspace-projects/${projectId}/branches`, {
+    method: "POST",
+    body: JSON.stringify({ name, from_branch: fromBranch }),
+  });
+export const deleteWorkspaceBranch = (projectId: string, branch: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/branches/${branch}`, { method: "DELETE" });
+
+// Workspace Project Files (branch-scoped)
+export const getWorkspaceFiles = (projectId: string, branch = "main", prefix?: string) =>
+  request<{ project_id: string; branch: string; prefix: string; files: import("./types").WorkspaceFileInfo[] }>(
+    `/api/workspace-projects/${projectId}/branches/${branch}/files${prefix ? `?prefix=${prefix}` : ""}`
   );
-export const getWorkspaceFile = (projectId: string, path: string) =>
-  request<string>(`/api/workspace-projects/${projectId}/files/${path}`, {}, true);
-export const uploadWorkspaceFile = (projectId: string, path: string, content: string) =>
-  request<{ key: string; size: number }>(`/api/workspace-projects/${projectId}/files/${path}`, {
+export const getWorkspaceFile = (projectId: string, branch: string, path: string) =>
+  request<string>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, {}, true);
+export const uploadWorkspaceFile = (projectId: string, branch: string, path: string, content: string) =>
+  request<{ key: string; size: number }>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, {
     method: "PUT",
     body: content,
     headers: { "Content-Type": "text/plain" },
   });
-export const deleteWorkspaceFile = (projectId: string, path: string) =>
-  request<void>(`/api/workspace-projects/${projectId}/files/${path}`, { method: "DELETE" });
+export const deleteWorkspaceFile = (projectId: string, branch: string, path: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, { method: "DELETE" });
+
+// User Session
+export const getUserSession = (projectId: string) =>
+  request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
+    `/api/workspace-projects/${projectId}/user-session`
+  );
+export const switchBranch = (projectId: string, branch: string) =>
+  request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
+    `/api/workspace-projects/${projectId}/user-session`, { method: "PUT", body: JSON.stringify({ branch }) }
+  );
 
 // API Keys (org-scoped)
 export const getApiKeys = () =>

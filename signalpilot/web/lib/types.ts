@@ -166,6 +166,22 @@ export interface WorkspaceFileInfo {
   last_modified: number;
 }
 
+export interface WorkspaceBranchInfo {
+  id: string;
+  project_id: string;
+  org_id: string;
+  name: string;
+  created_from: string | null;
+  is_protected: boolean;
+  is_default: boolean;
+  status: "active" | "deleted";
+  file_count: number;
+  total_bytes: number;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface SandboxInfo {
   id: string;
   vm_id: string | null;

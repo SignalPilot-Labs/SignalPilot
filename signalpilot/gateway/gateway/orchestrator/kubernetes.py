@@ -53,6 +53,7 @@ def _pod_manifest(
             "containers": [{
                 "name": "notebook",
                 "image": image,
+                "imagePullPolicy": "IfNotPresent",
                 "ports": [{"containerPort": 2718}],
                 "env": env,
                 "resources": {

@@ -160,7 +160,10 @@ class TestEnsureNamespaceIdempotent:
         rbac = _make_fake_rbac_api()
 
         # All calls raise 409 — simulating resources already exist.
-        error_409 = Exception("409 AlreadyExists: namespace already exists")
+        # Use an exception with .status=409 (R5: _is_409 now uses exc.status, not str(exc)).
+        _E = type("ApiException", (Exception,), {})
+        error_409 = _E("AlreadyExists: namespace already exists")
+        error_409.status = 409  # type: ignore[attr-defined]
         core.create_namespace.side_effect = error_409
         networking.create_namespaced_network_policy.side_effect = error_409
         core.create_namespaced_resource_quota.side_effect = error_409
@@ -217,7 +220,11 @@ class TestEnsureNamespaceConcurrentLock:
             nonlocal first_call_done, call_count
             call_count += 1
             if first_call_done:
-                raise Exception("409 AlreadyExists")
+                # R5: _is_409 uses exc.status, not str(exc).
+                _E = type("ApiException", (Exception,), {})
+                exc = _E("AlreadyExists")
+                exc.status = 409  # type: ignore[attr-defined]
+                raise exc
             first_call_done = True
 
         core.create_namespace = _create_ns_first_then_409
@@ -384,7 +391,7 @@ class TestRoleAndRoleBindingShape:
         )
         assert pod_rule is not None
         assert set(pod_rule["verbs"]) >= {"create", "get", "list", "delete", "patch"}
-        assert "services" in pod_rule["resources"]
+        assert "services" not in pod_rule["resources"]
         assert "resourcequotas" in pod_rule["resources"]
         assert "limitranges" in pod_rule["resources"]
 

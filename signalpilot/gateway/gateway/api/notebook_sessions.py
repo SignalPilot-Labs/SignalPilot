@@ -43,11 +43,10 @@ async def _get_orchestrator():
 
 def _is_quota_exceeded_error(exc: Exception) -> bool:
     """Return True if the exception is a K8s 403 ResourceQuota exceeded error."""
-    exc_str = str(exc)
-    return (
-        ("403" in exc_str or "Forbidden" in exc_str)
-        and ("exceeded quota" in exc_str.lower() or "quota" in exc_str.lower())
-    )
+    if getattr(exc, "status", None) != 403:
+        return False
+    body = getattr(exc, "body", "") or ""
+    return "exceeded quota" in body.lower()
 
 
 @router.post("", status_code=201, response_model=NotebookSessionInfo, dependencies=[RequireScope("write")])

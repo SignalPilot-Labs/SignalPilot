@@ -109,6 +109,9 @@ def _pod_manifest(
         "spec": {
             # Pods must not mount the SA token — no K8s API access from within notebook pods.
             "automountServiceAccountToken": False,
+            # Suppress per-Service env var injection (SVC_SERVICE_HOST, SVC_PORT, etc.).
+            # Prevents information disclosure of cluster Service topology to notebook pods.
+            "enableServiceLinks": False,
             "securityContext": {
                 "runAsNonRoot": True,
                 "runAsUser": 10001,

@@ -710,9 +710,12 @@ class TestR3OrgIdEnforcement:
         )
 
         mock_orch = AsyncMock()
-        mock_orch.create_pod.side_effect = Exception(
-            "403 Forbidden: pods 'nb-quota' is forbidden: exceeded quota: default-quota"
-        )
+        # R5: _is_quota_exceeded_error uses exc.status + exc.body, not str(exc).
+        _E = type("ApiException", (Exception,), {})
+        _quota_exc = _E("Forbidden")
+        _quota_exc.status = 403  # type: ignore[attr-defined]
+        _quota_exc.body = "pods 'nb-quota' is forbidden: exceeded quota: default-quota"  # type: ignore[attr-defined]
+        mock_orch.create_pod.side_effect = _quota_exc
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
         monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
@@ -1261,3 +1264,37 @@ class TestR4WorkspaceSync:
         non_sentinel = [m for m in members if m != ".sp-ready"]
         assert "a.txt" in non_sentinel
         assert "b.txt" in non_sentinel
+
+
+class TestIsQuotaExceededErrorClassification:
+    """R5: _is_quota_exceeded_error must use exc.status, not str(exc)."""
+
+    def test_returns_true_for_403_with_exceeded_quota_body(self):
+        from gateway.api.notebook_sessions import _is_quota_exceeded_error
+
+        exc = type("E", (Exception,), {})()
+        exc.status = 403  # type: ignore[attr-defined]
+        exc.body = "pods exceeded quota for pods in namespace sp-nb-abc"  # type: ignore[attr-defined]
+        assert _is_quota_exceeded_error(exc) is True
+
+    def test_returns_false_for_403_without_quota_body(self):
+        from gateway.api.notebook_sessions import _is_quota_exceeded_error
+
+        exc = type("E", (Exception,), {})()
+        exc.status = 403  # type: ignore[attr-defined]
+        exc.body = "forbidden"  # type: ignore[attr-defined]
+        assert _is_quota_exceeded_error(exc) is False
+
+    def test_returns_false_for_non_403_status(self):
+        from gateway.api.notebook_sessions import _is_quota_exceeded_error
+
+        exc = type("E", (Exception,), {})()
+        exc.status = 429  # type: ignore[attr-defined]
+        exc.body = "exceeded quota"  # type: ignore[attr-defined]
+        assert _is_quota_exceeded_error(exc) is False
+
+    def test_returns_false_for_plain_exception_with_403_in_message(self):
+        """Proves we no longer grep — '403' in the message text must not count."""
+        from gateway.api.notebook_sessions import _is_quota_exceeded_error
+
+        assert _is_quota_exceeded_error(Exception("403 exceeded quota forbidden")) is False

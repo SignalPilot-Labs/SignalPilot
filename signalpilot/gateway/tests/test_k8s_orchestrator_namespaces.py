@@ -294,3 +294,78 @@ class TestCreatePodNamespaceBehavior:
                 session_id="sess-1",
                 access_token=None,
             )
+
+
+class TestPodSpecHardening:
+    """R5: PodSpec must set enableServiceLinks=False."""
+
+    @pytest.mark.asyncio
+    async def test_create_pod_enable_service_links_false(self, monkeypatch):
+        """create_pod must set enableServiceLinks=False on the pod spec."""
+        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
+
+        import importlib
+
+        import gateway.orchestrator.kubernetes as k8s_mod
+
+        importlib.reload(k8s_mod)
+
+        orch = k8s_mod.KubernetesOrchestrator()
+        captured_bodies: list[dict] = []
+
+        async def _capture_pod(namespace, body):
+            captured_bodies.append(body)
+
+        mock_core = MagicMock()
+        mock_core.create_namespaced_pod = _capture_pod
+        mock_core.create_namespaced_service = AsyncMock()
+        orch._core_api = mock_core
+        orch._networking_api = MagicMock()
+        orch._rbac_api = MagicMock()
+        orch._namespace_prefix = "sp-nb"
+        orch._gateway_namespace = "signalpilot"
+        orch._gateway_pod_selector = {"app": "signalpilot-gateway"}
+        orch._gateway_port = 3300
+        orch._egress_cidr = None
+        orch._gateway_service_account = "signalpilot-gateway"
+
+        with patch("gateway.orchestrator.kubernetes.ensure_org_namespace", AsyncMock()):
+            await orch.create_pod(
+                pod_name="nb-test",
+                user_id="user-1",
+                org_id="org-1",
+                project_id=None,
+                branch="main",
+                image="signalpilot-notebook:latest",
+                gateway_url="http://gateway:3300",
+                session_jwt="jwt",
+                session_id="sess-1",
+                access_token=None,
+            )
+
+        assert len(captured_bodies) == 1
+        assert captured_bodies[0]["spec"]["enableServiceLinks"] is False
+
+
+class TestIs409Classification:
+    """R5: _is_409 must use exc.status, not str(exc)."""
+
+    def test_returns_true_for_status_409(self):
+        from gateway.orchestrator.namespaces import _is_409
+
+        exc = type("E", (Exception,), {})()
+        exc.status = 409  # type: ignore[attr-defined]
+        assert _is_409(exc) is True
+
+    def test_returns_false_for_status_500(self):
+        from gateway.orchestrator.namespaces import _is_409
+
+        exc = type("E", (Exception,), {})()
+        exc.status = 500  # type: ignore[attr-defined]
+        assert _is_409(exc) is False
+
+    def test_returns_false_for_plain_exception_with_409_in_message(self):
+        """Proves we no longer grep — '409' in the message text must not count."""
+        from gateway.orchestrator.namespaces import _is_409
+
+        assert _is_409(Exception("409 oops AlreadyExists")) is False

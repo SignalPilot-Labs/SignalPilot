@@ -70,8 +70,7 @@ def _sanitize_prefix(prefix: str) -> str:
 
 def _is_409(exc: Exception) -> bool:
     """Return True if the exception represents a K8s 409 AlreadyExists error."""
-    exc_str = str(exc)
-    return "409" in exc_str or "AlreadyExists" in exc_str or "already exists" in exc_str.lower()
+    return getattr(exc, "status", None) == 409
 
 
 async def _create_idempotent(coro_factory, resource_description: str) -> None:
@@ -379,7 +378,7 @@ def _gateway_org_role(namespace: str) -> dict:
         "rules": [
             {
                 "apiGroups": [""],
-                "resources": ["pods", "services", "resourcequotas", "limitranges"],
+                "resources": ["pods", "resourcequotas", "limitranges"],
                 "verbs": ["create", "get", "list", "delete", "patch"],
             },
             {

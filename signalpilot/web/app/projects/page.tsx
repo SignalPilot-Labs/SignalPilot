@@ -173,8 +173,10 @@ export default function ProjectsPage() {
     finally { setCreating(false); }
   }
 
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+
   // Full-screen IDE mode
-  if (ideStatus === "running" && ideUrl) {
+  if ((ideStatus === "running" || ideStatus === "starting") && (ideUrl || ideStatus === "starting")) {
     return (
       <div className="flex flex-col h-screen">
         <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
@@ -183,21 +185,49 @@ export default function ProjectsPage() {
             <span className="text-xs font-bold uppercase tracking-wider text-[var(--color-text)]">
               SignalPilot IDE
             </span>
-            <StatusDot status="healthy" size={4} pulse />
-            <span className="text-[11px] text-[var(--color-success)]">running</span>
+            {ideStatus === "starting" ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-text-dim)]" />
+                <span className="text-[11px] text-[var(--color-text-dim)]">starting...</span>
+              </>
+            ) : !iframeLoaded ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-text-dim)]" />
+                <span className="text-[11px] text-[var(--color-text-dim)]">loading...</span>
+              </>
+            ) : (
+              <>
+                <StatusDot status="healthy" size={4} pulse />
+                <span className="text-[11px] text-[var(--color-success)]">running</span>
+              </>
+            )}
           </div>
           <button
-            onClick={stopIde}
+            onClick={() => { stopIde(); setIframeLoaded(false); }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
           >
             <Square className="w-3 h-3" /> stop
           </button>
         </div>
-        <iframe
-          src={`${ideUrl}/`}
-          className="flex-1 w-full border-0"
-          allow="clipboard-read; clipboard-write"
-        />
+        <div className="flex-1 relative">
+          {(!ideUrl || !iframeLoaded) && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[var(--color-bg)] z-10">
+              <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-dim)]" />
+              <span className="text-xs text-[var(--color-text-dim)] tracking-wider uppercase">
+                {ideStatus === "starting" ? "starting notebook pod..." : "loading IDE..."}
+              </span>
+            </div>
+          )}
+          {ideUrl && (
+            <iframe
+              src={`${ideUrl}/`}
+              className="absolute inset-0 w-full h-full border-0"
+              style={{ opacity: iframeLoaded ? 1 : 0, transition: "opacity 300ms ease-in" }}
+              onLoad={() => setIframeLoaded(true)}
+              allow="clipboard-read; clipboard-write"
+            />
+          )}
+        </div>
       </div>
     );
   }

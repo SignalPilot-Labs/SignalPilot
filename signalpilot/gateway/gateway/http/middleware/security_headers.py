@@ -27,8 +27,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
+        # Skip restrictive framing headers for notebook proxy routes
+        is_proxy = request.url.path.startswith("/api/notebook-sessions/proxy")
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        if not is_proxy:
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "0"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Cache-Control"] = "no-store"
@@ -44,6 +47,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         # CSP: SP_GATEWAY_CSP_POLICY overrides the default entirely when set.
         # The deployer owns the full policy — no merging or layering.
-        csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY
-        response.headers["Content-Security-Policy"] = csp_policy
+        if is_proxy:
+            csp_policy = None
+        else:
+            csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY
+        if csp_policy:
+            response.headers["Content-Security-Policy"] = csp_policy
         return response

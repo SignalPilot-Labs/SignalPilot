@@ -85,7 +85,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
             project_id=body.project_id,
             branch=body.branch,
             image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
-            gateway_url=os.getenv("SP_GATEWAY_URL", "http://gateway:3300"),
+            gateway_url=f"{request.url.scheme}://{request.url.netloc}",
             api_key=user_api_key,
             access_token=session_info.access_token,
         )

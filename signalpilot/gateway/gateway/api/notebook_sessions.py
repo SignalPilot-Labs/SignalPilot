@@ -174,7 +174,11 @@ async def _resolve_pod_url_from_request(request: Request) -> str:
 async def proxy_http(request: Request, path: str = ""):
     """Reverse proxy HTTP requests to the user's notebook pod."""
     pod_url = await _resolve_pod_url_from_request(request)
-    target = f"{pod_url}/api/notebook-sessions/proxy/{path}" if path else f"{pod_url}/api/notebook-sessions/proxy/"
+    # The request path is /api/notebook-sessions/proxy/{path}
+    # The pod expects the same path since --base-url=/api/notebook-sessions/proxy
+    # So forward the original full path to the pod
+    full_path = request.url.path
+    target = f"{pod_url}{full_path}"
     if request.url.query:
         target += f"?{request.url.query}"
 
@@ -197,11 +201,7 @@ async def proxy_http(request: Request, path: str = ""):
         raise HTTPException(status_code=502, detail="Notebook pod not reachable")
 
     resp_headers = dict(resp.headers)
-    # Rewrite Location headers so redirects stay within the proxy path
-    if "location" in resp_headers:
-        loc = resp_headers["location"]
-        if loc.startswith("/"):
-            resp_headers["location"] = f"/api/notebook-sessions/proxy{loc}"
+    # marimo already uses --base-url so its Location headers include the full proxy path
     # Strip frame-blocking headers from proxied responses
     resp_headers.pop("x-frame-options", None)
     resp_headers.pop("content-security-policy", None)

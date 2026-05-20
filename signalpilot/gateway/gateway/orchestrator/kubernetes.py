@@ -144,7 +144,7 @@ def _pod_manifest(
                         "sh", "-c",
                         "while [ ! -f /workspace/.sp-ready ]; do sleep 0.2; done; "
                         f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
-                        f"--base-url /notebook/{session_id} /workspace",
+                        f"--no-skew-protection --base-url /notebook/{session_id} /workspace",
                     ],
                     "ports": [{"containerPort": 2718}],
                     "env": env,

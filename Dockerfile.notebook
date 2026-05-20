@@ -21,7 +21,14 @@ RUN if [ -n "$GIT_TOKEN" ]; then \
 RUN pip install --no-cache-dir -e . && \
     pip install --no-cache-dir "starlette==0.47.2" "uvicorn==0.35.0"
 
-# Common data packages + notebook deps (match conda marimo env)
+# dbt + adapters
+RUN pip install --no-cache-dir \
+    "dbt-core>=1.9,<2" \
+    "dbt-duckdb>=1.9" \
+    "dbt-postgres>=1.9" \
+    "dbt-snowflake>=1.9"
+
+# Common data packages + notebook deps
 RUN pip install --no-cache-dir \
     httpx \
     requests \
@@ -38,7 +45,10 @@ RUN pip install --no-cache-dir \
     scikit-learn \
     scipy \
     seaborn \
-    plotly
+    plotly \
+    pyyaml \
+    jinja2 \
+    python-dotenv
 
 # Non-root user
 RUN groupadd -g 10001 notebook && \

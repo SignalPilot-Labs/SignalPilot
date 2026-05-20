@@ -20,6 +20,7 @@ class NotebookSessionInfo(BaseModel):
     branch: str = "main"
     pod_name: str | None = None
     pod_ip: str | None = None
+    access_token: str | None = None
     status: str = "creating"
     proxy_base: str | None = None
     last_ping: float | None = None

@@ -33,7 +33,10 @@ async def create_session(
     branch: str,
     pod_name: str,
 ) -> NotebookSessionInfo:
+    import secrets
+
     now = time.time()
+    token = secrets.token_urlsafe(24)
     row = GatewayNotebookSession(
         id=str(uuid.uuid4()),
         org_id=org_id,
@@ -42,6 +45,7 @@ async def create_session(
         branch=branch,
         pod_name=pod_name,
         pod_ip=None,
+        access_token=token,
         status="creating",
         last_ping=now,
         created_at=now,
@@ -125,6 +129,7 @@ def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
         branch=row.branch,
         pod_name=row.pod_name,
         pod_ip=row.pod_ip,
+        access_token=row.access_token,
         status=row.status,
         proxy_base="/api/notebook-sessions/proxy" if row.status == "running" else None,
         last_ping=row.last_ping,

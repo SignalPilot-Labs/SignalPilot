@@ -17,17 +17,28 @@ RUN if [ -n "$GIT_TOKEN" ]; then \
       git clone --depth 1 --branch ${NOTEBOOK_BRANCH} ${NOTEBOOK_REPO} . ; \
     fi
 
-# Install marimo
-RUN pip install --no-cache-dir -e .
+# Install marimo (pin starlette/uvicorn to known-working versions)
+RUN pip install --no-cache-dir -e . && \
+    pip install --no-cache-dir "starlette==0.47.2" "uvicorn==0.35.0"
 
-# Common data packages + SP SDK
+# Common data packages + notebook deps (match conda marimo env)
 RUN pip install --no-cache-dir \
     httpx \
     requests \
     duckdb \
     polars \
     pandas \
-    pyarrow
+    pyarrow \
+    sqlglot \
+    altair \
+    anthropic \
+    claude-agent-sdk \
+    mcp \
+    pydantic-ai-slim \
+    scikit-learn \
+    scipy \
+    seaborn \
+    plotly
 
 # Non-root user
 RUN groupadd -g 10001 notebook && \
@@ -43,4 +54,7 @@ EXPOSE 2718
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
     CMD curl -sf http://localhost:2718/api/health || curl -sf http://localhost:2718/ -o /dev/null || exit 1
 
-CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--no-token", "--headless", "/workspace"]
+ENV SP_GATEWAY_URL=""
+ENV SP_API_KEY=""
+
+CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless", "/workspace"]

@@ -105,7 +105,8 @@ export default function ProjectsPage() {
         const session = await r.json();
         if (session && session.status === "running") {
           setIdeStatus("running");
-          setIdeUrl(`${GATEWAY_URL}${session.proxy_base}`);
+          const token = session.access_token ? `?access_token=${session.access_token}` : "";
+          setIdeUrl(`${GATEWAY_URL}${session.proxy_base}${token}`);
           startPing();
         }
       }
@@ -127,7 +128,8 @@ export default function ProjectsPage() {
       }
       const session = await r.json();
       setIdeStatus("running");
-      setIdeUrl(`${GATEWAY_URL}${session.proxy_base}`);
+      const token = session.access_token ? `?access_token=${session.access_token}` : "";
+      setIdeUrl(`${GATEWAY_URL}${session.proxy_base}${token}`);
       startPing();
     } catch (e) {
       toast(String(e), "error");
@@ -220,7 +222,7 @@ export default function ProjectsPage() {
           )}
           {ideUrl && (
             <iframe
-              src={`${ideUrl}/`}
+              src={ideUrl}
               className="absolute inset-0 w-full h-full border-0"
               style={{ opacity: iframeLoaded ? 1 : 0, transition: "opacity 300ms ease-in" }}
               onLoad={() => setIframeLoaded(true)}

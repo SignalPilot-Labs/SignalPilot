@@ -25,6 +25,7 @@ def _pod_manifest(
     branch: str,
     gateway_url: str,
     api_key: str | None,
+    access_token: str | None = None,
 ) -> dict:
     """Build the pod spec dict for the Kubernetes API."""
     env = [
@@ -36,6 +37,8 @@ def _pod_manifest(
     ]
     if api_key:
         env.append({"name": "SP_API_KEY", "value": api_key})
+    if access_token:
+        env.append({"name": "SP_ACCESS_TOKEN", "value": access_token})
 
     return {
         "apiVersion": "v1",
@@ -131,6 +134,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         image: str,
         gateway_url: str,
         api_key: str | None,
+        access_token: str | None = None,
     ) -> PodInfo:
         await self._ensure_client()
         if not self._core_api:
@@ -146,6 +150,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             branch=branch,
             gateway_url=gateway_url,
             api_key=api_key,
+            access_token=access_token,
         )
         await self._core_api.create_namespaced_pod(
             namespace=self._namespace, body=manifest

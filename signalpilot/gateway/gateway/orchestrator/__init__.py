@@ -28,6 +28,7 @@ class NotebookOrchestrator(ABC):
         image: str,
         gateway_url: str,
         api_key: str | None,
+        access_token: str | None = None,
     ) -> PodInfo:
         ...
 

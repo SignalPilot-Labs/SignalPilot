@@ -70,6 +70,14 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
     import os
 
     try:
+        # Pass the user's API key to the pod so it can call back to the gateway
+        auth = getattr(request.state, "auth", {})
+        user_api_key = None
+        if auth.get("auth_method") == "api_key":
+            user_api_key = request.headers.get("x-api-key") or (
+                request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None
+            )
+
         await orch.create_pod(
             pod_name=pod,
             user_id=user_id,
@@ -78,7 +86,8 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
             branch=body.branch,
             image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
             gateway_url=os.getenv("SP_GATEWAY_URL", "http://gateway:3300"),
-            api_key=None,
+            api_key=user_api_key,
+            access_token=session_info.access_token,
         )
         pod_info = await orch.wait_for_ready(pod, timeout=90)
         await ns.update_session_status(

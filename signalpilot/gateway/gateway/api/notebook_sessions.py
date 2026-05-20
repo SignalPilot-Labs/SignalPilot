@@ -1,13 +1,12 @@
-"""Notebook session endpoints — lifecycle + reverse proxy to user pods."""
+"""Notebook session endpoints — lifecycle management for user notebook pods."""
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 
-import httpx
-from fastapi import APIRouter, HTTPException, Request, WebSocket
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, HTTPException, Request
 
 from ..models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
 from ..security.scope_guard import RequireScope
@@ -17,15 +16,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/notebook-sessions")
 
-_proxy_client: httpx.AsyncClient | None = None
-
-
-def _get_proxy_client() -> httpx.AsyncClient:
-    global _proxy_client
-    if _proxy_client is None:
-        _proxy_client = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
-    return _proxy_client
-
 
 def _pod_name(org_id: str, user_id: str) -> str:
     h = hashlib.sha256(f"{org_id}:{user_id}".encode()).hexdigest()[:12]
@@ -34,11 +24,7 @@ def _pod_name(org_id: str, user_id: str) -> str:
 
 async def _get_orchestrator():
     from ..orchestrator.kubernetes import KubernetesOrchestrator
-
     return KubernetesOrchestrator()
-
-
-# ─── Session CRUD ────────────────────────────────────────────────────────────
 
 
 @router.post("", status_code=201, response_model=NotebookSessionInfo, dependencies=[RequireScope("write")])
@@ -67,10 +53,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
         pod_name=pod,
     )
 
-    import os
-
     try:
-        # Pass the user's API key to the pod so it can call back to the gateway
         auth = getattr(request.state, "auth", {})
         user_api_key = None
         if auth.get("auth_method") == "api_key":
@@ -95,7 +78,8 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
         )
         session_info.status = "running"
         session_info.pod_ip = pod_info.ip
-        session_info.proxy_base = "/api/notebook-sessions/proxy"
+        # Build the direct notebook URL for the frontend iframe
+        session_info.notebook_url = f"http://{pod_info.ip}?access_token={session_info.access_token}"
     except Exception as e:
         logger.error("Failed to create notebook pod %s: %s", pod, e)
         await ns.update_session_status(store.session, session_id=session_info.id, status="error")
@@ -108,7 +92,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
 async def get_session(store: StoreD):
     """Get current user's active session."""
     from ..store import notebook_sessions as ns
-
     return await ns.get_active_session(store.session, org_id=store.org_id, user_id=store.user_id or "local")
 
 
@@ -134,148 +117,4 @@ async def delete_session(store: StoreD):
 async def ping_session(store: StoreD):
     """Keep session alive. Call every 60 seconds."""
     from ..store import notebook_sessions as ns
-
     return await ns.ping_session(store.session, org_id=store.org_id, user_id=store.user_id or "local")
-
-
-# ─── Reverse Proxy ───────────────────────────────────────────────────────────
-
-
-async def _resolve_pod_url_from_store(store: StoreD) -> str:
-    from ..store import notebook_sessions as ns
-
-    session = await ns.get_active_session(store.session, org_id=store.org_id, user_id=store.user_id or "local")
-    if not session or session.status != "running" or not session.pod_ip:
-        raise HTTPException(status_code=404, detail="No running notebook session")
-    ip = session.pod_ip
-    return f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
-
-
-async def _resolve_pod_url_from_request(request: Request) -> str:
-    """Look up pod URL for the authenticated user, reading pod_ip directly from DB."""
-    from sqlalchemy import select
-
-    from ..db.engine import get_session_factory
-    from ..db.models import GatewayNotebookSession
-
-    auth = getattr(request.state, "auth", {})
-    org_id = auth.get("org_id", "local")
-    user_id = auth.get("user_id", "local")
-
-    factory = get_session_factory()
-    async with factory() as session:
-        q = select(GatewayNotebookSession).where(
-            GatewayNotebookSession.org_id == org_id,
-            GatewayNotebookSession.user_id == user_id,
-            GatewayNotebookSession.status == "running",
-        )
-        row = (await session.execute(q)).scalar_one_or_none()
-    if not row or not row.pod_ip:
-        raise HTTPException(status_code=404, detail="No running notebook session")
-    ip = row.pod_ip
-    return f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
-
-
-@router.api_route("/proxy", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-@router.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def proxy_http(request: Request, path: str = ""):
-    """Reverse proxy HTTP requests to the user's notebook pod."""
-    pod_url = await _resolve_pod_url_from_request(request)
-    # The request path is /api/notebook-sessions/proxy/{path}
-    # The pod expects the same path since --base-url=/api/notebook-sessions/proxy
-    # So forward the original full path to the pod
-    full_path = request.url.path
-    target = f"{pod_url}{full_path}"
-    if request.url.query:
-        target += f"?{request.url.query}"
-
-    client = _get_proxy_client()
-    body = await request.body()
-
-    headers = dict(request.headers)
-    for h in ["host", "content-length", "transfer-encoding"]:
-        headers.pop(h, None)
-
-    try:
-        resp = await client.request(
-            method=request.method,
-            url=target,
-            headers=headers,
-            content=body if body else None,
-            follow_redirects=False,
-        )
-    except httpx.ConnectError as e:
-        logger.error("Proxy connect error: %s → %s: %s", request.url.path, target, e)
-        raise HTTPException(status_code=502, detail=f"Notebook pod not reachable at {target}")
-    except Exception as e:
-        logger.error("Proxy error: %s → %s: %s", request.url.path, target, e)
-        raise HTTPException(status_code=502, detail=f"Proxy error: {type(e).__name__}: {e}")
-
-    # Build response, forwarding all headers including Set-Cookie
-    skip = {"x-frame-options", "content-security-policy", "transfer-encoding", "content-length", "content-type"}
-    response = Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type"),
-    )
-    for k, v in resp.headers.multi_items():
-        if k.lower() not in skip:
-            response.headers.append(k, v)
-    return response
-
-
-@router.websocket("/proxy/ws")
-async def proxy_websocket(ws: WebSocket):
-    """Reverse proxy WebSocket to the user's notebook pod."""
-    import asyncio
-    import websockets
-
-    # For WebSocket, auth state is set by the middleware on the initial HTTP upgrade
-    auth = getattr(ws.state, "auth", {})
-    org_id = auth.get("org_id", "local")
-    user_id = auth.get("user_id", "local")
-
-    from ..db.engine import get_session_factory
-    from ..store import notebook_sessions as ns
-
-    factory = get_session_factory()
-    async with factory() as session:
-        nb_session = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
-    if not nb_session or not nb_session.pod_ip:
-        await ws.close(code=4004, reason="No running notebook session")
-        return
-    ip = nb_session.pod_ip
-    pod_url = f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
-    ws_url = pod_url.replace("http://", "ws://") + "/api/notebook-sessions/proxy/ws"
-
-    await ws.accept()
-
-    try:
-        async with websockets.connect(ws_url) as pod_ws:
-
-            async def client_to_pod():
-                try:
-                    while True:
-                        data = await ws.receive_text()
-                        await pod_ws.send(data)
-                except Exception:
-                    pass
-
-            async def pod_to_client():
-                try:
-                    async for msg in pod_ws:
-                        if isinstance(msg, str):
-                            await ws.send_text(msg)
-                        else:
-                            await ws.send_bytes(msg)
-                except Exception:
-                    pass
-
-            await asyncio.gather(client_to_pod(), pod_to_client())
-    except Exception as e:
-        logger.warning("WebSocket proxy error: %s", e)
-    finally:
-        try:
-            await ws.close()
-        except Exception:
-            pass

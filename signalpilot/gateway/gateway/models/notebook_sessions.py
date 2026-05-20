@@ -22,6 +22,6 @@ class NotebookSessionInfo(BaseModel):
     pod_ip: str | None = None
     access_token: str | None = None
     status: str = "creating"
-    proxy_base: str | None = None
+    notebook_url: str | None = None
     last_ping: float | None = None
     created_at: float = Field(default_factory=time.time)

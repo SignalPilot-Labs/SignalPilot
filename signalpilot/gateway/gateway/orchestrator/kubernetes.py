@@ -57,8 +57,7 @@ def _pod_manifest(
                 "name": "notebook",
                 "image": f"docker.io/library/{image}" if ":" in image and "/" not in image else image,
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless",
-                    "--base-url", "/api/notebook-sessions/proxy"]
+                "command": ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless"]
                     + (["--token-password", access_token] if access_token else ["--no-token"])
                     + ["/workspace"],
                 "ports": [{"containerPort": 2718}],

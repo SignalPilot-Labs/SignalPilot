@@ -103,10 +103,9 @@ export default function ProjectsPage() {
       const r = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, { headers: await getAuthHeaders() });
       if (r.ok) {
         const session = await r.json();
-        if (session && session.status === "running") {
+        if (session && session.status === "running" && session.notebook_url) {
           setIdeStatus("running");
-          const token = session.access_token ? `?access_token=${session.access_token}` : "";
-          setIdeUrl(`${GATEWAY_URL}${session.proxy_base}${token}`);
+          setIdeUrl(session.notebook_url);
           startPing();
         }
       }
@@ -127,9 +126,13 @@ export default function ProjectsPage() {
         return;
       }
       const session = await r.json();
+      if (!session.notebook_url) {
+        toast("Session created but notebook URL not available", "error");
+        setIdeStatus("closed");
+        return;
+      }
       setIdeStatus("running");
-      const token = session.access_token ? `?access_token=${session.access_token}` : "";
-      setIdeUrl(`${GATEWAY_URL}${session.proxy_base}${token}`);
+      setIdeUrl(session.notebook_url);
       startPing();
     } catch (e) {
       toast(String(e), "error");

@@ -120,18 +120,22 @@ async def list_stale_sessions(
     return [_to_info(r) for r in rows]
 
 
-def _to_info(row: GatewayNotebookSession, include_internal: bool = False) -> NotebookSessionInfo:
+def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
+    notebook_url = None
+    if row.status == "running" and row.pod_ip and row.access_token:
+        ip = row.pod_ip
+        notebook_url = f"http://{ip}?access_token={row.access_token}"
     return NotebookSessionInfo(
         id=row.id,
         org_id=row.org_id,
         user_id=row.user_id,
         project_id=row.project_id,
         branch=row.branch,
-        pod_name=row.pod_name if include_internal else None,
-        pod_ip=row.pod_ip if include_internal else None,
+        pod_name=row.pod_name,
+        pod_ip=row.pod_ip,
         access_token=row.access_token,
         status=row.status,
-        proxy_base="/api/notebook-sessions/proxy" if row.status == "running" else None,
+        notebook_url=notebook_url,
         last_ping=row.last_ping,
         created_at=row.created_at,
     )

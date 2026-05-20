@@ -197,8 +197,12 @@ async def proxy_http(request: Request, path: str = ""):
             content=body if body else None,
             follow_redirects=False,
         )
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail="Notebook pod not reachable")
+    except httpx.ConnectError as e:
+        logger.error("Proxy connect error: %s → %s: %s", request.url.path, target, e)
+        raise HTTPException(status_code=502, detail=f"Notebook pod not reachable at {target}")
+    except Exception as e:
+        logger.error("Proxy error: %s → %s: %s", request.url.path, target, e)
+        raise HTTPException(status_code=502, detail=f"Proxy error: {type(e).__name__}: {e}")
 
     resp_headers = dict(resp.headers)
     # marimo already uses --base-url so its Location headers include the full proxy path

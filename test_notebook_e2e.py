@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 
 GATEWAY = "http://localhost:3300"
 FRONTEND = "http://localhost:3200"
-API_KEY = "sp_4ec5fc033abfc255ee81609443ab9ba1"
+API_KEY = "YOUR_API_KEY_HERE"
 
 
 def cleanup():

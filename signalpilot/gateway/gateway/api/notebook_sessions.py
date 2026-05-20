@@ -174,7 +174,7 @@ async def _resolve_pod_url_from_request(request: Request) -> str:
 async def proxy_http(request: Request, path: str = ""):
     """Reverse proxy HTTP requests to the user's notebook pod."""
     pod_url = await _resolve_pod_url_from_request(request)
-    target = f"{pod_url}/{path}"
+    target = f"{pod_url}/api/notebook-sessions/proxy/{path}" if path else f"{pod_url}/api/notebook-sessions/proxy/"
     if request.url.query:
         target += f"?{request.url.query}"
 
@@ -236,7 +236,7 @@ async def proxy_websocket(ws: WebSocket):
         return
     ip = nb_session.pod_ip
     pod_url = f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
-    ws_url = pod_url.replace("http://", "ws://") + "/ws"
+    ws_url = pod_url.replace("http://", "ws://") + "/api/notebook-sessions/proxy/ws"
 
     await ws.accept()
 

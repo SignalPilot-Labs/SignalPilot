@@ -190,14 +190,25 @@ async def proxy_http(path: str, request: Request):
             url=target,
             headers=headers,
             content=body if body else None,
+            follow_redirects=False,
         )
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail="Notebook pod not reachable")
 
+    resp_headers = dict(resp.headers)
+    # Rewrite Location headers so redirects stay within the proxy path
+    if "location" in resp_headers:
+        loc = resp_headers["location"]
+        if loc.startswith("/"):
+            resp_headers["location"] = f"/api/notebook-sessions/proxy{loc}"
+    # Strip frame-blocking headers from proxied responses
+    resp_headers.pop("x-frame-options", None)
+    resp_headers.pop("content-security-policy", None)
+
     return Response(
         content=resp.content,
         status_code=resp.status_code,
-        headers=dict(resp.headers),
+        headers=resp_headers,
         media_type=resp.headers.get("content-type"),
     )
 

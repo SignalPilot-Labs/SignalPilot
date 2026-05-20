@@ -169,8 +169,9 @@ async def _resolve_pod_url_from_request(request: Request) -> str:
     return f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
 
 
+@router.api_route("/proxy", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 @router.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def proxy_http(path: str, request: Request):
+async def proxy_http(request: Request, path: str = ""):
     """Reverse proxy HTTP requests to the user's notebook pod."""
     pod_url = await _resolve_pod_url_from_request(request)
     target = f"{pod_url}/{path}"

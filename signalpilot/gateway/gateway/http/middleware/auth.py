@@ -43,8 +43,12 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/mcp"):
             return await call_next(request)
 
-        # Notebook proxy — auth handled by access_token in query param
+        # Notebook proxy — auth handled by access_token in query param to marimo
         if request.url.path.startswith("/api/notebook-sessions/proxy"):
+            request.state.auth = {"user_id": "local", "org_id": "local", "auth_method": "notebook_proxy"}
+            return await call_next(request)
+        # Also catch without trailing path (redirect case)
+        if request.url.path == "/api/notebook-sessions/proxy":
             request.state.auth = {"user_id": "local", "org_id": "local", "auth_method": "notebook_proxy"}
             return await call_next(request)
 

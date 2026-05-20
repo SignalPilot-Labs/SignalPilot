@@ -387,6 +387,14 @@ def _gateway_org_role(namespace: str) -> dict:
                 "resources": ["pods/log", "pods/status"],
                 "verbs": ["get", "list"],
             },
+            # R4: pods/exec create — required for gateway-side workspace sync via tar.
+            # Mitigated by: pod_exec_io is the sole caller (C4 AST test), container
+            # hardcoded to "notebook", paths confined to /workspace/, argv is a list literal.
+            {
+                "apiGroups": [""],
+                "resources": ["pods/exec"],
+                "verbs": ["create"],
+            },
             {
                 "apiGroups": ["networking.k8s.io"],
                 "resources": ["networkpolicies"],

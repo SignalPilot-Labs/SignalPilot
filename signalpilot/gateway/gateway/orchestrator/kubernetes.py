@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 from . import NotebookOrchestrator, PodInfo
 from .namespaces import ensure_org_namespace, namespace_for_org
@@ -124,14 +125,21 @@ def _pod_manifest(
                         else image
                     ),
                     "imagePullPolicy": "IfNotPresent",
+                    # R4: Sentinel-wait shim (C1). The pod CMD polls for /workspace/.sp-ready
+                    # before starting marimo. This ensures the gateway has finished injecting
+                    # the workspace content (via pods/exec tar) before marimo opens /workspace.
+                    # The pod reaches Running state but NOT Ready (readinessProbe probes the
+                    # marimo HTTP port which is not bound until after the sentinel is written).
+                    # Sequence: create_pod → wait_for_running → populate_pod_workspace
+                    #           (writes .sp-ready last) → wait_for_ready.
                     # --no-token: pod runs without marimo's built-in auth; the gateway proxy
                     # is the sole auth gate.
                     # --base-url: tells marimo to emit asset/WS URLs under /notebook/{session_id}.
                     "command": [
-                        "sp", "edit", "--host", "0.0.0.0", "--port", "2718",
-                        "--headless", "--no-token",
-                        "--base-url", f"/notebook/{session_id}",
-                        "/workspace",
+                        "sh", "-c",
+                        "while [ ! -f /workspace/.sp-ready ]; do sleep 0.2; done; "
+                        f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
+                        f"--base-url /notebook/{session_id} /workspace",
                     ],
                     "ports": [{"containerPort": 2718}],
                     "env": env,
@@ -372,10 +380,11 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         pod = await self.get_pod(pod_name, org_id=org_id)
         return pod is not None and pod.status == "running"
 
-    async def wait_for_ready(self, pod_name: str, *, org_id: str, timeout: int = 60) -> PodInfo:
-        """Poll until pod has an IP and is running, or timeout.
+    async def wait_for_running(self, pod_name: str, *, org_id: str, timeout: int = 60) -> PodInfo:
+        """Poll until pod phase is Running and container started=True, or timeout.
 
-        Returns PodInfo with internal_ip set to the raw pod IP (pod_ip mode only).
+        Does NOT wait for readinessProbe. Used before populate_pod_workspace so we
+        can exec into the pod as soon as the container process is up.
         """
         if not org_id:
             raise ValueError("org_id must not be empty")
@@ -386,7 +395,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             pod = await self.get_pod(pod_name, org_id=org_id)
-            if pod and pod.ip and pod.status == "running":
+            if pod and pod.status == "running":
                 return PodInfo(
                     name=pod.name,
                     ip=pod.ip,
@@ -396,7 +405,128 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             if pod and pod.status in ("failed", "succeeded"):
                 raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
             await asyncio.sleep(2)
+        raise TimeoutError(f"Pod {pod_name} not in Running state after {timeout}s")
+
+    async def _is_pod_container_ready(self, pod_name: str, *, ns: str) -> tuple[bool, str | None]:
+        """Return (all_containers_ready, pod_ip) by inspecting containerStatuses[*].ready.
+
+        Reads pod directly (not via get_pod) to access the full status object.
+        Returns (False, None) on any K8s API error.
+        """
+        if not self._core_api:
+            return False, None
+        try:
+            resp = await self._core_api.read_namespaced_pod(name=pod_name, namespace=ns)
+            pod = resp.to_dict()
+            status = pod.get("status", {})
+            phase = (status.get("phase") or "").lower()
+            if phase in ("failed", "succeeded"):
+                return False, None
+
+            container_statuses = status.get("container_statuses") or []
+            if not container_statuses:
+                return False, None
+
+            all_ready = all(cs.get("ready", False) for cs in container_statuses)
+            pod_ip = status.get("pod_ip") or status.get("podIP")
+            return all_ready and bool(pod_ip), pod_ip
+        except Exception:
+            return False, None
+
+    async def wait_for_ready(self, pod_name: str, *, org_id: str, timeout: int = 60) -> PodInfo:
+        """Poll until all containers in the pod are ready (containerStatuses[*].ready=True).
+
+        Returns PodInfo with internal_ip set to the raw pod IP (pod_ip mode only).
+        Container readiness is gated by the readinessProbe (tcpSocket on port 2718),
+        which passes only after marimo starts, which only happens after the sentinel
+        /workspace/.sp-ready is extracted — making this the true end of the C1 flow.
+
+        Distinct from wait_for_running: that method only checks pod phase == Running;
+        this method checks that all containers have passed their readinessProbe.
+        """
+        if not org_id:
+            raise ValueError("org_id must not be empty")
+        await self._ensure_client()
+        if not self._core_api:
+            raise RuntimeError("K8s orchestrator not available")
+
+        ns = self._resolve_namespace(org_id)
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            all_ready, pod_ip = await self._is_pod_container_ready(pod_name, ns=ns)
+            if all_ready and pod_ip:
+                return PodInfo(
+                    name=pod_name,
+                    ip=pod_ip,
+                    status="running",
+                    internal_ip=pod_ip,
+                )
+            # Check for terminal state to avoid polling until timeout.
+            pod = await self.get_pod(pod_name, org_id=org_id)
+            if pod and pod.status in ("failed", "succeeded"):
+                raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
+            await asyncio.sleep(2)
         raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
+
+    async def populate_pod_workspace(
+        self, pod_name: str, *, org_id: str, src: Path
+    ) -> None:
+        """Inject workspace content into the pod via pods/exec tar stream.
+
+        Writes .sp-ready as the FINAL entry in the tar stream so the sentinel-wait
+        shim in the pod CMD starts marimo only after all workspace content is present.
+
+        Delegates to pod_exec_io.stream_tar_into_pod — the sole authorized
+        caller of the K8s exec API. Not on the NotebookOrchestrator ABC (K8s-specific).
+        """
+        if not org_id:
+            raise ValueError("org_id must not be empty")
+        await self._ensure_client()
+        if not self._core_api:
+            raise RuntimeError("K8s orchestrator not available")
+
+        # Write .sp-ready sentinel into src dir. Pass it as sentinel_last so
+        # stream_tar_into_pod guarantees it is the FINAL tar member regardless of
+        # lexicographic sort order (C1: dot-files sort before visible files in ASCII,
+        # so a naive sorted() would place ".sp-ready" first, not last).
+        sentinel = src / ".sp-ready"
+        sentinel.write_bytes(b"")
+
+        from .pod_exec_io import stream_tar_into_pod
+
+        ns = self._resolve_namespace(org_id)
+        await stream_tar_into_pod(
+            self._core_api,
+            namespace=ns,
+            pod_name=pod_name,
+            src_dir=src,
+            dest_path="/workspace/",
+            sentinel_last=sentinel,
+        )
+
+    async def snapshot_pod_workspace(
+        self, pod_name: str, *, org_id: str, dest: Path
+    ) -> None:
+        """Pull workspace content from the pod via pods/exec tar stream into dest.
+
+        Delegates to pod_exec_io.stream_tar_out_of_pod. Not on the ABC (K8s-specific).
+        """
+        if not org_id:
+            raise ValueError("org_id must not be empty")
+        await self._ensure_client()
+        if not self._core_api:
+            raise RuntimeError("K8s orchestrator not available")
+
+        from .pod_exec_io import stream_tar_out_of_pod
+
+        ns = self._resolve_namespace(org_id)
+        await stream_tar_out_of_pod(
+            self._core_api,
+            namespace=ns,
+            pod_name=pod_name,
+            src_path="/workspace/",
+            dest_dir=dest,
+        )
 
     async def close(self) -> None:
         if self._client:

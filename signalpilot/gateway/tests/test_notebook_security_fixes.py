@@ -230,6 +230,10 @@ class TestGatewayUrlFromConfig:
 
         mock_orch = AsyncMock()
         mock_orch.create_pod.return_value = PodInfo(name="nb-url-test", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            return_value=PodInfo(name="nb-url-test", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready.return_value = PodInfo(
             name="nb-url-test", ip="10.0.0.5:2718", status="running"
         )
@@ -250,9 +254,12 @@ class TestGatewayUrlFromConfig:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
+        mock_response = MagicMock()
+        mock_response.headers = {}
+
         import asyncio
 
-        asyncio.run(ns_api.create_session(body, store))
+        asyncio.run(ns_api.create_session(body, store, mock_response))
 
         call_kwargs = mock_orch.create_pod.call_args.kwargs
         # Must use the config URL, NOT any Host-header-derived value
@@ -396,8 +403,10 @@ class TestCloudModeEmptyUserId:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
+        mock_response = MagicMock()
+        mock_response.headers = {}
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api.create_session(body, store)
+            await ns_api.create_session(body, store, mock_response)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -435,6 +444,10 @@ class TestCloudModeEmptyUserId:
         mock_orch = AsyncMock()
         mock_orch.is_pod_alive.return_value = False
         mock_orch.create_pod.return_value = PodInfo(name="nb-local", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            return_value=PodInfo(name="nb-local", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready.return_value = PodInfo(name="nb-local", ip="10.0.0.6:2718", status="running")
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
@@ -451,7 +464,9 @@ class TestCloudModeEmptyUserId:
         from gateway.models.notebook_sessions import NotebookSessionCreate
 
         body = NotebookSessionCreate(project_id=None, branch="main")
-        result = await ns_api.create_session(body, store)
+        mock_response = MagicMock()
+        mock_response.headers = {}
+        result = await ns_api.create_session(body, store, mock_response)
         assert result is not None
 
 

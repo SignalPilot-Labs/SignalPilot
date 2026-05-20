@@ -398,6 +398,14 @@ class TestRoleAndRoleBindingShape:
         assert "create" not in log_rule["verbs"]
         assert "pods/status" in log_rule["resources"]
 
+        # R4: Find pods/exec rule — create verb required for workspace sync.
+        exec_rule = next(
+            (r for r in rules if "pods/exec" in r.get("resources", [])), None
+        )
+        assert exec_rule is not None, "pods/exec rule must be in the per-namespace Role (R4)"
+        assert "create" in exec_rule["verbs"], "pods/exec must allow 'create' verb"
+        assert exec_rule["apiGroups"] == [""], "pods/exec rule must be in '' apiGroup"
+
         # Find networkpolicies rule.
         np_rule = next(
             (r for r in rules if "networkpolicies" in r.get("resources", [])), None

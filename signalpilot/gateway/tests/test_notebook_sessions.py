@@ -517,7 +517,7 @@ class TestSessionReuse:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
-        result = await ns_api.create_session(body, store)
+        result = await ns_api.create_session(body, store, _make_mock_response())
         assert result.id == "existing-sess"
         mock_orch.create_pod.assert_not_called()
 
@@ -564,6 +564,10 @@ class TestSessionReuse:
         mock_orch = AsyncMock()
         mock_orch.is_pod_alive.return_value = False
         mock_orch.create_pod.return_value = PodInfo(name="nb-new", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            return_value=PodInfo(name="nb-new", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready.return_value = PodInfo(name="nb-new", ip="10.0.0.3:2718", status="running")
 
         mark_stopped_calls = []
@@ -590,7 +594,7 @@ class TestSessionReuse:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
-        result = await ns_api.create_session(body, store)
+        result = await ns_api.create_session(body, store, _make_mock_response())
         assert result.id == "new-sess"
         mock_orch.create_pod.assert_called_once()
         # Verify mark_stopped was called for the dead session
@@ -624,6 +628,10 @@ class TestSessionReuse:
 
         mock_orch = AsyncMock()
         mock_orch.create_pod.return_value = PodInfo(name="nb-test", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            return_value=PodInfo(name="nb-test", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready.return_value = PodInfo(name="nb-test", ip="10.0.0.4:2718", status="running")
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
@@ -638,7 +646,7 @@ class TestSessionReuse:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
-        await ns_api.create_session(body, store)
+        await ns_api.create_session(body, store, _make_mock_response())
 
         call_kwargs = mock_orch.create_pod.call_args.kwargs
         assert "session_jwt" in call_kwargs
@@ -672,7 +680,7 @@ class TestR3OrgIdEnforcement:
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api.create_session(body, store)
+            await ns_api.create_session(body, store, _make_mock_response())
         assert exc_info.value.status_code == 400
         assert "org_id" in exc_info.value.detail.lower()
 
@@ -720,7 +728,7 @@ class TestR3OrgIdEnforcement:
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api.create_session(body, store)
+            await ns_api.create_session(body, store, _make_mock_response())
         assert exc_info.value.status_code == 429
         assert "quota" in exc_info.value.detail.lower()
 
@@ -768,7 +776,7 @@ class TestR3OrgIdEnforcement:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
-        result = await ns_api.create_session(body, store)
+        result = await ns_api.create_session(body, store, _make_mock_response())
         assert result.id == "sess-alive"
         assert len(is_alive_calls) == 1
         assert is_alive_calls[0]["org_id"] == "org-1"
@@ -808,6 +816,10 @@ class TestR3OrgIdEnforcement:
 
         mock_orch = AsyncMock()
         mock_orch.create_pod.return_value = PodInfo(name="nb-test", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            return_value=PodInfo(name="nb-test", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready = _fake_wait
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
@@ -822,7 +834,7 @@ class TestR3OrgIdEnforcement:
 
         body = NotebookSessionCreate(project_id="proj-1", branch="main")
 
-        await ns_api.create_session(body, store)
+        await ns_api.create_session(body, store, _make_mock_response())
         assert len(wait_calls) == 1
         assert wait_calls[0]["org_id"] == "org-1"
 
@@ -869,3 +881,383 @@ class TestLocalAPIKeyAuth:
         with pytest.raises(HTTPException) as exc_info:
             await user_mod.resolve_user_id(request)
         assert exc_info.value.status_code == 401
+
+
+# ─── R4 Workspace sync integration tests ─────────────────────────────────────
+
+
+def _make_mock_response():
+    """Build a MagicMock Response object."""
+    resp = MagicMock()
+    resp.headers = {}
+    return resp
+
+
+class TestR4WorkspaceSync:
+    """R4: Workspace hydrate/snapshot integration in create/delete session."""
+
+    @pytest.mark.asyncio
+    async def test_create_session_hydrates_before_marking_running(self, monkeypatch):
+        """create_session: hydrate → wait_for_running → populate → wait_for_ready → running."""
+        _patch_jwt_secret(monkeypatch)
+
+        import time
+
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import NotebookSessionInfo
+        from gateway.orchestrator import PodInfo
+        from gateway.store import notebook_sessions as ns_store
+
+        call_order: list[str] = []
+
+        new_session = NotebookSessionInfo(
+            id="sess-r4",
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            pod_name="nb-r4",
+            pod_ip=None,
+            access_token="tok-r4",
+            status="creating",
+            last_ping=time.time(),
+            created_at=time.time(),
+        )
+
+        mock_orch = AsyncMock()
+        mock_orch.create_pod.return_value = PodInfo(name="nb-r4", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            side_effect=lambda *a, **kw: call_order.append("wait_for_running") or
+            PodInfo(name="nb-r4", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock(
+            side_effect=lambda *a, **kw: call_order.append("populate")
+        )
+        mock_orch.wait_for_ready = AsyncMock(
+            side_effect=lambda *a, **kw: call_order.append("wait_for_ready") or
+            PodInfo(name="nb-r4", ip="10.0.0.9", status="running", internal_ip="10.0.0.9")
+        )
+        mock_orch.snapshot_pod_workspace = AsyncMock()
+
+        mock_coordinator = AsyncMock()
+        mock_coordinator.hydrate_for_pod = AsyncMock(
+            side_effect=lambda k: call_order.append("hydrate") or __import__("pathlib").Path("/tmp/fake-hydrate")
+        )
+        mock_coordinator.start_periodic_snapshot = AsyncMock()
+        mock_coordinator.last_snapshot_result = MagicMock(return_value=None)
+
+        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
+        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
+        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
+        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
+        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        monkeypatch.setattr(ns_api, "get_workspace_sync_coordinator", lambda: mock_coordinator)
+
+        store = _make_mock_store()
+        response = _make_mock_response()
+
+        from gateway.models.notebook_sessions import NotebookSessionCreate
+
+        body = NotebookSessionCreate(project_id="proj-1", branch="main")
+
+        result = await ns_api.create_session(body, store, response)
+        assert result.id == "sess-r4"
+
+        # Check ordering: hydrate before wait_for_running before populate before wait_for_ready.
+        assert call_order.index("hydrate") < call_order.index("wait_for_running")
+        assert call_order.index("wait_for_running") < call_order.index("populate")
+        assert call_order.index("populate") < call_order.index("wait_for_ready")
+
+    @pytest.mark.asyncio
+    async def test_create_session_hydrate_cold_start_is_not_an_error(self, monkeypatch):
+        """Cold start (no prior manifest) is not an error — session is created normally."""
+        _patch_jwt_secret(monkeypatch)
+
+        import time
+        from pathlib import Path
+
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import NotebookSessionInfo
+        from gateway.orchestrator import PodInfo
+        from gateway.store import notebook_sessions as ns_store
+
+        new_session = NotebookSessionInfo(
+            id="sess-cold",
+            org_id="org-1",
+            user_id="user-1",
+            project_id=None,
+            branch="main",
+            pod_name="nb-cold",
+            pod_ip=None,
+            access_token="tok-cold",
+            status="creating",
+            last_ping=time.time(),
+            created_at=time.time(),
+        )
+
+        mock_orch = AsyncMock()
+        mock_orch.create_pod.return_value = PodInfo(name="nb-cold", ip=None, status="pending")
+        mock_orch.wait_for_running = AsyncMock(
+            return_value=PodInfo(name="nb-cold", ip=None, status="running")
+        )
+        mock_orch.populate_pod_workspace = AsyncMock()
+        mock_orch.wait_for_ready = AsyncMock(
+            return_value=PodInfo(name="nb-cold", ip="10.0.0.1", status="running", internal_ip="10.0.0.1")
+        )
+
+        mock_coordinator = AsyncMock()
+        mock_coordinator.hydrate_for_pod = AsyncMock(return_value=Path("/tmp/fake-cold"))
+        mock_coordinator.start_periodic_snapshot = AsyncMock()
+        mock_coordinator.last_snapshot_result = MagicMock(return_value=None)
+
+        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
+        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
+        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
+        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
+        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        monkeypatch.setattr(ns_api, "get_workspace_sync_coordinator", lambda: mock_coordinator)
+
+        store = _make_mock_store()
+        response = _make_mock_response()
+
+        from gateway.models.notebook_sessions import NotebookSessionCreate
+
+        body = NotebookSessionCreate(project_id=None, branch="main")
+
+        result = await ns_api.create_session(body, store, response)
+        assert result.id == "sess-cold"
+        assert result.status == "running"
+
+    @pytest.mark.asyncio
+    async def test_create_session_hydrate_failure_returns_503_and_deletes_pod(
+        self, monkeypatch
+    ):
+        """Hydrate failure → 503, pod deleted."""
+        _patch_jwt_secret(monkeypatch)
+
+        import time
+        from pathlib import Path
+
+        from fastapi import HTTPException
+
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import NotebookSessionInfo
+        from gateway.store import notebook_sessions as ns_store
+
+        new_session = NotebookSessionInfo(
+            id="sess-fail-hydrate",
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            pod_name="nb-fail-hydrate",
+            pod_ip=None,
+            access_token="tok-fail",
+            status="creating",
+            last_ping=time.time(),
+            created_at=time.time(),
+        )
+
+        mock_coordinator = AsyncMock()
+        mock_coordinator.hydrate_for_pod = AsyncMock(
+            side_effect=RuntimeError("S3 unreachable")
+        )
+
+        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
+        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
+        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
+        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
+        mock_orch = AsyncMock()
+        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        monkeypatch.setattr(ns_api, "get_workspace_sync_coordinator", lambda: mock_coordinator)
+
+        store = _make_mock_store()
+        response = _make_mock_response()
+
+        from gateway.models.notebook_sessions import NotebookSessionCreate
+
+        body = NotebookSessionCreate(project_id="proj-1", branch="main")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await ns_api.create_session(body, store, response)
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_delete_session_runs_final_snapshot_before_delete_pod(self, monkeypatch):
+        """delete_session: cancel periodic → final snapshot → delete pod."""
+        _patch_jwt_secret(monkeypatch)
+
+        import time
+
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import NotebookSessionInfo
+        from gateway.store import notebook_sessions as ns_store
+
+        call_order: list[str] = []
+
+        existing_session = NotebookSessionInfo(
+            id="sess-del",
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            pod_name="nb-del",
+            pod_ip="10.0.0.1",
+            access_token="tok-del",
+            status="running",
+            last_ping=time.time(),
+            created_at=time.time(),
+        )
+
+        mock_coordinator = AsyncMock()
+        mock_coordinator.cancel_periodic_snapshot = AsyncMock(
+            side_effect=lambda sid: call_order.append("cancel")
+        )
+
+        final_snap_called = False
+
+        async def _mock_snapshot_for_pod(key, pull):
+            nonlocal final_snap_called
+            call_order.append("final_snapshot")
+            final_snap_called = True
+
+        mock_coordinator.snapshot_for_pod = _mock_snapshot_for_pod
+
+        mock_orch = AsyncMock()
+
+        async def _mock_delete_pod(pod_name, *, org_id):
+            call_order.append("delete_pod")
+            return True
+
+        mock_orch.delete_pod = _mock_delete_pod
+        mock_orch.snapshot_pod_workspace = AsyncMock()
+
+        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
+        monkeypatch.setattr(ns_store, "mark_stopped", AsyncMock())
+        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        monkeypatch.setattr(ns_api, "get_workspace_sync_coordinator", lambda: mock_coordinator)
+
+        store = _make_mock_store()
+        response = _make_mock_response()
+
+        await ns_api.delete_session(store, response)
+
+        assert final_snap_called, "Final snapshot must be called before pod deletion"
+        assert call_order.index("cancel") < call_order.index("final_snapshot")
+        assert call_order.index("final_snapshot") < call_order.index("delete_pod")
+
+    @pytest.mark.asyncio
+    async def test_delete_session_succeeds_even_if_final_snapshot_fails(self, monkeypatch):
+        """delete_session succeeds even when final snapshot raises."""
+        _patch_jwt_secret(monkeypatch)
+
+        import time
+
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import NotebookSessionInfo
+        from gateway.store import notebook_sessions as ns_store
+
+        existing_session = NotebookSessionInfo(
+            id="sess-snap-fail",
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            pod_name="nb-snap-fail",
+            pod_ip="10.0.0.1",
+            access_token="tok-sf",
+            status="running",
+            last_ping=time.time(),
+            created_at=time.time(),
+        )
+
+        mock_coordinator = AsyncMock()
+        mock_coordinator.cancel_periodic_snapshot = AsyncMock()
+
+        async def _failing_snapshot(key, pull):
+            raise RuntimeError("pod gone")
+
+        mock_coordinator.snapshot_for_pod = _failing_snapshot
+
+        mock_orch = AsyncMock()
+        mock_orch.snapshot_pod_workspace = AsyncMock()
+
+        mark_stopped_called = []
+
+        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
+        monkeypatch.setattr(
+            ns_store, "mark_stopped",
+            AsyncMock(side_effect=lambda *a, **kw: mark_stopped_called.append(True))
+        )
+        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        monkeypatch.setattr(ns_api, "get_workspace_sync_coordinator", lambda: mock_coordinator)
+
+        store = _make_mock_store()
+        response = _make_mock_response()
+
+        # Should not raise.
+        await ns_api.delete_session(store, response)
+        assert mark_stopped_called, "mark_stopped must still be called after snapshot failure"
+
+    @pytest.mark.asyncio
+    async def test_sentinel_written_last_during_tar_in(self, monkeypatch):
+        """populate_pod_workspace writes .sp-ready as the FINAL tar member (C1 invariant).
+
+        The test intercepts stream_tar_into_pod at the pod_exec_io level and captures
+        the actual tar bytes transmitted. It then inspects the tar member order directly
+        to assert that .sp-ready is the last entry — not just present.
+
+        This is the real ordering test. A naive sorted(rglob("*")) would place ".sp-ready"
+        BEFORE "a.txt" (dot-files sort first in ASCII). The sentinel_last parameter in
+        stream_tar_into_pod fixes this: the sentinel is always appended last.
+        """
+        import io
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        from gateway.orchestrator import pod_exec_io
+
+        captured_tar_members: list[list[str]] = []
+
+        original_exec_with_stdin = pod_exec_io._exec_with_stdin
+
+        async def _capturing_exec_with_stdin(
+            core_api, *, namespace, pod_name, command, stdin_data, label
+        ):
+            # Parse the tar stream and record member names in order.
+            buf = io.BytesIO(stdin_data)
+            with tarfile.open(fileobj=buf, mode="r") as tf:
+                captured_tar_members.append([m.name for m in tf.getmembers()])
+
+        monkeypatch.setattr(pod_exec_io, "_exec_with_stdin", _capturing_exec_with_stdin)
+
+        with tempfile.TemporaryDirectory() as td:
+            src_dir = Path(td)
+            (src_dir / "a.txt").write_text("aaa")
+            (src_dir / "b.txt").write_text("bbb")
+            sentinel = src_dir / ".sp-ready"
+            sentinel.write_bytes(b"")
+
+            # Call stream_tar_into_pod directly with sentinel_last.
+            # core_api=None is fine because _exec_with_stdin is patched.
+            await pod_exec_io.stream_tar_into_pod(
+                None,
+                namespace="ns",
+                pod_name="pod",
+                src_dir=src_dir,
+                dest_path="/workspace/",
+                sentinel_last=sentinel,
+            )
+
+        assert captured_tar_members, "No tar was transmitted — test setup broken"
+        members = captured_tar_members[0]
+        assert ".sp-ready" in members, ".sp-ready sentinel must be in the tar archive"
+        assert members[-1] == ".sp-ready", (
+            f".sp-ready must be the LAST tar member (C1), but got order: {members}. "
+            "A naive sorted() would place it first (dot-files sort before letters in ASCII)."
+        )
+        # Verify the other workspace files are present and before the sentinel.
+        non_sentinel = [m for m in members if m != ".sp-ready"]
+        assert "a.txt" in non_sentinel
+        assert "b.txt" in non_sentinel

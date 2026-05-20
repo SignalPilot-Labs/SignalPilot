@@ -301,9 +301,13 @@ class TestPodCLI:
             session_id="sess-abc",
             access_token="some-token",
         )
+        # R4: command is now ["sh", "-c", "...sentinel shim..."]
         command = manifest["spec"]["containers"][0]["command"]
-        assert "--no-token" in command
-        assert "--token-password" not in command
+        assert command[0] == "sh"
+        assert command[1] == "-c"
+        cmd_str = command[2]
+        assert "--no-token" in cmd_str
+        assert "--token-password" not in cmd_str
 
     def test_pod_cli_no_token_when_access_token_none(self):
         from gateway.orchestrator.kubernetes import _pod_manifest
@@ -321,9 +325,13 @@ class TestPodCLI:
             session_id="sess-xyz",
             access_token=None,
         )
+        # R4: command is now ["sh", "-c", "...sentinel shim..."]
         command = manifest["spec"]["containers"][0]["command"]
-        assert "--no-token" in command
-        assert "--token-password" not in command
+        assert command[0] == "sh"
+        assert command[1] == "-c"
+        cmd_str = command[2]
+        assert "--no-token" in cmd_str
+        assert "--token-password" not in cmd_str
 
     def test_pod_cli_includes_base_url(self):
         from gateway.orchestrator.kubernetes import _pod_manifest
@@ -341,10 +349,13 @@ class TestPodCLI:
             session_id="sess-abc",
             access_token=None,
         )
+        # R4: command is ["sh", "-c", "...sentinel shim...exec sp edit ...--base-url /notebook/{sid}..."]
         command = manifest["spec"]["containers"][0]["command"]
-        assert "--base-url" in command
-        base_url_idx = command.index("--base-url")
-        assert command[base_url_idx + 1] == "/notebook/sess-abc"
+        assert command[0] == "sh"
+        assert command[1] == "-c"
+        cmd_str = command[2]
+        assert "--base-url" in cmd_str
+        assert "/notebook/sess-abc" in cmd_str
 
     def test_pod_env_no_sp_access_token(self):
         from gateway.orchestrator.kubernetes import _pod_manifest

@@ -36,8 +36,14 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, request: Re
     user_id = store.user_id or "local"
 
     existing = await ns.get_active_session(store.session, org_id=org_id, user_id=user_id)
-    if existing:
-        return existing
+    if existing and existing.notebook_url:
+        # Verify the pod is still alive
+        orch = await _get_orchestrator()
+        pod_info = await orch.get_pod(existing.pod_name) if existing.pod_name else None
+        if pod_info and pod_info.status == "running":
+            return existing
+        # Pod is dead — clean up stale session
+        await ns.mark_stopped(store.session, session_id=existing.id)
 
     await ns.delete_stopped(store.session, org_id=org_id, user_id=user_id)
 

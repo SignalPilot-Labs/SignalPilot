@@ -51,6 +51,16 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
 
+    # Load notebook session JWT secret at startup (fail fast if misconfigured)
+    from .auth.jwt_secret import load_session_jwt_secret
+
+    try:
+        load_session_jwt_secret()
+        logger.info("STARTUP: Notebook session JWT secret loaded successfully.")
+    except RuntimeError as e:
+        logger.error("STARTUP FATAL: %s", e)
+        raise SystemExit(1) from e
+
     # Initialize gateway DB tables
     await init_db()
 

@@ -24,19 +24,25 @@ def _pod_manifest(
     project_id: str | None,
     branch: str,
     gateway_url: str,
-    api_key: str | None,
-    access_token: str | None = None,
+    session_jwt: str,
+    session_id: str,
+    access_token: str | None,
 ) -> dict:
-    """Build the pod spec dict for the Kubernetes API."""
+    """Build the pod spec dict for the Kubernetes API.
+
+    Injects SP_SESSION_JWT and SP_SESSION_ID into the pod env.
+    Does NOT inject SP_API_KEY — the per-session JWT replaces it.
+    # TODO(R2): Add NodePort retirement, securityContext hardening, per-pod ServiceAccount.
+    """
     env = [
         {"name": "SP_GATEWAY_URL", "value": gateway_url},
         {"name": "SP_PROJECT_ID", "value": project_id or ""},
         {"name": "SP_BRANCH", "value": branch},
         {"name": "SP_USER_ID", "value": user_id},
         {"name": "SP_ORG_ID", "value": org_id},
+        {"name": "SP_SESSION_JWT", "value": session_jwt},
+        {"name": "SP_SESSION_ID", "value": session_id},
     ]
-    if api_key:
-        env.append({"name": "SP_API_KEY", "value": api_key})
     if access_token:
         env.append({"name": "SP_ACCESS_TOKEN", "value": access_token})
 
@@ -136,8 +142,9 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         branch: str,
         image: str,
         gateway_url: str,
-        api_key: str | None,
-        access_token: str | None = None,
+        session_jwt: str,
+        session_id: str,
+        access_token: str | None,
     ) -> PodInfo:
         await self._ensure_client()
         if not self._core_api:
@@ -152,7 +159,8 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             project_id=project_id,
             branch=branch,
             gateway_url=gateway_url,
-            api_key=api_key,
+            session_jwt=session_jwt,
+            session_id=session_id,
             access_token=access_token,
         )
         await self._core_api.create_namespaced_pod(
@@ -213,6 +221,11 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             )
         except Exception:
             return None
+
+    async def is_pod_alive(self, pod_name: str) -> bool:
+        """Return True iff the pod exists and its phase is 'running'."""
+        pod = await self.get_pod(pod_name)
+        return pod is not None and pod.status == "running"
 
     async def wait_for_ready(self, pod_name: str, timeout: int = 60) -> PodInfo:
         """Poll until pod has an IP and is running, or timeout."""

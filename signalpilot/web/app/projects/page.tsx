@@ -18,7 +18,15 @@ import {
   Square,
   Code,
 } from "lucide-react";
-import { getWorkspaceProjects, createWorkspaceProject, getConnections } from "@/lib/api";
+import {
+  getWorkspaceProjects,
+  createWorkspaceProject,
+  getConnections,
+  createNotebookSession,
+  getNotebookSession,
+  deleteNotebookSession,
+  pingNotebookSession,
+} from "@/lib/api";
 import type { WorkspaceProjectInfo, ConnectionInfo } from "@/lib/types";
 import { EmptyState } from "@/components/ui/empty-states";
 import { PageHeader, TerminalBar } from "@/components/ui/page-header";
@@ -59,8 +67,6 @@ function sourceIcon(source: string) {
   return <Server className="w-3 h-3" strokeWidth={1.5} />;
 }
 
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
-
 export default function ProjectsPage() {
   const { toast } = useToast();
   const [projects, setProjects] = useState<WorkspaceProjectInfo[]>([]);
@@ -100,14 +106,11 @@ export default function ProjectsPage() {
 
   async function checkIdeSession() {
     try {
-      const r = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, { headers: await getAuthHeaders() });
-      if (r.ok) {
-        const session = await r.json();
-        if (session && session.status === "running" && session.notebook_url) {
-          setIdeStatus("running");
-          setIdeUrl(session.notebook_url);
-          startPing();
-        }
+      const session = await getNotebookSession();
+      if (session && session.status === "running" && session.notebook_url) {
+        setIdeStatus("running");
+        setIdeUrl(session.notebook_url);
+        startPing();
       }
     } catch {}
   }
@@ -115,17 +118,7 @@ export default function ProjectsPage() {
   async function launchIde() {
     setIdeStatus("starting");
     try {
-      const r = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
-        method: "POST",
-        headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
-        body: JSON.stringify({ branch: "main" }),
-      });
-      if (!r.ok) {
-        toast(`Failed to start IDE: ${await r.text()}`, "error");
-        setIdeStatus("closed");
-        return;
-      }
-      const session = await r.json();
+      const session = await createNotebookSession({ project_id: "", branch: "main" });
       if (!session.notebook_url) {
         toast("Session created but notebook URL not available", "error");
         setIdeStatus("closed");
@@ -142,7 +135,7 @@ export default function ProjectsPage() {
 
   async function stopIde() {
     try {
-      await fetch(`${GATEWAY_URL}/api/notebook-sessions`, { method: "DELETE", headers: await getAuthHeaders() });
+      await deleteNotebookSession();
     } catch {}
     setIdeStatus("closed");
     setIdeUrl(null);
@@ -152,7 +145,7 @@ export default function ProjectsPage() {
   function startPing() {
     if (pingRef.current) clearInterval(pingRef.current);
     pingRef.current = setInterval(async () => {
-      try { await fetch(`${GATEWAY_URL}/api/notebook-sessions/ping`, { method: "POST", headers: await getAuthHeaders() }); } catch {}
+      try { await pingNotebookSession(); } catch {}
     }, 60000);
   }
 
@@ -247,14 +240,9 @@ export default function ProjectsPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={launchIde}
-              disabled={ideStatus === "starting"}
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
             >
-              {ideStatus === "starting" ? (
-                <><Loader2 className="w-3.5 h-3.5 animate-spin" /> starting IDE...</>
-              ) : (
-                <><Code className="w-3.5 h-3.5" /> open IDE</>
-              )}
+              <Code className="w-3.5 h-3.5" /> open IDE
             </button>
             <button
               onClick={() => setShowCreate(true)}
@@ -403,9 +391,3 @@ export default function ProjectsPage() {
   );
 }
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const h: Record<string, string> = {};
-  const key = typeof window !== "undefined" ? sessionStorage.getItem("sp_api_key") : null;
-  if (key) h["Authorization"] = `Bearer ${key}`;
-  return h;
-}

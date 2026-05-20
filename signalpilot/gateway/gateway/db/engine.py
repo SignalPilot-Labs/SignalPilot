@@ -362,6 +362,25 @@ async def _ensure_notebook_session_columns(engine) -> None:
     logger.info("Ensured notebook session columns")
 
 
+async def _ensure_notebook_session_org_id(engine) -> None:
+    """Idempotent: ensure org_id column on gateway_notebook_sessions and backfill legacy NULLs.
+
+    1. ADD COLUMN IF NOT EXISTS org_id TEXT (no-op if already present).
+    2. Backfill org_id = user_id WHERE org_id IS NULL (safe default for personal/local mode).
+
+    In local/personal mode the org_id collapses to user_id; this backfill is safe for all
+    legacy rows.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS org_id TEXT")
+        )
+        await conn.execute(
+            text("UPDATE gateway_notebook_sessions SET org_id = user_id WHERE org_id IS NULL")
+        )
+    logger.info("Ensured org_id column on gateway_notebook_sessions")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -381,6 +400,7 @@ async def init_db() -> None:
     await _ensure_chat_columns(engine)
     await _ensure_branch_columns(engine)
     await _ensure_notebook_session_columns(engine)
+    await _ensure_notebook_session_org_id(engine)
     logger.info("Gateway database tables initialized")
 
 

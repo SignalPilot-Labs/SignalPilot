@@ -27,8 +27,9 @@ class NotebookOrchestrator(ABC):
         branch: str,
         image: str,
         gateway_url: str,
-        api_key: str | None,
-        access_token: str | None = None,
+        session_jwt: str,
+        session_id: str,
+        access_token: str | None,
     ) -> PodInfo:
         ...
 
@@ -42,6 +43,11 @@ class NotebookOrchestrator(ABC):
 
     @abstractmethod
     async def wait_for_ready(self, pod_name: str, timeout: int = 60) -> PodInfo:
+        ...
+
+    @abstractmethod
+    async def is_pod_alive(self, pod_name: str) -> bool:
+        """Return True iff the pod exists and its phase is 'running'."""
         ...
 
     @abstractmethod

@@ -12,6 +12,22 @@ from ..db.models import GatewayNotebookSession
 from ..models.notebook_sessions import NotebookSessionInfo
 
 
+async def get_session_by_id(
+    session: AsyncSession, *, session_id: str, org_id: str
+) -> NotebookSessionInfo | None:
+    """Look up a session by id, scoped to org_id.
+
+    Returns None if the session does not exist OR belongs to a different org
+    (404-semantics: no existence oracle for cross-org callers).
+    """
+    q = select(GatewayNotebookSession).where(
+        GatewayNotebookSession.id == session_id,
+        GatewayNotebookSession.org_id == org_id,
+    )
+    row = (await session.execute(q)).scalar_one_or_none()
+    return _to_info(row) if row else None
+
+
 async def get_active_session(
     session: AsyncSession, *, org_id: str, user_id: str
 ) -> NotebookSessionInfo | None:

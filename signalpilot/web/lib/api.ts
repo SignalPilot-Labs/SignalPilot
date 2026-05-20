@@ -427,6 +427,34 @@ export const createBudget = (session_id: string, budget_usd: number) =>
 export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
 
+// Notebook Sessions
+export type NotebookSession = {
+  id: string;
+  status: string;
+  project_id: string | null;
+  branch: string | null;
+  notebook_url: string | null;
+  pod_ip: string | null;
+  last_ping: number | null;
+  created_at: number;
+  access_token?: string | null;
+};
+
+export const createNotebookSession = (body: { project_id: string; branch: string }) =>
+  request<NotebookSession>("/api/notebook-sessions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const getNotebookSession = () =>
+  request<NotebookSession | null>("/api/notebook-sessions");
+
+export const deleteNotebookSession = () =>
+  request<void>("/api/notebook-sessions", { method: "DELETE" });
+
+export const pingNotebookSession = () =>
+  request<void>("/api/notebook-sessions/ping", { method: "POST" });
+
 // Health
 export const getHealth = () => request<Record<string, unknown>>("/health");
 

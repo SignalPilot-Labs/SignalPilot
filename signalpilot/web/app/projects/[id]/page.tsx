@@ -24,6 +24,10 @@ import {
   deleteWorkspaceFile,
   getWorkspaceBranches,
   getUserSession,
+  createNotebookSession,
+  getNotebookSession,
+  deleteNotebookSession,
+  pingNotebookSession,
 } from "@/lib/api";
 import type { WorkspaceProjectInfo, WorkspaceFileInfo } from "@/lib/types";
 import { PageHeader } from "@/components/ui/page-header";
@@ -48,8 +52,6 @@ function fileIcon(key: string) {
   if (key.endsWith(".md")) return <span className="text-[10px] font-mono text-gray-400">MD</span>;
   return <File className="w-3 h-3 text-[var(--color-text-dim)]" />;
 }
-
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
 export default function ProjectDetailPage() {
   const { toast } = useToast();
@@ -93,16 +95,11 @@ export default function ProjectDetailPage() {
 
   async function checkNotebookSession() {
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
-        headers: await getAuthHeaders(),
-      });
-      if (res.ok) {
-        const session = await res.json();
-        if (session && session.status === "running") {
-          setNotebookStatus("running");
-          setNotebookProxy(`${GATEWAY_URL}${session.proxy_base}`);
-          startPing();
-        }
+      const session = await getNotebookSession();
+      if (session && session.status === "running" && session.notebook_url) {
+        setNotebookStatus("running");
+        setNotebookProxy(session.notebook_url);
+        startPing();
       }
     } catch {}
   }
@@ -110,20 +107,14 @@ export default function ProjectDetailPage() {
   async function launchNotebook() {
     setNotebookStatus("starting");
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
-        method: "POST",
-        headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
-        body: JSON.stringify({ project_id: projectId, branch: activeBranch }),
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        toast(`Failed to start notebook: ${err}`, "error");
+      const session = await createNotebookSession({ project_id: projectId, branch: activeBranch });
+      if (!session.notebook_url) {
+        toast("Session created but notebook URL not available", "error");
         setNotebookStatus("error");
         return;
       }
-      const session = await res.json();
       setNotebookStatus("running");
-      setNotebookProxy(`${GATEWAY_URL}${session.proxy_base}`);
+      setNotebookProxy(session.notebook_url);
       startPing();
     } catch (e) {
       toast(String(e), "error");
@@ -133,10 +124,7 @@ export default function ProjectDetailPage() {
 
   async function stopNotebook() {
     try {
-      await fetch(`${GATEWAY_URL}/api/notebook-sessions`, {
-        method: "DELETE",
-        headers: await getAuthHeaders(),
-      });
+      await deleteNotebookSession();
     } catch {}
     setNotebookStatus("idle");
     setNotebookProxy(null);
@@ -150,10 +138,7 @@ export default function ProjectDetailPage() {
     if (pingRef.current) clearInterval(pingRef.current);
     pingRef.current = setInterval(async () => {
       try {
-        await fetch(`${GATEWAY_URL}/api/notebook-sessions/ping`, {
-          method: "POST",
-          headers: await getAuthHeaders(),
-        });
+        await pingNotebookSession();
       } catch {}
     }, 60000);
   }
@@ -215,7 +200,7 @@ export default function ProjectDetailPage() {
           </button>
         </div>
         <iframe
-          src={`${notebookProxy}/`}
+          src={notebookProxy}
           className="flex-1 w-full border-0"
           allow="clipboard-read; clipboard-write"
         />
@@ -346,9 +331,3 @@ function InfoRow({ icon, label, value, mono = false }: { icon: React.ReactNode; 
   );
 }
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const h: Record<string, string> = {};
-  const key = typeof window !== "undefined" ? sessionStorage.getItem("sp_api_key") : null;
-  if (key) h["Authorization"] = `Bearer ${key}`;
-  return h;
-}

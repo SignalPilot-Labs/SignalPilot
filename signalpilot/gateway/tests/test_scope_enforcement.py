@@ -334,9 +334,29 @@ class TestJwtErrorRedaction:
     @pytest.mark.asyncio
     async def test_invalid_token_response_is_generic(self):
         """resolve_user_id must return a generic message, not f'Invalid token: {e}'."""
+        import time
+
         import jwt as pyjwt
 
         from gateway.auth import resolve_user_id
+
+        # Build a valid RS256-header token so it passes the alg gate and reaches Clerk verifier
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user-1",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        # Sign with HS256 but header says RS256 — this tests the Clerk verifier error path
+        # We need to construct a token with RS256 in header manually
+        import base64
+        import json
+
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        # Use a dummy signature — the mock will throw before signature check anyway
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
 
         # Simulate cloud mode being active
         with patch("gateway.auth.user.is_cloud_mode", return_value=True):
@@ -347,7 +367,7 @@ class TestJwtErrorRedaction:
 
             with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
                 request = MagicMock()
-                request.headers.get.return_value = "Bearer eyJfake.jwt.token"
+                request.headers.get.return_value = f"Bearer {clerk_token}"
                 request.cookies.get.return_value = None
                 request.state = MagicMock(spec=[])  # no auth attribute
 
@@ -362,15 +382,31 @@ class TestJwtErrorRedaction:
                 assert "RS256" not in detail
                 assert "kid" not in detail
                 assert "signature" not in detail
-                # Must be the generic message
+                # Must be a safe generic message
                 assert detail == "Invalid authentication token"
 
     @pytest.mark.asyncio
     async def test_expired_token_response_is_specific_but_safe(self):
         """ExpiredSignatureError returns 'Token expired' — no library internals."""
+        import time
+        import base64
+        import json
+
         import jwt as pyjwt
 
         from gateway.auth import resolve_user_id
+
+        # Build a valid RS256-header token so it passes the alg gate
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user-1",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
 
         with patch("gateway.auth.user.is_cloud_mode", return_value=True):
             mock_client = MagicMock()
@@ -378,7 +414,7 @@ class TestJwtErrorRedaction:
 
             with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
                 request = MagicMock()
-                request.headers.get.return_value = "Bearer eyJfake.expired.token"
+                request.headers.get.return_value = f"Bearer {clerk_token}"
                 request.cookies.get.return_value = None
                 request.state = MagicMock(spec=[])
 

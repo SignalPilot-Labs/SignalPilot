@@ -82,9 +82,17 @@ services:
       SP_K8S_HOST: https://k3s:6443
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       KUBECONFIG: /k3s/k3s.yaml
+      # Gateway URL used by pods to call back — must not be derived from request Host.
+      # In local compose mode this defaults to http://gateway:3300 (set explicitly here).
+      # In cloud mode SP_PUBLIC_GATEWAY_URL must point to the real external gateway hostname.
+      SP_PUBLIC_GATEWAY_URL: http://gateway:3300
+      # Cloud mode: set SP_SESSION_JWT_SECRET to a 48-byte random secret.
+      # Local mode: the gateway generates and persists /gateway-secrets/notebook_jwt_secret automatically.
+      # SP_SESSION_JWT_SECRET: ${SP_SESSION_JWT_SECRET:-}
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
+      - signalpilot-gateway-secrets:/gateway-secrets
       - k3s-config:/k3s:ro
     command: >
       sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
@@ -170,6 +178,8 @@ volumes:
   signalpilot-pg-data:
   signalpilot-data:
   signalpilot-shared:
+  # Gateway-private volume for JWT signing secrets — NOT mounted into web or any other service.
+  signalpilot-gateway-secrets:
   signalpilot-minio-data:
   k3s-server:
   k3s-config:

@@ -139,7 +139,10 @@ async def _resolve_pod_url(store: StoreD) -> str:
     session = await ns.get_active_session(store.session, org_id=store.org_id, user_id=store.user_id or "local")
     if not session or session.status != "running" or not session.pod_ip:
         raise HTTPException(status_code=404, detail="No running notebook session")
-    return f"http://{session.pod_ip}:2718"
+    ip = session.pod_ip
+    if ":" in ip:
+        return f"http://{ip}"
+    return f"http://{ip}:2718"
 
 
 @router.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], dependencies=[RequireScope("read")])

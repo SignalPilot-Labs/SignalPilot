@@ -147,33 +147,47 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             gateway_url=gateway_url,
             api_key=api_key,
         )
-        resp = await self._core_api.create_namespaced_pod(
+        await self._core_api.create_namespaced_pod(
             namespace=self._namespace, body=manifest
         )
-        logger.info("Created pod %s for user %s", pod_name, user_id)
-        return PodInfo(
-            name=pod_name,
-            ip=None,
-            status="pending",
-        )
+        svc_manifest = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": pod_name, "namespace": self._namespace},
+            "spec": {
+                "type": "NodePort",
+                "selector": {"app": "signalpilot-notebook", "signalpilot.ai/user": user_id[:63]},
+                "ports": [{"port": 2718, "targetPort": 2718, "protocol": "TCP"}],
+            },
+        }
+        try:
+            await self._core_api.create_namespaced_service(namespace=self._namespace, body=svc_manifest)
+        except Exception as e:
+            if "AlreadyExists" not in str(e):
+                logger.warning("Failed to create service %s: %s", pod_name, e)
+        logger.info("Created pod + service %s for user %s", pod_name, user_id)
+        return PodInfo(name=pod_name, ip=None, status="pending")
 
     async def delete_pod(self, pod_name: str) -> bool:
         await self._ensure_client()
         if not self._core_api:
             return False
+        deleted = False
         try:
             await self._core_api.delete_namespaced_pod(
-                name=pod_name,
-                namespace=self._namespace,
-                grace_period_seconds=5,
+                name=pod_name, namespace=self._namespace, grace_period_seconds=5,
             )
-            logger.info("Deleted pod %s", pod_name)
-            return True
+            deleted = True
         except Exception as e:
-            if "404" in str(e) or "Not Found" in str(e):
-                return False
-            logger.warning("Failed to delete pod %s: %s", pod_name, e)
-            return False
+            if "404" not in str(e) and "Not Found" not in str(e):
+                logger.warning("Failed to delete pod %s: %s", pod_name, e)
+        try:
+            await self._core_api.delete_namespaced_service(name=pod_name, namespace=self._namespace)
+        except Exception:
+            pass
+        if deleted:
+            logger.info("Deleted pod + service %s", pod_name)
+        return deleted
 
     async def get_pod(self, pod_name: str) -> PodInfo | None:
         await self._ensure_client()
@@ -202,11 +216,24 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         while asyncio.get_event_loop().time() < deadline:
             pod = await self.get_pod(pod_name)
             if pod and pod.ip and pod.status == "running":
-                return pod
+                node_port = await self._get_node_port(pod_name)
+                k3s_host = os.getenv("SP_K8S_HOST", "").replace("https://", "").split(":")[0] or "k3s"
+                reachable_ip = f"{k3s_host}:{node_port}" if node_port else pod.ip
+                return PodInfo(name=pod.name, ip=reachable_ip, status="running")
             if pod and pod.status in ("failed", "succeeded"):
                 raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
             await asyncio.sleep(2)
         raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
+
+    async def _get_node_port(self, svc_name: str) -> int | None:
+        try:
+            svc = await self._core_api.read_namespaced_service(name=svc_name, namespace=self._namespace)
+            ports = svc.to_dict().get("spec", {}).get("ports", [])
+            if ports:
+                return ports[0].get("node_port")
+        except Exception:
+            pass
+        return None
 
     async def close(self) -> None:
         if self._client:

@@ -211,19 +211,17 @@ async def proxy_http(request: Request, path: str = ""):
         logger.error("Proxy error: %s → %s: %s", request.url.path, target, e)
         raise HTTPException(status_code=502, detail=f"Proxy error: {type(e).__name__}: {e}")
 
-    # Build raw header list preserving duplicates (e.g. multiple Set-Cookie)
-    raw_headers: list[tuple[str, str]] = []
-    skip = {"x-frame-options", "content-security-policy", "transfer-encoding", "content-length"}
-    for k, v in resp.headers.multi_items():
-        if k.lower() not in skip:
-            raw_headers.append((k, v))
-
-    return Response(
+    # Build response, forwarding all headers including Set-Cookie
+    skip = {"x-frame-options", "content-security-policy", "transfer-encoding", "content-length", "content-type"}
+    response = Response(
         content=resp.content,
         status_code=resp.status_code,
-        headers=dict(raw_headers),
         media_type=resp.headers.get("content-type"),
     )
+    for k, v in resp.headers.multi_items():
+        if k.lower() not in skip:
+            response.headers.append(k, v)
+    return response
 
 
 @router.websocket("/proxy/ws")

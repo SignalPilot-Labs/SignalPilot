@@ -43,4 +43,4 @@ EXPOSE 2718
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
     CMD curl -sf http://localhost:2718/api/health || curl -sf http://localhost:2718/ -o /dev/null || exit 1
 
-CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--token-password", "", "--headless", "/workspace"]
+CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--no-token", "--headless", "/workspace"]

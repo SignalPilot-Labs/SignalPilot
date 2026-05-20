@@ -157,7 +157,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             "spec": {
                 "type": "NodePort",
                 "selector": {"app": "signalpilot-notebook", "signalpilot.ai/user": user_id[:63]},
-                "ports": [{"port": 2718, "targetPort": 2718, "protocol": "TCP"}],
+                "ports": [{"port": 2718, "targetPort": 2718, "protocol": "TCP", "nodePort": 30000 + (hash(pod_name) % 100)}],
             },
         }
         try:

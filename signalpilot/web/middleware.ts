@@ -57,7 +57,7 @@ function applySecurityHeaders(
 
   let workerSrc = "'self'";
 
-  let frameSrc = "'self'";
+  let frameSrc = "'self' http://localhost:* https://localhost:*";
 
   if (withClerk) {
     connectSrc +=

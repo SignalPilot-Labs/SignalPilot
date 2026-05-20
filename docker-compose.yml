@@ -15,6 +15,7 @@ services:
     privileged: true
     ports:
       - "127.0.0.1:6443:6443"
+      - "30000-30100:30000-30100"
     environment:
       K3S_TOKEN: ${K3S_TOKEN:-signalpilot-dev}
       K3S_KUBECONFIG_MODE: "644"

@@ -37,12 +37,25 @@ async def _get_orchestrator():
     return KubernetesOrchestrator()
 
 
+def _is_quota_exceeded_error(exc: Exception) -> bool:
+    """Return True if the exception is a K8s 403 ResourceQuota exceeded error."""
+    exc_str = str(exc)
+    return (
+        ("403" in exc_str or "Forbidden" in exc_str)
+        and ("exceeded quota" in exc_str.lower() or "quota" in exc_str.lower())
+    )
+
+
 @router.post("", status_code=201, response_model=NotebookSessionInfo, dependencies=[RequireScope("write")])
 async def create_session(body: NotebookSessionCreate, store: StoreD):
     """Create or return existing notebook session for the current user."""
     from ..store import notebook_sessions as ns
 
     org_id = store.org_id
+    # org_id is required in all modes — no fallback namespace allowed (R3).
+    if not org_id:
+        raise HTTPException(status_code=400, detail="org_id required")
+
     if is_cloud_mode() and not store.user_id:
         raise HTTPException(status_code=401, detail="User identity required")
     user_id = store.user_id or "local"
@@ -50,7 +63,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
     existing = await ns.get_active_session(store.session, org_id=org_id, user_id=user_id)
     if existing and existing.status == "running" and existing.pod_ip and existing.pod_name:
         orch = await _get_orchestrator()
-        if await orch.is_pod_alive(existing.pod_name):
+        if await orch.is_pod_alive(existing.pod_name, org_id=org_id):
             return existing
         # Pod is dead — clean up stale session
         await ns.mark_stopped(store.session, session_id=existing.id)
@@ -102,7 +115,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
             session_id=session_info.id,
             access_token=session_info.access_token,
         )
-        pod_info = await orch.wait_for_ready(pod, timeout=90)
+        pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=90)
         await ns.update_session_status(
             store.session,
             session_id=session_info.id,
@@ -114,7 +127,15 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         session_info.pod_ip = pod_info.ip
         # Proxy-based URL — relative path, no token, no host, no port.
         session_info.notebook_url = f"/notebook/{session_info.id}/_init"
+    except ValueError as e:
+        logger.warning("Invalid org_id for notebook session: %s", e)
+        await ns.update_session_status(store.session, session_id=session_info.id, status="error")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        if _is_quota_exceeded_error(e):
+            logger.warning("Org quota exhausted for org %s: %s", org_id, e)
+            await ns.update_session_status(store.session, session_id=session_info.id, status="error")
+            raise HTTPException(status_code=429, detail="Org quota exhausted")
         logger.error("Failed to create notebook pod %s: %s", pod, e)
         await ns.update_session_status(store.session, session_id=session_info.id, status="error")
         raise HTTPException(status_code=503, detail=f"Failed to start notebook: {e}")
@@ -171,7 +192,7 @@ async def delete_session(store: StoreD, response: Response):
 
     orch = await _get_orchestrator()
     if session.pod_name:
-        await orch.delete_pod(session.pod_name)
+        await orch.delete_pod(session.pod_name, org_id=org_id or "")
     await ns.mark_stopped(store.session, session_id=session.id)
 
     # Clear the proxy cookie. Path MUST be /notebook/{sid} to match the original
@@ -206,7 +227,7 @@ async def delete_session_by_id(session_id: str, store: StoreD, response: Respons
 
     orch = await _get_orchestrator()
     if session.pod_name:
-        await orch.delete_pod(session.pod_name)
+        await orch.delete_pod(session.pod_name, org_id=org_id)
     await ns.mark_stopped(store.session, session_id=session.id)
 
     # Clear the proxy cookie with the correct path.

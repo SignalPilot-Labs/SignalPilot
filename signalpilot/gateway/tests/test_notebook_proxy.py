@@ -1027,11 +1027,16 @@ class TestProxyUsesInternalIp:
         assert "30" not in result.upstream_base  # NodePort ports are 30000+
 
 
-# ─── H-1: NodePort service not created in pod_ip mode ─────────────────────────
+# ─── H-1/R3: NodePort fully retired — KubernetesOrchestrator only accepts pod_ip ─
 
 
 class TestNodePortServiceGating:
-    """H-1: NodePort service is only created in nodeport mode, never in pod_ip mode."""
+    """R3: NodePort is fully retired from KubernetesOrchestrator.
+
+    The constructor now refuses any SP_NOTEBOOK_UPSTREAM_MODE other than pod_ip.
+    Services are never created. ResourceQuota services=0 enforces this at the
+    K8s API layer too.
+    """
 
     @pytest.mark.asyncio
     async def test_pod_ip_mode_does_not_create_nodeport_service(self, monkeypatch):
@@ -1044,6 +1049,8 @@ class TestNodePortServiceGating:
 
         import importlib
 
+        from unittest.mock import patch
+
         mod = importlib.import_module("gateway.orchestrator.kubernetes")
         orch = mod.KubernetesOrchestrator()
 
@@ -1051,26 +1058,52 @@ class TestNodePortServiceGating:
         core_api.create_namespaced_pod = AsyncMock()
         core_api.create_namespaced_service = AsyncMock()
         orch._core_api = core_api
+        orch._networking_api = MagicMock()
+        orch._rbac_api = MagicMock()
         orch._client = MagicMock()
+        orch._namespace_prefix = "sp-nb"
+        orch._gateway_namespace = "signalpilot"
+        orch._gateway_pod_selector = {"app": "signalpilot-gateway"}
+        orch._gateway_port = 3300
+        orch._egress_cidr = None
+        orch._gateway_service_account = "signalpilot-gateway"
 
-        await orch.create_pod(
-            pod_name="nb-test",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            image="signalpilot-notebook:latest",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token="tok",
-        )
+        with patch("gateway.orchestrator.kubernetes.ensure_org_namespace", AsyncMock()):
+            await orch.create_pod(
+                pod_name="nb-test",
+                user_id="user-1",
+                org_id="org-1",
+                project_id="proj-1",
+                branch="main",
+                image="signalpilot-notebook:latest",
+                gateway_url="http://localhost:3300",
+                session_jwt="test.jwt",
+                session_id="sess-abc",
+                access_token="tok",
+            )
         core_api.create_namespaced_pod.assert_called_once()
         core_api.create_namespaced_service.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_nodeport_mode_in_cloud_raises_runtime_error(self, monkeypatch):
-        """nodeport mode is forbidden in cloud mode — fail-fast at create_pod."""
+    def test_nodeport_mode_constructor_raises_runtime_error(self, monkeypatch):
+        """R3: KubernetesOrchestrator constructor raises if SP_NOTEBOOK_UPSTREAM_MODE=nodeport.
+
+        NodePort was retired in R3. The constructor now refuses it immediately
+        rather than failing at create_pod — no dead branches remain in the class.
+        """
+        import sys
+
+        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
+        sys.modules.pop("gateway.orchestrator.kubernetes", None)
+
+        import importlib
+
+        mod = importlib.import_module("gateway.orchestrator.kubernetes")
+
+        with pytest.raises(RuntimeError, match="pod_ip"):
+            mod.KubernetesOrchestrator()
+
+    def test_nodeport_mode_in_cloud_constructor_raises(self, monkeypatch):
+        """R3: nodeport mode is rejected at constructor time, regardless of deployment mode."""
         import sys
 
         monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
@@ -1080,62 +1113,9 @@ class TestNodePortServiceGating:
         import importlib
 
         mod = importlib.import_module("gateway.orchestrator.kubernetes")
-        orch = mod.KubernetesOrchestrator()
 
-        core_api = AsyncMock()
-        core_api.create_namespaced_pod = AsyncMock()
-        core_api.create_namespaced_service = AsyncMock()
-        orch._core_api = core_api
-        orch._client = MagicMock()
-
-        with pytest.raises(RuntimeError, match="nodeport.*forbidden.*cloud"):
-            await orch.create_pod(
-                pod_name="nb-test",
-                user_id="user-1",
-                org_id="org-1",
-                project_id="proj-1",
-                branch="main",
-                image="signalpilot-notebook:latest",
-                gateway_url="https://gateway.example.com",
-                session_jwt="test.jwt",
-                session_id="sess-abc",
-                access_token="tok",
-            )
-
-    @pytest.mark.asyncio
-    async def test_nodeport_mode_in_local_creates_service(self, monkeypatch):
-        """nodeport mode in local deployment creates the NodePort service."""
-        import sys
-
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-
-        import importlib
-
-        mod = importlib.import_module("gateway.orchestrator.kubernetes")
-        orch = mod.KubernetesOrchestrator()
-
-        core_api = AsyncMock()
-        core_api.create_namespaced_pod = AsyncMock()
-        core_api.create_namespaced_service = AsyncMock()
-        orch._core_api = core_api
-        orch._client = MagicMock()
-
-        await orch.create_pod(
-            pod_name="nb-test",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            image="signalpilot-notebook:latest",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token="tok",
-        )
-        core_api.create_namespaced_pod.assert_called_once()
-        core_api.create_namespaced_service.assert_called_once()
+        with pytest.raises(RuntimeError, match="pod_ip"):
+            mod.KubernetesOrchestrator()
 
 
 # ─── M-1: User ownership check on session API endpoints ───────────────────────

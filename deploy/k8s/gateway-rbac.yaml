@@ -1,0 +1,95 @@
+# gateway-rbac.yaml — Cluster-scope bootstrap RBAC for the SignalPilot gateway.
+#
+# Apply once before the first session:
+#   kubectl apply -f deploy/k8s/gateway-rbac.yaml
+#
+# This gives the gateway SA the minimum cluster-wide power needed to:
+#   1. Create/list/get/patch Namespaces (for per-org namespace bootstrap).
+#   2. Create/get/patch Roles and RoleBindings cluster-wide (so it can grant
+#      itself the per-namespace Role it provisions in each org namespace).
+#
+# The gateway has NO cluster-wide pod, Service, NetworkPolicy, or quota write power.
+# All workload writes are scoped to the per-namespace Role that ensure_org_namespace
+# provisions on first-session-for-org via RoleBinding in each sp-nb-* namespace.
+#
+# Bootstrap sequence:
+#   SA authenticates to K8s → creates sp-nb-<hash> Namespace → creates Role in it
+#   → creates RoleBinding binding itself to that Role → then creates pods/NPs/quotas
+#   in that namespace using the namespaced Role.
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: signalpilot-gateway
+  namespace: signalpilot
+  labels:
+    signalpilot.ai/managed-by: gateway
+    signalpilot.ai/component: gateway
+
+---
+# ClusterRole: create/list/get/patch namespaces only (no delete, no update).
+# The gateway creates org namespaces lazily on first session.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: signalpilot-gateway-namespaces
+  labels:
+    signalpilot.ai/managed-by: gateway
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "patch"]
+
+---
+# ClusterRole: create/get/patch Roles and RoleBindings in any namespace.
+# Required so ensure_org_namespace can install the per-namespace Role+RoleBinding
+# that grants the gateway workload write power within that namespace only.
+# No cluster-wide pod/networkpolicy/quota/limitrange verbs here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: signalpilot-gateway-rbac-provisioner
+  labels:
+    signalpilot.ai/managed-by: gateway
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "get", "patch"]
+
+---
+# ClusterRoleBinding: bind the gateway SA to both ClusterRoles above.
+# This is the only cluster-level binding; all pod/workload operations require
+# the per-namespace RoleBinding that the gateway provisions for itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: signalpilot-gateway-cluster-bindings
+  labels:
+    signalpilot.ai/managed-by: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  # Bind to both ClusterRoles via a single binding to each.
+  # Note: ClusterRoleBinding can only reference one roleRef. Use two bindings.
+  name: signalpilot-gateway-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: signalpilot-gateway
+    namespace: signalpilot
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: signalpilot-gateway-rbac-provisioner-binding
+  labels:
+    signalpilot.ai/managed-by: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-rbac-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: signalpilot-gateway
+    namespace: signalpilot

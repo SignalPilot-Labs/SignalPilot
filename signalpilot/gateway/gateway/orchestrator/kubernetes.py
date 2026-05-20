@@ -1,6 +1,10 @@
 """Kubernetes orchestrator — creates/deletes notebook pods via K8s API.
 
 Works with K3s locally and EKS in production. Same code path.
+
+Cloud mode only: SP_DEPLOYMENT_MODE=cloud + SP_NOTEBOOK_UPSTREAM_MODE=pod_ip.
+NodePort path is fully removed in R3. The constructor refuses any upstream mode
+other than pod_ip with a clear RuntimeError.
 """
 
 from __future__ import annotations
@@ -10,20 +14,37 @@ import logging
 import os
 
 from . import NotebookOrchestrator, PodInfo
+from .namespaces import ensure_org_namespace, namespace_for_org
 
 logger = logging.getLogger(__name__)
 
-# SP_NOTEBOOK_UPSTREAM_MODE: how the gateway proxy reaches notebook pods.
-# "pod_ip"   — use the raw pod IP from K8s API (requires network access to pod CIDR).
-# "nodeport" — use the NodePort service address (k3s_host:nodeport).
-# Read once at module import time; fail fast on unknown values so misconfiguration
-# surfaces at startup, not on the first proxied request.
+# SP_NOTEBOOK_UPSTREAM_MODE: the env-var validator still accepts "nodeport" for
+# compose/dev test environments that instantiate a different orchestrator path.
+# KubernetesOrchestrator itself refuses anything other than "pod_ip" in its
+# constructor — there are no nodeport branches left in this class.
 _UPSTREAM_MODE = os.getenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
 if _UPSTREAM_MODE not in {"pod_ip", "nodeport"}:
     raise RuntimeError(
         f"Invalid SP_NOTEBOOK_UPSTREAM_MODE: {_UPSTREAM_MODE!r}. "
         "Allowed values: 'pod_ip', 'nodeport'."
     )
+
+
+def _parse_single_kv(selector_str: str) -> dict[str, str]:
+    """Parse a single k=v selector string into a dict. Raises on violation."""
+    if "," in selector_str or selector_str.count("=") != 1:
+        raise ValueError(
+            f"Gateway pod selector must be a single k=v pair, no commas or wildcards. "
+            f"Got: {selector_str!r}"
+        )
+    k, v = selector_str.split("=", 1)
+    k = k.strip()
+    v = v.strip()
+    if not k or not v:
+        raise ValueError(
+            f"Gateway pod selector key and value must be non-empty. Got: {selector_str!r}"
+        )
+    return {k: v}
 
 
 def _pod_manifest(
@@ -49,7 +70,11 @@ def _pod_manifest(
     --base-url /notebook/{session_id} tells marimo to emit asset URLs under that prefix.
     access_token is stored on the DB row as the gateway proxy cookie value but is NOT
     injected into the pod env or CLI.
-    # TODO(R3): Add NodePort retirement, securityContext hardening, per-pod ServiceAccount.
+
+    R3: Adds pod-level securityContext (non-root, seccomp RuntimeDefault),
+    container-level securityContext (readOnlyRootFilesystem, drop ALL caps),
+    automountServiceAccountToken: false, emptyDir volumes for writable scratch,
+    and env additions for HOME, PYTHONDONTWRITEBYTECODE, MARIMO_LOG_DIR.
     """
     env = [
         {"name": "SP_GATEWAY_URL", "value": gateway_url},
@@ -59,6 +84,12 @@ def _pod_manifest(
         {"name": "SP_ORG_ID", "value": org_id},
         {"name": "SP_SESSION_JWT", "value": session_jwt},
         {"name": "SP_SESSION_ID", "value": session_id},
+        # Required because marimo is installed at /opt/sp-notebook which is on the
+        # read-only root FS; without this, Python attempts to write __pycache__/*.pyc
+        # and EROFS surfaces at import time.
+        {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
+        {"name": "HOME", "value": "/home/notebook"},
+        {"name": "MARIMO_LOG_DIR", "value": "/tmp/marimo-logs"},
     ]
     # SP_ACCESS_TOKEN removed in R2. access_token is stored for the proxy cookie only.
 
@@ -75,37 +106,68 @@ def _pod_manifest(
             },
         },
         "spec": {
-            "containers": [{
-                "name": "notebook",
-                "image": f"docker.io/library/{image}" if ":" in image and "/" not in image else image,
-                "imagePullPolicy": "IfNotPresent",
-                # --no-token: pod runs without marimo's built-in auth; the gateway proxy is the
-                # sole auth gate. --token-password branch removed unconditionally in R2.
-                # --base-url: tells marimo to emit asset/WS URLs under /notebook/{session_id}.
-                "command": [
-                    "sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless",
-                    "--no-token", "--base-url", f"/notebook/{session_id}",
-                    "/workspace",
-                ],
-                "ports": [{"containerPort": 2718}],
-                "env": env,
-                "resources": {
-                    "requests": {"memory": "512Mi", "cpu": "500m"},
-                    "limits": {"memory": "2Gi", "cpu": "2"},
-                },
-                "readinessProbe": {
-                    "tcpSocket": {"port": 2718},
-                    "initialDelaySeconds": 5,
-                    "periodSeconds": 5,
-                    "failureThreshold": 20,
-                },
-                "livenessProbe": {
-                    "tcpSocket": {"port": 2718},
-                    "initialDelaySeconds": 30,
-                    "periodSeconds": 30,
-                    "failureThreshold": 5,
-                },
-            }],
+            # Pods must not mount the SA token — no K8s API access from within notebook pods.
+            "automountServiceAccountToken": False,
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 10001,
+                "runAsGroup": 10001,
+                "fsGroup": 10001,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {
+                    "name": "notebook",
+                    "image": (
+                        f"docker.io/library/{image}"
+                        if ":" in image and "/" not in image
+                        else image
+                    ),
+                    "imagePullPolicy": "IfNotPresent",
+                    # --no-token: pod runs without marimo's built-in auth; the gateway proxy
+                    # is the sole auth gate.
+                    # --base-url: tells marimo to emit asset/WS URLs under /notebook/{session_id}.
+                    "command": [
+                        "sp", "edit", "--host", "0.0.0.0", "--port", "2718",
+                        "--headless", "--no-token",
+                        "--base-url", f"/notebook/{session_id}",
+                        "/workspace",
+                    ],
+                    "ports": [{"containerPort": 2718}],
+                    "env": env,
+                    "resources": {
+                        "requests": {"memory": "512Mi", "cpu": "500m"},
+                        "limits": {"memory": "2Gi", "cpu": "2"},
+                    },
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "readOnlyRootFilesystem": True,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                    "volumeMounts": [
+                        {"name": "tmp", "mountPath": "/tmp"},
+                        {"name": "home", "mountPath": "/home/notebook"},
+                        {"name": "workspace", "mountPath": "/workspace"},
+                    ],
+                    "readinessProbe": {
+                        "tcpSocket": {"port": 2718},
+                        "initialDelaySeconds": 5,
+                        "periodSeconds": 5,
+                        "failureThreshold": 20,
+                    },
+                    "livenessProbe": {
+                        "tcpSocket": {"port": 2718},
+                        "initialDelaySeconds": 30,
+                        "periodSeconds": 30,
+                        "failureThreshold": 5,
+                    },
+                }
+            ],
+            "volumes": [
+                {"name": "tmp", "emptyDir": {}},
+                {"name": "home", "emptyDir": {}},
+                {"name": "workspace", "emptyDir": {}},
+            ],
             "restartPolicy": "Never",
             "terminationGracePeriodSeconds": 5,
         },
@@ -124,17 +186,51 @@ def _parse_pod_ip(pod: dict) -> str | None:
 
 
 class KubernetesOrchestrator(NotebookOrchestrator):
-    """Manages notebook pods via the Kubernetes API."""
+    """Manages notebook pods via the Kubernetes API.
 
-    def __init__(self, namespace: str | None = None, image: str | None = None):
-        self._namespace = namespace or os.getenv("SP_K8S_NAMESPACE", "default")
+    Requires SP_NOTEBOOK_UPSTREAM_MODE=pod_ip. Refuses any other value at
+    construction time. The nodeport path was fully removed in R3.
+    """
+
+    def __init__(self, image: str | None = None):
+        if _UPSTREAM_MODE != "pod_ip":
+            raise RuntimeError(
+                "KubernetesOrchestrator requires SP_NOTEBOOK_UPSTREAM_MODE=pod_ip. "
+                f"Got: {_UPSTREAM_MODE!r}. "
+                "NodePort mode was retired in R3. Use pod_ip for cloud/k8s deployments."
+            )
         self._image = image or os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest")
         self._client = None
         self._core_api = None
+        self._networking_api = None
+        self._rbac_api = None
 
-    async def _ensure_client(self):
+        # Loaded from settings — resolved lazily to avoid importing settings at module load.
+        self._namespace_prefix: str | None = None
+        self._gateway_namespace: str | None = None
+        self._gateway_pod_selector: dict[str, str] | None = None
+        self._gateway_port: int | None = None
+        self._egress_cidr: str | None = None
+        self._gateway_service_account: str | None = None
+
+    def _load_settings(self) -> None:
+        """Load K8s settings on first use. Called from _ensure_client."""
+        if self._namespace_prefix is not None:
+            return
+        from ..config.k8s import get_k8s_settings
+
+        settings = get_k8s_settings()
+        self._namespace_prefix = settings.sp_notebook_namespace_prefix
+        self._gateway_namespace = settings.sp_gateway_namespace
+        self._gateway_pod_selector = _parse_single_kv(settings.sp_gateway_pod_selector)
+        self._gateway_port = settings.sp_public_gateway_port
+        self._egress_cidr = settings.sp_notebook_egress_cidr
+        self._gateway_service_account = settings.sp_gateway_service_account
+
+    async def _ensure_client(self) -> None:
         if self._client is not None:
             return
+        self._load_settings()
         from kubernetes_asyncio import client, config
 
         kubeconfig = os.getenv("KUBECONFIG")
@@ -151,7 +247,26 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             return
         self._client = client.ApiClient()
         self._core_api = client.CoreV1Api(self._client)
-        logger.info("K8s orchestrator connected (namespace=%s)", self._namespace)
+        self._networking_api = client.NetworkingV1Api(self._client)
+        self._rbac_api = client.RbacAuthorizationV1Api(self._client)
+        logger.info("K8s orchestrator connected (namespace_prefix=%s)", self._namespace_prefix)
+
+    def _resolve_namespace(self, org_id: str) -> str:
+        """Resolve the namespace for an org_id. Raises ValueError on empty org_id."""
+        if not org_id:
+            raise ValueError("org_id must not be empty")
+        if self._namespace_prefix is None:
+            self._load_settings()
+        assert self._namespace_prefix is not None
+        return namespace_for_org(org_id, prefix=self._namespace_prefix)
+
+    def _assert_settings_loaded(self) -> None:
+        """Assert all settings were loaded. Called after _ensure_client."""
+        assert self._namespace_prefix is not None, "namespace_prefix not loaded"
+        assert self._gateway_namespace is not None, "gateway_namespace not loaded"
+        assert self._gateway_pod_selector is not None, "gateway_pod_selector not loaded"
+        assert self._gateway_port is not None, "gateway_port not loaded"
+        assert self._gateway_service_account is not None, "gateway_service_account not loaded"
 
     async def create_pod(
         self,
@@ -167,13 +282,37 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         session_id: str,
         access_token: str | None,
     ) -> PodInfo:
+        if not org_id:
+            raise ValueError("org_id must not be empty")
         await self._ensure_client()
         if not self._core_api:
             raise RuntimeError("K8s orchestrator not available")
+        self._assert_settings_loaded()
+
+        ns = self._resolve_namespace(org_id)
+
+        # These cannot be None after _assert_settings_loaded().
+        gateway_namespace: str = self._gateway_namespace  # type: ignore[assignment]
+        gateway_pod_selector: dict[str, str] = self._gateway_pod_selector  # type: ignore[assignment]
+        gateway_port: int = self._gateway_port  # type: ignore[assignment]
+        gateway_service_account: str = self._gateway_service_account  # type: ignore[assignment]
+
+        await ensure_org_namespace(
+            self._core_api,
+            self._networking_api,
+            self._rbac_api,
+            org_id=org_id,
+            namespace=ns,
+            gateway_namespace=gateway_namespace,
+            gateway_pod_selector=gateway_pod_selector,
+            gateway_port=gateway_port,
+            egress_cidr=self._egress_cidr,
+            gateway_service_account=gateway_service_account,
+        )
 
         manifest = _pod_manifest(
             pod_name=pod_name,
-            namespace=self._namespace,
+            namespace=ns,
             image=image or self._image,
             user_id=user_id,
             org_id=org_id,
@@ -184,74 +323,39 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             session_id=session_id,
             access_token=access_token,
         )
-        await self._core_api.create_namespaced_pod(
-            namespace=self._namespace, body=manifest
-        )
-        # H-1 fix: only create the NodePort Service in 'nodeport' mode (dev-only docker-compose).
-        # In 'pod_ip' mode (cloud/k8s), the gateway reaches pods directly via pod IP — no
-        # NodePort service is needed or created. Creating one would expose the unauthenticated
-        # marimo pod (--no-token) to anyone who can reach the k3s host's high-port range.
-        #
-        # IMPORTANT: 'nodeport' mode is for local docker-compose dev ONLY.
-        # It MUST NOT be used in cloud deployments — set SP_NOTEBOOK_UPSTREAM_MODE=pod_ip in cloud.
-        # The fail-fast check below enforces this.
-        if _UPSTREAM_MODE == "nodeport":
-            from ..runtime.mode import is_cloud_mode as _is_cloud_mode
-            if _is_cloud_mode():
-                raise RuntimeError(
-                    "SP_NOTEBOOK_UPSTREAM_MODE=nodeport is forbidden in cloud mode. "
-                    "Set SP_NOTEBOOK_UPSTREAM_MODE=pod_ip for cloud/k8s deployments."
-                )
-            svc_manifest = {
-                "apiVersion": "v1",
-                "kind": "Service",
-                "metadata": {"name": pod_name, "namespace": self._namespace},
-                "spec": {
-                    "type": "NodePort",
-                    "selector": {"app": "signalpilot-notebook", "signalpilot.ai/user": user_id[:63]},
-                    "ports": [{"port": 2718, "targetPort": 2718, "protocol": "TCP", "nodePort": 30000 + (hash(pod_name) % 100)}],
-                },
-            }
-            try:
-                await self._core_api.create_namespaced_service(namespace=self._namespace, body=svc_manifest)
-            except Exception as e:
-                if "AlreadyExists" not in str(e):
-                    logger.warning("Failed to create service for pod %s", pod_name)
-            logger.info("Created pod + NodePort service %s (dev-only nodeport mode)", pod_name)
-        else:
-            # pod_ip mode: no NodePort service created. Gateway uses pod IP directly.
-            logger.info("Created pod %s for user %s (pod_ip mode, no NodePort service)", pod_name, user_id)
+        await self._core_api.create_namespaced_pod(namespace=ns, body=manifest)
+        logger.info("Created pod %s in namespace %s (pod_ip mode)", pod_name, ns)
         return PodInfo(name=pod_name, ip=None, status="pending")
 
-    async def delete_pod(self, pod_name: str) -> bool:
+    async def delete_pod(self, pod_name: str, *, org_id: str) -> bool:
+        if not org_id:
+            raise ValueError("org_id must not be empty")
         await self._ensure_client()
         if not self._core_api:
             return False
+        ns = self._resolve_namespace(org_id)
         deleted = False
         try:
             await self._core_api.delete_namespaced_pod(
-                name=pod_name, namespace=self._namespace, grace_period_seconds=5,
+                name=pod_name, namespace=ns, grace_period_seconds=5,
             )
             deleted = True
         except Exception as e:
             if "404" not in str(e) and "Not Found" not in str(e):
-                logger.warning("Failed to delete pod %s: %s", pod_name, e)
-        try:
-            await self._core_api.delete_namespaced_service(name=pod_name, namespace=self._namespace)
-        except Exception:
-            pass
+                logger.warning("Failed to delete pod %s in %s: %s", pod_name, ns, e)
         if deleted:
-            logger.info("Deleted pod + service %s", pod_name)
+            logger.info("Deleted pod %s from namespace %s", pod_name, ns)
         return deleted
 
-    async def get_pod(self, pod_name: str) -> PodInfo | None:
+    async def get_pod(self, pod_name: str, *, org_id: str) -> PodInfo | None:
+        if not org_id:
+            raise ValueError("org_id must not be empty")
         await self._ensure_client()
         if not self._core_api:
             return None
+        ns = self._resolve_namespace(org_id)
         try:
-            resp = await self._core_api.read_namespaced_pod(
-                name=pod_name, namespace=self._namespace
-            )
+            resp = await self._core_api.read_namespaced_pod(name=pod_name, namespace=ns)
             pod = resp.to_dict()
             return PodInfo(
                 name=pod_name,
@@ -261,55 +365,43 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         except Exception:
             return None
 
-    async def is_pod_alive(self, pod_name: str) -> bool:
+    async def is_pod_alive(self, pod_name: str, *, org_id: str) -> bool:
         """Return True iff the pod exists and its phase is 'running'."""
-        pod = await self.get_pod(pod_name)
+        if not org_id:
+            raise ValueError("org_id must not be empty")
+        pod = await self.get_pod(pod_name, org_id=org_id)
         return pod is not None and pod.status == "running"
 
-    async def wait_for_ready(self, pod_name: str, timeout: int = 60) -> PodInfo:
+    async def wait_for_ready(self, pod_name: str, *, org_id: str, timeout: int = 60) -> PodInfo:
         """Poll until pod has an IP and is running, or timeout.
 
-        Returns PodInfo with:
-        - ip: legacy {k3s_host}:{nodeport} address (TODO: remove in R3).
-        - internal_ip: the value the gateway proxy should use to reach the pod.
-          In 'pod_ip' mode this is the raw pod IP; in 'nodeport' mode it mirrors ip.
-        Note (R2, not fixed): NodePort assignment uses hash(pod_name) % 100 which is
-        non-deterministic across Python runs (PYTHONHASHSEED) and can collide. R3 cleanup.
+        Returns PodInfo with internal_ip set to the raw pod IP (pod_ip mode only).
         """
+        if not org_id:
+            raise ValueError("org_id must not be empty")
         await self._ensure_client()
         if not self._core_api:
             raise RuntimeError("K8s orchestrator not available")
 
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
-            pod = await self.get_pod(pod_name)
+            pod = await self.get_pod(pod_name, org_id=org_id)
             if pod and pod.ip and pod.status == "running":
-                node_port = await self._get_node_port(pod_name)
-                k3s_host = os.getenv("SP_K8S_HOST", "").replace("https://", "").split(":")[0] or "k3s"
-                reachable_ip = f"{k3s_host}:{node_port}" if node_port else pod.ip
-                # Determine internal_ip based on upstream mode (read once at startup).
-                if _UPSTREAM_MODE == "pod_ip":
-                    internal_ip: str | None = pod.ip  # raw pod IP from K8s API
-                else:
-                    internal_ip = reachable_ip  # nodeport fallback
-                return PodInfo(name=pod.name, ip=reachable_ip, status="running", internal_ip=internal_ip)
+                return PodInfo(
+                    name=pod.name,
+                    ip=pod.ip,
+                    status="running",
+                    internal_ip=pod.ip,
+                )
             if pod and pod.status in ("failed", "succeeded"):
                 raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
             await asyncio.sleep(2)
         raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
-
-    async def _get_node_port(self, svc_name: str) -> int | None:
-        try:
-            svc = await self._core_api.read_namespaced_service(name=svc_name, namespace=self._namespace)
-            ports = svc.to_dict().get("spec", {}).get("ports", [])
-            if ports:
-                return ports[0].get("node_port")
-        except Exception:
-            pass
-        return None
 
     async def close(self) -> None:
         if self._client:
             await self._client.close()
             self._client = None
             self._core_api = None
+            self._networking_api = None
+            self._rbac_api = None

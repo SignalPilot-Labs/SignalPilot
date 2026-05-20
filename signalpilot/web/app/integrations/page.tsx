@@ -176,7 +176,12 @@ function IntegrationsContent() {
       setFormReportPage("");
       await fetchIntegrations();
     } catch (e) {
-      setFormError(String(e));
+      const msg = String(e);
+      if (msg.includes("409")) {
+        setFormError(`integration "${editingName}" already exists`);
+      } else {
+        setFormError(msg);
+      }
     } finally {
       setCreating(false);
     }
@@ -361,8 +366,9 @@ function IntegrationsContent() {
               failed to load integrations
             </p>
             <button
+              disabled={loading}
               onClick={() => { setLoading(true); fetchIntegrations(); }}
-              className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+              className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-30"
             >
               retry
             </button>

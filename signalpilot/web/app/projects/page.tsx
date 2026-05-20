@@ -82,6 +82,11 @@ export default function ProjectsPage() {
     git_remote: "",
   });
 
+  // Build-time gateway origin — used to construct the /_init iframe URL.
+  // NEXT_PUBLIC_GATEWAY_URL is substituted at build time by Next.js; it must
+  // not be derived from any runtime API response (prevents URL injection).
+  const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3300";
+
   // IDE state
   const [ideStatus, setIdeStatus] = useState<"closed" | "starting" | "running">("closed");
   const [ideUrl, setIdeUrl] = useState<string | null>(null);
@@ -109,7 +114,11 @@ export default function ProjectsPage() {
       const session = await getNotebookSession();
       if (session && session.status === "running" && session.notebook_url) {
         setIdeStatus("running");
-        setIdeUrl(session.notebook_url);
+        // notebook_url is a relative path (/notebook/{id}/_init); prepend
+        // the gateway origin so the browser navigates to the proxy endpoint
+        // that sets the HttpOnly cookie and 302s into marimo. The marimo
+        // access token never appears in any frontend URL or DOM.
+        setIdeUrl(`${GATEWAY_URL}${session.notebook_url}`);
         startPing();
       }
     } catch {}
@@ -125,7 +134,7 @@ export default function ProjectsPage() {
         return;
       }
       setIdeStatus("running");
-      setIdeUrl(session.notebook_url);
+      setIdeUrl(`${GATEWAY_URL}${session.notebook_url}`);
       startPing();
     } catch (e) {
       toast(String(e), "error");
@@ -217,12 +226,24 @@ export default function ProjectsPage() {
             </div>
           )}
           {ideUrl && (
+            /*
+              sandbox rationale: allow-scripts + allow-same-origin together
+              effectively negates the sandboxing isolation for same-origin documents
+              — this is intentional. Marimo requires both: allow-scripts for kernel
+              execution, allow-same-origin for its own localStorage/IndexedDB access.
+              This sandbox attribute is defense-in-depth (no allow-popups, no
+              allow-top-navigation), not a primary isolation mechanism. Primary
+              isolation is the gateway proxy auth layer (sp_nb_* HttpOnly cookie +
+              ownership check on every request).
+            */
             <iframe
               src={ideUrl}
+              title="Marimo notebook"
               className="absolute inset-0 w-full h-full border-0"
               style={{ opacity: iframeLoaded ? 1 : 0, transition: "opacity 300ms ease-in" }}
               onLoad={() => setIframeLoaded(true)}
               allow="clipboard-read; clipboard-write"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
             />
           )}
         </div>

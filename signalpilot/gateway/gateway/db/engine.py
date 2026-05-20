@@ -362,6 +362,20 @@ async def _ensure_notebook_session_columns(engine) -> None:
     logger.info("Ensured notebook session columns")
 
 
+async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
+    """Add pod_ip_internal column to gateway_notebook_sessions if it does not exist.
+
+    Idempotent ADD COLUMN IF NOT EXISTS. No index needed (lookup is by PK).
+    The proxy uses this column to reach the pod inside the cluster, distinct
+    from pod_ip which is the legacy NodePort address kept for R3 cleanup.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS pod_ip_internal TEXT")
+        )
+    logger.info("Ensured pod_ip_internal column on gateway_notebook_sessions")
+
+
 async def _ensure_notebook_session_org_id(engine) -> None:
     """Idempotent: ensure org_id column on gateway_notebook_sessions and backfill legacy NULLs.
 
@@ -401,6 +415,7 @@ async def init_db() -> None:
     await _ensure_branch_columns(engine)
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)
+    await _ensure_notebook_session_pod_ip_internal(engine)
     logger.info("Gateway database tables initialized")
 
 

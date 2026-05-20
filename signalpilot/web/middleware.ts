@@ -57,7 +57,29 @@ function applySecurityHeaders(
 
   let workerSrc = "'self'";
 
-  let frameSrc = "'self' http://localhost:* https://localhost:*";
+  // frame-src: always allow 'self'. Add the gateway origin if it differs from
+  // the web app origin (cross-origin gateway deployment). NEXT_PUBLIC_GATEWAY_URL
+  // is a build-time constant — never sourced from a runtime API response so a
+  // malicious script cannot swap it to a different origin.
+  let frameSrc = "'self'";
+  const gatewayOrigin = (() => {
+    try {
+      const u = new URL(gatewayUrl);
+      return u.origin; // e.g. "http://localhost:3300"
+    } catch {
+      return null;
+    }
+  })();
+  // Include localhost wildcard for dev convenience only — in production the
+  // gatewayOrigin covers the exact gateway host and there is no need to allow
+  // arbitrary localhost ports. L-1: gate on NODE_ENV to avoid widening frame-src
+  // in production builds.
+  if (process.env.NODE_ENV === "development") {
+    frameSrc += " http://localhost:* https://localhost:*";
+  }
+  if (gatewayOrigin && isSafeUrl(gatewayUrl) && gatewayOrigin !== "null") {
+    frameSrc += ` ${gatewayOrigin}`;
+  }
 
   if (withClerk) {
     connectSrc +=

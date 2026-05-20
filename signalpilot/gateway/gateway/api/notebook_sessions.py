@@ -5,15 +5,21 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from ..auth.notebook_jwt import mint_session_jwt
 from ..config.k8s import get_k8s_settings
 from ..models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
+from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
+from ..notebook_proxy.cookies import clear_proxy_cookie
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
+
+# Single source of truth for session_id charset validation (shared with proxy auth).
+_SESSION_ID_PATTERN = re.compile(SESSION_ID_PATTERN_STR)
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +84,12 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
 
     # Use the config-supplied gateway URL — never derive it from the request Host header
     # because that header is attacker-controlled and would let a user redirect the pod's
-    # JWT callback (SP_SESSION_JWT + SP_ACCESS_TOKEN) to an arbitrary origin.
+    # JWT callback to an arbitrary origin.
     gateway_url = k8s_settings.sp_public_gateway_url
 
     try:
+        # access_token is no longer passed to the pod env or CLI (R2: --no-token).
+        # It is stored on the DB row only as the gateway proxy cookie value.
         await orch.create_pod(
             pod_name=pod,
             user_id=user_id,
@@ -96,12 +104,16 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         )
         pod_info = await orch.wait_for_ready(pod, timeout=90)
         await ns.update_session_status(
-            store.session, session_id=session_info.id, status="running", pod_ip=pod_info.ip
+            store.session,
+            session_id=session_info.id,
+            status="running",
+            pod_ip=pod_info.ip,
+            pod_ip_internal=pod_info.internal_ip,
         )
         session_info.status = "running"
         session_info.pod_ip = pod_info.ip
-        # Build the direct notebook URL for the frontend iframe
-        session_info.notebook_url = f"http://{pod_info.ip}?access_token={session_info.access_token}"
+        # Proxy-based URL — relative path, no token, no host, no port.
+        session_info.notebook_url = f"/notebook/{session_info.id}/_init"
     except Exception as e:
         logger.error("Failed to create notebook pod %s: %s", pod, e)
         await ns.update_session_status(store.session, session_id=session_info.id, status="error")
@@ -120,18 +132,33 @@ async def get_session(store: StoreD):
 
 @router.get("/{session_id}", response_model=NotebookSessionInfo, dependencies=[RequireScope("read")])
 async def get_session_by_id(session_id: str, store: StoreD):
-    """Get a specific session by id, scoped to the caller's org. Returns 404 on missing or cross-org."""
+    """Get a specific session by id, scoped to the caller's org and user.
+
+    Returns 404 on missing, cross-org, OR cross-user (same-org peers cannot
+    read each other's sessions — sharing is a future feature).
+    """
     from ..store import notebook_sessions as ns
+
+    # M-4: Validate session_id charset before interpolating into cookie paths.
+    if not _SESSION_ID_PATTERN.match(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
 
     org_id = store.org_id or ""
     session = await ns.get_session_by_id(store.session, session_id=session_id, org_id=org_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # M-1: Ownership check — same-org non-owners get 404 (not 403) to avoid
+    # leaking existence information. Mirrors the proxy's resolve_proxy_session check.
+    user_id = store.user_id or "local"
+    if session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
     return session
 
 
 @router.delete("", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def delete_session(store: StoreD):
+async def delete_session(store: StoreD, response: Response):
     """Kill current user's notebook session."""
     from ..store import notebook_sessions as ns
 
@@ -147,15 +174,34 @@ async def delete_session(store: StoreD):
         await orch.delete_pod(session.pod_name)
     await ns.mark_stopped(store.session, session_id=session.id)
 
+    # Clear the proxy cookie. Path MUST be /notebook/{sid} to match the original
+    # cookie's Path= attribute — browsers ignore clear-headers with a mismatched path.
+    clear_proxy_cookie(response, session_id=session.id, secure=is_cloud_mode())
+
 
 @router.delete("/{session_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def delete_session_by_id(session_id: str, store: StoreD):
-    """Delete a specific session by id, scoped to the caller's org. Returns 404 on missing or cross-org."""
+async def delete_session_by_id(session_id: str, store: StoreD, response: Response):
+    """Delete a specific session by id, scoped to the caller's org and user.
+
+    Returns 404 on missing, cross-org, OR cross-user (same-org peers cannot
+    delete each other's sessions).
+    """
     from ..store import notebook_sessions as ns
+
+    # M-4: Validate session_id charset BEFORE any cookie/header construction.
+    # This is defense in depth — clear_proxy_cookie interpolates session_id into
+    # a Set-Cookie Path= attribute, so CR/LF/semicolons must never reach it.
+    if not _SESSION_ID_PATTERN.match(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
 
     org_id = store.org_id or ""
     session = await ns.get_session_by_id(store.session, session_id=session_id, org_id=org_id)
     if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # M-1: Ownership check — same-org peers cannot delete each other's sessions.
+    user_id = store.user_id or "local"
+    if session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
     orch = await _get_orchestrator()
@@ -163,12 +209,45 @@ async def delete_session_by_id(session_id: str, store: StoreD):
         await orch.delete_pod(session.pod_name)
     await ns.mark_stopped(store.session, session_id=session.id)
 
+    # Clear the proxy cookie with the correct path.
+    clear_proxy_cookie(response, session_id=session_id, secure=is_cloud_mode())
+
+
+@router.post("/{session_id}/ping", response_model=NotebookSessionInfo | None, dependencies=[RequireScope("read")])
+async def ping_session_by_id(session_id: str, store: StoreD):
+    """Keep a specific session alive by id. Call every 60 seconds.
+
+    Returns 404 on missing, cross-org, OR cross-user (same-org peers cannot
+    extend each other's sessions' idle timers).
+    """
+    from ..store import notebook_sessions as ns
+
+    # M-4: Validate session_id charset at the boundary.
+    if not _SESSION_ID_PATTERN.match(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    org_id = store.org_id or ""
+    user_id = store.user_id or "local"
+
+    # M-1: Load session to check ownership before pinging.
+    session = await ns.get_session_by_id(store.session, session_id=session_id, org_id=org_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return await ns.ping_session_by_id(store.session, session_id=session_id, org_id=org_id)
+
 
 @router.post("/ping", response_model=NotebookSessionInfo | None, dependencies=[RequireScope("read")])
 async def ping_session(store: StoreD):
-    """Keep session alive. Call every 60 seconds."""
+    """Keep session alive. Call every 60 seconds.
+
+    Deprecated: use POST /api/notebook-sessions/{session_id}/ping instead.
+    This shim routes to the collection-style ping for backward compatibility.
+    """
     from ..store import notebook_sessions as ns
 
     org_id = store.org_id or ""
-    # Use collection-style ping by org+user; org scoping is implicit via the where clause.
     return await ns.ping_session(store.session, org_id=org_id, user_id=store.user_id or "local")

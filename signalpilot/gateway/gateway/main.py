@@ -12,6 +12,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +51,26 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
+
+    from .notebook_proxy.constants import (
+        PROXY_CONNECT_TIMEOUT_SECONDS,
+        PROXY_POOL_TIMEOUT_SECONDS,
+        PROXY_READ_TIMEOUT_SECONDS,
+        PROXY_WRITE_TIMEOUT_SECONDS,
+    )
+
+    # Shared httpx client for the notebook proxy — one client, shared across requests.
+    # Closed in lifespan teardown. Timeouts: connect=5s, read=None (SSE/long-poll),
+    # write=10s, pool=10s. Per-chunk idle watchdog wraps each chunk read in the proxy.
+    proxy_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=PROXY_CONNECT_TIMEOUT_SECONDS,
+            read=PROXY_READ_TIMEOUT_SECONDS,
+            write=PROXY_WRITE_TIMEOUT_SECONDS,
+            pool=PROXY_POOL_TIMEOUT_SECONDS,
+        )
+    )
+    app.state.notebook_proxy_client = proxy_client
 
     # Load notebook session JWT secret at startup (fail fast if misconfigured)
     from .auth.jwt_secret import load_session_jwt_secret
@@ -328,6 +349,7 @@ async def lifespan(app: FastAPI):
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()
+        await proxy_client.aclose()
         from .api.deps import _sandbox_client
 
         if _sandbox_client:

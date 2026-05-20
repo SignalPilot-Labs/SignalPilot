@@ -428,6 +428,8 @@ export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
 
 // Notebook Sessions
+// access_token is intentionally absent: the gateway issues an HttpOnly cookie
+// at /_init and never surfaces the token to frontend JavaScript.
 export type NotebookSession = {
   id: string;
   status: string;
@@ -437,7 +439,6 @@ export type NotebookSession = {
   pod_ip: string | null;
   last_ping: number | null;
   created_at: number;
-  access_token?: string | null;
 };
 
 export const createNotebookSession = (body: { project_id: string; branch: string }) =>

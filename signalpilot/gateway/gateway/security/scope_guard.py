@@ -2,6 +2,12 @@
 
 Provides require_scopes() and the RequireScope factory for FastAPI Depends usage.
 Scope model is flat — no hierarchy, no inheritance.
+
+Sanctioned bypass: routes under /notebook/* deliberately use resolve_proxy_session
+instead of RequireScope. This is the ONLY approved bypass of this guard. Those routes
+perform their own auth (Clerk/JWT + org-scope + cookie + ownership checks) inside
+resolve_proxy_session. Any future route that bypasses RequireScope for a different
+reason must be documented here and reviewed as a security exception.
 """
 
 from __future__ import annotations

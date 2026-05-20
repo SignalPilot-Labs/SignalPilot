@@ -574,7 +574,7 @@ class TestSessionReuse:
         async def _mock_delete_stopped(session, *, org_id, user_id):
             pass
 
-        async def _mock_update_status(session, *, session_id, status, pod_ip=None):
+        async def _mock_update_status(session, *, session_id, status, pod_ip=None, pod_ip_internal=None):
             pass
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))

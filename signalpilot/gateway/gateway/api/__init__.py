@@ -55,4 +55,9 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(chat_router)
     app.include_router(agent_runs_router)
     app.include_router(notebook_sessions_router)
+    # Notebook proxy router is imported lazily to avoid circular import
+    # (notebook_proxy.routes imports api.deps which is in this package).
+    from ..notebook_proxy import router as notebook_proxy_router
+
+    app.include_router(notebook_proxy_router)
     app.include_router(dbt_proxy_router)

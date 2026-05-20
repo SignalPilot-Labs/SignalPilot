@@ -11,6 +11,10 @@ class PodInfo:
     name: str
     ip: str | None
     status: str  # "pending", "running", "succeeded", "failed", "unknown"
+    # internal_ip: raw pod IP used by the gateway proxy to reach the pod inside
+    # the cluster. The gateway proxy routes to this address, never to the NodePort.
+    # ip remains as {k3s_host}:{nodeport} (legacy, TODO: remove in R3).
+    internal_ip: str | None = None
 
 
 class NotebookOrchestrator(ABC):

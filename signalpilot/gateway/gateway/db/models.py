@@ -547,6 +547,9 @@ class GatewayNotebookSession(GatewayBase):
     branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
     pod_name: Mapped[str | None] = mapped_column(String)
     pod_ip: Mapped[str | None] = mapped_column(String)
+    # pod_ip_internal: raw pod IP used by the gateway proxy to reach the pod inside
+    # the cluster. Distinct from pod_ip which is the legacy NodePort address.
+    pod_ip_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_token: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
     last_ping: Mapped[float | None] = mapped_column(Float)

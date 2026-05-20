@@ -13,6 +13,18 @@ from . import NotebookOrchestrator, PodInfo
 
 logger = logging.getLogger(__name__)
 
+# SP_NOTEBOOK_UPSTREAM_MODE: how the gateway proxy reaches notebook pods.
+# "pod_ip"   — use the raw pod IP from K8s API (requires network access to pod CIDR).
+# "nodeport" — use the NodePort service address (k3s_host:nodeport).
+# Read once at module import time; fail fast on unknown values so misconfiguration
+# surfaces at startup, not on the first proxied request.
+_UPSTREAM_MODE = os.getenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
+if _UPSTREAM_MODE not in {"pod_ip", "nodeport"}:
+    raise RuntimeError(
+        f"Invalid SP_NOTEBOOK_UPSTREAM_MODE: {_UPSTREAM_MODE!r}. "
+        "Allowed values: 'pod_ip', 'nodeport'."
+    )
+
 
 def _pod_manifest(
     *,
@@ -31,8 +43,13 @@ def _pod_manifest(
     """Build the pod spec dict for the Kubernetes API.
 
     Injects SP_SESSION_JWT and SP_SESSION_ID into the pod env.
-    Does NOT inject SP_API_KEY — the per-session JWT replaces it.
-    # TODO(R2): Add NodePort retirement, securityContext hardening, per-pod ServiceAccount.
+    Does NOT inject SP_API_KEY (replaced by per-session JWT) or SP_ACCESS_TOKEN
+    (removed in R2 — the gateway proxy is the sole auth gate; the pod runs --no-token).
+    --token-password is removed unconditionally; the pod runs --no-token always.
+    --base-url /notebook/{session_id} tells marimo to emit asset URLs under that prefix.
+    access_token is stored on the DB row as the gateway proxy cookie value but is NOT
+    injected into the pod env or CLI.
+    # TODO(R3): Add NodePort retirement, securityContext hardening, per-pod ServiceAccount.
     """
     env = [
         {"name": "SP_GATEWAY_URL", "value": gateway_url},
@@ -43,8 +60,7 @@ def _pod_manifest(
         {"name": "SP_SESSION_JWT", "value": session_jwt},
         {"name": "SP_SESSION_ID", "value": session_id},
     ]
-    if access_token:
-        env.append({"name": "SP_ACCESS_TOKEN", "value": access_token})
+    # SP_ACCESS_TOKEN removed in R2. access_token is stored for the proxy cookie only.
 
     return {
         "apiVersion": "v1",
@@ -63,9 +79,14 @@ def _pod_manifest(
                 "name": "notebook",
                 "image": f"docker.io/library/{image}" if ":" in image and "/" not in image else image,
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless"]
-                    + (["--token-password", access_token] if access_token else ["--no-token"])
-                    + ["/workspace"],
+                # --no-token: pod runs without marimo's built-in auth; the gateway proxy is the
+                # sole auth gate. --token-password branch removed unconditionally in R2.
+                # --base-url: tells marimo to emit asset/WS URLs under /notebook/{session_id}.
+                "command": [
+                    "sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless",
+                    "--no-token", "--base-url", f"/notebook/{session_id}",
+                    "/workspace",
+                ],
                 "ports": [{"containerPort": 2718}],
                 "env": env,
                 "resources": {
@@ -166,22 +187,40 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         await self._core_api.create_namespaced_pod(
             namespace=self._namespace, body=manifest
         )
-        svc_manifest = {
-            "apiVersion": "v1",
-            "kind": "Service",
-            "metadata": {"name": pod_name, "namespace": self._namespace},
-            "spec": {
-                "type": "NodePort",
-                "selector": {"app": "signalpilot-notebook", "signalpilot.ai/user": user_id[:63]},
-                "ports": [{"port": 2718, "targetPort": 2718, "protocol": "TCP", "nodePort": 30000 + (hash(pod_name) % 100)}],
-            },
-        }
-        try:
-            await self._core_api.create_namespaced_service(namespace=self._namespace, body=svc_manifest)
-        except Exception as e:
-            if "AlreadyExists" not in str(e):
-                logger.warning("Failed to create service %s: %s", pod_name, e)
-        logger.info("Created pod + service %s for user %s", pod_name, user_id)
+        # H-1 fix: only create the NodePort Service in 'nodeport' mode (dev-only docker-compose).
+        # In 'pod_ip' mode (cloud/k8s), the gateway reaches pods directly via pod IP — no
+        # NodePort service is needed or created. Creating one would expose the unauthenticated
+        # marimo pod (--no-token) to anyone who can reach the k3s host's high-port range.
+        #
+        # IMPORTANT: 'nodeport' mode is for local docker-compose dev ONLY.
+        # It MUST NOT be used in cloud deployments — set SP_NOTEBOOK_UPSTREAM_MODE=pod_ip in cloud.
+        # The fail-fast check below enforces this.
+        if _UPSTREAM_MODE == "nodeport":
+            from ..runtime.mode import is_cloud_mode as _is_cloud_mode
+            if _is_cloud_mode():
+                raise RuntimeError(
+                    "SP_NOTEBOOK_UPSTREAM_MODE=nodeport is forbidden in cloud mode. "
+                    "Set SP_NOTEBOOK_UPSTREAM_MODE=pod_ip for cloud/k8s deployments."
+                )
+            svc_manifest = {
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": pod_name, "namespace": self._namespace},
+                "spec": {
+                    "type": "NodePort",
+                    "selector": {"app": "signalpilot-notebook", "signalpilot.ai/user": user_id[:63]},
+                    "ports": [{"port": 2718, "targetPort": 2718, "protocol": "TCP", "nodePort": 30000 + (hash(pod_name) % 100)}],
+                },
+            }
+            try:
+                await self._core_api.create_namespaced_service(namespace=self._namespace, body=svc_manifest)
+            except Exception as e:
+                if "AlreadyExists" not in str(e):
+                    logger.warning("Failed to create service for pod %s", pod_name)
+            logger.info("Created pod + NodePort service %s (dev-only nodeport mode)", pod_name)
+        else:
+            # pod_ip mode: no NodePort service created. Gateway uses pod IP directly.
+            logger.info("Created pod %s for user %s (pod_ip mode, no NodePort service)", pod_name, user_id)
         return PodInfo(name=pod_name, ip=None, status="pending")
 
     async def delete_pod(self, pod_name: str) -> bool:
@@ -228,7 +267,15 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         return pod is not None and pod.status == "running"
 
     async def wait_for_ready(self, pod_name: str, timeout: int = 60) -> PodInfo:
-        """Poll until pod has an IP and is running, or timeout."""
+        """Poll until pod has an IP and is running, or timeout.
+
+        Returns PodInfo with:
+        - ip: legacy {k3s_host}:{nodeport} address (TODO: remove in R3).
+        - internal_ip: the value the gateway proxy should use to reach the pod.
+          In 'pod_ip' mode this is the raw pod IP; in 'nodeport' mode it mirrors ip.
+        Note (R2, not fixed): NodePort assignment uses hash(pod_name) % 100 which is
+        non-deterministic across Python runs (PYTHONHASHSEED) and can collide. R3 cleanup.
+        """
         await self._ensure_client()
         if not self._core_api:
             raise RuntimeError("K8s orchestrator not available")
@@ -240,7 +287,12 @@ class KubernetesOrchestrator(NotebookOrchestrator):
                 node_port = await self._get_node_port(pod_name)
                 k3s_host = os.getenv("SP_K8S_HOST", "").replace("https://", "").split(":")[0] or "k3s"
                 reachable_ip = f"{k3s_host}:{node_port}" if node_port else pod.ip
-                return PodInfo(name=pod.name, ip=reachable_ip, status="running")
+                # Determine internal_ip based on upstream mode (read once at startup).
+                if _UPSTREAM_MODE == "pod_ip":
+                    internal_ip: str | None = pod.ip  # raw pod IP from K8s API
+                else:
+                    internal_ip = reachable_ip  # nodeport fallback
+                return PodInfo(name=pod.name, ip=reachable_ip, status="running", internal_ip=internal_ip)
             if pod and pod.status in ("failed", "succeeded"):
                 raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
             await asyncio.sleep(2)

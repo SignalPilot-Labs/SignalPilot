@@ -65,6 +65,11 @@ export default function ProjectDetailPage() {
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Build-time gateway origin — used to construct the /_init iframe URL.
+  // NEXT_PUBLIC_GATEWAY_URL is substituted at build time by Next.js; it must
+  // not be derived from any runtime API response (prevents URL injection).
+  const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3300";
+
   // Notebook session state
   const [notebookStatus, setNotebookStatus] = useState<"idle" | "starting" | "running" | "error">("idle");
   const [notebookProxy, setNotebookProxy] = useState<string | null>(null);
@@ -98,7 +103,11 @@ export default function ProjectDetailPage() {
       const session = await getNotebookSession();
       if (session && session.status === "running" && session.notebook_url) {
         setNotebookStatus("running");
-        setNotebookProxy(session.notebook_url);
+        // notebook_url is a relative path (/notebook/{id}/_init); prepend
+        // the gateway origin so the browser navigates to the proxy endpoint
+        // that sets the HttpOnly cookie and 302s into marimo. The marimo
+        // access token never appears in any frontend URL or DOM.
+        setNotebookProxy(`${GATEWAY_URL}${session.notebook_url}`);
         startPing();
       }
     } catch {}
@@ -114,7 +123,7 @@ export default function ProjectDetailPage() {
         return;
       }
       setNotebookStatus("running");
-      setNotebookProxy(session.notebook_url);
+      setNotebookProxy(`${GATEWAY_URL}${session.notebook_url}`);
       startPing();
     } catch (e) {
       toast(String(e), "error");
@@ -199,10 +208,22 @@ export default function ProjectDetailPage() {
             <Square className="w-3 h-3" /> stop
           </button>
         </div>
+        {/*
+          sandbox rationale: allow-scripts + allow-same-origin together
+          effectively negates the sandboxing isolation for same-origin documents
+          — this is intentional. Marimo requires both: allow-scripts for kernel
+          execution, allow-same-origin for its own localStorage/IndexedDB access.
+          This sandbox attribute is defense-in-depth (no allow-popups, no
+          allow-top-navigation), not a primary isolation mechanism. Primary
+          isolation is the gateway proxy auth layer (sp_nb_* HttpOnly cookie +
+          ownership check on every request).
+        */}
         <iframe
           src={notebookProxy}
+          title="Marimo notebook"
           className="flex-1 w-full border-0"
           allow="clipboard-read; clipboard-write"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
         />
       </div>
     );

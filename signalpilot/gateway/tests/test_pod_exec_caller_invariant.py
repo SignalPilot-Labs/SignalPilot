@@ -27,8 +27,8 @@ _EXEC_API_PATTERN = re.compile(rb"connect_get_namespaced_pod_exec")
 
 
 def _relative_path(file: Path) -> str:
-    """Return path relative to gateway package root."""
-    return str(file.relative_to(_GATEWAY_PACKAGE))
+    """Return path relative to gateway package root (always forward slashes)."""
+    return file.relative_to(_GATEWAY_PACKAGE).as_posix()
 
 
 def _collect_exec_imports(file: Path) -> bool:

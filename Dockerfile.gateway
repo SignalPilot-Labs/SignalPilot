@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -e . && \
 # Run as non-root for defense-in-depth
 RUN groupadd -g 10001 appuser && \
     useradd -r -u 10001 -g appuser appuser
-RUN mkdir -p /data /shared && chown -R appuser:appuser /app /data /shared
+RUN mkdir -p /data /shared /gateway-secrets && chown -R appuser:appuser /app /data /shared /gateway-secrets
 
 USER appuser
 

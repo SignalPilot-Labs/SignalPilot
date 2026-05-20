@@ -48,7 +48,11 @@ HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
 #   and the sp_nb_<id> proxy cookie into pod logs.
 # - Authorization: a Clerk bearer JWT must never reach the pod.
 # Host is also not forwarded (let httpx synthesize it from the URL).
-OUTBOUND_STRIP_HEADERS: frozenset[str] = HOP_BY_HOP_HEADERS | frozenset({"cookie", "authorization", "host"})
+OUTBOUND_STRIP_HEADERS: frozenset[str] = HOP_BY_HOP_HEADERS | frozenset({
+    "cookie", "authorization", "host",
+    "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions",
+    "sec-websocket-protocol", "sec-websocket-accept",
+})
 
 # Headers stripped from upstream responses before returning to the browser.
 # Set-Cookie is stripped to prevent marimo's own session cookie from colliding

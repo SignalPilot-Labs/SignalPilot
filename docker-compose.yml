@@ -16,6 +16,7 @@ services:
     ports:
       - "127.0.0.1:6443:6443"
       - "30000-30100:30000-30100"
+      - "3300:3300"
     environment:
       K3S_TOKEN: ${K3S_TOKEN:-signalpilot-dev}
       K3S_KUBECONFIG_MODE: "644"
@@ -63,8 +64,7 @@ services:
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
-    ports:
-      - "3300:3300"
+    network_mode: "service:k3s"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
       SP_DATA_DIR: /data
@@ -72,20 +72,26 @@ services:
       SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_SANDBOX_ENABLED: "true"
       SP_DEPLOYMENT_MODE: local
-      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:2718
+      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:3300,http://localhost:2718
       SP_S3_ENDPOINT_URL: http://minio:9000
       SP_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-signalpilot}
       SP_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme_dev_only}
       SP_S3_BUCKET: signalpilot-data
       SP_S3_REGION: us-east-1
       SP_K8S_NAMESPACE: default
-      SP_K8S_HOST: https://k3s:6443
+      SP_K8S_HOST: https://127.0.0.1:6443
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
+      SP_NOTEBOOK_UPSTREAM_MODE: pod_ip
+      SP_NOTEBOOK_NETWORK_POLICY: "false"
+      SP_GATEWAY_NAMESPACE: signalpilot
+      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+      SP_PUBLIC_GATEWAY_PORT: "3300"
       KUBECONFIG: /k3s/k3s.yaml
       # Gateway URL used by pods to call back — must not be derived from request Host.
       # In local compose mode this defaults to http://gateway:3300 (set explicitly here).
       # In cloud mode SP_PUBLIC_GATEWAY_URL must point to the real external gateway hostname.
-      SP_PUBLIC_GATEWAY_URL: http://gateway:3300
+      SP_PUBLIC_GATEWAY_URL: http://localhost:3300
+      SP_GATEWAY_INTERNAL_URL: http://172.26.0.5:3300
       # Cloud mode: set SP_SESSION_JWT_SECRET to a 48-byte random secret.
       # Local mode: the gateway generates and persists /gateway-secrets/notebook_jwt_secret automatically.
       # SP_SESSION_JWT_SECRET: ${SP_SESSION_JWT_SECRET:-}

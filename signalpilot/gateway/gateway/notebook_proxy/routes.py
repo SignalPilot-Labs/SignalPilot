@@ -135,8 +135,6 @@ async def proxy_websocket(
     session_id: str,
     path: str,
     ws: WebSocket,
-    # Auth runs BEFORE ws.accept() — resolve_proxy_session is injected as a
-    # WebSocket dependency. FastAPI evaluates Depends before calling the handler.
     proxy_session: ProxySession = Depends(resolve_proxy_session),
 ) -> None:
     """Bridge a WebSocket connection to the notebook pod.
@@ -152,6 +150,8 @@ async def proxy_websocket(
     No RequireScope — see module docstring.
     """
     raw_query = ws.url.query
+    logger.info("WS HANDLER: session=%s path=%s query=%s upstream_base=%s",
+                session_id, path, raw_query, proxy_session.upstream_base)
     # M-3: Validate query string before forwarding to upstream.
     # Reject CR/LF and any char outside the safe URL charset to prevent response-
     # splitting and marimo session-ID abuse via querystring manipulation.
@@ -169,6 +169,8 @@ async def proxy_websocket(
     )
     if raw_query:
         upstream_url = f"{upstream_url}?{raw_query}"
+
+    logger.info("WS UPSTREAM URL: %s", upstream_url)
 
     proxy = NotebookProxy(
         proxy_session.upstream_base,

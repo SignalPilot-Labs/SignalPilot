@@ -9,6 +9,7 @@ from collections import defaultdict
 
 from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 
 from ...config import get_network_settings
@@ -158,11 +159,20 @@ def check_principal_rate_limit(key_id: str | None, org_id: str | None) -> str | 
     return None
 
 
-async def enforce_principal_rate_limit(request: Request) -> None:
-    """FastAPI dependency — runs after auth middleware has set request.state.auth."""
+async def enforce_principal_rate_limit(request: HTTPConnection) -> None:
+    """FastAPI dependency — runs after auth middleware has set request.state.auth.
+
+    Accepts HTTPConnection (not Request) so it works for both HTTP and WebSocket routes.
+    WebSocket is a subclass of HTTPConnection but not of Request.
+    """
+    import logging
+    _rl_log = logging.getLogger("rate_limit.enforce")
+    scope_type = getattr(request, "scope", {}).get("type", "?")
+    _rl_log.debug("enforce_principal_rate_limit scope=%s", scope_type)
     auth = getattr(request.state, "auth", None) or {}
     key_id = auth.get("key_id")
     org_id = auth.get("org_id")
     error = check_principal_rate_limit(key_id, org_id)
     if error:
+        _rl_log.warning("rate limit hit: %s", error)
         raise HTTPException(status_code=429, detail=error)

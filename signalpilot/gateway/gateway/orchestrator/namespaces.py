@@ -121,13 +121,14 @@ async def ensure_org_namespace(
     gateway_port: int,
     egress_cidr: str | None,
     gateway_service_account: str,
+    skip_network_policy: bool = False,
 ) -> None:
     """Idempotently bootstrap a per-org Kubernetes namespace and all required resources.
 
     Creates in order, swallowing only 409 AlreadyExists:
     1. Namespace
-    2. NetworkPolicy default-deny
-    3. NetworkPolicy allow-gateway-ingress-and-egress
+    2. NetworkPolicy default-deny (skipped if skip_network_policy)
+    3. NetworkPolicy allow-gateway-ingress-and-egress (skipped if skip_network_policy)
     4. ResourceQuota default-quota
     5. LimitRange default-limits
     6. Role signalpilot-gateway-org-role
@@ -148,26 +149,30 @@ async def ensure_org_namespace(
             lambda: core_api.create_namespace(body=_namespace_manifest(namespace, sha)),
             f"Namespace/{namespace}",
         )
-        await _create_idempotent(
-            lambda: networking_api.create_namespaced_network_policy(
-                namespace=namespace,
-                body=_default_deny_policy(namespace),
-            ),
-            f"NetworkPolicy/default-deny in {namespace}",
-        )
-        await _create_idempotent(
-            lambda: networking_api.create_namespaced_network_policy(
-                namespace=namespace,
-                body=_allow_gateway_policy(
+        if skip_network_policy:
+            logger.info("Skipping NetworkPolicy creation (SP_NOTEBOOK_NETWORK_POLICY=false)")
+        if not skip_network_policy:
+            await _create_idempotent(
+                lambda: networking_api.create_namespaced_network_policy(
                     namespace=namespace,
-                    gateway_namespace=gateway_namespace,
-                    gateway_pod_selector=gateway_pod_selector,
-                    gateway_port=gateway_port,
-                    egress_cidr=egress_cidr,
+                    body=_default_deny_policy(namespace),
                 ),
-            ),
-            f"NetworkPolicy/allow-gateway-ingress-and-egress in {namespace}",
-        )
+                f"NetworkPolicy/default-deny in {namespace}",
+            )
+        if not skip_network_policy:
+            await _create_idempotent(
+                lambda: networking_api.create_namespaced_network_policy(
+                    namespace=namespace,
+                    body=_allow_gateway_policy(
+                        namespace=namespace,
+                        gateway_namespace=gateway_namespace,
+                        gateway_pod_selector=gateway_pod_selector,
+                        gateway_port=gateway_port,
+                        egress_cidr=egress_cidr,
+                    ),
+                ),
+                f"NetworkPolicy/allow-gateway-ingress-and-egress in {namespace}",
+            )
         await _create_idempotent(
             lambda: core_api.create_namespaced_resource_quota(
                 namespace=namespace,

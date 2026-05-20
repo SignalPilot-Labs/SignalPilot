@@ -77,8 +77,10 @@ def _pod_manifest(
     automountServiceAccountToken: false, emptyDir volumes for writable scratch,
     and env additions for HOME, PYTHONDONTWRITEBYTECODE, MARIMO_LOG_DIR.
     """
+    internal_url = os.getenv("SP_GATEWAY_INTERNAL_URL", gateway_url)
     env = [
-        {"name": "SP_GATEWAY_URL", "value": gateway_url},
+        {"name": "SP_GATEWAY_URL", "value": internal_url},
+        {"name": "SP_GATEWAY_PUBLIC_URL", "value": gateway_url},
         {"name": "SP_PROJECT_ID", "value": project_id or ""},
         {"name": "SP_BRANCH", "value": branch},
         {"name": "SP_USER_ID", "value": user_id},
@@ -250,13 +252,17 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             if kubeconfig and os.path.exists(kubeconfig):
                 await config.load_kube_config(config_file=kubeconfig)
                 if k8s_host:
-                    client.Configuration.get_default_copy().host = k8s_host
+                    cfg = client.Configuration.get_default_copy()
+                    cfg.host = k8s_host
+                    cfg.verify_ssl = False
+                    self._client = client.ApiClient(configuration=cfg)
             else:
                 config.load_incluster_config()
         except Exception as e:
             logger.warning("K8s config failed: %s — orchestrator disabled", e)
             return
-        self._client = client.ApiClient()
+        if self._client is None:
+            self._client = client.ApiClient()
         self._core_api = client.CoreV1Api(self._client)
         self._networking_api = client.NetworkingV1Api(self._client)
         self._rbac_api = client.RbacAuthorizationV1Api(self._client)
@@ -308,6 +314,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         gateway_port: int = self._gateway_port  # type: ignore[assignment]
         gateway_service_account: str = self._gateway_service_account  # type: ignore[assignment]
 
+        skip_netpol = os.getenv("SP_NOTEBOOK_NETWORK_POLICY", "true").lower() == "false"
         await ensure_org_namespace(
             self._core_api,
             self._networking_api,
@@ -319,6 +326,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             gateway_port=gateway_port,
             egress_cidr=self._egress_cidr,
             gateway_service_account=gateway_service_account,
+            skip_network_policy=skip_netpol,
         )
 
         manifest = _pod_manifest(

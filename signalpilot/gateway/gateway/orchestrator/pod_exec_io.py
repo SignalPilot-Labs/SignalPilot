@@ -45,8 +45,9 @@ from __future__ import annotations
 import io
 import logging
 import os
+import posixpath
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +61,11 @@ def _validate_workspace_path(path: str, label: str) -> None:
         raise ValueError(
             f"{label} must start with '/workspace/'. Got: {path!r}"
         )
-    if ".." in Path(path).parts:
+    if ".." in PurePosixPath(path).parts:
         raise ValueError(
             f"{label} must not contain '..'. Got: {path!r}"
         )
-    if os.path.normpath(path) != path.rstrip("/"):
+    if posixpath.normpath(path) != path.rstrip("/"):
         raise ValueError(
             f"{label} is not a normalized path. Got: {path!r}"
         )
@@ -191,10 +192,15 @@ async def _exec_with_stdin(
     label: str,
 ) -> None:
     """Execute command in pod, sending stdin_data on stdin. Raises on non-zero exit."""
+    import json as _json
+
+    from kubernetes_asyncio import client
     from kubernetes_asyncio.stream import WsApiClient
 
-    async with WsApiClient(aiohttp_client_session=core_api.api_client) as ws_api:
-        ws = await ws_api.connect_get_namespaced_pod_exec(
+    cfg = core_api.api_client.configuration
+    async with WsApiClient(configuration=cfg) as ws_client:
+        v1 = client.CoreV1Api(api_client=ws_client)
+        ws_connect = await v1.connect_get_namespaced_pod_exec(
             name=pod_name,
             namespace=namespace,
             container=_CONTAINER_NAME,
@@ -203,15 +209,45 @@ async def _exec_with_stdin(
             stdin=True,
             stdout=True,
             tty=False,
+            _preload_content=False,
         )
-        await ws.write_stdin(stdin_data)
-        stdout = await ws.read_stdout()
-        stderr = await ws.read_stderr()
-        rc = ws.returncode
+        async with ws_connect as ws:
+            stdin_channel = b"\x00"
+            chunk_size = 64 * 1024
+            for offset in range(0, len(stdin_data), chunk_size):
+                chunk = stdin_data[offset : offset + chunk_size]
+                await ws.send_bytes(stdin_channel + chunk)
+            await ws.send_bytes(b"\x00")
 
+            stdout_buf = bytearray()
+            stderr_buf = bytearray()
+            rc = None
+            async for msg in ws:
+                data = msg.data
+                if isinstance(data, str):
+                    data = data.encode("utf-8")
+                if len(data) < 1:
+                    continue
+                channel = data[0]
+                payload = data[1:]
+                if channel == 1:
+                    stdout_buf.extend(payload)
+                elif channel == 2:
+                    stderr_buf.extend(payload)
+                elif channel == 3:
+                    try:
+                        status = _json.loads(payload.decode("utf-8"))
+                        rc = 0 if status.get("status") == "Success" else int(
+                            status["details"]["causes"][0]["message"]
+                        )
+                    except Exception:
+                        rc = 1
+
+    if rc is None:
+        rc = 0
     if rc != 0:
         raise RuntimeError(
-            f"{label} tar failed: rc={rc}, stderr={stderr!r}"
+            f"{label} tar failed: rc={rc}, stderr={bytes(stderr_buf)!r}"
         )
     logger.debug("%s complete: %d bytes sent", label, len(stdin_data))
 
@@ -225,26 +261,55 @@ async def _exec_with_stdout(
     label: str,
 ) -> bytes:
     """Execute command in pod, capturing stdout. Raises on non-zero exit."""
+    import json as _json
+
+    from kubernetes_asyncio import client
     from kubernetes_asyncio.stream import WsApiClient
 
-    async with WsApiClient(aiohttp_client_session=core_api.api_client) as ws_api:
-        ws = await ws_api.connect_get_namespaced_pod_exec(
+    cfg = core_api.api_client.configuration
+    async with WsApiClient(configuration=cfg) as ws_client:
+        v1 = client.CoreV1Api(api_client=ws_client)
+        ws_connect = await v1.connect_get_namespaced_pod_exec(
             name=pod_name,
             namespace=namespace,
             container=_CONTAINER_NAME,
             command=command,
             stderr=True,
-            stdin=True,
+            stdin=False,
             stdout=True,
             tty=False,
+            _preload_content=False,
         )
-        stdout = await ws.read_stdout()
-        stderr = await ws.read_stderr()
-        rc = ws.returncode
+        async with ws_connect as ws:
+            stdout_buf = bytearray()
+            stderr_buf = bytearray()
+            rc = None
+            async for msg in ws:
+                data = msg.data
+                if isinstance(data, str):
+                    data = data.encode("utf-8")
+                if len(data) < 1:
+                    continue
+                channel = data[0]
+                payload = data[1:]
+                if channel == 1:
+                    stdout_buf.extend(payload)
+                elif channel == 2:
+                    stderr_buf.extend(payload)
+                elif channel == 3:
+                    try:
+                        status = _json.loads(payload.decode("utf-8"))
+                        rc = 0 if status.get("status") == "Success" else int(
+                            status["details"]["causes"][0]["message"]
+                        )
+                    except Exception:
+                        rc = 1
 
+    if rc is None:
+        rc = 0
     if rc != 0:
         raise RuntimeError(
-            f"{label} tar failed: rc={rc}, stderr={stderr!r}"
+            f"{label} tar failed: rc={rc}, stderr={bytes(stderr_buf)!r}"
         )
     logger.debug("%s complete: %d bytes received", label, len(stdout) if stdout else 0)
     return stdout if stdout else b""

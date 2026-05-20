@@ -44,7 +44,14 @@ _CSP_DEFAULT_POLICY = (
     "form-action 'self'"
 )
 
-_CSP_PROXY_POLICY = "frame-ancestors 'self'"
+def _build_proxy_csp() -> str:
+    allowed_origins = os.environ.get("SP_ALLOWED_ORIGINS", "")
+    ancestors = ["'self'"]
+    for origin in allowed_origins.split(","):
+        origin = origin.strip()
+        if origin:
+            ancestors.append(origin)
+    return f"frame-ancestors {' '.join(ancestors)}"
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -58,10 +65,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # relaxed CSP. Only requests that go through the proxy router qualify.
         is_proxy = bool(_NOTEBOOK_PROXY_PATH_RE.match(request.url.path))
         response.headers["X-Content-Type-Options"] = "nosniff"
-        if is_proxy:
-            # SAMEORIGIN allows the iframe on our own origin. Do NOT set DENY.
-            response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        else:
+        if not is_proxy:
             response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "0"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -83,7 +87,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # The deployer owns the full policy — no merging or layering.
         # Proxy paths get a minimal policy: frame-ancestors 'self' only.
         if is_proxy:
-            response.headers["Content-Security-Policy"] = _CSP_PROXY_POLICY
+            response.headers["Content-Security-Policy"] = _build_proxy_csp()
         else:
             csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY
             response.headers["Content-Security-Policy"] = csp_policy

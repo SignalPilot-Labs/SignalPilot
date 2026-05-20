@@ -152,9 +152,11 @@ async def _resolve_pod_url_from_store(store: StoreD) -> str:
 
 
 async def _resolve_pod_url_from_request(request: Request) -> str:
-    """Look up pod URL for the authenticated user, handling both API key and local mode."""
+    """Look up pod URL for the authenticated user, reading pod_ip directly from DB."""
+    from sqlalchemy import select
+
     from ..db.engine import get_session_factory
-    from ..store import notebook_sessions as ns
+    from ..db.models import GatewayNotebookSession
 
     auth = getattr(request.state, "auth", {})
     org_id = auth.get("org_id", "local")
@@ -162,10 +164,15 @@ async def _resolve_pod_url_from_request(request: Request) -> str:
 
     factory = get_session_factory()
     async with factory() as session:
-        nb_session = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
-    if not nb_session or nb_session.status != "running" or not nb_session.pod_ip:
+        q = select(GatewayNotebookSession).where(
+            GatewayNotebookSession.org_id == org_id,
+            GatewayNotebookSession.user_id == user_id,
+            GatewayNotebookSession.status == "running",
+        )
+        row = (await session.execute(q)).scalar_one_or_none()
+    if not row or not row.pod_ip:
         raise HTTPException(status_code=404, detail="No running notebook session")
-    ip = nb_session.pod_ip
+    ip = row.pod_ip
     return f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
 
 

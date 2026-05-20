@@ -43,6 +43,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/mcp"):
             return await call_next(request)
 
+        # Notebook proxy — auth handled by access_token in query param
+        if request.url.path.startswith("/api/notebook-sessions/proxy"):
+            request.state.auth = {"user_id": "local", "org_id": "local", "auth_method": "notebook_proxy"}
+            return await call_next(request)
+
         from ...store import get_local_api_key
 
         local_key = get_local_api_key()

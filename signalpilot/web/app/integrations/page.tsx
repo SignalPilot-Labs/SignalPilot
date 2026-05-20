@@ -59,6 +59,7 @@ function IntegrationsContent() {
 
   const [integrations, setIntegrations] = useState<NotionIntegration[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Form
   const [showForm, setShowForm] = useState(false);
@@ -81,7 +82,9 @@ function IntegrationsContent() {
   const fetchIntegrations = useCallback(async () => {
     try {
       setIntegrations(await getNotionIntegrations());
+      setLoadError(false);
     } catch {
+      setLoadError(true);
       toast("failed to load integrations", "error");
     } finally {
       setLoading(false);
@@ -127,7 +130,12 @@ function IntegrationsContent() {
       setFormReportPage("");
       await fetchIntegrations();
     } catch (e) {
-      setFormError(String(e));
+      const msg = String(e);
+      if (msg.includes("409")) {
+        setFormError(`integration "${formName.trim()}" already exists`);
+      } else {
+        setFormError(msg);
+      }
     } finally {
       setCreating(false);
     }
@@ -168,7 +176,12 @@ function IntegrationsContent() {
       setFormReportPage("");
       await fetchIntegrations();
     } catch (e) {
-      setFormError(String(e));
+      const msg = String(e);
+      if (msg.includes("409")) {
+        setFormError(`integration "${editingName}" already exists`);
+      } else {
+        setFormError(msg);
+      }
     } finally {
       setCreating(false);
     }
@@ -345,8 +358,25 @@ function IntegrationsContent() {
           </div>
         )}
 
+        {/* ── Error state ── */}
+        {loadError && !showForm && (
+          <div className="border border-[var(--color-error)]/20 bg-[var(--color-bg-card)] p-8 text-center">
+            <AlertTriangle className="w-6 h-6 text-[var(--color-error)] mx-auto mb-3" strokeWidth={1} />
+            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
+              failed to load integrations
+            </p>
+            <button
+              disabled={loading}
+              onClick={() => { setLoading(true); fetchIntegrations(); }}
+              className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-30"
+            >
+              retry
+            </button>
+          </div>
+        )}
+
         {/* ── Empty state ── */}
-        {integrations.length === 0 && !showForm && (
+        {!loadError && integrations.length === 0 && !showForm && (
           <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-8 text-center">
             <BookOpen className="w-6 h-6 text-[var(--color-text-dim)] mx-auto mb-3" strokeWidth={1} />
             <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
@@ -357,7 +387,7 @@ function IntegrationsContent() {
               <a href="https://www.notion.so/profile/integrations" target="_blank" rel="noopener noreferrer" className="text-[var(--color-text-muted)] underline underline-offset-2 hover:text-[var(--color-text)] transition-colors">
                 notion.so/profile/integrations
               </a>
-              {" "}to get an api key, then share your pages with it
+              {" "}to get an access token, then share your pages with it
             </p>
           </div>
         )}

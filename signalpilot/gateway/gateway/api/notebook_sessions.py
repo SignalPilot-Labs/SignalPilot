@@ -132,23 +132,38 @@ async def ping_session(store: StoreD):
 # ─── Reverse Proxy ───────────────────────────────────────────────────────────
 
 
-async def _resolve_pod_url(store: StoreD) -> str:
-    """Get the pod URL for the current user's active session."""
+async def _resolve_pod_url_from_store(store: StoreD) -> str:
     from ..store import notebook_sessions as ns
 
     session = await ns.get_active_session(store.session, org_id=store.org_id, user_id=store.user_id or "local")
     if not session or session.status != "running" or not session.pod_ip:
         raise HTTPException(status_code=404, detail="No running notebook session")
     ip = session.pod_ip
-    if ":" in ip:
-        return f"http://{ip}"
-    return f"http://{ip}:2718"
+    return f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
 
 
-@router.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], dependencies=[RequireScope("read")])
-async def proxy_http(path: str, request: Request, store: StoreD):
+async def _resolve_pod_url_from_request(request: Request) -> str:
+    """Look up pod URL for the authenticated user, handling both API key and local mode."""
+    from ..db.engine import get_session_factory
+    from ..store import notebook_sessions as ns
+
+    auth = getattr(request.state, "auth", {})
+    org_id = auth.get("org_id", "local")
+    user_id = auth.get("user_id", "local")
+
+    factory = get_session_factory()
+    async with factory() as session:
+        nb_session = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
+    if not nb_session or nb_session.status != "running" or not nb_session.pod_ip:
+        raise HTTPException(status_code=404, detail="No running notebook session")
+    ip = nb_session.pod_ip
+    return f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
+
+
+@router.api_route("/proxy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_http(path: str, request: Request):
     """Reverse proxy HTTP requests to the user's notebook pod."""
-    pod_url = await _resolve_pod_url(store)
+    pod_url = await _resolve_pod_url_from_request(request)
     target = f"{pod_url}/{path}"
     if request.url.query:
         target += f"?{request.url.query}"
@@ -179,12 +194,27 @@ async def proxy_http(path: str, request: Request, store: StoreD):
 
 
 @router.websocket("/proxy/ws")
-async def proxy_websocket(ws: WebSocket, store: StoreD):
+async def proxy_websocket(ws: WebSocket):
     """Reverse proxy WebSocket to the user's notebook pod."""
     import asyncio
     import websockets
 
-    pod_url = await _resolve_pod_url(store)
+    # For WebSocket, auth state is set by the middleware on the initial HTTP upgrade
+    auth = getattr(ws.state, "auth", {})
+    org_id = auth.get("org_id", "local")
+    user_id = auth.get("user_id", "local")
+
+    from ..db.engine import get_session_factory
+    from ..store import notebook_sessions as ns
+
+    factory = get_session_factory()
+    async with factory() as session:
+        nb_session = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
+    if not nb_session or not nb_session.pod_ip:
+        await ws.close(code=4004, reason="No running notebook session")
+        return
+    ip = nb_session.pod_ip
+    pod_url = f"http://{ip}" if ":" in ip else f"http://{ip}:2718"
     ws_url = pod_url.replace("http://", "ws://") + "/ws"
 
     await ws.accept()

@@ -1571,3 +1571,289 @@ class TestSessionIdValidationOnApiEndpoints:
         with pytest.raises(HTTPException) as exc_info:
             await ns_api_mod.ping_session_by_id("bad,id", store)
         assert exc_info.value.status_code == 404
+
+
+# ─── Cookie slide on proxied HTTP responses ───────────────────────────────────
+
+
+class TestCookieSlide:
+    """R6: proxy_http re-emits the session cookie with a fresh Max-Age on every
+    successful proxied request so actively-used sessions never expire mid-work.
+
+    Positive: successful proxied response carries Set-Cookie with:
+      - name  = sp_nb_{session_id}
+      - value = original proxy_cookie_token (NOT rotated)
+      - Path  = /notebook/{session_id}
+      - Max-Age present and > 0
+
+    Negative: auth failures (no cookie / wrong cookie / wrong owner) MUST NOT
+    emit Set-Cookie — the slide only runs inside the handler body, AFTER
+    resolve_proxy_session Depends has already succeeded.
+    """
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+
+    def _make_proxy_session(
+        self,
+        session_id: str = "slide-sess-1",
+        token: str = "opaque-token-xyz",
+    ):
+        from gateway.notebook_proxy.auth import ProxySession
+
+        return ProxySession(
+            session_id=session_id,
+            user_id="user-1",
+            org_id="org-1",
+            upstream_base="http://10.42.0.5:2718",
+            proxy_cookie_token=token,
+        )
+
+    def _make_request(self, session_id: str = "slide-sess-1"):
+        request = MagicMock()
+        request.method = "GET"
+        url = MagicMock()
+        url.query = ""
+        request.url = url
+        request.headers = {}
+
+        async def _body():
+            return b""
+
+        request.body = _body
+        return request
+
+    def _make_upstream_response(self, status_code: int = 200):
+        """Build a fake upstream response that NotebookProxy.forward_http will stream."""
+        response = MagicMock()
+        response.status_code = status_code
+        response.headers = {"content-type": "text/plain"}
+
+        async def _aiter():
+            yield b"hello"
+
+        response.aiter_bytes = _aiter
+        response.aclose = AsyncMock()
+        return response
+
+    # ── positive: cookie slide on successful proxy ────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_successful_proxy_emits_slide_cookie(self, monkeypatch):
+        """proxy_http must set Set-Cookie with fresh Max-Age after forward_http."""
+        import gateway.notebook_proxy.routes as routes_mod
+
+        session_id = "slide-sess-1"
+        token = "opaque-token-xyz"
+        ttl = 28800
+
+        proxy_session = self._make_proxy_session(session_id=session_id, token=token)
+
+        # Patch get_k8s_settings to return a stable TTL
+        k8s_settings_mock = MagicMock()
+        k8s_settings_mock.sp_session_jwt_ttl_seconds = ttl
+        monkeypatch.setattr(routes_mod, "get_k8s_settings", lambda: k8s_settings_mock)
+        monkeypatch.setattr(routes_mod, "is_cloud_mode", lambda: False)
+
+        # Patch NotebookProxy.forward_http to return a plain Response
+        from fastapi.responses import Response as FastAPIResponse
+
+        upstream_resp = FastAPIResponse(content=b"ok", status_code=200)
+
+        async def _fake_forward_http(self_proxy, req, path):
+            return upstream_resp
+
+        monkeypatch.setattr(
+            routes_mod.NotebookProxy, "forward_http", _fake_forward_http
+        )
+
+        # Patch _get_proxy_client so we don't need real app state
+        monkeypatch.setattr(routes_mod, "_get_proxy_client", lambda req: MagicMock())
+
+        request = self._make_request(session_id=session_id)
+
+        result = await routes_mod.proxy_http(
+            session_id=session_id,
+            path="index.html",
+            request=request,
+            proxy_session=proxy_session,
+        )
+
+        set_cookie = result.headers.get("set-cookie", "")
+        assert f"sp_nb_{session_id}={token}" in set_cookie, (
+            f"Expected cookie sp_nb_{session_id}={token} in Set-Cookie, got: {set_cookie!r}"
+        )
+        assert f"Path=/notebook/{session_id}" in set_cookie
+        assert f"Max-Age={ttl}" in set_cookie
+
+    @pytest.mark.asyncio
+    async def test_slide_cookie_value_equals_original_token_not_rotated(self, monkeypatch):
+        """Cookie value must be the original proxy_cookie_token — NOT a new token."""
+        import gateway.notebook_proxy.routes as routes_mod
+
+        session_id = "slide-sess-2"
+        original_token = secrets.token_urlsafe(24)
+
+        proxy_session = self._make_proxy_session(session_id=session_id, token=original_token)
+
+        k8s_settings_mock = MagicMock()
+        k8s_settings_mock.sp_session_jwt_ttl_seconds = 3600
+        monkeypatch.setattr(routes_mod, "get_k8s_settings", lambda: k8s_settings_mock)
+        monkeypatch.setattr(routes_mod, "is_cloud_mode", lambda: False)
+
+        from fastapi.responses import Response as FastAPIResponse
+
+        async def _fake_forward_http(self_proxy, req, path):
+            return FastAPIResponse(content=b"ok", status_code=200)
+
+        monkeypatch.setattr(
+            routes_mod.NotebookProxy, "forward_http", _fake_forward_http
+        )
+        monkeypatch.setattr(routes_mod, "_get_proxy_client", lambda req: MagicMock())
+
+        request = self._make_request(session_id=session_id)
+        result = await routes_mod.proxy_http(
+            session_id=session_id,
+            path="",
+            request=request,
+            proxy_session=proxy_session,
+        )
+
+        set_cookie = result.headers.get("set-cookie", "")
+        assert original_token in set_cookie, (
+            "Cookie value must be the unmodified original token"
+        )
+
+    # ── negative: auth failures must NOT emit Set-Cookie ─────────────────────
+
+    @pytest.mark.asyncio
+    async def test_missing_cookie_auth_failure_emits_no_set_cookie(self, monkeypatch):
+        """When resolve_proxy_session raises 401 (no cookie), Set-Cookie must NOT appear."""
+        from fastapi import HTTPException
+
+        import gateway.notebook_proxy.auth as auth_mod
+        import gateway.store.notebook_sessions as ns_mod
+        from gateway.store.notebook_sessions import NotebookSessionInternal
+
+        internal = NotebookSessionInternal(
+            session_id="slide-auth-fail",
+            org_id="org-1",
+            user_id="user-1",
+            status="running",
+            pod_ip_internal="10.42.0.5",
+            access_token="real-token",
+        )
+        monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
+
+        async def _fake_user(conn):
+            return "user-1"
+
+        async def _fake_org(conn, uid):
+            return "org-1"
+
+        monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
+        monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
+
+        store = MagicMock()
+        store.session = AsyncMock()
+        request = MagicMock()
+        request.cookies = {}  # No cookie
+        request.headers = {}
+        request.state = MagicMock()
+        request.state.auth = None
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session("slide-auth-fail", request, store)
+
+        assert exc_info.value.status_code == 401
+        # The exception carries no Set-Cookie header
+        assert "set-cookie" not in (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    async def test_wrong_cookie_auth_failure_emits_no_set_cookie(self, monkeypatch):
+        """When resolve_proxy_session raises 401 (wrong token), Set-Cookie must NOT appear."""
+        from fastapi import HTTPException
+
+        import gateway.notebook_proxy.auth as auth_mod
+        import gateway.store.notebook_sessions as ns_mod
+        from gateway.store.notebook_sessions import NotebookSessionInternal
+
+        internal = NotebookSessionInternal(
+            session_id="slide-wrong-tok",
+            org_id="org-1",
+            user_id="user-1",
+            status="running",
+            pod_ip_internal="10.42.0.5",
+            access_token="correct-token",
+        )
+        monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
+
+        async def _fake_user(conn):
+            return "user-1"
+
+        async def _fake_org(conn, uid):
+            return "org-1"
+
+        monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
+        monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
+
+        store = MagicMock()
+        store.session = AsyncMock()
+        request = MagicMock()
+        request.cookies = {"sp_nb_slide-wrong-tok": "wrong-token"}
+        request.headers = {}
+        request.state = MagicMock()
+        request.state.auth = None
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session("slide-wrong-tok", request, store)
+
+        assert exc_info.value.status_code == 401
+        assert "set-cookie" not in (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    async def test_wrong_owner_auth_failure_emits_no_set_cookie(self, monkeypatch):
+        """When resolve_proxy_session raises 404 (wrong owner), Set-Cookie must NOT appear."""
+        from fastapi import HTTPException
+
+        import gateway.notebook_proxy.auth as auth_mod
+        import gateway.store.notebook_sessions as ns_mod
+        from gateway.store.notebook_sessions import NotebookSessionInternal
+
+        internal = NotebookSessionInternal(
+            session_id="slide-owner-fail",
+            org_id="org-1",
+            user_id="user-owner",  # Different from attacker
+            status="running",
+            pod_ip_internal="10.42.0.5",
+            access_token="token",
+        )
+        monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
+
+        async def _fake_user(conn):
+            return "user-attacker"
+
+        async def _fake_org(conn, uid):
+            return "org-1"
+
+        monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
+        monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
+
+        store = MagicMock()
+        store.session = AsyncMock()
+        request = MagicMock()
+        request.cookies = {}
+        request.headers = {}
+        request.state = MagicMock()
+        request.state.auth = None
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session("slide-owner-fail", request, store)
+
+        assert exc_info.value.status_code == 404
+        assert "set-cookie" not in (exc_info.value.headers or {})

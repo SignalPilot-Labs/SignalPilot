@@ -111,10 +111,23 @@ async def proxy_http(
 
     Auth: resolve_proxy_session (cookie-validated, org/user-scoped).
     No RequireScope — see module docstring.
+
+    Cookie slide: after a successful proxy, re-emit the session cookie with a
+    fresh Max-Age so actively-used sessions never silently expire mid-work.
+    The token value is unchanged — only the expiry window is extended.
     """
     http_client = _get_proxy_client(request)
     proxy = NotebookProxy(proxy_session.upstream_base, http_client=http_client)
-    return await proxy.forward_http(request, path)
+    response = await proxy.forward_http(request, path)
+    k8s_settings = get_k8s_settings()
+    set_proxy_cookie(
+        response,
+        session_id=proxy_session.session_id,
+        token=proxy_session.proxy_cookie_token,
+        secure=is_cloud_mode(),
+        max_age=k8s_settings.sp_session_jwt_ttl_seconds,
+    )
+    return response
 
 
 @router.websocket("/notebook/{session_id}/{path:path}")

@@ -70,7 +70,11 @@ export default function ProjectDetailPage() {
         return;
       }
       setIdeStatus("running");
-      setIdeUrl(`${GATEWAY_URL}${session.notebook_url}`);
+      const params = new URLSearchParams();
+      params.set("project", projectId);
+      params.set("branch", "main");
+      params.set("file", "__new__project");
+      setIdeUrl(`${GATEWAY_URL}${session.notebook_url}?${params.toString()}`);
       startPing();
     } catch (e) {
       toast(String(e), "error");

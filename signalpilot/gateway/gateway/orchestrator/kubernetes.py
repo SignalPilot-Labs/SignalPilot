@@ -61,6 +61,7 @@ def _pod_manifest(
     session_jwt: str,
     session_id: str,
     access_token: str | None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict:
     """Build the pod spec dict for the Kubernetes API.
 
@@ -94,6 +95,9 @@ def _pod_manifest(
         {"name": "HOME", "value": "/home/notebook"},
         {"name": "MARIMO_LOG_DIR", "value": "/tmp/marimo-logs"},
     ]
+    if extra_env:
+        for k, v in extra_env.items():
+            env.append({"name": k, "value": v})
     # SP_ACCESS_TOKEN removed in R2. access_token is stored for the proxy cookie only.
 
     return {
@@ -298,6 +302,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         session_jwt: str,
         session_id: str,
         access_token: str | None,
+        extra_env: dict[str, str] | None = None,
     ) -> PodInfo:
         if not org_id:
             raise ValueError("org_id must not be empty")
@@ -341,6 +346,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             session_jwt=session_jwt,
             session_id=session_id,
             access_token=access_token,
+            extra_env=extra_env,
         )
         await self._core_api.create_namespaced_pod(namespace=ns, body=manifest)
         logger.info("Created pod %s in namespace %s (pod_ip mode)", pod_name, ns)

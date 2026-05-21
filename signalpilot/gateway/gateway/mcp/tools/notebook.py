@@ -139,6 +139,7 @@ async def run_notebook(
                     gateway_url=k8s_settings.sp_public_gateway_url,
                     session_jwt=session_jwt, session_id=session_id,
                     access_token=session_info.access_token,
+                    extra_env={"SP_AGENT_MODE": "true"},
                 )
                 await orch.wait_for_running(pod_name, org_id=org_id, timeout=90)
                 await orch.populate_pod_workspace(pod_name, org_id=org_id, src=hydrate_path)

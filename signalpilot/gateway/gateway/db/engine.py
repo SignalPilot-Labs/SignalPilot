@@ -416,6 +416,8 @@ async def init_db() -> None:
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)
     await _ensure_notebook_session_pod_ip_internal(engine)
+    # GitHub tables are created by metadata.create_all above; this is a placeholder
+    # for future column additions via ALTER TABLE IF NOT EXISTS.
     logger.info("Gateway database tables initialized")
 
 

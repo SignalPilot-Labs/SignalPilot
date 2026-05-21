@@ -110,14 +110,22 @@ function NavIconKnowledge({ active }: { active: boolean }) {
   );
 }
 
+function NavIconGitHub({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M7 1C3.7 1 1 3.7 1 7c0 2.7 1.7 4.9 4.1 5.7.3.1.4-.1.4-.3v-1c-1.7.4-2-.8-2-.8-.3-.7-.7-.9-.7-.9-.5-.4 0-.4 0-.4.6 0 .9.6.9.6.5.9 1.4.6 1.7.5.1-.4.2-.6.4-.8-1.3-.1-2.7-.7-2.7-3 0-.7.2-1.2.6-1.7-.1-.1-.3-.8.1-1.6 0 0 .5-.2 1.7.6.5-.1 1-.2 1.5-.2s1 .1 1.5.2c1.2-.8 1.7-.6 1.7-.6.3.8.1 1.5.1 1.6.4.4.6 1 .6 1.7 0 2.3-1.4 2.8-2.7 3 .2.2.4.5.4 1.1v1.6c0 .2.1.4.4.3C11.3 11.9 13 9.7 13 7c0-3.3-2.7-6-6-6z" stroke="currentColor" strokeWidth="0.5" fill={active ? "currentColor" : "none"} />
+    </svg>
+  );
+}
+
 type NavIconComponent = React.FC<{ active: boolean }>;
 
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
   { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
+  { href: "/connections/github", label: "github", icon: NavIconGitHub, shortcut: "" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
-  // sandboxes removed — replaced by managed notebook sessions
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
   { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },

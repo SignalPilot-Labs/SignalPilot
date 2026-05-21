@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.models import GatewayProjectBranch, GatewayUserSession
 from ..models.workspace import BranchInfo, UserSessionInfo
 
-_BRANCH_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,100}$")
+_BRANCH_NAME_RE = re.compile(r"^[a-zA-Z0-9/_.\-]{1,200}$")
 
 
 def _validate_branch_name(name: str) -> str | None:
     if not _BRANCH_NAME_RE.match(name):
-        return "Branch name must be 1-100 chars: letters, numbers, _ or -"
+        return "Branch name must be 1-200 chars: letters, numbers, / _ - ."
+    if ".." in name or name.startswith("/") or name.endswith("/"):
+        return "Branch name must not contain '..' or start/end with '/'"
     return None
 
 

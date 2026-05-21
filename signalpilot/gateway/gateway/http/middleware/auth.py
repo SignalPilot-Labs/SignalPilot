@@ -43,6 +43,10 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/mcp"):
             return await call_next(request)
 
+        # GitHub OAuth flow — browser redirects, no API key
+        if request.url.path.startswith("/auth/github"):
+            return await call_next(request)
+
 
         from ...store import get_local_api_key
 

@@ -311,5 +311,77 @@ async def _exec_with_stdout(
         raise RuntimeError(
             f"{label} tar failed: rc={rc}, stderr={bytes(stderr_buf)!r}"
         )
-    logger.debug("%s complete: %d bytes received", label, len(stdout) if stdout else 0)
-    return stdout if stdout else b""
+    logger.debug("%s complete: %d bytes received", label, len(stdout_buf))
+    return bytes(stdout_buf)
+
+
+async def exec_command_in_pod(
+    core_api,
+    *,
+    namespace: str,
+    pod_name: str,
+    argv: list[str],
+    timeout_seconds: int = 300,
+) -> tuple[str, str, int]:
+    """Execute a command in the pod and return (stdout, stderr, exit_code).
+
+    Unlike stream_tar_into_pod / stream_tar_out_of_pod, this function accepts
+    an arbitrary command. The caller is responsible for validating the command.
+    """
+    import asyncio
+    import json as _json
+
+    from kubernetes_asyncio import client
+    from kubernetes_asyncio.stream import WsApiClient
+
+    cfg = core_api.api_client.configuration
+    async with WsApiClient(configuration=cfg) as ws_client:
+        v1 = client.CoreV1Api(api_client=ws_client)
+        ws_connect = await v1.connect_get_namespaced_pod_exec(
+            name=pod_name,
+            namespace=namespace,
+            container=_CONTAINER_NAME,
+            command=argv,
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+            _preload_content=False,
+        )
+        stdout_buf = bytearray()
+        stderr_buf = bytearray()
+        rc = None
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with ws_connect as ws:
+                    async for msg in ws:
+                        data = msg.data
+                        if isinstance(data, str):
+                            data = data.encode("utf-8")
+                        if len(data) < 1:
+                            continue
+                        channel = data[0]
+                        payload = data[1:]
+                        if channel == 1:
+                            stdout_buf.extend(payload)
+                        elif channel == 2:
+                            stderr_buf.extend(payload)
+                        elif channel == 3:
+                            try:
+                                status = _json.loads(payload.decode("utf-8"))
+                                rc = 0 if status.get("status") == "Success" else int(
+                                    status["details"]["causes"][0]["message"]
+                                )
+                            except Exception:
+                                rc = 1
+        except TimeoutError:
+            logger.warning("exec_command_in_pod timed out after %ds: %s", timeout_seconds, argv)
+            return bytes(stdout_buf).decode("utf-8", errors="replace"), "Timed out", -1
+
+    if rc is None:
+        rc = 0
+    return (
+        bytes(stdout_buf).decode("utf-8", errors="replace"),
+        bytes(stderr_buf).decode("utf-8", errors="replace"),
+        rc,
+    )

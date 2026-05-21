@@ -91,7 +91,14 @@ services:
       # In local compose mode this defaults to http://gateway:3300 (set explicitly here).
       # In cloud mode SP_PUBLIC_GATEWAY_URL must point to the real external gateway hostname.
       SP_PUBLIC_GATEWAY_URL: http://localhost:3300
-      SP_GATEWAY_INTERNAL_URL: http://172.26.0.5:3300
+      SP_GATEWAY_INTERNAL_URL: http://172.26.0.2:3300
+      # GitHub App (optional — leave empty to disable)
+      SP_GITHUB_APP_ID: ${SP_GITHUB_APP_ID:-}
+      SP_GITHUB_APP_CLIENT_ID: ${SP_GITHUB_APP_CLIENT_ID:-}
+      SP_GITHUB_APP_CLIENT_SECRET: ${SP_GITHUB_APP_CLIENT_SECRET:-}
+      SP_GITHUB_APP_PRIVATE_KEY: ${SP_GITHUB_APP_PRIVATE_KEY:-}
+      SP_GITHUB_APP_SLUG: ${SP_GITHUB_APP_SLUG:-signalpilot}
+      SP_WEB_URL: http://localhost:3200
       # Cloud mode: set SP_SESSION_JWT_SECRET to a 48-byte random secret.
       # Local mode: the gateway generates and persists /gateway-secrets/notebook_jwt_secret automatically.
       # SP_SESSION_JWT_SECRET: ${SP_SESSION_JWT_SECRET:-}

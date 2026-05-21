@@ -559,3 +559,54 @@ class GatewayNotebookSession(GatewayBase):
         UniqueConstraint("org_id", "user_id", name="uq_gw_nbsession_org_user"),
         Index("ix_gw_nbsession_org_status", "org_id", "status"),
     )
+
+
+# ─── GitHub App Installations ──────────────────────────────────────────────
+
+
+class GatewayGitHubInstallation(GatewayBase):
+    """GitHub App installation linked to an org."""
+
+    __tablename__ = "gateway_github_installations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    github_installation_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    github_account_login: Mapped[str] = mapped_column(String(200), nullable=False)
+    github_account_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    token_expires_at: Mapped[float | None] = mapped_column(Float)
+    permissions: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_by: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "github_installation_id", name="uq_gw_ghinstall_org_install"),
+        Index("ix_gw_ghinstall_org_id", "org_id"),
+    )
+
+
+class GatewayGitHubRepoLink(GatewayBase):
+    """Links a workspace project to a GitHub repo."""
+
+    __tablename__ = "gateway_github_repo_links"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    installation_id: Mapped[str] = mapped_column(String, nullable=False)
+    repo_full_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    repo_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    default_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    last_sync_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "project_id", name="uq_gw_ghrepo_org_project"),
+        Index("ix_gw_ghrepo_org_id", "org_id"),
+        Index("ix_gw_ghrepo_installation", "installation_id"),
+    )

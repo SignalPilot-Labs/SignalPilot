@@ -261,3 +261,47 @@ export interface MetricsSnapshot {
     hit_rate: number;
   };
 }
+
+// GitHub App
+export interface GitHubInstallation {
+  id: string;
+  org_id: string;
+  github_installation_id: number;
+  github_account_login: string;
+  github_account_type: string;
+  permissions: Record<string, string> | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GitHubRepo {
+  id: number;
+  full_name: string;
+  name: string;
+  private: boolean;
+  default_branch: string;
+  description: string | null;
+  html_url: string;
+}
+
+export interface GitHubRepoLink {
+  id: string;
+  org_id: string;
+  project_id: string;
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+  status: string;
+  last_sync_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GitCredentials {
+  source: string;
+  clone_url: string | null;
+  default_branch: string;
+  expires_at: number | null;
+}

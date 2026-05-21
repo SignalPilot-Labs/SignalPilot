@@ -456,6 +456,39 @@ export const deleteNotebookSession = () =>
 export const pingNotebookSession = () =>
   request<void>("/api/notebook-sessions/ping", { method: "POST" });
 
+// GitHub App
+export const getGitHubInstallations = () =>
+  request<GitHubInstallation[]>("/api/github/installations");
+
+export const deleteGitHubInstallation = (id: string) =>
+  request<void>(`/api/github/installations/${id}`, { method: "DELETE" });
+
+export const getGitHubRepos = (installationId: string) =>
+  request<GitHubRepo[]>(`/api/github/installations/${installationId}/repos`);
+
+export const linkGitHubRepo = (body: {
+  project_id: string;
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+}) =>
+  request<GitHubRepoLink>("/api/github/repo-links", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const unlinkGitHubRepo = (linkId: string) =>
+  request<void>(`/api/github/repo-links/${linkId}`, { method: "DELETE" });
+
+export const getGitHubRepoLinks = (projectId?: string) =>
+  request<GitHubRepoLink[]>(
+    `/api/github/repo-links${projectId ? `?project_id=${projectId}` : ""}`
+  );
+
+export const getGitCredentials = (projectId: string) =>
+  request<GitCredentials>(`/api/github/credentials/${projectId}`);
+
 // Health
 export const getHealth = () => request<Record<string, unknown>>("/health");
 
@@ -657,6 +690,7 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
 
 // Knowledge Base
 import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+import type { GitHubInstallation, GitHubRepo, GitHubRepoLink, GitCredentials } from "./types";
 
 export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
   const qs = params ? new URLSearchParams(

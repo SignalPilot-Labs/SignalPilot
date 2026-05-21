@@ -476,8 +476,7 @@ try:
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     app.mount("/mcp", _mcp_http_app)  # New canonical path
-    # Backward compat mount at / is removed — it intercepts WebSocket upgrades
-    # for /notebook/* proxy routes. MCP clients should use /mcp instead.
-    logger.info("MCP streamable-http endpoint mounted at /mcp")
+    app.mount("/", _mcp_http_app)  # Root mount for OAuth discovery (.well-known)
+    logger.info("MCP streamable-http endpoint mounted at /mcp (also / for OAuth discovery)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

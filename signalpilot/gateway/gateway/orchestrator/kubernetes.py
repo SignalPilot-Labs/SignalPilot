@@ -539,6 +539,27 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             dest_dir=dest,
         )
 
+    async def exec_in_pod(
+        self, pod_name: str, *, org_id: str, argv: list[str], timeout: int = 300
+    ) -> tuple[str, str, int]:
+        """Run a command in a pod and return (stdout, stderr, exit_code)."""
+        if not org_id:
+            raise ValueError("org_id must not be empty")
+        await self._ensure_client()
+        if not self._core_api:
+            raise RuntimeError("K8s orchestrator not available")
+
+        from .pod_exec_io import exec_command_in_pod
+
+        ns = self._resolve_namespace(org_id)
+        return await exec_command_in_pod(
+            self._core_api,
+            namespace=ns,
+            pod_name=pod_name,
+            argv=argv,
+            timeout_seconds=timeout,
+        )
+
     async def close(self) -> None:
         if self._client:
             await self._client.close()

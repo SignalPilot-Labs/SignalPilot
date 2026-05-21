@@ -27,6 +27,7 @@ from .workspace_projects import router as workspace_projects_router
 from .chat import router as chat_router
 from .agent_runs import router as agent_runs_router
 from .github import router as github_router
+from .user_secrets import router as user_secrets_router
 from .workspaces import router as workspaces_router
 from ..git.http_server import router as git_http_router
 
@@ -59,6 +60,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(agent_runs_router)
     app.include_router(notebook_sessions_router)
     app.include_router(github_router)
+    app.include_router(user_secrets_router)
     app.include_router(workspaces_router)
     app.include_router(git_http_router)
     # Notebook proxy router is imported lazily to avoid circular import

@@ -564,6 +564,23 @@ class GatewayNotebookSession(GatewayBase):
 # ─── GitHub App Installations ──────────────────────────────────────────────
 
 
+class GatewayUserSecrets(GatewayBase):
+    """Per-user secrets — encrypted at rest."""
+
+    __tablename__ = "gateway_user_secrets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    anthropic_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_gw_usersecrets_org_user"),
+        Index("ix_gw_usersecrets_org_id", "org_id"),
+    )
+
+
 class GatewayGitHubInstallation(GatewayBase):
     """GitHub App installation linked to an org."""
 

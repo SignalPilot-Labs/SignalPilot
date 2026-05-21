@@ -77,9 +77,15 @@ async def get_clone_url(project_id: str, store: StoreD, request: Request):
     token = ""
     if auth.get("auth_method") == "api_key":
         token = request.headers.get("x-api-key") or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    elif auth.get("auth_method") == "notebook_session":
+        token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     elif auth.get("auth_method") in ("local_key", "local_nokey"):
         from ..store import get_local_api_key
         token = get_local_api_key()
+    if not token:
+        bearer = request.headers.get("authorization", "")
+        if bearer.startswith("Bearer "):
+            token = bearer[7:].strip()
 
     scheme = request.url.scheme
     host = request.headers.get("host", "localhost:3300")

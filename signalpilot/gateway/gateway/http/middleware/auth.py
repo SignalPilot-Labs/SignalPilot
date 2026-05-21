@@ -47,6 +47,10 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/auth/github"):
             return await call_next(request)
 
+        # Git smart HTTP — auth handled inside the router via Basic Auth
+        if request.url.path.startswith("/git/"):
+            return await call_next(request)
+
 
         from ...store import get_local_api_key
 

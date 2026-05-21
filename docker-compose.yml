@@ -87,6 +87,7 @@ services:
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
       SP_PUBLIC_GATEWAY_PORT: "3300"
       KUBECONFIG: /k3s/k3s.yaml
+      SP_REPOS_DIR: /repos
       # Gateway URL used by pods to call back — must not be derived from request Host.
       # In local compose mode this defaults to http://gateway:3300 (set explicitly here).
       # In cloud mode SP_PUBLIC_GATEWAY_URL must point to the real external gateway hostname.
@@ -106,6 +107,7 @@ services:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
       - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos
       - k3s-config:/k3s:ro
     command: >
       sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
@@ -193,6 +195,8 @@ volumes:
   signalpilot-shared:
   # Gateway-private volume for JWT signing secrets — NOT mounted into web or any other service.
   signalpilot-gateway-secrets:
+  # Bare git repos — Docker volume for dev, EFS mount for production.
+  signalpilot-repos:
   signalpilot-minio-data:
   k3s-server:
   k3s-config:

@@ -97,6 +97,10 @@ async def lifespan(app: FastAPI):
         logger.error("STARTUP FATAL: Workspace storage misconfigured: %s", exc)
         raise SystemExit(1) from exc
 
+    # Ensure git repos directory exists
+    from .git.repos import ensure_repos_dir
+    ensure_repos_dir()
+
     # Initialize gateway DB tables
     await init_db()
 

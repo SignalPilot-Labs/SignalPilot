@@ -70,6 +70,18 @@ async def create_project(
     )
     session.add(main_branch)
     await session.commit()
+
+    # Initialize bare git repo for this project
+    try:
+        from ..git.repos import init_bare_repo, clone_from_remote
+        if source == "github" and git_remote:
+            clone_from_remote(project_id, git_remote)
+        else:
+            init_bare_repo(project_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to init git repo for project %s: %s", project_id, e)
+
     return _to_info(row)
 
 
@@ -137,6 +149,15 @@ async def delete_project(
         return False
     await session.delete(row)
     await session.commit()
+
+    # Delete bare git repo
+    try:
+        from ..git.repos import delete_repo
+        delete_repo(project_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to delete git repo for project %s: %s", project_id, e)
+
     return True
 
 

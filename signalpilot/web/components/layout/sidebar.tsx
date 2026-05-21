@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users } from "lucide-react";
+import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 import { getProjects, getWorkspaceProjects } from "@/lib/api";
@@ -123,7 +123,6 @@ type NavIconComponent = React.FC<{ active: boolean }>;
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
   { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
-  { href: "/connections/github", label: "github", icon: NavIconGitHub, shortcut: "" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
@@ -371,6 +370,25 @@ function AccountSecurityNavLink({ pathname }: { pathname: string }) {
   );
 }
 
+/** GitHub nav link — nested under settings */
+function GitHubNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/github");
+
+  return (
+    <Link
+      href="/settings/github"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <GitBranch size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">github</span>
+    </Link>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -509,6 +527,8 @@ export default function Sidebar() {
         <TeamNavLink pathname={pathname} />
         {/* Account Security sub-link — cloud-mode only */}
         <AccountSecurityNavLink pathname={pathname} />
+        {/* GitHub sub-link */}
+        <GitHubNavLink pathname={pathname} />
       </nav>
 
       {/* User section — Clerk UserButton or sign-in link */}

@@ -300,6 +300,38 @@ class GatewaySessionBudget(GatewayBase):
     )
 
 
+class GatewayNotionIntegration(GatewayBase):
+    """Notion integration configuration scoped by org."""
+
+    __tablename__ = "gateway_notion_integrations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    api_key_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    search_page_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    report_parent_page_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="unknown")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_gw_notion_org_name"),
+        Index("ix_gw_notion_org_id", "org_id"),
+    )
+
+    def to_info_dict(self) -> dict:
+        """Convert to a dict matching NotionIntegrationInfo fields."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "search_page_ids": self.search_page_ids or [],
+            "report_parent_page_id": self.report_parent_page_id,
+            "status": self.status or "unknown",
+            "created_at": self.created_at,
+            "org_id": self.org_id,
+        }
+
+
 class GatewayApiKey(GatewayBase):
     __tablename__ = "gateway_api_keys"
 

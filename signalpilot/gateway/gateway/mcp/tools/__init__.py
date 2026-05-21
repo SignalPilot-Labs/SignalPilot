@@ -21,5 +21,6 @@ from gateway.mcp.tools import model_blueprint as model_blueprint  # noqa: E402
 from gateway.mcp.tools import model_verify as model_verify  # noqa: E402
 from gateway.mcp.tools import projects as projects  # noqa: E402
 from gateway.mcp.tools import query as query  # noqa: E402
+from gateway.mcp.tools import notion as notion  # noqa: E402
 from gateway.mcp.tools import schema as schema  # noqa: E402
 from gateway.mcp.tools import notebook as notebook  # noqa: E402

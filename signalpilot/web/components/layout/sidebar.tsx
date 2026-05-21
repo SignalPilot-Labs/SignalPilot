@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch } from "lucide-react";
+import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, BookOpen } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useAppAuth } from "@/lib/auth-context";
 import { getProjects, getWorkspaceProjects } from "@/lib/api";
@@ -32,6 +32,16 @@ function NavIconQuery({ active }: { active: boolean }) {
       <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
       <path d="M10 8L12 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
       {active && <circle cx="11" cy="9" r="1" fill="var(--color-success)" />}
+    </svg>
+  );
+}
+function NavIconIntegrations({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <circle cx="4" cy="4" r="2.5" stroke="currentColor" strokeWidth="1" />
+      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1" />
+      <path d="M6 5.5L8 8.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+      {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
     </svg>
   );
 }
@@ -123,13 +133,14 @@ type NavIconComponent = React.FC<{ active: boolean }>;
 const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
   { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
   { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
-  { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "3" },
-  { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "4" },
+  { href: "/integrations", label: "integrations", icon: NavIconIntegrations, shortcut: "3" },
+  { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "4" },
+  { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "5" },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
   { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "9" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "10" },
+  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
 ];
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
@@ -297,6 +308,25 @@ function McpConnectNavLink({ pathname }: { pathname: string }) {
     >
       <Plug size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
       <span className="flex-1 tracking-wide text-[12px]">mcp connect</span>
+    </Link>
+  );
+}
+
+/** Notion Connect nav link — available in both local and cloud mode */
+function NotionConnectNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/notion-connect");
+
+  return (
+    <Link
+      href="/settings/notion-connect"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <BookOpen size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">notion connect</span>
     </Link>
   );
 }

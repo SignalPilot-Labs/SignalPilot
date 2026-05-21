@@ -15,6 +15,7 @@ from .files import router as files_router
 from .health import router as health_router
 from .keys import router as keys_router
 from .knowledge import router as knowledge_router
+from .notion import router as notion_router
 from .metrics import router as metrics_router
 from .projects import router as projects_router
 from .query import router as query_router
@@ -55,6 +56,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(security_router)
     app.include_router(byok_router)
     app.include_router(knowledge_router)
+    app.include_router(notion_router)
     app.include_router(workspace_projects_router)
     app.include_router(chat_router)
     app.include_router(agent_runs_router)
@@ -63,8 +65,6 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(user_secrets_router)
     app.include_router(workspaces_router)
     app.include_router(git_http_router)
-    # Notebook proxy router is imported lazily to avoid circular import
-    # (notebook_proxy.routes imports api.deps which is in this package).
     from ..notebook_proxy import router as notebook_proxy_router
 
     app.include_router(notebook_proxy_router)

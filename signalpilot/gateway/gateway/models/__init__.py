@@ -43,6 +43,11 @@ from .knowledge import (
     KnowledgeUsage,
 )
 from .mcp import MCPToolCall
+from .notion import (
+    NotionIntegrationCreate,
+    NotionIntegrationInfo,
+    NotionIntegrationUpdate,
+)
 from .projects import (
     ProjectCreate,
     ProjectInfo,
@@ -82,6 +87,9 @@ __all__ = [
     "ExecuteResult",
     "GatewaySettings",
     "MCPToolCall",
+    "NotionIntegrationCreate",
+    "NotionIntegrationInfo",
+    "NotionIntegrationUpdate",
     "ProjectCreate",
     "ProjectInfo",
     "ProjectSource",

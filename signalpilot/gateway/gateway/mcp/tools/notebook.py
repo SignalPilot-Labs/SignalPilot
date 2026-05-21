@@ -225,7 +225,7 @@ async def run_notebook(
     from gateway.config.k8s import get_k8s_settings
     gw_url = get_k8s_settings().sp_public_gateway_url
     notebook_url = (
-        f"{gw_url}/notebook/{session_id}/"
+        f"{gw_url}/notebook/{session_id}/_init"
         f"?project={project_id}&branch={agent_branch}&file={filename}"
     )
 

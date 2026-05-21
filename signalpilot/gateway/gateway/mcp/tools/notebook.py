@@ -160,34 +160,49 @@ async def run_notebook(
             finally:
                 shutil.rmtree(hydrate_path, ignore_errors=True)
 
-    # 4. Tar the .py file into the pod
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        (tmp_path / filename).write_text(code, encoding="utf-8")
+    # 4. Find the project's git clone directory in the pod
+    find_out, _, find_rc = await orch.exec_in_pod(
+        pod_name, org_id=org_id,
+        argv=["find", "/home/notebook/.sp/projects", "-name", ".git", "-type", "d", "-maxdepth", 4],
+        timeout=10,
+    )
+    if find_rc == 0 and find_out.strip():
+        project_dir = find_out.strip().split("\n")[0].replace("/.git", "")
+    else:
+        project_dir = "/workspace"
 
-        from gateway.orchestrator.pod_exec_io import stream_tar_into_pod
+    # 5. Write the .py file into the project directory via exec
+    write_cmd = ["sh", "-c", f"cat > '{project_dir}/{filename}'"]
+    w_out, w_err, w_rc = await orch.exec_in_pod(
+        pod_name, org_id=org_id,
+        argv=["sh", "-c", f"cat > {project_dir}/{filename} << 'SPEOF'\n{code}\nSPEOF"],
+        timeout=10,
+    )
+    if w_rc != 0:
+        # Fallback: tar inject
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / filename).write_text(code, encoding="utf-8")
+            from gateway.orchestrator.pod_exec_io import stream_tar_into_pod
+            ns_name = orch._resolve_namespace(org_id)
+            await orch._ensure_client()
+            await stream_tar_into_pod(
+                orch._core_api, namespace=ns_name, pod_name=pod_name,
+                src_dir=tmp_path, dest_path=f"{project_dir}/",
+            )
 
-        ns_name = orch._resolve_namespace(org_id)
-        await orch._ensure_client()
-        await stream_tar_into_pod(
-            orch._core_api,
-            namespace=ns_name,
-            pod_name=pod_name,
-            src_dir=tmp_path,
-            dest_path="/workspace/",
-        )
-
-    # 5. Run sp export session
+    # 6. Run sp export session from the project directory
     stdout, stderr, exit_code = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["python", "-m", "signalpilot", "export", "session",
-              f"/workspace/{filename}", "--force-overwrite", "--verbose"],
+        argv=["sh", "-c",
+              f"cd {project_dir} && python -m signalpilot export session "
+              f"{project_dir}/{filename} --force-overwrite --verbose"],
         timeout=300,
     )
 
-    # 6. Read session JSON from pod to extract cell outputs
+    # 7. Read session JSON from pod to extract cell outputs
     cell_outputs = ""
-    session_json_path = f"/workspace/__sp__/session/{filename}.json"
+    session_json_path = f"{project_dir}/__sp__/session/{filename}.json"
     try:
         cat_stdout, cat_stderr, cat_rc = await orch.exec_in_pod(
             pod_name, org_id=org_id,
@@ -201,20 +216,22 @@ async def run_notebook(
     except Exception as e:
         logger.warning("Failed to read session JSON: %s", e)
 
-    # 7. Commit and push results back to git repo
+    # 8. Commit and push results back via git (from project dir)
     push_result = ""
     try:
         git_cmds = [
-            ["git", "add", "-A"],
-            ["git", "commit", "-m", f"agent: {filename}"],
-            ["git", "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
+            f"cd {project_dir} && git add -A",
+            f"cd {project_dir} && git commit -m 'agent: {filename}'",
+            f"cd {project_dir} && git push origin HEAD:refs/heads/{agent_branch}",
         ]
         for cmd in git_cmds:
             g_out, g_err, g_rc = await orch.exec_in_pod(
-                pod_name, org_id=org_id, argv=cmd, timeout=30,
+                pod_name, org_id=org_id,
+                argv=["sh", "-c", cmd],
+                timeout=30,
             )
             if g_rc != 0 and "nothing to commit" not in g_err:
-                push_result = f"git {cmd[1]} failed: {g_err}"
+                push_result = f"failed: {g_err.strip()}"
                 break
         else:
             push_result = "pushed to git"

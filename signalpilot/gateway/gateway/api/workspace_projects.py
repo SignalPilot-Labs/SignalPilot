@@ -64,7 +64,8 @@ async def get_project(project_id: str, store: StoreD):
 async def get_clone_url(project_id: str, store: StoreD, request: Request):
     """Return the git clone URL for this project.
 
-    Embeds auth token so notebooks/agents can clone directly.
+    Returns clone URL and auth token separately. The token is passed via
+    HTTP Basic Auth, not embedded in the URL, to prevent leaking in logs.
     """
     project = await _get_project_or_404(store, project_id)
 
@@ -82,14 +83,13 @@ async def get_clone_url(project_id: str, store: StoreD, request: Request):
 
     scheme = request.url.scheme
     host = request.headers.get("host", "localhost:3300")
-
-    if token:
-        clone_url = f"{scheme}://x-access-token:{token}@{host}/git/{project_id}.git"
-    else:
-        clone_url = f"{scheme}://{host}/git/{project_id}.git"
+    base_url = f"{scheme}://{host}/git/{project_id}.git"
 
     return {
-        "clone_url": clone_url,
+        "clone_url": base_url,
+        "auth_token": token,
+        "auth_method": "basic",
+        "auth_username": "x-access-token",
         "default_branch": project.default_branch or "main",
         "source": project.source,
         "has_repo": True,

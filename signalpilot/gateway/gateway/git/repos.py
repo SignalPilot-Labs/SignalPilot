@@ -22,11 +22,20 @@ def _run_git(*args: str, cwd: Path | str | None = None, timeout: int = 30) -> tu
 
 
 def repo_path(project_id: str) -> Path:
-    return REPOS_ROOT / f"{project_id}.git"
+    import re
+    if not re.match(r"^[a-f0-9\-]{36}$", project_id):
+        raise ValueError(f"Invalid project_id: must be a UUID")
+    path = REPOS_ROOT / f"{project_id}.git"
+    if not str(path.resolve()).startswith(str(REPOS_ROOT.resolve())):
+        raise ValueError("Path traversal detected")
+    return path
 
 
 def repo_exists(project_id: str) -> bool:
-    return repo_path(project_id).is_dir()
+    try:
+        return repo_path(project_id).is_dir()
+    except ValueError:
+        return False
 
 
 def init_bare_repo(project_id: str, default_branch: str = "main") -> Path:

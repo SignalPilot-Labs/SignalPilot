@@ -47,7 +47,9 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/auth/github"):
             return await call_next(request)
 
-        # Git smart HTTP — auth handled inside the router via Basic Auth
+        # Git smart HTTP — auth handled inside the git router via Basic Auth.
+        # Skip the API key middleware to avoid double-auth, but the git handler
+        # validates credentials independently before any repo access.
         if request.url.path.startswith("/git/"):
             return await call_next(request)
 

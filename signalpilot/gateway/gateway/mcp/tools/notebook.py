@@ -160,7 +160,7 @@ async def run_notebook(
             finally:
                 shutil.rmtree(hydrate_path, ignore_errors=True)
 
-    # 4. Find the project's git clone directory in the pod
+    # 4. Find or clone the project's git repo in the pod
     find_out, _, find_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
         argv=["find", "/home/notebook/.sp/projects", "-name", ".git", "-type", "d", "-maxdepth", 4],
@@ -169,7 +169,28 @@ async def run_notebook(
     if find_rc == 0 and find_out.strip():
         project_dir = find_out.strip().split("\n")[0].replace("/.git", "")
     else:
-        project_dir = "/workspace"
+        # No clone yet — trigger sync_down via the notebook's API
+        logger.info("No git clone in pod, triggering sync_down for project %s", project_id)
+        sync_out, sync_err, sync_rc = await orch.exec_in_pod(
+            pod_name, org_id=org_id,
+            argv=["python", "-c",
+                   f"from signalpilot._server.files.project_sync import sync_down; "
+                   f"r = sync_down('{project_id}', '{agent_branch}'); print(r)"],
+            timeout=120,
+        )
+        logger.info("sync_down result: %s %s", sync_out.strip(), sync_err.strip() if sync_err else "")
+
+        # Find it again after clone
+        find_out2, _, _ = await orch.exec_in_pod(
+            pod_name, org_id=org_id,
+            argv=["find", "/home/notebook/.sp/projects", "-name", ".git", "-type", "d", "-maxdepth", 4],
+            timeout=10,
+        )
+        if find_out2 and find_out2.strip():
+            project_dir = find_out2.strip().split("\n")[0].replace("/.git", "")
+        else:
+            project_dir = "/workspace"
+            logger.warning("Still no git clone after sync_down, falling back to /workspace")
 
     # 5. Write the .py file into the project directory via exec
     write_cmd = ["sh", "-c", f"cat > '{project_dir}/{filename}'"]

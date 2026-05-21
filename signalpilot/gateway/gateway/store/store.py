@@ -943,44 +943,4 @@ class Store:
 
     # ─── Branches ────────────────────────────────────────────────────────────
 
-    async def create_branch(self, project_id: str, **kwargs):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.create_branch(self.session, org_id=oid, project_id=project_id, user_id=self.user_id, **kwargs)
-
-    async def list_branches(self, project_id: str, **kwargs):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.list_branches(self.session, org_id=oid, project_id=project_id, **kwargs)
-
-    async def get_branch(self, project_id: str, branch_name: str):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.get_branch(self.session, org_id=oid, project_id=project_id, name=branch_name)
-
-    async def delete_branch(self, project_id: str, branch_name: str):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.delete_branch(self.session, org_id=oid, project_id=project_id, name=branch_name)
-
-    async def ensure_main_branch(self, project_id: str):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.ensure_main_branch(self.session, org_id=oid, project_id=project_id, user_id=self.user_id)
-
-    async def get_user_session(self, project_id: str):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.get_or_create_user_session(self.session, org_id=oid, user_id=self.user_id or "local", project_id=project_id)
-
-    async def switch_branch(self, project_id: str, branch_name: str):
-        from . import branches
-
-        oid = self._require_org_id()
-        return await branches.update_user_session(self.session, org_id=oid, user_id=self.user_id or "local", project_id=project_id, branch_name=branch_name)
+    # Branch methods removed — branches are git refs now. Use git CLI directly.

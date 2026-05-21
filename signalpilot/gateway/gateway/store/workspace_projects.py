@@ -50,25 +50,6 @@ async def create_project(
         updated_at=now,
     )
     session.add(row)
-
-    from ..db.models import GatewayProjectBranch
-
-    main_branch = GatewayProjectBranch(
-        id=str(uuid.uuid4()),
-        project_id=project_id,
-        org_id=org_id,
-        name="main",
-        created_from=None,
-        is_protected=False,
-        is_default=True,
-        status="active",
-        file_count=0,
-        total_bytes=0,
-        created_by=user_id,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(main_branch)
     await session.commit()
 
     # Initialize bare git repo for this project

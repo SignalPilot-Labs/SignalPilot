@@ -1,8 +1,6 @@
 """MCP tool: run_notebook — execute a marimo notebook in a cloud pod."""
 
-import io
 import logging
-import tarfile
 import tempfile
 import uuid
 from pathlib import Path
@@ -42,34 +40,33 @@ async def run_notebook(
     if not code.strip():
         return "Error: code is empty"
 
-    # 1. Create or reuse agent branch
+    # 1. Validate project exists
     async with _store_session(user_id=user_id, org_id=org_id) as store:
         project = await store.get_workspace_project(project_id)
         if not project:
             return f"Error: project {project_id} not found"
 
-        if not agent_branch:
-            agent_branch = f"signalpilot-agent/{uuid.uuid4().hex[:12]}"
-            try:
-                await store.create_branch(project_id, name=agent_branch, from_branch="main")
-                logger.info("Created agent branch %s for project %s", agent_branch, project_id)
-            except Exception as e:
-                if "already exists" in str(e).lower():
-                    pass
-                else:
-                    return f"Error creating branch: {e}"
-        else:
-            branch = await store.get_branch(project_id, agent_branch)
-            if not branch:
-                return f"Error: branch {agent_branch} not found"
+    # 2. Create or reuse agent branch via git
+    from gateway.git.repos import repo_exists, repo_path, _run_git
 
-    # 2. Write .py file to S3 branch
-    from gateway.s3 import get_s3
+    if not repo_exists(project_id):
+        return f"Error: git repo not initialized for project {project_id}"
 
-    s3 = get_s3(org_id)
-    if s3:
-        s3_key = f"{project.s3_prefix}/branches/{agent_branch}/files/{filename}"
-        s3.put_object(s3_key, code.encode("utf-8"))
+    rp = repo_path(project_id)
+    if not agent_branch:
+        agent_branch = f"signalpilot-agent/{uuid.uuid4().hex[:12]}"
+        # Create branch in the bare repo (from HEAD if main exists, else orphan)
+        rc, out, err = _run_git("branch", agent_branch, "main", cwd=rp)
+        if rc != 0 and "not a valid" in err:
+            rc, out, err = _run_git("branch", agent_branch, cwd=rp)
+        if rc != 0 and "already exists" not in err:
+            return f"Error creating branch: {err}"
+        logger.info("Created agent branch %s for project %s", agent_branch, project_id)
+    else:
+        # Verify branch exists
+        rc, out, err = _run_git("rev-parse", "--verify", f"refs/heads/{agent_branch}", cwd=rp)
+        if rc != 0:
+            return f"Error: branch {agent_branch} not found"
 
     # 3. Get or create notebook session (pod reuse)
     from gateway.orchestrator.kubernetes import KubernetesOrchestrator
@@ -203,7 +200,28 @@ async def run_notebook(
     except Exception as e:
         logger.warning("Failed to read session JSON: %s", e)
 
-    # 7. Build notebook URL
+    # 7. Commit and push results back to git repo
+    push_result = ""
+    try:
+        git_cmds = [
+            ["git", "add", "-A"],
+            ["git", "commit", "-m", f"agent: {filename}"],
+            ["git", "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
+        ]
+        for cmd in git_cmds:
+            g_out, g_err, g_rc = await orch.exec_in_pod(
+                pod_name, org_id=org_id, argv=cmd, timeout=30,
+            )
+            if g_rc != 0 and "nothing to commit" not in g_err:
+                push_result = f"git {cmd[1]} failed: {g_err}"
+                break
+        else:
+            push_result = "pushed to git"
+    except Exception as e:
+        logger.warning("Failed to push results to git: %s", e)
+        push_result = f"push failed: {e}"
+
+    # 8. Build notebook URL
     from gateway.config.k8s import get_k8s_settings
     gw_url = get_k8s_settings().sp_public_gateway_url
     notebook_url = (
@@ -211,10 +229,10 @@ async def run_notebook(
         f"?project={project_id}&branch={agent_branch}&file={filename}"
     )
 
-    # 8. Format result
+    # 9. Format result
     parts = []
     if exit_code == 0:
-        parts.append("Notebook executed successfully.")
+        parts.append(f"Notebook executed successfully. ({push_result})")
     else:
         parts.append(f"Notebook execution failed (exit code {exit_code}).")
 

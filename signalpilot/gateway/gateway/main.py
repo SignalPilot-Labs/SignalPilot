@@ -482,8 +482,11 @@ try:
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
-    app.mount("/mcp", _mcp_http_app)  # New canonical path
-    app.mount("/.well-known", _mcp_http_app)  # OAuth discovery only (not catch-all)
-    logger.info("MCP streamable-http endpoint mounted at /mcp (+ /.well-known for OAuth)")
+    # MCP streamable-http app has internal route at /mcp.
+    # Mount at root so /mcp is reachable. MCPAuthMiddleware gates access.
+    # FastAPI routes take priority over mounts, so /api/*, /notebook/*, /git/*
+    # are handled by their routers before falling through to this mount.
+    app.mount("/", _mcp_http_app)
+    logger.info("MCP streamable-http endpoint mounted at /mcp (root mount, MCPAuth gated)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

@@ -26,7 +26,7 @@ NOTEBOOK_SESSION_AUD = "signalpilot-gateway"
 _REQUIRED_CLAIMS = {"sub", "org_id", "session_id", "iss", "aud", "exp", "iat", "scopes"}
 
 # Scopes granted to notebook session JWTs — read/write only; no admin, no billing.
-NOTEBOOK_SESSION_SCOPES: list[str] = ["read", "write"]
+NOTEBOOK_SESSION_SCOPES: list[str] = ["read", "write", "query", "execute"]
 
 
 class NotebookSessionJWTError(Exception):

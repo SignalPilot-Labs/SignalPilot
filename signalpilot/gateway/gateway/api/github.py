@@ -215,19 +215,38 @@ async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
             raise HTTPException(status_code=409, detail="Project already linked to a repo")
         raise
 
-    # Initial clone/fetch from GitHub into the bare repo
+    # Clone the GitHub repo into the bare repo synchronously before returning.
+    # This must succeed — without it, the bare repo doesn't exist and clone-url is a lie.
+    installation = await gh_store.get_installation(
+        store.session, org_id=store.org_id or "local", installation_id=body.installation_id,
+    )
+    if not installation:
+        raise HTTPException(status_code=400, detail="GitHub installation not found")
+
+    token = await gh_store.get_valid_token(store.session, installation)
+    remote_url = f"https://x-access-token:{token}@github.com/{body.repo_full_name}.git"
+
+    from ..git.repos import clone_from_remote, repo_exists
     try:
-        installation = await gh_store.get_installation(
-            store.session, org_id=store.org_id or "local", installation_id=body.installation_id,
-        )
-        if installation:
-            token = await gh_store.get_valid_token(store.session, installation)
-            remote_url = f"https://x-access-token:{token}@github.com/{body.repo_full_name}.git"
-            from ..git.repos import clone_from_remote
-            clone_from_remote(body.project_id, remote_url)
-            logger.info("Cloned GitHub repo %s into bare repo for project %s", body.repo_full_name, body.project_id)
+        clone_from_remote(body.project_id, remote_url)
+        logger.info("Cloned GitHub repo %s into bare repo for project %s", body.repo_full_name, body.project_id)
     except Exception as e:
-        logger.warning("Initial GitHub clone failed (non-fatal): %s", e)
+        logger.error("GitHub clone failed for %s: %s", body.repo_full_name, e)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to clone GitHub repo: {e}. The repo link was created but the bare repo is missing.",
+        )
+
+    # Update last_sync_at
+    import time as _time
+    from sqlalchemy import update as _update
+    from ..db.models import GatewayGitHubRepoLink
+    await store.session.execute(
+        _update(GatewayGitHubRepoLink)
+        .where(GatewayGitHubRepoLink.id == link.id)
+        .values(last_sync_at=_time.time())
+    )
+    await store.session.commit()
 
     return link
 

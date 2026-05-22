@@ -149,12 +149,8 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
         token = await gh_store.get_valid_token(session, installation)
         remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
 
-        # Fetch from GitHub (GitHub wins)
-        fetch_result = fetch_from_github(project_id, remote_url)
-        if "error" in fetch_result:
-            return {"fetch": fetch_result}
-
-        # Push all non-agent local branches to GitHub
+        # Push first, then fetch. Local changes go to GitHub before we pull.
+        # This prevents "GitHub wins" fetch from overwriting unpushed local commits.
         from .repos import list_branches
         branches = list_branches(project_id)
         push_results = {}
@@ -164,6 +160,11 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
             result = mirror_to_github(project_id, remote_url, branch=branch)
             push_results[branch] = result
         push_result = push_results
+
+        # Then fetch from GitHub (GitHub wins for branches where push succeeded)
+        fetch_result = fetch_from_github(project_id, remote_url)
+        if "error" in fetch_result:
+            return {"push": push_result, "fetch": fetch_result}
 
         # Update last_sync_at
         from sqlalchemy import update

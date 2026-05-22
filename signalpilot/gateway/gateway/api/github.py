@@ -327,9 +327,9 @@ async def sync_with_github(project_id: str, store: StoreD):
 
 
 @router.post("/api/github/fetch/{project_id}", dependencies=[RequireScope("read")])
-async def fetch_from_github(project_id: str, store: StoreD):
+async def fetch_from_github_endpoint(project_id: str, store: StoreD):
     """Fetch latest from GitHub into the bare repo (one-way pull)."""
-    from ..git.sync import fetch_from_github as _fetch, configure_github_remote
+    from ..git.sync import fetch_all, pull_branch
     from ..store import github as gh_store
 
     org_id = store.org_id or "local"
@@ -344,7 +344,10 @@ async def fetch_from_github(project_id: str, store: StoreD):
     token = await gh_store.get_valid_token(store.session, installation)
     remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
 
-    result = _fetch(project_id, remote_url)
+    result = fetch_all(project_id, remote_url)
+    if result.get("fetched"):
+        pull_result = pull_branch(project_id, remote_url, link.default_branch or "main")
+        result["pull"] = pull_result
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result

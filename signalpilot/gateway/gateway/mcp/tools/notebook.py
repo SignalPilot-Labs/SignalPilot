@@ -160,17 +160,17 @@ async def run_notebook(
             finally:
                 shutil.rmtree(hydrate_path, ignore_errors=True)
 
-    # 4. Find or clone the project's git repo in the pod
+    # 4. Find or clone the specific project's git repo in the pod
+    project_base = f"/home/notebook/.sp/projects/{project_id}"
     find_out, _, find_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["find", "/home/notebook/.sp/projects", "-name", ".git", "-type", "d", "-maxdepth", 4],
+        argv=["find", project_base, "-name", ".git", "-type", "d", "-maxdepth", 3],
         timeout=10,
     )
     if find_rc == 0 and find_out.strip():
         project_dir = find_out.strip().split("\n")[0].replace("/.git", "")
     else:
-        # No clone yet — trigger sync_down via the notebook's API
-        logger.info("No git clone in pod, triggering sync_down for project %s", project_id)
+        logger.info("No git clone for project %s in pod, triggering sync_down", project_id)
         sync_out, sync_err, sync_rc = await orch.exec_in_pod(
             pod_name, org_id=org_id,
             argv=["python", "-c",
@@ -180,10 +180,9 @@ async def run_notebook(
         )
         logger.info("sync_down result: %s %s", sync_out.strip(), sync_err.strip() if sync_err else "")
 
-        # Find it again after clone
         find_out2, _, _ = await orch.exec_in_pod(
             pod_name, org_id=org_id,
-            argv=["find", "/home/notebook/.sp/projects", "-name", ".git", "-type", "d", "-maxdepth", 4],
+            argv=["find", project_base, "-name", ".git", "-type", "d", "-maxdepth", 3],
             timeout=10,
         )
         if find_out2 and find_out2.strip():

@@ -154,9 +154,16 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
         if "error" in fetch_result:
             return {"fetch": fetch_result}
 
-        # Push local changes to GitHub
-        default_branch = link.default_branch or "main"
-        push_result = mirror_to_github(project_id, remote_url, branch=default_branch)
+        # Push all non-agent local branches to GitHub
+        from .repos import list_branches
+        branches = list_branches(project_id)
+        push_results = {}
+        for branch in branches:
+            if branch.startswith("signalpilot-agent/"):
+                continue
+            result = mirror_to_github(project_id, remote_url, branch=branch)
+            push_results[branch] = result
+        push_result = push_results
 
         # Update last_sync_at
         from sqlalchemy import update

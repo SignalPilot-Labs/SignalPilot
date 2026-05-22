@@ -13,6 +13,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
+  getGitHubInstallUrl,
   getGitHubInstallations,
   deleteGitHubInstallation,
   getGitHubRepos,
@@ -163,12 +164,19 @@ export default function GitHubConnectionsPage() {
               <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
                 connected accounts
               </span>
-              <a
-                href={`${GATEWAY_URL}/auth/github`}
+              <button
+                onClick={async () => {
+                  try {
+                    const { install_url } = await getGitHubInstallUrl();
+                    window.location.href = install_url;
+                  } catch (e) {
+                    toast(String(e), "error");
+                  }
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] transition-all tracking-wider uppercase"
               >
                 <Plug className="w-3 h-3" /> connect github
-              </a>
+              </button>
             </div>
             {installations.length === 0 ? (
               <div className="p-8 text-center text-xs text-[var(--color-text-dim)]">

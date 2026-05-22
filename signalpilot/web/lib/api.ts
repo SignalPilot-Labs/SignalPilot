@@ -457,6 +457,9 @@ export const pingNotebookSession = () =>
   request<void>("/api/notebook-sessions/ping", { method: "POST" });
 
 // GitHub App
+export const getGitHubInstallUrl = () =>
+  request<{ install_url: string }>("/api/github/install-url");
+
 export const getGitHubInstallations = () =>
   request<GitHubInstallation[]>("/api/github/installations");
 

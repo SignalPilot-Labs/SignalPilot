@@ -62,22 +62,36 @@ def _verify_state(state: str) -> str | None:
 # ─── OAuth Flow ──────────────────────────────────────────────────────────
 
 
-@router.get("/auth/github")
-async def github_oauth_start(request: Request, org_id: str | None = None):
+@router.get("/api/github/install-url", dependencies=[RequireScope("write")])
+async def github_install_url(store: StoreD):
+    """Return the GitHub App installation URL with HMAC-signed state.
+
+    Authenticated endpoint — org_id comes from the Clerk JWT / API key,
+    not from a spoofable query param. The frontend calls this, gets the URL,
+    and redirects the browser.
+    """
     settings = get_github_settings()
     if not settings.is_configured:
         raise HTTPException(status_code=503, detail="GitHub App not configured")
 
-    if not org_id:
-        auth = getattr(request.state, "auth", None) or {}
-        org_id = auth.get("org_id")
-    if not org_id:
-        from ..runtime.mode import is_cloud_mode
-        if is_cloud_mode():
-            raise HTTPException(status_code=400, detail="org_id required. Pass ?org_id= parameter.")
-        org_id = "local"
+    org_id = store.org_id or "local"
     state = _make_state(org_id)
+    install_url = f"https://github.com/apps/{settings.sp_github_app_slug}/installations/new?state={state}"
+    return {"install_url": install_url}
 
+
+@router.get("/auth/github")
+async def github_oauth_start(request: Request):
+    """Legacy redirect endpoint — used in local mode only."""
+    settings = get_github_settings()
+    if not settings.is_configured:
+        raise HTTPException(status_code=503, detail="GitHub App not configured")
+
+    from ..runtime.mode import is_cloud_mode
+    if is_cloud_mode():
+        raise HTTPException(status_code=400, detail="Use GET /api/github/install-url instead")
+
+    state = _make_state("local")
     install_url = f"https://github.com/apps/{settings.sp_github_app_slug}/installations/new?state={state}"
     return RedirectResponse(url=install_url, status_code=302)
 

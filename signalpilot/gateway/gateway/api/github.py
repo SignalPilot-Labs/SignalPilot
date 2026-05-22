@@ -125,7 +125,7 @@ async def github_oauth_callback(
             permissions=details.get("permissions"),
         )
 
-    redirect_url = f"{settings.sp_web_url}/connections/github?installed=true"
+    redirect_url = f"{settings.sp_web_url}/settings/github?installed=true"
     logger.info("GitHub App installed: installation_id=%s org=%s", installation_id, org_id)
     return RedirectResponse(url=redirect_url, status_code=302)
 

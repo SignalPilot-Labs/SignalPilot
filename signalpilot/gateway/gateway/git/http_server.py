@@ -233,21 +233,25 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
         import asyncio
         from .sync import mirror_push_to_github
         org_id = auth.get("org_id", "local")
-        # Detect which branch was pushed from the request path
-        branch = _detect_pushed_branch(proc.stderr or b"")
-        if branch:
+        for branch in _detect_pushed_branches(body):
             asyncio.ensure_future(mirror_push_to_github(project_id, org_id, branch))
 
     return Response(content=body_bytes, status_code=status_code, headers=headers)
 
 
-def _detect_pushed_branch(stderr: bytes) -> str | None:
-    """Extract the branch name from git-receive-pack stderr output."""
-    text = stderr.decode("utf-8", errors="replace")
-    for line in text.split("\n"):
-        if "refs/heads/" in line:
-            import re as _re
-            m = _re.search(r"refs/heads/(\S+)", line)
-            if m:
-                return m.group(1)
-    return "main"
+def _detect_pushed_branches(request_body: bytes) -> list[str]:
+    """Extract branch names from git-receive-pack request body.
+
+    The pkt-line format contains refs like:
+    old_sha new_sha refs/heads/main\0capabilities...
+    old_sha new_sha refs/heads/feat/my-branch
+    """
+    branches = []
+    text = request_body.decode("utf-8", errors="replace")
+    for match in re.finditer(r"refs/heads/([\w/.@_-]+)", text):
+        branch = match.group(1)
+        if branch not in branches:
+            branches.append(branch)
+    if not branches:
+        branches.append("main")
+    return branches

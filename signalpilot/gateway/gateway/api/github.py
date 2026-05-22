@@ -201,7 +201,7 @@ async def list_repos(installation_id: str, store: StoreD):
 async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
     from ..store import github as gh_store
     try:
-        return await gh_store.create_repo_link(
+        link = await gh_store.create_repo_link(
             store.session,
             org_id=store.org_id or "local",
             project_id=body.project_id,
@@ -214,6 +214,22 @@ async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
         if "uq_gw_ghrepo_org_project" in str(e):
             raise HTTPException(status_code=409, detail="Project already linked to a repo")
         raise
+
+    # Initial clone/fetch from GitHub into the bare repo
+    try:
+        installation = await gh_store.get_installation(
+            store.session, org_id=store.org_id or "local", installation_id=body.installation_id,
+        )
+        if installation:
+            token = await gh_store.get_valid_token(store.session, installation)
+            remote_url = f"https://x-access-token:{token}@github.com/{body.repo_full_name}.git"
+            from ..git.repos import clone_from_remote
+            clone_from_remote(body.project_id, remote_url)
+            logger.info("Cloned GitHub repo %s into bare repo for project %s", body.repo_full_name, body.project_id)
+    except Exception as e:
+        logger.warning("Initial GitHub clone failed (non-fatal): %s", e)
+
+    return link
 
 
 @router.get(
@@ -268,3 +284,48 @@ async def get_git_credentials(project_id: str, store: StoreD):
         default_branch=link.default_branch,
         expires_at=installation.token_expires_at,
     )
+
+
+# ─── GitHub Sync ─────────────────────────────────────────────────────
+
+
+@router.post("/api/github/sync/{project_id}", dependencies=[RequireScope("write")])
+async def sync_with_github(project_id: str, store: StoreD):
+    """Bidirectional sync: fetch from GitHub, push local changes back.
+
+    GitHub wins on conflicts — local branches are force-updated to match.
+    Agent branches (signalpilot-agent/*) are never synced.
+    If push can't fast-forward, creates a PR branch on GitHub.
+    """
+    from ..git.sync import sync_project_with_github
+
+    org_id = store.org_id or "local"
+    result = await sync_project_with_github(project_id, org_id)
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.post("/api/github/fetch/{project_id}", dependencies=[RequireScope("read")])
+async def fetch_from_github(project_id: str, store: StoreD):
+    """Fetch latest from GitHub into the bare repo (one-way pull)."""
+    from ..git.sync import fetch_from_github as _fetch, configure_github_remote
+    from ..store import github as gh_store
+
+    org_id = store.org_id or "local"
+    link = await gh_store.get_repo_link_for_project(store.session, org_id=org_id, project_id=project_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="No GitHub repo linked")
+
+    installation = await gh_store.get_installation(store.session, org_id=org_id, installation_id=link.installation_id)
+    if not installation:
+        raise HTTPException(status_code=404, detail="GitHub installation not found")
+
+    token = await gh_store.get_valid_token(store.session, installation)
+    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+
+    result = _fetch(project_id, remote_url)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result

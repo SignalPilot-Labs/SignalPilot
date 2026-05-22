@@ -93,6 +93,16 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
         pod_name=pod,
     )
 
+    # Fetch latest from GitHub before starting the pod (best-effort)
+    if body.project_id:
+        try:
+            from ..git.sync import sync_project_with_github
+            sync_result = await sync_project_with_github(body.project_id, org_id)
+            if sync_result.get("synced"):
+                logger.info("Pre-session GitHub sync for project %s: %s", body.project_id, sync_result)
+        except Exception as e:
+            logger.warning("Pre-session GitHub sync failed (non-fatal): %s", e)
+
     k8s_settings = get_k8s_settings()
     session_jwt = mint_session_jwt(
         user_id=user_id,

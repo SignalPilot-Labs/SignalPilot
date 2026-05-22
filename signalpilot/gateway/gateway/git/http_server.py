@@ -228,4 +228,26 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
     if proc.stderr and logger.isEnabledFor(logging.DEBUG):
         logger.debug("git stderr for project %s: %s", project_id, proc.stderr.decode("utf-8", errors="replace")[:100])
 
+    # Auto-mirror to GitHub after a successful push
+    if is_write and status_code < 400:
+        import asyncio
+        from .sync import mirror_push_to_github
+        org_id = auth.get("org_id", "local")
+        # Detect which branch was pushed from the request path
+        branch = _detect_pushed_branch(proc.stderr or b"")
+        if branch:
+            asyncio.ensure_future(mirror_push_to_github(project_id, org_id, branch))
+
     return Response(content=body_bytes, status_code=status_code, headers=headers)
+
+
+def _detect_pushed_branch(stderr: bytes) -> str | None:
+    """Extract the branch name from git-receive-pack stderr output."""
+    text = stderr.decode("utf-8", errors="replace")
+    for line in text.split("\n"):
+        if "refs/heads/" in line:
+            import re as _re
+            m = _re.search(r"refs/heads/(\S+)", line)
+            if m:
+                return m.group(1)
+    return "main"

@@ -23,7 +23,7 @@ from ..models import VALID_API_KEY_SCOPES  # noqa: F401 — imported for referen
 # never be able to perform org administration, billing changes, or user management.
 # This allowlist is the gateway-side hard cap; the JWT's own scopes claim is
 # intersected with it, so the token can only ask for less — never more.
-_NOTEBOOK_SESSION_SCOPE_ALLOWLIST: frozenset[str] = frozenset({"read", "write"})
+_NOTEBOOK_SESSION_SCOPE_ALLOWLIST: frozenset[str] = frozenset({"read", "write", "query", "execute"})
 
 
 async def _resolve_user_id(request: Request) -> str:

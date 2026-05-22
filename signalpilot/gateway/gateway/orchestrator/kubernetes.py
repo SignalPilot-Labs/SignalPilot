@@ -78,9 +78,16 @@ def _pod_manifest(
     automountServiceAccountToken: false, emptyDir volumes for writable scratch,
     and env additions for HOME, PYTHONDONTWRITEBYTECODE, MARIMO_LOG_DIR.
     """
-    internal_url = os.getenv("SP_GATEWAY_INTERNAL_URL", gateway_url)
+    static_internal_url = os.getenv("SP_GATEWAY_INTERNAL_URL", "")
+    gateway_port = os.getenv("SP_PUBLIC_GATEWAY_PORT", "3300")
     env = [
-        {"name": "SP_GATEWAY_URL", "value": internal_url},
+        {"name": "SP_NODE_IP", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}},
+    ]
+    if static_internal_url:
+        env.append({"name": "SP_GATEWAY_URL", "value": static_internal_url})
+    else:
+        env.append({"name": "SP_GATEWAY_URL", "value": f"http://$(SP_NODE_IP):{gateway_port}"})
+    env += [
         {"name": "SP_GATEWAY_PUBLIC_URL", "value": gateway_url},
         {"name": "SP_PROJECT_ID", "value": project_id or ""},
         {"name": "SP_BRANCH", "value": branch},

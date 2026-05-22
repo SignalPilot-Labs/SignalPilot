@@ -71,13 +71,20 @@ services:
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_SANDBOX_ENABLED: "true"
-      SP_DEPLOYMENT_MODE: local
+      SP_DEPLOYMENT_MODE: ${SP_DEPLOYMENT_MODE:-local}
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      SP_SESSION_JWT_SECRET: ${SP_SESSION_JWT_SECRET:-}
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:3300,http://localhost:2718
       SP_S3_ENDPOINT_URL: http://minio:9000
       SP_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-signalpilot}
       SP_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-changeme_dev_only}
       SP_S3_BUCKET: signalpilot-data
       SP_S3_REGION: us-east-1
+      SP_WORKSPACE_BACKEND: s3
+      SP_WORKSPACE_S3_BUCKET: signalpilot-data
+      SP_WORKSPACE_S3_REGION: us-east-1
+      SP_WORKSPACE_S3_ENDPOINT_URL: http://minio:9000
       SP_K8S_NAMESPACE: default
       SP_K8S_HOST: https://127.0.0.1:6443
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
@@ -92,7 +99,8 @@ services:
       # In local compose mode this defaults to http://gateway:3300 (set explicitly here).
       # In cloud mode SP_PUBLIC_GATEWAY_URL must point to the real external gateway hostname.
       SP_PUBLIC_GATEWAY_URL: http://localhost:3300
-      SP_GATEWAY_INTERNAL_URL: http://172.26.0.2:3300
+      # SP_GATEWAY_INTERNAL_URL not set — pods use K8s downward API (status.hostIP) instead.
+      # Set this only if the automatic node IP detection doesn't work in your environment.
       # GitHub App (optional — leave empty to disable)
       SP_GITHUB_APP_ID: ${SP_GITHUB_APP_ID:-}
       SP_GITHUB_APP_CLIENT_ID: ${SP_GITHUB_APP_CLIENT_ID:-}
@@ -110,7 +118,7 @@ services:
       - signalpilot-repos:/repos
       - k3s-config:/k3s:ro
     command: >
-      sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
+      sh -c "python3 -c 'from gateway.store import get_local_api_key; k=get_local_api_key(); open(\"/shared/local_api_key\",\"w\").write(k) if k else None' &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
@@ -159,35 +167,36 @@ services:
       - ${HOST_DATA_DIR:-/tmp}:/host-data:ro
     restart: unless-stopped
 
-  workspaces-api:
-    build:
-      context: ./workspaces/api
-      dockerfile: Dockerfile
-    ports:
-      - "3400:3400"
-    environment:
-      WORKSPACES_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
-      SP_DEPLOYMENT_MODE: ${SP_DEPLOYMENT_MODE:-local}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      SP_GATEWAY_URL: http://gateway:3300
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: on-failure
-
-  workspaces-web:
-    build:
-      context: .
-      dockerfile: workspaces/web/Dockerfile
-    ports:
-      - "3500:3500"
-    environment:
-      WORKSPACES_API_URL: http://workspaces-api:3400
-    volumes:
-      - signalpilot-shared:/shared:ro
-    depends_on:
-      - workspaces-api
-    restart: unless-stopped
+  # workspaces-api and workspaces-web are disabled until the workspaces/ directory is set up.
+  # workspaces-api:
+  #   build:
+  #     context: ./workspaces/api
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3400:3400"
+  #   environment:
+  #     WORKSPACES_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
+  #     SP_DEPLOYMENT_MODE: ${SP_DEPLOYMENT_MODE:-local}
+  #     CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+  #     SP_GATEWAY_URL: http://gateway:3300
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   restart: on-failure
+  #
+  # workspaces-web:
+  #   build:
+  #     context: .
+  #     dockerfile: workspaces/web/Dockerfile
+  #   ports:
+  #     - "3500:3500"
+  #   environment:
+  #     WORKSPACES_API_URL: http://workspaces-api:3400
+  #   volumes:
+  #     - signalpilot-shared:/shared:ro
+  #   depends_on:
+  #     - workspaces-api
+  #   restart: unless-stopped
 
 volumes:
   signalpilot-pg-data:

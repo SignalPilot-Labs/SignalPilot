@@ -411,10 +411,13 @@ def _build_allowed_origins() -> list[str]:
         origins = [o.strip() for o in raw.split(",") if o.strip()]
         validated = []
         for origin in origins:
-            if not origin.startswith("https://"):
+            if origin.startswith("http://localhost"):
+                validated.append(origin)
+            elif not origin.startswith("https://"):
                 logger.warning("CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin)
                 continue
-            validated.append(origin)
+            else:
+                validated.append(origin)
         return validated
     if not raw:
         return ["http://localhost:3000", "http://localhost:3200"]
@@ -480,7 +483,7 @@ try:
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     app.mount("/mcp", _mcp_http_app)  # New canonical path
-    app.mount("/", _mcp_http_app)  # Root mount for OAuth discovery (.well-known)
-    logger.info("MCP streamable-http endpoint mounted at /mcp (also / for OAuth discovery)")
+    app.mount("/.well-known", _mcp_http_app)  # OAuth discovery only (not catch-all)
+    logger.info("MCP streamable-http endpoint mounted at /mcp (+ /.well-known for OAuth)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

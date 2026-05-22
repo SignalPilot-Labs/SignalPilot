@@ -55,29 +55,48 @@ def _get_proxy_client(request: Request | WebSocket) -> httpx.AsyncClient:
 async def init_notebook(
     session_id: str,
     request: Request,
-    store: StoreD,
+    token: str | None = None,
 ) -> Response:
     """Set the HttpOnly proxy cookie and redirect to the notebook.
 
-    Auth: existing Clerk/sp_-key path via resolve_user_id / resolve_org_id.
-    The user must own the session. No RequireScope — see module docstring.
+    Auth chain (in order):
+    1. Clerk JWT / API key → resolve_user_id (works when called from same origin)
+    2. ?token= query param → session access_token (works cross-origin from web FE)
+
+    The token param is a signed session secret embedded in notebook_url by the
+    gateway when the session is created. It allows the web frontend (different
+    origin, no Clerk cookie) to initialize the session cookie securely.
     """
-    # Validate session_id charset before it reaches cookie/path construction.
+    import secrets as _secrets
+
     if not SESSION_ID_PATTERN.match(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    user_id = await resolve_user_id(request)
-    org_id = await resolve_org_id(request, user_id)
+    from ..db.engine import get_session_factory
+    factory = get_session_factory()
+    async with factory() as db_session:
+        session = await ns.get_session_internal(
+            db_session, session_id=session_id,
+        )
 
-    # Use the internal read path to get the real access_token for the cookie.
-    session = await ns.get_session_internal(
-        store.session, session_id=session_id, org_id=org_id
-    )
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Session not found")
+    # Auth: try Clerk/API key first, fall back to ?token= param
+    authed = False
+    try:
+        user_id = await resolve_user_id(request)
+        if session.user_id == user_id:
+            authed = True
+    except Exception:
+        pass
+
+    if not authed and token:
+        if _secrets.compare_digest(token, session.access_token or ""):
+            authed = True
+
+    if not authed:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
     if session.status != "running" or not session.pod_ip_internal:
         raise HTTPException(status_code=409, detail="Session not ready")

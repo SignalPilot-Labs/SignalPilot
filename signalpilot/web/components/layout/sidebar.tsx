@@ -433,9 +433,7 @@ export default function Sidebar() {
     return { total: conns.length, healthy: conns.filter((c) => c.status === "healthy").length };
   }, [healthData]);
 
-  // Sandboxes & projects are local-only — poll separately
   useEffect(() => {
-    if (isCloudMode) return;
     const fetch = () => {
       getWorkspaceProjects().then((res) => setProjectCount(res.total)).catch(() => getProjects().then((p) => setProjectCount(p.length)).catch(() => {}));
     };
@@ -444,7 +442,7 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/settings")));
+  const filteredNav = nav.filter(({ href }) => !(isCloudMode && href === "/settings"));
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -520,7 +518,7 @@ export default function Sidebar() {
         {filteredNav.map(({ href, label, icon: Icon }, filteredIdx) => {
           const shortcut = String(filteredIdx + 1);
           const active = pathname.startsWith(href);
-          const badge = href === "/projects" ? projectCount : 0;
+          const badge = 0;
           return (
             <Link
               key={href}

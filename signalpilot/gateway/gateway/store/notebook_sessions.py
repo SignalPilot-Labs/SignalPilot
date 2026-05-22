@@ -49,17 +49,19 @@ async def get_session_by_id(
 
 
 async def get_session_internal(
-    session: AsyncSession, *, session_id: str, org_id: str
+    session: AsyncSession, *, session_id: str, org_id: str | None = None
 ) -> NotebookSessionInternal | None:
     """Return the internal session view including the real access_token.
 
     Used ONLY by the gateway proxy (resolve_proxy_session) to compare the
     inbound cookie and determine the upstream address. Never expose to the FE.
+    When org_id is None, looks up by session_id only (cookie is the auth gate).
     """
     q = select(GatewayNotebookSession).where(
         GatewayNotebookSession.id == session_id,
-        GatewayNotebookSession.org_id == org_id,
     )
+    if org_id is not None:
+        q = q.where(GatewayNotebookSession.org_id == org_id)
     row = (await session.execute(q)).scalar_one_or_none()
     if row is None:
         return None
@@ -217,7 +219,7 @@ def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
     """
     notebook_url = None
     if row.status == "running" and row.pod_ip:
-        notebook_url = f"/notebook/{row.id}/_init"
+        notebook_url = f"/notebook/{row.id}/_init?token={row.access_token}"
     return NotebookSessionInfo(
         id=row.id,
         org_id=row.org_id,

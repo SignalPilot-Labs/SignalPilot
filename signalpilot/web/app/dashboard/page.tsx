@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -452,24 +452,21 @@ function DashboardOnboardingCheck() {
   const { activeOrgId, isAuthenticated } = useAppAuth();
   const { isComplete, isLoading, markComplete } = useOnboardingStatus();
   const [autoCompleting, setAutoCompleting] = useState(false);
+  const triedRef = useRef(false);
 
   useEffect(() => {
-    if (isLoading) return;
-
-    // Not signed in — nothing to do, auth protection handled by middleware
+    if (isLoading || autoCompleting) return;
     if (!isAuthenticated) return;
-
-    if (isComplete === true) return; // already done
+    if (isComplete === true) return;
+    if (triedRef.current) return;
 
     if (activeOrgId) {
-      // User has an active org but onboarding flag not set.
-      // Auto-mark complete — they don't need the wizard.
+      triedRef.current = true;
       setAutoCompleting(true);
       markComplete()
         .catch(() => {})
         .finally(() => setAutoCompleting(false));
     } else {
-      // No org — send to onboarding to create/join a team
       router.push("/onboarding");
     }
   }, [isLoading, isComplete, activeOrgId, isAuthenticated, router, markComplete]);

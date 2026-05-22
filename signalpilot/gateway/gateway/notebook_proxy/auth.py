@@ -50,15 +50,17 @@ class ProxySession:
 async def resolve_proxy_session(
     session_id: str,
     connection: HTTPConnection,
-    store: StoreD,
 ) -> ProxySession:
     """FastAPI dependency: authenticate and resolve a notebook proxy request.
 
     Uses HTTPConnection (not Request) so this dependency works for both HTTP
-    routes and WebSocket routes — WebSocket is an HTTPConnection subclass but
-    NOT a Request. FastAPI will not inject a Request into a WS handler dependency.
+    routes and WebSocket routes.
 
-    Does NOT use RequireScope — see module docstring for rationale.
+    Auth: validates the session cookie (sp_nb_{session_id}) via constant-time
+    comparison against the DB-stored access_token. User/org identity is derived
+    from the session record — no Clerk JWT needed (the iframe doesn't have it).
+
+    Does NOT use StoreD or RequireScope — see module docstring for rationale.
     """
     import logging
     _log = logging.getLogger("notebook_proxy.auth")
@@ -66,41 +68,12 @@ async def resolve_proxy_session(
     scope_type = getattr(connection, "scope", {}).get("type", "unknown")
     _log.info("resolve_proxy_session: session_id=%s scope=%s", session_id, scope_type)
 
-    # Step 1: charset validation before session_id reaches any cookie/header construction.
     if not SESSION_ID_PATTERN.match(session_id):
         _log.warning("REJECT: session_id charset invalid: %s", session_id[:40])
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Steps 2–3: existing auth deps give us user_id and org_id.
-    user_id = await resolve_user_id(connection)
-    org_id = await resolve_org_id(connection, user_id)
-    _log.info("  user_id=%s org_id=%s", user_id, org_id)
-
-    # Step 3: load internal session (includes real access_token).
-    session = await ns.get_session_internal(
-        store.session, session_id=session_id, org_id=org_id
-    )
-    if session is None:
-        _log.warning("REJECT: session not found in DB for id=%s org=%s", session_id, org_id)
-        raise HTTPException(status_code=404, detail="Session not found")
-    _log.info("  session loaded: status=%s user=%s pod_ip_internal=%s",
-              session.status, session.user_id, session.pod_ip_internal)
-
-    # Step 4: ownership check — 404 to avoid existence oracle for same-org non-owners.
-    if session.user_id != user_id:
-        _log.warning("REJECT: ownership mismatch session.user=%s != auth.user=%s",
-                      session.user_id, user_id)
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Step 5: readiness check.
-    if session.status != "running" or not session.pod_ip_internal:
-        _log.warning("REJECT: not ready status=%s pod_ip_internal=%s",
-                      session.status, session.pod_ip_internal)
-        raise HTTPException(status_code=409, detail="Session not ready")
-
-    # Step 6: cookie presence and constant-time comparison.
+    # Step 1: cookie presence
     cookie_value = connection.cookies.get(cookie_name(session_id))
-    _log.info("  cookie name=%s present=%s", cookie_name(session_id), cookie_value is not None)
     if cookie_value is None:
         all_cookies = list(connection.cookies.keys())
         _log.warning("REJECT: cookie missing. Available cookies: %s", all_cookies)
@@ -109,15 +82,38 @@ async def resolve_proxy_session(
             detail="Cookie missing; re-init session",
             headers={"WWW-Authenticate": "SP-Notebook-Init"},
         )
+
+    # Step 2: load session from DB (no org filter — cookie is the auth gate)
+    from ..db.engine import get_session_factory
+    factory = get_session_factory()
+    async with factory() as db_session:
+        session = await ns.get_session_internal(
+            db_session, session_id=session_id,
+        )
+
+    if session is None:
+        _log.warning("REJECT: session not found in DB for id=%s", session_id)
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Step 3: constant-time cookie comparison
     if not secrets.compare_digest(cookie_value, session.access_token or ""):
         _log.warning("REJECT: cookie value mismatch for session %s", session_id)
         raise HTTPException(status_code=401, detail="Session token mismatch")
 
+    _log.info("  session authenticated: user=%s org=%s status=%s",
+              session.user_id, session.org_id, session.status)
+
+    # Step 4: readiness check
+    if session.status != "running" or not session.pod_ip_internal:
+        _log.warning("REJECT: not ready status=%s pod_ip_internal=%s",
+                      session.status, session.pod_ip_internal)
+        raise HTTPException(status_code=409, detail="Session not ready")
+
     upstream_base = f"http://{session.pod_ip_internal}:{POD_PORT}/notebook/{session_id}"
     return ProxySession(
         session_id=session_id,
-        user_id=user_id,
-        org_id=org_id,
+        user_id=session.user_id,
+        org_id=session.org_id or "local",
         upstream_base=upstream_base,
         proxy_cookie_token=cookie_value,
     )

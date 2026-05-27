@@ -1,6 +1,7 @@
 import { useAtom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { spApiUrl } from "@/core/network/api";
+import { isConnectedAtom } from "@/core/network/connection";
 import { classifyFile } from "@/core/active-file";
 import { openFileInTab } from "@/core/file-tabs";
 import {
@@ -107,6 +108,7 @@ export const FileExplorer: React.FC<{
   const { ref: cloudBarRef, height: cloudBarHeight = 0 } = useResizeObserver<HTMLDivElement>();
   const dndManager = useTreeDndManager();
   const [tree] = useAtom(treeAtom);
+  const isConnected = useAtomValue(isConnectedAtom);
   const [data, setData] = useState<FileInfo[]>([]);
   const [openFile, setOpenFile] = useState<FileInfo | null>(null);
   const [gitChangedFiles, setGitChangedFiles] = useState<Set<string>>(new Set());
@@ -132,7 +134,7 @@ export const FileExplorer: React.FC<{
     if (Object.keys(validIds).length !== openIds.length) {
       setOpenState(validIds);
     }
-  }, [tree]);
+  }, [tree, isConnected]);
 
   // No FS event subscription: cross-process FS sync is unreliable and the wipe-on-event pattern caused user-visible bugs. Use the refresh button.
   const handleRefresh = useEvent(() => {

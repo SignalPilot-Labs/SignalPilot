@@ -64,33 +64,18 @@ async function clickTreeItem(page: Page, name: string, opts?: { timeout?: number
   });
 }
 
-/** Open the file tree sidebar panel via React fiber click.
- * Retries up to 5 times to handle timing where the sidebar
- * icon strip hasn't rendered yet. */
+/** Open the file tree sidebar panel using keyboard shortcut */
 async function openSidebar(page: Page) {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const opened = await page.evaluate(() => {
-      const root = document.querySelector(".sp-root");
-      if (!root) return false;
-      const strip = root.querySelector("div[class*='flex'][class*='flex-col'][class*='items-start']");
-      if (!strip) return false;
-      const firstIcon = strip.querySelector("div[class*='rounded']") as HTMLElement;
-      if (!firstIcon) return false;
-      const propsKey = Object.keys(firstIcon).find((k) => k.startsWith("__reactProps"));
-      if (propsKey) {
-        const props = (firstIcon as any)[propsKey];
-        if (props?.onClick) {
-          props.onClick({ stopPropagation: () => {}, preventDefault: () => {} });
-          return true;
-        }
-      }
-      firstIcon.click();
-      return true;
-    });
-    if (opened) {
-      await page.waitForTimeout(2000);
-      return;
-    }
+  // Focus the notebook area first
+  await page.locator(".sp-root").click({ force: true, position: { x: 5, y: 5 } }).catch(() => {});
+  await page.waitForTimeout(500);
+  // Toggle sidebar with keyboard shortcut
+  await page.keyboard.press("Control+Shift+KeyE");
+  await page.waitForTimeout(2000);
+  // If that didn't work, try Ctrl+B
+  const hasTree = await page.locator('[role="treeitem"]').first().isVisible({ timeout: 3_000 }).catch(() => false);
+  if (!hasTree) {
+    await page.keyboard.press("Control+KeyB");
     await page.waitForTimeout(2000);
   }
 }

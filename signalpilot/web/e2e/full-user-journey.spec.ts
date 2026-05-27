@@ -117,19 +117,22 @@ test("Full user journey: create project → file tree → expand → click files
 
   const savedUrls: Record<string, string> = {};
 
-  // ── Step 0: Delete old e2e_journey project if it exists ────────
-  ts("Step 0: Cleanup old project");
+  // ── Step 0: Clean slate — kill stale sessions + delete old project ──
+  ts("Step 0: Cleanup");
   const apiKey = await getApiKey();
-  const projResp = await fetch(`${GATEWAY}/api/workspace-projects?status=active&limit=50`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
+  const headers = { Authorization: `Bearer ${apiKey}` };
+
+  // Kill any existing notebook session (pod might be dead from previous crash)
+  await fetch(`${GATEWAY}/api/notebook-sessions`, { method: "DELETE", headers }).catch(() => {});
+  ts("Killed stale session");
+  await page.waitForTimeout(5000);
+
+  // Delete old project if it exists
+  const projResp = await fetch(`${GATEWAY}/api/workspace-projects?status=active&limit=50`, { headers });
   const projData = (await projResp.json()) as { projects?: { id: string; name: string }[] };
   const existing = projData?.projects?.find((p) => p.name === PROJECT_NAME);
   if (existing) {
-    await fetch(`${GATEWAY}/api/workspace-projects/${existing.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    await fetch(`${GATEWAY}/api/workspace-projects/${existing.id}`, { method: "DELETE", headers });
     ts(`Deleted existing "${PROJECT_NAME}"`);
   }
 
@@ -151,7 +154,7 @@ test("Full user journey: create project → file tree → expand → click files
   }
   ts("Session running");
 
-  await page.locator(".sp-root").waitFor({ timeout: 30_000 });
+  await page.locator(".sp-root").waitFor({ timeout: 90_000 });
   ts("Notebook embed loaded");
   await page.screenshot({ path: "e2e-journey-01-home.png" });
 

@@ -8,21 +8,44 @@ import {
 import { waitForConnectionOpen } from "./connection";
 
 /**
+ * Wait for the pod to be verified reachable.
+ *
+ * RuntimeManager.waitForHealthy() resolves once the boot sequence
+ * (NotebookBoot or standalone init) confirms the pod responds to
+ * health checks. This prevents API calls from firing before the pod
+ * connection is established — e.g. after a page refresh where
+ * NotebookConfig is set from React props but the pod hasn't been
+ * re-verified yet.
+ */
+async function waitForPodReady(): Promise<void> {
+  try {
+    const rm = getRuntimeManager();
+    if (!rm.isLazy) {
+      await rm.waitForHealthy();
+    }
+  } catch {
+    // RuntimeManager not initialized yet (during early boot) — skip
+  }
+}
+
+/**
  * Resolve the base URL and auth headers for API calls.
  *
- * Tries RuntimeManager first (works after the notebook has fully initialised).
- * Falls back to NotebookConfig (works during boot before RuntimeManager exists).
+ * Uses NotebookConfig for URL/headers (instant, set by React context).
+ * Falls back to RuntimeManager (standalone mode).
+ * Both paths wait for the pod health check before returning.
  */
 async function getBaseUrlAndHeaders(): Promise<{
   baseUrl: string;
   headers: Record<string, string>;
 }> {
-  // Use NotebookConfig first — instant, no waiting, always available after boot.
+  // Use NotebookConfig for URL/headers — instant, no async overhead.
   try {
     const { getNotebookConfig } = await import(
       /* webpackIgnore: true */ "../../components/notebook/notebook-context"
     );
     const config = getNotebookConfig();
+    await waitForPodReady();
     return {
       baseUrl: `${config.gatewayUrl}/notebook/${config.sessionId}/`,
       headers: {
@@ -114,28 +137,16 @@ export async function apiCall<T>(
   const url = buildURL(baseUrl, path);
   const method = body !== undefined ? "POST" : "GET";
 
-  let retries = 2;
-  let lastError: unknown;
-  while (retries >= 0) {
-    try {
-      const response = await fetch(url, {
-        method,
-        headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-      return await parseResponse<T>(response, url);
-    } catch (error) {
-      lastError = error;
-      if (retries > 0) {
-        await new Promise((r) => setTimeout(r, 1000));
-        retries--;
-      } else {
-        Logger.error(`Error requesting ${url}`, error);
-        throw error;
-      }
-    }
-  }
-  throw lastError;
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  }).catch((error) => {
+    Logger.error(`Error requesting ${url}`, error);
+    throw error;
+  });
+
+  return parseResponse<T>(response, url);
 }
 
 /**

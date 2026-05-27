@@ -278,7 +278,7 @@ export class RuntimeManager {
    * init() retry loop can be skipped entirely.
    */
   markHealthy(): void {
-    if (!this.initialHealthyCheck.status === "resolved") {
+    if (this.initialHealthyCheck.status !== "resolved") {
       Logger.debug("Runtime pre-marked as healthy (boot verified)");
       this.initialHealthyCheck.resolve();
     }

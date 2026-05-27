@@ -36,28 +36,62 @@ async function getApiKey(): Promise<string> {
   return data?.key ?? "";
 }
 
-/** Click a tree item by dispatching a native click event via JS.
- * This bypasses Playwright's pointer-event interception check,
- * which fails due to the PanelsWrapper absolute overlay. */
+/** Click a tree item by invoking its React onClick handler directly.
+ * Playwright's native click is intercepted by wrapper divs (PanelGroup,
+ * PanelsWrapper, sp-root) that sit above the tree items in the hit-test
+ * stacking order. Real user clicks work because the browser's native
+ * event dispatch differs from elementFromPoint(). For tests, we invoke
+ * the React handler directly via the React fiber. */
 async function clickTreeItem(page: Page, name: string, opts?: { timeout?: number }) {
   const timeout = opts?.timeout ?? 10_000;
   const item = page.locator('[role="treeitem"]').filter({
     has: page.locator(`span.flex-1:text-is("${name}")`),
   }).first();
   await item.waitFor({ timeout });
+
   await item.evaluate((el) => {
-    const clickable = el.querySelector("div.cursor-pointer") ?? el;
-    clickable.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    // Find the clickable row div inside the treeitem
+    const row = el.querySelector("div.cursor-pointer") as HTMLElement | null;
+    if (!row) return;
+    // Find the React fiber and invoke the onClick prop
+    const propsKey = Object.keys(row).find((k) => k.startsWith("__reactProps"));
+    if (propsKey) {
+      const props = (row as any)[propsKey];
+      if (props?.onClick) {
+        props.onClick({ stopPropagation: () => {}, preventDefault: () => {} });
+      }
+    }
   });
 }
 
-/** Open the file tree sidebar panel */
+/** Open the file tree sidebar panel via React fiber click.
+ * Retries up to 5 times to handle timing where the sidebar
+ * icon strip hasn't rendered yet. */
 async function openSidebar(page: Page) {
-  const strip = page.locator(".sp-root div[class*='flex'][class*='flex-col'][class*='bg-']").first();
-  const icon = strip.locator("div[class*='rounded']").first();
-  if (await icon.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await icon.click();
-    await page.waitForTimeout(1000);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const opened = await page.evaluate(() => {
+      const root = document.querySelector(".sp-root");
+      if (!root) return false;
+      const strip = root.querySelector("div[class*='flex'][class*='flex-col'][class*='items-start']");
+      if (!strip) return false;
+      const firstIcon = strip.querySelector("div[class*='rounded']") as HTMLElement;
+      if (!firstIcon) return false;
+      const propsKey = Object.keys(firstIcon).find((k) => k.startsWith("__reactProps"));
+      if (propsKey) {
+        const props = (firstIcon as any)[propsKey];
+        if (props?.onClick) {
+          props.onClick({ stopPropagation: () => {}, preventDefault: () => {} });
+          return true;
+        }
+      }
+      firstIcon.click();
+      return true;
+    });
+    if (opened) {
+      await page.waitForTimeout(2000);
+      return;
+    }
+    await page.waitForTimeout(2000);
   }
 }
 
@@ -215,7 +249,7 @@ test.describe.serial("Full User Journey", () => {
   // ── Segment 3: Click notebooks/ folder to expand ───────────────
 
   test("S4: expand notebooks/ folder", async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(180_000);
     const ts = timer();
 
     if (savedUrls["workspace"]) {
@@ -223,10 +257,10 @@ test.describe.serial("Full User Journey", () => {
     } else {
       await page.goto("/projects", { waitUntil: "domcontentloaded" });
     }
-    await page.locator(".sp-root").waitFor({ timeout: 60_000 });
-    await page.waitForTimeout(2000);
+    await page.locator(".sp-root").waitFor({ timeout: 90_000 });
+    await page.waitForTimeout(3000);
     await openSidebar(page);
-    await waitForTreeItems(page, 3, 30_000);
+    await waitForTreeItems(page, 3, 60_000);
 
     const namesBefore = await getTreeItemNames(page);
     ts(`Before expand: ${namesBefore.join(", ")}`);

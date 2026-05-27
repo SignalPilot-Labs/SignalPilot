@@ -124,8 +124,8 @@ test("Full user journey: create project → file tree → expand → click files
 
   // Kill any existing notebook session (pod might be dead from previous crash)
   await fetch(`${GATEWAY}/api/notebook-sessions`, { method: "DELETE", headers }).catch(() => {});
-  ts("Killed stale session");
-  await page.waitForTimeout(5000);
+  ts("Killed stale session — waiting for pod to terminate...");
+  await page.waitForTimeout(15000);
 
   // Delete old project if it exists
   const projResp = await fetch(`${GATEWAY}/api/workspace-projects?status=active&limit=50`, { headers });

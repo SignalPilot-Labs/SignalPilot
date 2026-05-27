@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Thread-local stream proxy for run mode.
 
 In run mode, multiple sessions share the same process. Each session runs in its

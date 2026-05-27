@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Virtual file storage and management for sp.
 
 This module provides storage backends and file management for virtual files

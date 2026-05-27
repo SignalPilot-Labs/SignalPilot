@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Internal operation types, plan builder, and validation for code mode."""
 
 from __future__ import annotations

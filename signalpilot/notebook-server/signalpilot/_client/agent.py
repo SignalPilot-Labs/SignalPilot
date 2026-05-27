@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Python SDK client for the SignalPilot Agent REST API.
 
 Usage:

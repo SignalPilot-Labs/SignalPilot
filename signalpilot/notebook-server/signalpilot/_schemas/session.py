@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """This file contains the schema for the notebook session.
 
 It may be externally used and must be kept backwards compatible.

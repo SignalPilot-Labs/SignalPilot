@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Tokenizer-based cell boundary scanner for sp notebooks.
 
 Uses Python's tokenize module to find cell boundaries, correctly

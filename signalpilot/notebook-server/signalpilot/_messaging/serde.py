@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Serialization and deserialization utilities for kernel messages."""
 
 from __future__ import annotations

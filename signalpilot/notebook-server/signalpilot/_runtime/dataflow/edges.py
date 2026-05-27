@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Edge computation logic for cell dependencies."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 Claude Agent SDK integration for the notebook AI chat.
 

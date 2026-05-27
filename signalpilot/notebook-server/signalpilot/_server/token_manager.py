@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Token management for authentication and skew protection.
 
 Manages creation and validation of auth tokens and skew protection tokens

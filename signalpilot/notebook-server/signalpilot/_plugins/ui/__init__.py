@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Interactive UI elements.
 
 This module contains a library of interactive UI elements.

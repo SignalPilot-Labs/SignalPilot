@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 from __future__ import annotations
 
 import signalpilot._save.cache as _cache_module  # prevent variable shadowing

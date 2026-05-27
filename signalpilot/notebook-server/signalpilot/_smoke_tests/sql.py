@@ -1,4 +1,4 @@
-# /// script
+﻿# /// script
 # requires-python = ">=3.11"
 # dependencies = [
 #     "duckdb",
@@ -7,8 +7,6 @@
 #     "altair",
 # ]
 # ///
-# Copyright 2026 SignalPilot. All rights reserved.
-
 import signalpilot
 
 __generated_with = "0.15.5"

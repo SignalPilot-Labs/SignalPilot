@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Repository for session storage and retrieval."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Abstract base class for server-side notebook workspaces."""
 
 from __future__ import annotations

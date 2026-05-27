@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """The entry point for the app host process, which serves multiple clients.
 
 Each app host manages kernel threads for a single notebook file (one thread per

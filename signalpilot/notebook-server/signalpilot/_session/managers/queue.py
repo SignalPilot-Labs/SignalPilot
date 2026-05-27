@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Queue manager implementation using multiprocessing or threading queues."""
 
 from __future__ import annotations

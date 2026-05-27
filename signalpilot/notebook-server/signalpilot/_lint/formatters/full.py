@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Full formatter for rich terminal output."""
 
 from __future__ import annotations

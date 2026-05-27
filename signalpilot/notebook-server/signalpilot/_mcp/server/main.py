@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 MCP (Model Context Protocol) Server Implementation for SignalPilot
 

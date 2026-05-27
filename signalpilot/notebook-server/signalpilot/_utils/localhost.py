@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Normalize localhost URLs to 127.0.0.1 on Windows.
 
 Windows resolves 'localhost' to ::1 (IPv6) first, and the 2-second TCP

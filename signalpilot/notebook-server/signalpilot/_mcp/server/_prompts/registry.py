@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Registry of all supported MCP prompts."""
 
 from signalpilot._mcp.server._prompts.base import PromptBase

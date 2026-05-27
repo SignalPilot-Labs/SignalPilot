@@ -1,8 +1,6 @@
 ---
 title: Latex
 sp-version: 0.19.6
-header: |-
-  # Copyright 2026 SignalPilot. All rights reserved.
 ---
 
 ```python {.sp}

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 from __future__ import annotations
 
 from signalpilot._lint.rules.base import LintRule, UnsafeFixRule

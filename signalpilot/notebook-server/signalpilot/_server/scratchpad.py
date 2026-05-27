@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Shared utilities for scratchpad execution."""
 
 from __future__ import annotations

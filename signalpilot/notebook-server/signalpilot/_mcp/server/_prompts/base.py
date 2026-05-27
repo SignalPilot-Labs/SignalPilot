@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Base class for MCP prompts."""
 
 from __future__ import annotations

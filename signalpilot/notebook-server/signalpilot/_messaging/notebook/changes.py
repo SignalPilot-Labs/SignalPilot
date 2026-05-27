@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Typed operations and transactions for notebook structural changes."""
 
 from __future__ import annotations

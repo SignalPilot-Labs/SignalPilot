@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """WASM-only fallback patches for polars.
 
 Two flavors of fallback live here, both built on :class:`WasmPatchSet`:

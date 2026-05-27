@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Internal API for inter-process communication (IPC)."""
 
 from signalpilot._ipc.connection import Channel, Connection

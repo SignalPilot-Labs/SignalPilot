@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Internal API for package management."""
 
 from signalpilot._runtime.packages.package_manager import (

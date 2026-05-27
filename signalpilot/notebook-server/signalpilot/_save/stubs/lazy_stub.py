@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """msgspec schemas and format registries for lazy cache serialization."""
 
 from __future__ import annotations

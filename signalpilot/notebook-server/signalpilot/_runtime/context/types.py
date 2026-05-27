@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Thread-local context for the runtime
 
 Each client gets its own context.

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """AST visitors for linting purposes."""
 
 from __future__ import annotations

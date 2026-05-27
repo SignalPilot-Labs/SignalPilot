@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """WASM-only monkey-patch framework.
 
 `WasmPatchSet` wraps a target so that when the original raises a caught

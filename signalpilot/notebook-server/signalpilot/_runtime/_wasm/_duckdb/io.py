@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Resolve DuckDB remote file reads into fetch and DataFrame reader steps.
 
 DuckDB's native network scanner is unavailable in Pyodide. This module is the

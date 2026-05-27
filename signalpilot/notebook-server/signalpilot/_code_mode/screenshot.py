@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Headless Chromium screenshot session for cell outputs.
 
 Lazily launches a browser connected to the running notebook server

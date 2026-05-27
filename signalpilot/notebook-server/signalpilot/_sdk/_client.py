@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Low-level HTTP client for the SignalPilot gateway. Stdlib-only."""
 from __future__ import annotations
 

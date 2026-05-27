@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 Smoke test for setup cell embedding.
 

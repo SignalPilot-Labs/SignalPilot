@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Formatters for diagnostic output."""
 
 from __future__ import annotations

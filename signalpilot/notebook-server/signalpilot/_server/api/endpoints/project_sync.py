@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 Project sync endpoints: pull files from gateway to local disk,
 push local changes back.

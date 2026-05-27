@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Write to a cell's output area."""
 
 __all__ = [

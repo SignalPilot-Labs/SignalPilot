@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """ZMQ connection management for IPC between an app host and its process."""
 
 from __future__ import annotations

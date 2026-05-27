@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Standalone kernel server entry point for IPC (using ZeroMQ)."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Agent instance manager for concurrent agent execution.
 
 Each agent instance has its own Claude conversation session, event buffer,

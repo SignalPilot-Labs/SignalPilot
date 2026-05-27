@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Install WASM-only DuckDB fallbacks for remote file scans.
 
 DuckDB-WASM cannot use ``httpfs``. sp fetches supported URLs itself,

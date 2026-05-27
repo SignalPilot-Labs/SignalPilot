@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """better_inspect -- opinionated replacements for dir() and help().
 
 Why these exist:

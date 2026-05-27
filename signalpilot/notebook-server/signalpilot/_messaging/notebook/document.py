@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Canonical notebook document model.
 
 ``NotebookDocument`` maintains an ordered list of ``NotebookCell`` entries and

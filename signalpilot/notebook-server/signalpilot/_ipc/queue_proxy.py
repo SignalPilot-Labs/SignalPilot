@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Queue proxy for ZeroMQ sockets."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Workspace for a fixed list of notebooks (``sp run a.py b.py``)."""
 
 from __future__ import annotations

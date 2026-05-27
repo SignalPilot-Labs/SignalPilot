@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Poll another process and exit when that process exits.
 
 Ported from ipykernel.parentpoller (BSD-licensed) to avoid orphaned kernel

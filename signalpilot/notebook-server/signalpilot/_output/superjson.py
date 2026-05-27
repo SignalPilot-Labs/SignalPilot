@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 # This data serializes
 from __future__ import annotations
 

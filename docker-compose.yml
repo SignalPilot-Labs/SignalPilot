@@ -64,7 +64,8 @@ services:
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
-    network_mode: "service:k3s"
+    ports:
+      - "3300:3300"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
       SP_DATA_DIR: /data
@@ -126,8 +127,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      k3s:
-        condition: service_started
       sandbox:
         condition: service_healthy
     restart: unless-stopped

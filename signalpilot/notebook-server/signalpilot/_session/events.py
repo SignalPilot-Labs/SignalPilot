@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Event system for session lifecycle events.
 
 Provides an event bus and listeners for session creation, closure, and resumption.

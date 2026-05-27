@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Export sp notebooks to Jupyter ipynb format."""
 
 from __future__ import annotations

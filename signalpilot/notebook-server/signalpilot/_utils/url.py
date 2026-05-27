@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Copied from `validators`: https://github.com/python-validators/validators
 
 Don't want to include the entire package as a dependency.

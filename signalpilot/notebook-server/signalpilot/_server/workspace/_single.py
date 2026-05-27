@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Workspace for a single notebook (``sp edit nb.py``)."""
 
 from __future__ import annotations

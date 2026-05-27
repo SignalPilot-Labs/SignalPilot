@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Adapters to translate SignalPilot Gateway responses into sp-notebook data models."""
 from __future__ import annotations
 

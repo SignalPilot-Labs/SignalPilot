@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 print("""The sp contract
 
 To use sp means entering into a social contract.

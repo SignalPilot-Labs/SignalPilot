@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """ZeroMQ connection management for inter-process communication."""
 
 from __future__ import annotations

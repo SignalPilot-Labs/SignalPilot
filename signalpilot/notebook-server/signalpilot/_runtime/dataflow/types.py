@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Type definitions for dataflow graph."""
 
 from __future__ import annotations

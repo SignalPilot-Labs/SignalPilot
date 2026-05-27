@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Classify how a kernel subprocess exited.
 
 Used to turn a raw ``multiprocessing.Process.exitcode`` into a structured

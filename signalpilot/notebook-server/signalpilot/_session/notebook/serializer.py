@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Format handlers for different notebook file formats."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Server-side notebook workspace abstractions.
 
 A :class:`NotebookWorkspace` represents the set of notebooks a server is

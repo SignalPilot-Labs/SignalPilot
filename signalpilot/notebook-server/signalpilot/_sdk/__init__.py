@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """SignalPilot Data SDK — governed data access for notebooks and scripts."""
 from __future__ import annotations
 

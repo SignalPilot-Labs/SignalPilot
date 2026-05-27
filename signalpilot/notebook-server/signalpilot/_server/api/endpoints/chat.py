@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Proxy endpoints for the SignalPilot gateway chat API.
 
 Uses a keep-alive HTTP connection to avoid the 2s TCP connect penalty

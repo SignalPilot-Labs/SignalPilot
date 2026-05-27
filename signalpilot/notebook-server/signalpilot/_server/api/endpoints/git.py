@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Git operations for cloud project local repos."""
 from __future__ import annotations
 

@@ -79,6 +79,32 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
 
     await ns.delete_stopped(store.session, org_id=org_id, user_id=user_id)
 
+    # ── Direct mode: skip K8s entirely ────────────────────────────
+    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
+    if direct_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(direct_url)
+        host_port = f"{parsed.hostname}:{parsed.port or 2718}"
+        session_info = await ns.create_session(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            project_id=body.project_id,
+            branch=body.branch,
+            pod_name="local-notebook",
+        )
+        await ns.update_session_status(
+            store.session,
+            session_id=session_info.id,
+            status="running",
+            pod_ip=host_port,
+            pod_ip_internal=host_port,
+        )
+        session_info.status = "running"
+        session_info.pod_ip = host_port
+        session_info.notebook_url = f"/notebook/{session_info.id}/_init?token={session_info.access_token}"
+        return session_info
+
     pod = _pod_name(org_id, user_id)
     orch = await _get_orchestrator()
 
@@ -95,24 +121,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
         branch=body.branch,
         pod_name=pod,
     )
-
-    # ── Direct mode: skip K8s, notebook server is always running ──
-    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
-    if direct_url:
-        from urllib.parse import urlparse
-        parsed = urlparse(direct_url)
-        host_port = f"{parsed.hostname}:{parsed.port or 2718}"
-        await ns.update_session_status(
-            store.session,
-            session_id=session_info.id,
-            status="running",
-            pod_ip=host_port,
-            pod_ip_internal=host_port,
-        )
-        session_info.status = "running"
-        session_info.pod_ip = host_port
-        session_info.notebook_url = f"/notebook/{session_info.id}/_init"
-        return session_info
 
     # Fetch latest from GitHub before starting the pod (best-effort)
     if body.project_id:

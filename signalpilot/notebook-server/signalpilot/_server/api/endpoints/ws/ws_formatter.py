@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """WebSocket message formatting utilities.
 
 This module handles the wire format for WebSocket transport:

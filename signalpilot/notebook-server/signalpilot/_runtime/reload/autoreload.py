@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Module reloader
 
 In addition to reloading modules, the reloader also patches instances

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Packages: queued package operations for ``AsyncCodeModeContext``.
 
 Accessed via :attr:`AsyncCodeModeContext.packages`. Mutations are

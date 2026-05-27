@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Virtual environment configuration utilities.
 
 This module provides utilities for working with configured virtual environments

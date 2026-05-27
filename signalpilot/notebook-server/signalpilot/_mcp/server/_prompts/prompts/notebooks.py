@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """MCP Prompts for notebook information."""
 
 from __future__ import annotations

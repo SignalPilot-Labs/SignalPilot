@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [

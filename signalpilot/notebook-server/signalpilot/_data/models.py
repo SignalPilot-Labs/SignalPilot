@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta  # noqa: TC003

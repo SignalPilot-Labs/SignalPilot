@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Notification utilities for kernel messages.
 
 CellNotificationUtils for cell-related broadcasts.

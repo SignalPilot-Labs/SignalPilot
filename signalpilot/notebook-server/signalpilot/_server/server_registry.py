@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Local discovery registry for running sp instances.
 
 Each sp server writes a small JSON file to

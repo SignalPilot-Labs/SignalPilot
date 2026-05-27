@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Utility functions for session management."""
 
 from __future__ import annotations

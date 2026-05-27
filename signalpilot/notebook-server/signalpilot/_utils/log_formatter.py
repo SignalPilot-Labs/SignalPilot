@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 # Adapted from tornado.log (Apache 2.0 License)
 from __future__ import annotations
 

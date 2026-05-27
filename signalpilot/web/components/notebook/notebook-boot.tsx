@@ -10,6 +10,20 @@ import {
 } from "@/embed";
 import { useNotebookConfig } from "./notebook-context";
 
+// Lazy-loaded to avoid pulling notebook internals into the page bundle.
+// Resolved once on first use, then cached.
+let _openFileInTab: ((path: string) => void) | null = null;
+let _getDbtProjectDir: (() => string | null) | null = null;
+const ensureFileTabImports = async () => {
+  if (!_openFileInTab) {
+    const ft = await import("@/core/file-tabs");
+    const st = await import("@/core/state/jotai");
+    const dbt = await import("@/components/editor/dbt/use-dbt");
+    _openFileInTab = (path: string) => ft.openFileInTab(path);
+    _getDbtProjectDir = () => st.store.get(dbt.dbtProjectDirAtom);
+  }
+};
+
 type BootPhase = "health" | "syncing" | "sessions" | "ready";
 
 const PHASE_LABELS: Record<BootPhase, string> = {
@@ -43,7 +57,35 @@ export default function NotebookBoot({
   const [ready, setReady] = useState(false);
 
   const hostNavigate = useCallback((href: string) => {
-    router.push(href);
+    try {
+      const next = new URL(href, window.location.origin);
+      const current = new URL(window.location.href);
+      const sameSession = next.searchParams.get("project") === current.searchParams.get("project");
+      const newFile = next.searchParams.get("file");
+
+      if (sameSession && newFile && newFile !== "__new__project") {
+        // Same project, different file — open the file directly without
+        // re-rendering the page (which would destroy the notebook client).
+        window.history.pushState(null, "", href);
+        import("@/core/file-tabs").then(({ openFileInTab }) => {
+          import("@/core/state/jotai").then(({ store }) => {
+            import("@/components/editor/dbt/use-dbt").then(({ dbtProjectDirAtom }) => {
+              let filePath = newFile;
+              const projectDir = store.get(dbtProjectDirAtom);
+              if (projectDir && !filePath.startsWith("/")) {
+                filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
+              }
+              openFileInTab(filePath);
+            });
+          });
+        });
+      } else {
+        // Different project or non-file navigation — full page transition
+        router.push(href);
+      }
+    } catch {
+      router.push(href);
+    }
   }, [router]);
 
   useEffect(() => {

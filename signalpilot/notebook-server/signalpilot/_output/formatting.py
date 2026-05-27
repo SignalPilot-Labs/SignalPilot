@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Formatting protocol
 
 This module defines a protocol for implementing objects that can be displayed

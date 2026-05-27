@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Pre-warmed kernel process pool for fast EDIT-mode session startup.
 
 Two optimisation layers:

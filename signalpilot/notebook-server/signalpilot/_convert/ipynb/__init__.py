@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Jupyter notebook (.ipynb) conversion utilities for sp notebooks.
 
 This module provides bidirectional conversion between ipynb and sp IR:

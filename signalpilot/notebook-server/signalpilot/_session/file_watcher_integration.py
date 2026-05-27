@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """File watcher integration for sessions.
 
 Provides clean abstraction for attaching/detaching file watchers to sessions

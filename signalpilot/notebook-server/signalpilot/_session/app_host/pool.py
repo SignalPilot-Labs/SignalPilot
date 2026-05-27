@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Provides AppHosts for notebooks.
 
 Each app is run in its own AppHost, providing isolation.

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Msgspec encoder with custom type support for sp."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 from __future__ import annotations
 
 from signalpilot._runtime.packages.module_name_to_conda_name import (

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Subprocess-based dbt command runner."""
 
 from __future__ import annotations

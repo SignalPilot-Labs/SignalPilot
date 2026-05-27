@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Protocol definitions for session management components.
 
 These protocols define the public interfaces for all major session management

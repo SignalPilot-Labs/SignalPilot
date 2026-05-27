@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 Async version of pathlib.Path that uses asyncio.to_thread for filesystem operations.
 """

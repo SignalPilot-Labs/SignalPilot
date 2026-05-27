@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Session resume strategies for different modes.
 
 Provides mode-specific logic for determining whether and how to resume sessions.

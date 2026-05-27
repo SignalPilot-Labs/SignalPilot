@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Variable definition tracking for cells."""
 
 from __future__ import annotations

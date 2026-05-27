@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 # KubernetesOrchestrator itself refuses anything other than "pod_ip" in its
 # constructor — there are no nodeport branches left in this class.
 _UPSTREAM_MODE = os.getenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
-if _UPSTREAM_MODE not in {"pod_ip", "nodeport"}:
+if _UPSTREAM_MODE not in {"pod_ip", "nodeport", "direct"}:
     raise RuntimeError(
         f"Invalid SP_NOTEBOOK_UPSTREAM_MODE: {_UPSTREAM_MODE!r}. "
-        "Allowed values: 'pod_ip', 'nodeport'."
+        "Allowed values: 'pod_ip', 'nodeport', 'direct'."
     )
 
 

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """FIFO dispatch of blocking work off the asyncio event loop.
 
 Usage::

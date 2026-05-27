@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Graph topology for cell dependencies.
 
 This module provides the core graph structure for tracking cell relationships.

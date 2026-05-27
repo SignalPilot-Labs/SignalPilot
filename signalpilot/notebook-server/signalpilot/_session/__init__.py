@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Session management for sp server.
 
 This module provides session management functionality including:

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Internal API for server request types."""
 
 from signalpilot._server.models.export import (

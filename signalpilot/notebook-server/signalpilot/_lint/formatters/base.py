@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Base formatter interface."""
 
 from __future__ import annotations

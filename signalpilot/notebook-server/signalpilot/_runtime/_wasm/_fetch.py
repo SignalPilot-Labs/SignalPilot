@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Shared URL fetch for WASM fallbacks."""
 
 from __future__ import annotations

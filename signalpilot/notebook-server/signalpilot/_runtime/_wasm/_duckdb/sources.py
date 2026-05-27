@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Resolve sqlglot DuckDB table nodes to remote file sources.
 
 The SQL patch should only rewrite queries it can execute with fetched

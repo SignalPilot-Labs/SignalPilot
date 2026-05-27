@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """The sp library.
 
 The sp library brings sp notebooks to life with powerful

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Room management for broadcasting messages to multiple consumers.
 
 A Room is a collection of SessionConsumers that can be used to broadcast

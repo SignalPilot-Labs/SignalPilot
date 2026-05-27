@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Code mode: programmatic notebook editing via async context manager.
 
 .. warning::

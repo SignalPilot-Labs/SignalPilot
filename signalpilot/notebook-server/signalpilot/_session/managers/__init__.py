@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Queue and Kernel managers for session management.
 
 This module contains the infrastructure components for managing

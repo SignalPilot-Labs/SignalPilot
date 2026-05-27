@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Comm backend for the ``comm`` library.
 
 Patches ``comm.create_comm`` so that anywidget's descriptor API

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """QueueManager and KernelManager adapters for an AppHost.
 
 These adapt AppHost's multiplexed ZMQ channels to the session manager

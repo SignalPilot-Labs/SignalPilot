@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 #
 # NB: Do not import click top-level. This module is imported in WASM, which
 # does not have access to click.

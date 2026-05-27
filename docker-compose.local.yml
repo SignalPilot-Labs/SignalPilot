@@ -15,13 +15,13 @@ services:
       - "127.0.0.1:2718:2718"
     environment:
       SP_LOG_DIR: /tmp/sp-logs
+      SP_GATEWAY_URL: http://gateway:3300
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
-    depends_on:
-      - gateway
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:2718/api/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -30,10 +30,6 @@ services:
 
   # ─── Override gateway to use local notebook instead of K8s ───────
   gateway:
-    # Switch from K3s network to default compose network
-    network_mode: ""
-    ports:
-      - "3300:3300"
     environment:
       SP_NOTEBOOK_UPSTREAM_MODE: direct
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718

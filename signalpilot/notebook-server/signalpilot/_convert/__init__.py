@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 sp._convert - Format conversion utilities for sp notebooks.
 

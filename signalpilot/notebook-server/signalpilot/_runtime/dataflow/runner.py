@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Runner utility for executing individual cells in a graph."""
 
 from __future__ import annotations

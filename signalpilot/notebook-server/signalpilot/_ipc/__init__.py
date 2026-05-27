@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Experimental IPC implementation (using ZeroMQ)."""
 
 from __future__ import annotations

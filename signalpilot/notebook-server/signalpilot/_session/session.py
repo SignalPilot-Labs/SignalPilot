@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Core Session class for managing client sessions.
 
 Each session represents a single client connection with its own Python kernel

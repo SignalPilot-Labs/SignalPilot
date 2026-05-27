@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Kernel-startup primitives that don't depend on the hosting environment.
 
 Environment-specific concerns (stream construction, signal handlers,

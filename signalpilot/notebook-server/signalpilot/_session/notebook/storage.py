@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Storage abstraction for notebook persistence."""
 
 from __future__ import annotations

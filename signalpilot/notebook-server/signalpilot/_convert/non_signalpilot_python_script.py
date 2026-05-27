@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Convert non-sp Python scripts to sp notebooks."""
 
 from __future__ import annotations

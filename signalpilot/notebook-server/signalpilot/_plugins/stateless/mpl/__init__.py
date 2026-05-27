@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Utilities for working with matplotlib."""
 
 __all__ = [

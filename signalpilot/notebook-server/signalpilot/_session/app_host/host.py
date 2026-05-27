@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """A container for a single notebook supporting multiple client sessions."""
 
 from __future__ import annotations

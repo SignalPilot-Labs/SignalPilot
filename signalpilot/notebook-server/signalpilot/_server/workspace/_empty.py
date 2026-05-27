@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Workspace for an untitled (new) notebook."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 
 from signalpilot._runtime.watch._directory import DirectoryState, directory
 from signalpilot._runtime.watch._file import FileState, file

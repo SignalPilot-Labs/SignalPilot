@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Graph coordinator that orchestrates all dataflow components."""
 
 from __future__ import annotations

@@ -1,15 +1,15 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 from __future__ import annotations
 
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from signalpilot._server.api.endpoints.ws.ws_connection_validator import (
+    ConnectionParams,
+)
+
 if TYPE_CHECKING:
     from starlette.websockets import WebSocket
 
-    from signalpilot._server.api.endpoints.ws.ws_connection_validator import (
-        ConnectionParams,
-    )
     from signalpilot._server.api.endpoints.ws_endpoint import WebSocketHandler
     from signalpilot._server.session_manager import SessionManager
     from signalpilot._session import Session

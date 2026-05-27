@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 #
 # Colored Click classes for CLI help formatting.
 #

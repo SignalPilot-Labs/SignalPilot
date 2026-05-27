@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """IPC-based managers using ZeroMQ.
 
 These implementations launch the kernel as a subprocess and communicate

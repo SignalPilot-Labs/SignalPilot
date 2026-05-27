@@ -1,4 +1,3 @@
-# Copyright 2024 SignalPilot. All rights reserved.
 from __future__ import annotations
 
 from dataclasses import dataclass

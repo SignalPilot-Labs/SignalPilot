@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """JSON formatter and types for lint output."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Notebook document model — canonical representation of notebook structure."""
 
 from signalpilot._messaging.notebook.changes import (

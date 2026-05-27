@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Kernel manager implementation using multiprocessing Process or threading Thread."""
 
 from __future__ import annotations

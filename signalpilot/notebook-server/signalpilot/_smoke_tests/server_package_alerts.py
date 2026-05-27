@@ -1,11 +1,10 @@
-# /// script
+﻿# /// script
 # requires-python = ">=3.13"
 # dependencies = [
 #     "sp>=0.20.4",
 # ]
 # ///
 
-# Copyright 2026 SignalPilot. All rights reserved.
 """Smoke test for server-side package alerts (PR #8619).
 
 Tests that missing-package alerts for server-side tools (ruff, nbformat)

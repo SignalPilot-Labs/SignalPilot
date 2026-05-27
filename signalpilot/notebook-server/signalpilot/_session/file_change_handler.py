@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """File change handling for sp notebooks.
 
 Provides strategies for handling file changes in different session modes.

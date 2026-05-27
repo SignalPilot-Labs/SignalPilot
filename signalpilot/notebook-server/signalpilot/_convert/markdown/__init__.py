@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Markdown conversion utilities for sp notebooks.
 
 This module provides bidirectional conversion between markdown and sp IR:

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Connection object — user-facing interface to a SignalPilot data connection."""
 from __future__ import annotations
 

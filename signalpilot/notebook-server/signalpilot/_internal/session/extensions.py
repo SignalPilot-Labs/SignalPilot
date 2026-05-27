@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Internal API for session extensions."""
 
 from signalpilot._session.extensions.extensions import (

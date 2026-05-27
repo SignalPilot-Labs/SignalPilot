@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Shared multiprocessing context helper for kernel and queue managers.
 
 Uses ``forkserver`` on Linux for faster subprocess startup (the forkserver

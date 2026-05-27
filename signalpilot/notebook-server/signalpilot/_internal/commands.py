@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Internal API for commands."""
 
 from signalpilot._runtime.commands import (

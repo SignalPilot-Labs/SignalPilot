@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Decode fetched DuckDB file bytes into pandas DataFrames.
 
 The WASM patch fetches remote bytes in Python, but DuckDB's Python readers

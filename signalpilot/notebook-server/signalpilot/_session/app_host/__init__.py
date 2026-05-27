@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """App isolation for serving multiple notebooks.
 
 Each notebook is hosted in an AppHost, which isolates the notebook from other

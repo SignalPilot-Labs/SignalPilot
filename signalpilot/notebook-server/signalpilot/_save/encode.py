@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Deterministic encoding of Python values to bytes for content-addressed hashing.
 
 This module owns the conversion of Python objects (primitives, tensors,

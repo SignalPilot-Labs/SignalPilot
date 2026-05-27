@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Session extensions for composable session features.
 
 Extensions provide a way to add cross-cutting concerns to sessions

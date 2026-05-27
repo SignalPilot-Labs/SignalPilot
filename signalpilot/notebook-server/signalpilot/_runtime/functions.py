@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Functions associated with a graph."""
 
 from __future__ import annotations

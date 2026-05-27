@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Specification of a cell's visual output"""
 
 from __future__ import annotations

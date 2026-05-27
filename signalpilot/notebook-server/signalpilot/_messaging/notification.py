@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Notification message types for kernel-to-frontend communication."""
 
 from __future__ import annotations

@@ -117,7 +117,7 @@ async def resolve_proxy_session(
     # Step 4: readiness check + upstream URL resolution
     direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
     if direct_url:
-        upstream_base = f"{direct_url.rstrip('/')}/notebook/{session_id}"
+        upstream_base = direct_url.rstrip("/")
     elif session.status != "running" or not session.pod_ip_internal:
         _log.warning("REJECT: not ready status=%s pod_ip_internal=%s",
                       session.status, session.pod_ip_internal)

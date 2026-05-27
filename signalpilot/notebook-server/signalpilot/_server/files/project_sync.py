@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 Project sync via git clone/pull/push against the gateway's bare git repos.
 

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """REST API endpoints for agent management.
 
 These endpoints do NOT require a notebook session — they work

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Public API for rendering sp notebooks as static HTML.
 
 This module provides a clean, public API for rendering sp notebooks

@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """
 signalpilot-notebook-mcp: In-process MCP server for notebook tools.
 

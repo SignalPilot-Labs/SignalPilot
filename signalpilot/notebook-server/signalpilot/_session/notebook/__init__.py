@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Notebook file management and storage abstractions."""
 
 from __future__ import annotations

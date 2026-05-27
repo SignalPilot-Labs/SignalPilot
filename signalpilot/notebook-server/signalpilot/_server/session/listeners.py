@@ -1,4 +1,3 @@
-# Copyright 2026 SignalPilot. All rights reserved.
 """Common session event listeners.
 
 Provides reusable listeners for common session lifecycle concerns like

@@ -1,4 +1,3 @@
-import { spApiUrl } from "@/core/network/api";
 import { apiCall } from "@/core/network/api-call";
 import {
   bracketMatching,
@@ -27,7 +26,6 @@ import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/utils/cn";
 import { darkTheme } from "@/core/codemirror/theme/dark";
 import { lightTheme } from "@/core/codemirror/theme/light";
-import { getApiHeaders } from "@/core/network/api-headers";
 import { filenameAtom } from "@/core/saving/file-state";
 import { useTheme } from "@/theme/useTheme";
 import { LazyAnyLanguageCodeMirror } from "@/plugins/impl/code/LazyAnyLanguageCodeMirror";
@@ -162,13 +160,13 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
   }, [isDirty, setRawNeedsSave]);
 
   // Project context
-  const projectDir = (() => {
+  const projectDir = useMemo(() => {
     try {
       const raw = localStorage.getItem("sp:dbt-project-dir");
-      if (raw && raw !== "null") {return JSON.parse(raw) as string;}
+      if (raw && raw !== "null") return JSON.parse(raw) as string;
     } catch { /* ignore */ }
     return null;
-  })();
+  }, []);
   const projectName = projectDir?.split(/[/\\]/).pop() || null;
   const relativePath = projectDir && filename?.startsWith(projectDir)
     ? filename.slice(projectDir.length).replace(/^[/\\]/, "")

@@ -57,3 +57,7 @@ export function getNotebookConfig(): NotebookConfig {
   if (!_config) throw new Error("NotebookConfig not set");
   return _config;
 }
+
+export function tryGetNotebookConfig(): NotebookConfig | null {
+  return _config;
+}

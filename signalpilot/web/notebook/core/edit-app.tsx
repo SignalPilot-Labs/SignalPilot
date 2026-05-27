@@ -1,10 +1,6 @@
 import { usePrevious } from "@dnd-kit/utilities";
 import { Tooltip } from "radix-ui";
-import { spApiUrl } from "@/core/network/api";
 import { apiCall } from "@/core/network/api-call";
-
-const TooltipProvider = Tooltip.Provider;
-
 import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef } from "react";
 import { NotStartedConnectionAlert } from "@/components/editor/alerts/connecting-alert";
@@ -22,7 +18,6 @@ import { dbtProjectDirAtom, dbtProjectInfoAtom } from "@/components/editor/dbt/u
 import type { DbtProjectInfo } from "@/components/editor/dbt/types";
 import { gatewayBranchIdAtom } from "@/core/branch/branch-state";
 import { getGatewayBranchId, getGatewayProjectId, setGatewayBranchId, setGatewayProjectId } from "./network/api";
-import { getApiHeaders } from "./network/api-headers";
 import { store } from "./state/jotai";
 import { rawFallbackAtom } from "./meta/state";
 import { filenameAtom } from "./saving/file-state";
@@ -52,6 +47,8 @@ import { useFilename } from "./saving/filename";
 import { setDocumentTitle } from "./dom/document-title";
 import { lastSavedNotebookAtom } from "./saving/state";
 import { useSpKernelConnection } from "./websocket/useSpKernelConnection";
+
+const TooltipProvider = Tooltip.Provider;
 
 interface AppProps {
   /**

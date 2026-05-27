@@ -1,0 +1,22 @@
+/* Load Inter from Google Fonts */
+
+@import url("https://fonts.googleapis.com/css?family=Montserrat:300,300italic,800,800italic");
+
+:root {
+  --sp-text-font: "Montserrat", sans-serif;
+  --sp-heading-font: "Montserrat", sans-serif;
+}
+
+.paragraph {
+  font-size: 1.2rem;
+  color: light-dark(navy, pink);
+}
+
+h1 {
+  color: light-dark(red, blue) !important;
+}
+
+input[inputmode="numeric"] {
+  border: 1px solid red;
+  text-align: right;
+}

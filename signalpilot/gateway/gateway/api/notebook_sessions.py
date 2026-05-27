@@ -65,6 +65,9 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
 
     existing = await ns.get_active_session(store.session, org_id=org_id, user_id=user_id)
     if existing and existing.status == "running" and existing.pod_ip and existing.pod_name:
+        direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
+        if direct_url:
+            return existing
         orch = await _get_orchestrator()
         if await orch.is_pod_alive(existing.pod_name, org_id=org_id):
             return existing
@@ -92,6 +95,24 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
         branch=body.branch,
         pod_name=pod,
     )
+
+    # ── Direct mode: skip K8s, notebook server is always running ──
+    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
+    if direct_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(direct_url)
+        host_port = f"{parsed.hostname}:{parsed.port or 2718}"
+        await ns.update_session_status(
+            store.session,
+            session_id=session_info.id,
+            status="running",
+            pod_ip=host_port,
+            pod_ip_internal=host_port,
+        )
+        session_info.status = "running"
+        session_info.pod_ip = host_port
+        session_info.notebook_url = f"/notebook/{session_info.id}/_init"
+        return session_info
 
     # Fetch latest from GitHub before starting the pod (best-effort)
     if body.project_id:
@@ -271,12 +292,11 @@ async def delete_session(store: StoreD, response: Response):
                 exc,
             )
 
-    if session.pod_name:
+    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
+    if not direct_url and session.pod_name:
         await orch.delete_pod(session.pod_name, org_id=org_id or "")
     await ns.mark_stopped(store.session, session_id=session.id)
 
-    # Clear the proxy cookie. Path MUST be /notebook/{sid} to match the original
-    # cookie's Path= attribute — browsers ignore clear-headers with a mismatched path.
     clear_proxy_cookie(response, session_id=session.id, secure=is_cloud_mode())
 
 

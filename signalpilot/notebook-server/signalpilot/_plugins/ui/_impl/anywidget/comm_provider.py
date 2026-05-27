@@ -1,0 +1,104 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+"""Comm backend for the ``comm`` library.
+
+Patches ``comm.create_comm`` so that anywidget's descriptor API
+(``MimeBundleDescriptor``) creates comms that broadcast through
+sp's notification system instead of being silent no-ops.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+from signalpilot._loggers import sp_logger
+from signalpilot._plugins.ui._impl.anywidget.init import (
+    WIDGET_COMM_MANAGER,
+    CommLifecycleItem,
+)
+from signalpilot._plugins.ui._impl.comm import SpComm
+from signalpilot._runtime.context import ContextNotInitializedError, get_context
+from signalpilot._types.ids import WidgetModelId
+
+LOGGER = sp_logger()
+
+
+def _is_anywidget_comm(target_name: str, data: dict[str, Any] | None) -> bool:
+    """Check if this comm is being opened by anywidget.
+
+    anywidget's ``open_comm`` always uses ``target_name="jupyter.widget"``
+    and includes ``_model_module: "anywidget"`` in the state.
+    """
+    if target_name != "jupyter.widget":
+        return False
+    if data is None:
+        return False
+    state = data.get("state", {})
+    return bool(state.get("_model_module") == "anywidget")
+
+
+def patch_comm_create() -> None:
+    """Replace ``comm.create_comm`` with a sp-backed implementation.
+
+    Only intercepts comms created by anywidget (identified by
+    ``target_name`` and ``_model_module``). All other comms fall
+    through to a no-op ``DummyComm``.
+
+    This is idempotent -- calling it multiple times is safe.
+    """
+    try:
+        import comm
+        from comm import DummyComm
+    except ImportError:
+        return
+
+    def _signalpilot_create_comm(
+        *,
+        target_name: str = "comm",
+        data: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        buffers: list[Any] | None = None,
+        comm_id: str | None = None,
+        **kwargs: Any,
+    ) -> SpComm | DummyComm:
+        if not _is_anywidget_comm(target_name, data):
+            LOGGER.warning(
+                "comm.create_comm called with target_name=%r but "
+                "not recognized as anywidget; returning no-op comm",
+                target_name,
+            )
+            return DummyComm(
+                target_name=target_name,
+                data=data,
+                metadata=metadata,
+                buffers=buffers,
+                comm_id=comm_id,
+                **kwargs,
+            )
+
+        resolved_id = WidgetModelId(comm_id or uuid4().hex)
+
+        if data is not None:
+            # Tag with method="open" so SpComm._broadcast creates a
+            # ModelOpen (not ModelUpdate) on first send.
+            data = {**data, "method": "open"}
+
+        c = SpComm(
+            comm_id=resolved_id,
+            comm_manager=WIDGET_COMM_MANAGER,
+            target_name=target_name,
+            data=data,
+            metadata=metadata,
+            buffers=buffers,
+            **kwargs,
+        )
+        # Register lifecycle cleanup so the comm is closed when
+        # the cell is re-run or deleted.
+        try:
+            ctx = get_context()
+            ctx.cell_lifecycle_registry.add(CommLifecycleItem(c))
+        except ContextNotInitializedError:
+            pass
+        return c
+
+    comm.create_comm = _signalpilot_create_comm  # type: ignore[assignment]

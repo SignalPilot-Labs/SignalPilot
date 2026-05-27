@@ -1,0 +1,804 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import functools
+import io
+import signal
+import threading
+import traceback
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
+from types import TracebackType
+from typing import TYPE_CHECKING, Any
+
+from signalpilot._ast.variables import unmangle_local
+from signalpilot._config.config import ExecutionType, SpConfig, OnCellChangeType
+from signalpilot._dependencies.dependencies import DependencyManager
+from signalpilot._dependencies.errors import ManyModulesNotFoundError
+from signalpilot._loggers import sp_logger
+from signalpilot._messaging.errors import (
+    SpExceptionRaisedError,
+    SpSQLError,
+    SpStrictExecutionError,
+    UnknownError,
+)
+from signalpilot._messaging.tracebacks import write_traceback
+from signalpilot._runtime import dataflow
+from signalpilot._runtime.context.types import safe_get_context
+from signalpilot._runtime.control_flow import SpInterrupt, SpStopError
+from signalpilot._runtime.exceptions import (
+    SpMissingRefError,
+    SpNameError,
+    SpRuntimeException,
+)
+from signalpilot._runtime.executor import (
+    ExecutionConfig,
+    get_executor,
+)
+from signalpilot._runtime.sp_pdb import SpPdb
+from signalpilot._runtime.runner.hook_context import (
+    CancelledCells,
+    ExceptionOrError,
+    ExecutionContextManager,
+)
+from signalpilot._sql.error_utils import (
+    create_sql_error_from_exception,
+    is_sql_parse_error,
+)
+from signalpilot._types.ids import CellId_t
+
+LOGGER = sp_logger()
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from signalpilot._runtime.runner.hooks import NotebookCellHooks
+    from signalpilot._runtime.state import State
+
+
+def _should_broadcast_data() -> bool:
+    """Whether data (variables, datasets, etc.) should be broadcast.
+
+    Returns True only in edit mode for non-embedded contexts.
+    """
+    from signalpilot._runtime.context.kernel_context import KernelRuntimeContext
+    from signalpilot._runtime.context.types import get_context
+    from signalpilot._session.model import SessionMode
+
+    ctx = get_context()
+    is_edit_mode = (
+        isinstance(ctx, KernelRuntimeContext)
+        and ctx.session_mode == SessionMode.EDIT
+    )
+    # We don't broadcast data in embedded contexts, since the variables
+    # panel, etc. should only show the top-level graph's variables.
+    return is_edit_mode and not ctx.is_embedded()
+
+
+def cell_filename(cell_id: CellId_t) -> str:
+    """Filename to use when running cells through exec."""
+    return f"<cell-{cell_id}>"
+
+
+@dataclass
+class RunResult:
+    # Raw output of cell: last expression
+    output: Any
+    # Exception raised by cell, if any
+    #
+    # TODO(akshayka): Exceptions and "Errors" (most of which are at parse time
+    # and can't be encountered by the runner) shouldn't be packed into a single
+    # field.
+    exception: ExceptionOrError | None
+    # Accumulated output: via imperative sp.output.append()
+    accumulated_output: Any = None
+
+    def success(self) -> bool:
+        """Whether the cell expected successfully"""
+        return self.exception is None
+
+
+def should_show_traceback(
+    exception: ExceptionOrError | None,
+) -> bool:
+    if exception is None:
+        return True
+
+    # Stop "errors" aren't actually errors but rather a control
+    # flow mechanism used by sp.stop() to stop execution; as such
+    # a traceback should not be shown for them.
+    if isinstance(exception, SpStopError):
+        return False
+
+    # SQL parsing errors happen in SQL cells so showing a
+    # python traceback is not useful.
+    return not isinstance(exception, SpSQLError)
+
+
+class Runner:
+    """Runner for a collection of cells."""
+
+    def __init__(
+        self,
+        roots: set[CellId_t],
+        graph: dataflow.DirectedGraph,
+        glbls: dict[Any, Any],
+        debugger: SpPdb | None,
+        hooks: NotebookCellHooks,
+        execution_mode: OnCellChangeType = "autorun",
+        execution_type: ExecutionType = "relaxed",
+        excluded_cells: set[CellId_t] | None = None,
+        execution_context: ExecutionContextManager | None = None,
+        user_config: SpConfig | None = None,
+    ):
+        self.graph = graph
+        self.debugger = debugger
+        self.excluded_cells = excluded_cells or set()
+        self._executor = get_executor(
+            ExecutionConfig(is_strict=execution_type == "strict")
+        )
+        self.execution_context = execution_context
+        self._hooks = hooks
+        self.user_config = user_config
+
+        # runtime globals
+        self.glbls = glbls
+        self.execution_mode: OnCellChangeType = execution_mode
+        self.execution_type = execution_type
+
+        # cells that the runner will run, subtracting out cells with errors:
+        #
+        # cells with errors can't be run, but are still in the graph
+        # so that they can be transitioned out of error if a future
+        # run request repairs the graph
+        self.roots = roots
+        self.cells_to_run: deque[CellId_t] = deque(
+            Runner.compute_cells_to_run(
+                self.graph,
+                self.roots,
+                self.excluded_cells,
+                self.execution_mode,
+            )
+        )
+
+        # tracks cancelled cells: raising cell -> descendants, with O(1) lookup
+        self.cancelled_cells = CancelledCells()
+        # whether the runner has been interrupted
+        self.interrupted = False
+        # mapping from cell_id to exception it raised
+        self.exceptions: dict[CellId_t, ExceptionOrError] = {}
+
+        # each cell's position in the run queue
+        self._run_position = {
+            cell_id: index for index, cell_id in enumerate(self.cells_to_run)
+        }
+
+    @staticmethod
+    def compute_cells_to_run(
+        graph: dataflow.DirectedGraph,
+        roots: set[CellId_t],
+        excluded_cells: set[CellId_t],
+        execution_mode: OnCellChangeType,
+    ) -> list[CellId_t]:
+        # Runner always runs stale ancestors, if any.
+        cells_to_run = roots.union(
+            dataflow.transitive_closure(
+                graph,
+                roots,
+                children=False,
+                inclusive=False,
+                predicate=lambda cell: cell.stale,
+            )
+        )
+
+        if execution_mode == "autorun":
+            # in autorun/eager mode, descendants are also run;
+            cells_to_run = dataflow.transitive_closure(
+                graph,
+                cells_to_run,
+                relatives=dataflow.get_import_block_relatives(graph),
+            )
+
+        sorted_cells = dataflow.topological_sort(
+            graph,
+            cells_to_run - excluded_cells,
+        )
+
+        # Overridden cells may be on the path of a UI element update.
+        if (
+            (ctx := safe_get_context()) is not None
+            and ctx.is_embedded()
+            and ((overrides := ctx.app.overrides()) is not None)
+        ):
+            sorted_cells = dataflow.prune_cells_for_overrides(
+                graph, sorted_cells, overrides
+            )
+
+        return sorted_cells
+
+    # Adapted from
+    # https://github.com/ipython/ipykernel/blob/eddd3e666a82ebec287168b0da7cfa03639a3772/ipykernel/ipkernel.py#L312
+    @staticmethod
+    @contextlib.contextmanager
+    def _cancel_on_sigint(future: asyncio.Future[Any]) -> Iterator[None]:
+        """ContextManager for capturing SIGINT and cancelling a future
+
+        SIGINT raises in the event loop when running async code,
+        but we want it to halt a coroutine.
+
+        Ideally, it would raise KeyboardInterrupt, but this turns it into a
+        CancelledError.
+        """
+        sigint_future: asyncio.Future[int] = asyncio.Future()
+
+        # whichever future finishes first,
+        # cancel the other one
+        def cancel_unless_done(f: asyncio.Future[Any], _: Any) -> None:
+            if f.cancelled() or f.done():
+                return
+            f.cancel()
+
+        # when sigint finishes,
+        # abort the coroutine with CancelledError
+        sigint_future.add_done_callback(
+            functools.partial(cancel_unless_done, future)
+        )
+        # when the main future finishes,
+        # stop watching for SIGINT events
+        future.add_done_callback(
+            functools.partial(cancel_unless_done, sigint_future)
+        )
+
+        def handle_sigint(*_: Any) -> None:
+            if sigint_future.cancelled() or sigint_future.done():
+                return
+            # mark as done, to trigger cancellation
+            sigint_future.set_result(1)
+
+        # set the custom sigint handler during this context
+        save_sigint = signal.signal(signal.SIGINT, handle_sigint)
+        try:
+            yield
+        finally:
+            # restore the previous sigint handler
+            signal.signal(signal.SIGINT, save_sigint)
+
+    def cancel(self, cell_id: CellId_t) -> None:
+        """Mark a cell (and its descendants) as cancelled."""
+        descendants = {
+            cid
+            for cid in dataflow.transitive_closure(self.graph, {cell_id})
+            if cid in self.cells_to_run
+        }
+        self.cancelled_cells.add(cell_id, descendants)
+        for cid in descendants:
+            self.graph.cells[cid].set_run_result_status("cancelled")
+
+    def cancelled(self, cell_id: CellId_t) -> bool:
+        """Return whether a cell has been cancelled."""
+        return cell_id in self.cancelled_cells
+
+    def pending(self) -> bool:
+        """Whether there are more cells to run."""
+        return not self.interrupted and len(self.cells_to_run) > 0
+
+    def _get_run_position(self, cell_id: CellId_t) -> int | None:
+        """Position in the original run queue"""
+        return self._run_position.get(cell_id, None)
+
+    def _runs_after(self, source: CellId_t, target: CellId_t) -> bool | None:
+        """Compare run positions.
+
+        Returns `True` if source runs after target, `False` if target runs
+        after source, or `None` if not comparable
+        """
+        source_pos = self._get_run_position(source)
+        target_pos = self._get_run_position(target)
+        if source_pos is None or target_pos is None:
+            return None
+        return source_pos > target_pos
+
+    def resolve_state_updates(
+        self,
+        state_updates: dict[State[Any], CellId_t],
+    ) -> set[CellId_t]:
+        """
+        Get cells that need to be run as a consequence of state updates
+
+        A cell is marked as needing to run if all of the following are true:
+
+            1. The runner was not interrupted.
+            2. It was not already run after its setter was called.
+            3. It isn't the cell that called the setter (unless the state
+               object was configured to allow self loops).
+            4. It is not errored (unable to run) or cancelled.
+            5. It has among its refs the state object whose setter
+               was invoked.
+
+        (3) means that a state update in a given cell will never re-trigger
+        the same cell to run. This is similar to how interacting with
+        a UI element in the cell that created it won't re-trigger the cell,
+        and this behavior is useful when tying UI elements together with a
+        state object.
+
+        **Arguments.**
+
+        - state_updates: mapping from state object to the cell that last ran
+          its setter
+        - errored_cells: cell ids that are unable to run
+        """
+        # No updates when the runner is interrupted (condition 1)
+        if self.interrupted:
+            return set()
+
+        cids_to_run: set[CellId_t] = set()
+        for state, setter_cell_id in state_updates.items():
+            for cid, cell in self.graph.cells.items():
+                # Don't re-run cells that already ran with new state (2)
+                if self._runs_after(source=cid, target=setter_cell_id):
+                    continue
+                # No self-loops (3)
+                if cid == setter_cell_id and not state.allow_self_loops:
+                    continue
+                # No errorred/cancelled cells (4)
+                if cid in self.excluded_cells or self.cancelled(cid):
+                    continue
+                # State object in refs (5)
+                for ref in cell.refs:
+                    # run this cell if any of its refs match the state object
+                    # by object ID (via is operator)
+                    if ref in self.glbls and self.glbls[ref] is state:
+                        cids_to_run.add(cid)
+                        break  # cell already matched; skip remaining refs
+        return cids_to_run
+
+    def pop_cell(self) -> CellId_t:
+        """Get the next cell to run."""
+        return self.cells_to_run.popleft()
+
+    def _run_result_from_exception(
+        self,
+        output: Any,
+        unwrapped_exception: BaseException | None,
+        cell_id: CellId_t,
+    ) -> tuple[RunResult, BaseException | None]:
+        exception: ExceptionOrError | None = unwrapped_exception
+        if isinstance(exception, SpMissingRefError):
+            ref, blamed_cell = self._get_blamed_cell(exception)
+            # All SpMissingRefErrors should be caused caused by
+            # NameErrors if they are the cause of SpRuntimeExceptions.
+            if exception.name_error is not None:
+                unwrapped_exception = exception.name_error
+            # Provide output context for said missing reference errors.
+            if self.execution_type == "strict":
+                output = SpExceptionRaisedError(
+                    f"sp came across the undefined variable `{ref}` "
+                    "during runtime. This is possible in strict mode when "
+                    "static analysis is unable to properly resolve the "
+                    "reference due  to direct access (e.g. "
+                    "`globals()['var']`) or circuitous definitions (e.g.  "
+                    "by reassigning variables to different functions). If "
+                    "this failure is not the result of either of these "
+                    "cases, please consider reporting this issue to "
+                    "https://docs.signalpilot.ai/docs/ "
+                    "Definition expected in cell : ",
+                    "NameError",
+                    blamed_cell,
+                )
+                exception = output
+            elif blamed_cell != cell_id:
+                possibly_deleted = any(
+                    ref in cell.deleted_refs
+                    for cell in self.graph.cells.values()
+                )
+
+                deleted_message = (
+                    " Another cell may have deleted it with the del operator."
+                    if possibly_deleted
+                    else ""
+                )
+                output = SpExceptionRaisedError(
+                    f"Name `{ref}` is not defined.{deleted_message} "
+                    "It was expected to be defined in ",
+                    "NameError",
+                    blamed_cell,
+                )
+                exception = output
+            else:
+                # Default to regular error for self reference in relaxed
+                # mode.
+                exception = unwrapped_exception
+        # Handle other special runtime errors.
+        elif isinstance(
+            unwrapped_exception,
+            (ModuleNotFoundError, ManyModulesNotFoundError),
+        ):
+            self.missing_packages = True
+
+            # If the user has a library and a file with the same name
+            # we should inform that this is a conflict.
+            if isinstance(unwrapped_exception, ModuleNotFoundError):
+                try:
+                    module_name = getattr(unwrapped_exception, "name", "")
+                    # Grab the base module name if it's a submodule
+                    module_name = module_name.split(".")[0]
+
+                    if Path(
+                        f"{module_name}.py"
+                    ).exists() and DependencyManager.has(module_name):
+                        error_message = f"There is a file named '{module_name}.py' which conflicts with the imported package. Please rename the file."
+                        output = SpExceptionRaisedError(
+                            error_message,
+                            unwrapped_exception.__class__.__name__,
+                            None,
+                        )
+                        LOGGER.error(error_message)
+                        exception = output
+                except Exception:
+                    pass
+        # Handle SQL parsing errors
+        elif unwrapped_exception is not None and is_sql_parse_error(
+            unwrapped_exception
+        ):
+            cell = self.graph.cells[cell_id]
+            output = create_sql_error_from_exception(unwrapped_exception, cell)
+            exception = output
+        elif isinstance(unwrapped_exception, SpStopError):
+            output = unwrapped_exception.output
+            exception = unwrapped_exception
+        return RunResult(
+            output=output, exception=exception
+        ), unwrapped_exception
+
+    async def run(self, cell_id: CellId_t) -> RunResult:
+        """Run a cell."""
+        if self.debugger is not None:
+            last_tb = self.debugger._last_tracebacks.pop(cell_id, None)
+            if last_tb == self.debugger._last_traceback:
+                self.debugger._last_traceback = None
+
+        cell = self.graph.cells[cell_id]
+        run_result = None
+        try:
+            if cell.is_coroutine():
+                return_value_future = asyncio.ensure_future(
+                    self._executor.execute_cell_async(
+                        cell,
+                        self.glbls,
+                        self.graph,
+                    )
+                )
+                if threading.current_thread() == threading.main_thread():
+                    # edit mode: need to handle user interrupts
+                    with Runner._cancel_on_sigint(return_value_future):
+                        return_value = await return_value_future
+                else:
+                    # run mode: can't use signal.signal, not interruptible
+                    # by user anyway.
+                    return_value = await return_value_future
+            else:
+                return_value = self._executor.execute_cell(
+                    cell,
+                    self.glbls,
+                    self.graph,
+                )
+            run_result = RunResult(output=return_value, exception=None)
+        except asyncio.exceptions.CancelledError:
+            # User interrupt
+            # interrupt the entire runner
+            # Async cells can only be cancelled via a user interrupt
+            run_result = RunResult(output=None, exception=SpInterrupt())
+            # Still provide a general traceback.
+            tmpio = io.StringIO()
+            traceback.print_exc(file=tmpio)
+            tmpio.seek(0)
+            write_traceback(tmpio.read())
+        # Strict mode errors may also raise errors outside of execution.
+        except SpNameError as e:
+            self.cancel(cell_id)
+            strict_exception = SpStrictExecutionError(str(e), e.ref, None)
+            run_result = RunResult(
+                output=strict_exception, exception=strict_exception
+            )
+        except SpMissingRefError as e:
+            # In strict mode, sp refuses to evaluate a cell if there are
+            # missing definitions. Since the cell hasn't run, this is a pre
+            # check error, but still mark descendants as cancelled.
+            self.cancel(cell_id)
+            ref, blamed_cell = self._get_blamed_cell(e)
+            name_output = SpStrictExecutionError(
+                "sp was unable to resolve "
+                f"a reference to `{ref}` in cell : ",
+                ref,
+                blamed_cell,
+            )
+            run_result = RunResult(output=name_output, exception=name_output)
+        # Should cover all cell runtime exceptions.
+        except SpRuntimeException as e:
+            output: Any = None
+            unwrapped_exception: BaseException | None = e.__cause__
+
+            # Interrupts are sometimes sent multiple times; in particular,
+            # it appears that polars forwards interrupts, so interrupting
+            # pl.read_parquet() causes two interrupts to be sent instead of one
+            # on macOS. This try/except is here to catch that extra
+            # interrupt.
+            #
+            # TODO(akshayka): Find a less brittle way of handling interrupts.
+            try:
+                run_result, unwrapped_exception = (
+                    self._run_result_from_exception(
+                        output, unwrapped_exception, cell_id
+                    )
+                )
+            except KeyboardInterrupt:
+                run_result = RunResult(
+                    output=None, exception=SpInterrupt()
+                )
+
+            # Exceptions trigger cancellation of descendants.
+            #
+            # TODO(akshayka): Another interrupt will end up interrupting
+            # this call as well, so this should be lifted out of `run`.
+            self.cancel(cell_id)
+
+            if should_show_traceback(run_result.exception):
+                tmpio = io.StringIO()
+                # The executors explicitly raise cell exceptions from base
+                # exceptions such that the stack trace is cleaner.
+                # Verbosity is for Python < 3.10 compat
+                # See https://docs.python.org/3/library/traceback.html
+                exception_type = (
+                    type(unwrapped_exception) if unwrapped_exception else None
+                )
+                maybe_traceback = (
+                    unwrapped_exception.__traceback__
+                    if unwrapped_exception
+                    else None
+                )
+                traceback.print_exception(
+                    exception_type,
+                    unwrapped_exception,
+                    maybe_traceback,
+                    file=tmpio,
+                )
+                tmpio.seek(0)
+                write_traceback(tmpio.read())
+        except BaseException as e:
+            # Check that SpRuntimeException has't already handled the
+            # error, since exceptions fall through except blocks.
+            # If not, then this is an unexpected error.
+            if not isinstance(e, SpRuntimeException):
+                LOGGER.error(f"Unexpected error type: {e}")
+                self.cancel(cell_id)
+                unknown_error = UnknownError(f"{e}")
+                run_result = RunResult(output=None, exception=unknown_error)
+                tmpio = io.StringIO()
+                traceback.print_exc(file=tmpio)
+                tmpio.seek(0)
+                write_traceback(tmpio.read())
+        finally:
+            # TODO(akshayka): some of this logic should be lifted out
+            # of `run`, (in particular to where execution context is not set)
+            # so that it is not interruptible
+            if run_result is None:
+                LOGGER.error(
+                    """sp encountered an internal error.
+
+                    sp finished executing a cell, but did not produce
+                    a run result.
+
+                    Please copy this message and paste it in a GitHub issue:
+
+                    https://docs.signalpilot.ai/docs/
+
+                    Any additional context of what caused this error, such
+                    as sample code to reproduce, will help us debug.
+                    """
+                )
+                run_result = RunResult(output=None, exception=None)
+
+            # Mark as interrupted if the cell raised a SpInterrupt
+            # Set here since failed async can also trigger an Interrupt.
+            if isinstance(run_result.exception, SpInterrupt):
+                self.interrupted = True
+
+            # if a debugger is active, force it to skip past sp code.
+            try:
+                # Bdb defines the botframe attribute and sets it to non-None
+                # when it starts up
+                if self.debugger is not None:
+                    if (
+                        hasattr(self.debugger, "botframe")
+                        and self.debugger.botframe is not None
+                    ):
+                        self.debugger.set_continue()
+                    # Hold on to this information for debugging postmortem etc.
+                    if run_result.exception is not None and hasattr(
+                        run_result.exception, "__traceback__"
+                    ):
+                        tb = run_result.exception.__traceback__
+                        if isinstance(tb, TracebackType):
+                            self.debugger._last_traceback = tb
+                            self.debugger._last_tracebacks[cell_id] = tb
+            except Exception as debugger_error:
+                # This has never been hit, but just in case -- don't want
+                # to crash the kernel.
+                LOGGER.error(
+                    """Internal sp error. Please copy this message and
+                    paste it in a GitHub issue:
+
+                    https://docs.signalpilot.ai/docs/
+
+                    An exception raised attempting to continue debugger (%s).
+                    """,
+                    str(debugger_error),
+                )
+
+        if run_result.exception is not None:
+            self.exceptions[cell_id] = run_result.exception
+
+        return run_result
+
+    def _get_blamed_cell(
+        self, e: SpMissingRefError
+    ) -> tuple[str, CellId_t | None]:
+        ref = e.ref
+        blamed_cell = None
+        try:
+            (blamed_cell, *_) = self.graph.get_defining_cells(ref)
+        except (KeyError, ValueError):
+            # The reference is not found anywhere else in the graph
+            # but it might be private
+            ref, var_cell_id = unmangle_local(ref)
+            if var_cell_id:
+                blamed_cell = var_cell_id
+        return ref, blamed_cell
+
+    def _find_first_blocked_missing_ref(
+        self, cell_id: CellId_t
+    ) -> CellId_t | None:
+        """Return the first out-of-run ancestor still in a stopped/errored state."""
+        cell = self.graph.cells[cell_id]
+        for ref in cell.refs:
+            if ref in self.glbls:
+                # The reference is already available
+                continue
+            for defining_cell_id in self.graph.get_defining_cells(ref):
+                if defining_cell_id in self._run_position:
+                    # The defining cell is part of this run
+                    continue
+                defining_cell = self.graph.cells[defining_cell_id]
+                if defining_cell.run_result_status == "exception":
+                    return defining_cell_id
+        return None
+
+    async def run_all(self) -> None:
+        from signalpilot._runtime.runner.hook_context import (
+            OnFinishHookContext,
+            PostExecutionHookContext,
+            PreExecutionHookContext,
+            PreparationHookContext,
+        )
+
+        prep_ctx = PreparationHookContext(
+            graph=self.graph,
+            execution_mode=self.execution_mode,
+            cells_to_run=self.cells_to_run,
+        )
+        LOGGER.debug("Running preparation hooks")
+        for prep_hook in self._hooks.preparation_hooks:
+            prep_hook(prep_ctx)
+
+        pre_exec_ctx = PreExecutionHookContext(
+            graph=self.graph,
+            execution_mode=self.execution_mode,
+        )
+        all_temporaries: frozenset[str] = (
+            frozenset().union(
+                *(cell.temporaries for cell in self.graph.cells.values())
+            )
+            if self.graph.cells
+            else frozenset()
+        )
+        post_exec_ctx = PostExecutionHookContext(
+            graph=self.graph,
+            glbls=self.glbls,
+            execution_context=self.execution_context,
+            exceptions=self.exceptions,
+            cancelled_cells=self.cancelled_cells,
+            all_temporaries=all_temporaries,
+            should_broadcast_data=_should_broadcast_data(),
+            user_config=self.user_config,
+        )
+
+        while self.pending():
+            cell_id = self.pop_cell()
+            LOGGER.debug("Cell runner processing %s", cell_id)
+            cell = self.graph.cells[cell_id]
+
+            blocked_ancestor_id = self._find_first_blocked_missing_ref(cell_id)
+            if blocked_ancestor_id is not None:
+                # Cancel cell_id and descendants before the check below.
+                LOGGER.debug(
+                    "%s cancelled: ancestor %s still stopped",
+                    cell_id,
+                    blocked_ancestor_id,
+                )
+                if blocked_ancestor_id not in self.exceptions:
+                    # TODO (jlehuen): We wouldn't have to create this SpStopError if those were stored directly
+                    # in CellImpl.exception. See: sp._runtime.runner.hooks_post_execution._set_run_result_status
+                    self.exceptions[blocked_ancestor_id] = self.graph.cells[
+                        blocked_ancestor_id
+                    ].exception or SpStopError(None)
+                pending = {cell_id} | {
+                    cid
+                    for cid in dataflow.transitive_closure(
+                        self.graph, {cell_id}, inclusive=False
+                    )
+                    if cid in self.cells_to_run
+                }
+                for cid in pending:
+                    self.graph.cells[cid].set_run_result_status("cancelled")
+                self.cancelled_cells.add(blocked_ancestor_id, pending)
+
+            # Update run result status for cells that won't run.
+            #
+            # Hack: frontend sets status to queued on run, so we also have to
+            # set runtime_state to get FE to transition.
+            if self.cancelled(cell_id):
+                LOGGER.debug("%s cancelled", cell_id)
+                cell.set_run_result_status("cancelled")
+                cell.set_runtime_state("idle")
+                continue
+            if cell.config.disabled:
+                LOGGER.debug("%s disabled", cell_id)
+                cell.set_run_result_status("disabled")
+                cell.set_runtime_state("idle")
+                continue
+            if self.graph.is_disabled(cell_id):
+                LOGGER.debug("%s disabled transitively", cell_id)
+                cell.set_run_result_status("disabled")
+                cell.set_runtime_state("disabled-transitively")
+                continue
+
+            LOGGER.debug("Running pre_execution hooks")
+            for pre_hook in self._hooks.pre_execution_hooks:
+                pre_hook(cell, pre_exec_ctx)
+            LOGGER.debug("Running cell %s", cell_id)
+            if self.execution_context is not None:
+                try:
+                    # TODO(akshayka): The execution context should be pushed
+                    # down to as close to kernel execution as possible.
+                    with self.execution_context(cell_id) as exc_ctx:
+                        run_result = await self.run(cell_id)
+                        run_result.accumulated_output = exc_ctx.output
+                        LOGGER.debug("Running post_execution hooks in context")
+                        for post_hook in self._hooks.post_execution_hooks:
+                            post_hook(cell, post_exec_ctx, run_result)
+                except KeyboardInterrupt:
+                    LOGGER.error(
+                        """
+                        A keyboard interrupt was raised but not handled by the runner.
+                        """
+                    )
+
+            else:
+                run_result = await self.run(cell_id)
+                LOGGER.debug("Running post_execution hooks out of context")
+                for post_hook in self._hooks.post_execution_hooks:
+                    post_hook(cell, post_exec_ctx, run_result)
+
+        finish_ctx = OnFinishHookContext(
+            graph=self.graph,
+            cells_to_run=self.cells_to_run,
+            interrupted=self.interrupted,
+            cancelled_cells=self.cancelled_cells,
+            exceptions=self.exceptions,
+        )
+        LOGGER.debug("Running on_finish hooks")
+        for finish_hook in self._hooks.on_finish_hooks:
+            finish_hook(finish_ctx)

@@ -1,0 +1,38 @@
+import signalpilot
+
+__generated_with = "0.19.7"
+app = sp.App()
+
+
+@app.cell
+def _():
+    import anywidget
+    import traitlets
+
+
+    class Widget(anywidget.AnyWidget):
+        _esm = """
+        function render({ model, el }) {
+          let arr = model.get("arr");
+          el.innerText = arr.bytes instanceof DataView;
+        }
+        export default { render };
+        """
+        arr = traitlets.Dict().tag(sync=True)
+
+
+    import numpy as np
+
+    arr = np.array([1, 2, 3])
+    Widget(
+        arr={
+            "bytes": arr.tobytes(),
+            "shape": arr.shape,
+            "dtype": str(arr.dtype),
+        }
+    )
+    return
+
+
+if __name__ == "__main__":
+    app.run()

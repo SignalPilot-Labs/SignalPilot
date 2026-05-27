@@ -16,6 +16,7 @@ Auth chain (runs on every HTTP and WS request, before ws.accept()):
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from dataclasses import dataclass
@@ -113,13 +114,16 @@ async def resolve_proxy_session(
     _log.info("  session authenticated: user=%s org=%s status=%s",
               session.user_id, session.org_id, session.status)
 
-    # Step 4: readiness check
-    if session.status != "running" or not session.pod_ip_internal:
+    # Step 4: readiness check + upstream URL resolution
+    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
+    if direct_url:
+        upstream_base = f"{direct_url.rstrip('/')}/notebook/{session_id}"
+    elif session.status != "running" or not session.pod_ip_internal:
         _log.warning("REJECT: not ready status=%s pod_ip_internal=%s",
                       session.status, session.pod_ip_internal)
         raise HTTPException(status_code=409, detail="Session not ready")
-
-    upstream_base = f"http://{session.pod_ip_internal}:{POD_PORT}/notebook/{session_id}"
+    else:
+        upstream_base = f"http://{session.pod_ip_internal}:{POD_PORT}/notebook/{session_id}"
     return ProxySession(
         session_id=session_id,
         user_id=session.user_id,

@@ -1,0 +1,333 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+import base64
+import dataclasses
+import mimetypes
+import random
+import string
+import threading
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+from signalpilot import _loggers
+from signalpilot._messaging.mimetypes import KnownMimeType
+from signalpilot._runtime.cell_lifecycle_item import CellLifecycleItem
+from signalpilot._runtime.context import ContextNotInitializedError
+from signalpilot._runtime.virtual_file.storage import (
+    VirtualFileStorage,
+    VirtualFileStorageManager,
+)
+from signalpilot._utils.data_uri import build_data_url
+from signalpilot._utils.http import HTTPException, HTTPStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from signalpilot._runtime.context.types import RuntimeContext
+
+LOGGER = _loggers.sp_logger()
+
+_ALPHABET = string.ascii_letters + string.digits
+
+
+def random_filename(ext: str) -> str:
+    # adapted from: https://stackoverflow.com/questions/13484726/safe-enough-8-character-short-unique-random-string
+    # TODO(akshayka): should callers redraw if they get a collision?
+    try:
+        tid = str(threading.get_native_id())
+    except AttributeError:
+        # get_native_id() not implemented in pyodide/WASM
+        tid = "0"
+    basename = tid + "-" + "".join(random.choices(_ALPHABET, k=8))
+    return f"{basename}.{ext}"
+
+
+@dataclasses.dataclass
+class VirtualFile:
+    url: str
+    filename: str
+    buffer: bytes
+
+    def __init__(
+        self,
+        filename: str,
+        buffer: bytes,
+        url: str | None = None,
+        as_data_url: bool = False,
+    ) -> None:
+        self.filename = filename
+        self.buffer = buffer
+        # Create a file URL with the buffer size
+        # This is a hack so when we pull from shared memory we know how
+        # many bytes to read.
+        # Also, URL is intentionally relative, so it can be resolved with
+        # different base URLs.
+        if not as_data_url:
+            self.url = url or f"./@file/{len(buffer)}-{filename}"
+        else:
+            mimetype = mimetypes.guess_type(self.filename)[0] or "text/plain"
+            self.url = url or build_data_url(
+                mimetype=cast(KnownMimeType, mimetype),
+                data=base64.b64encode(buffer),
+            )
+
+    @staticmethod
+    def from_external_url(url: str) -> VirtualFile:
+        return VirtualFile(
+            filename=url,
+            buffer=b"",
+            url=url,
+        )
+
+    @staticmethod
+    def create_and_register(buffer: bytes, ext: str) -> VirtualFile:
+        """Create a virtual file and register it in the current context.
+
+        Falls back to a data URL if no runtime context is available,
+        virtual files aren't supported, or the buffer is empty.
+        """
+        from signalpilot._runtime.context import get_context
+
+        vfile_name = random_filename(ext)
+
+        def return_data_url() -> VirtualFile:
+            return VirtualFile(
+                filename=vfile_name, buffer=buffer, as_data_url=True
+            )
+
+        # Empty buffers can't be served via the file registry, so use a
+        # data URL instead to ensure the URL is always resolvable.
+        if len(buffer) == 0:
+            return return_data_url()
+
+        try:
+            ctx = get_context()
+        except ContextNotInitializedError:
+            return return_data_url()
+
+        if not ctx.virtual_files_supported:
+            return return_data_url()
+
+        vfile = VirtualFile(filename=vfile_name, buffer=buffer)
+        ctx.virtual_file_registry.add(vfile, ctx)
+        return vfile
+
+
+EMPTY_VIRTUAL_FILE = VirtualFile(
+    filename="empty.txt",
+    # URL is intentionally relative, so it can be resolved with
+    # different base URLs.
+    url="@file/0-empty.txt",
+    buffer=b"",
+)
+
+
+class VirtualFileLifecycleItem(CellLifecycleItem):
+    def __init__(self, ext: str, buffer: bytes) -> None:
+        self.ext = _without_leading_dot(ext)
+        self.buffer = buffer
+        # Not resolved until added to registry
+        self._virtual_file: VirtualFile | None = None
+
+    def add_to_cell_lifecycle_registry(self) -> None:
+        from signalpilot._runtime.context import get_context
+
+        try:
+            ctx = get_context()
+        except ContextNotInitializedError:
+            ctx = None
+
+        if ctx is not None:
+            ctx.cell_lifecycle_registry.add(self)
+        else:
+            self.create(context=None)
+
+    @property
+    def virtual_file(self) -> VirtualFile:
+        assert self._virtual_file is not None
+        return self._virtual_file
+
+    def create(self, context: RuntimeContext | None) -> None:
+        """Create the virtual file
+
+        Every virtual file gets a unique random name. Uniqueness is
+        required for reference counting.
+        """
+        filename = random_filename(self.ext)
+        if context is None or not context.virtual_files_supported:
+            self._virtual_file = VirtualFile(
+                filename=filename, buffer=self.buffer, as_data_url=True
+            )
+            return
+
+        registry = context.virtual_file_registry
+        # create a unique filename for the virtual file
+        tries = 0
+        max_tries = 100
+        while registry.has(filename) and tries < max_tries:
+            filename = random_filename(self.ext)
+            tries += 1
+        if tries > max_tries:
+            raise RuntimeError(
+                "Failed to add virtual file to registry. "
+                "This is a bug in sp. Please file an issue."
+            )
+        self._virtual_file = VirtualFile(filename, self.buffer)
+        context.virtual_file_registry.add(self._virtual_file, context)
+
+    def dispose(self, context: RuntimeContext, deletion: bool) -> bool:
+        # Remove the file if the refcount is 0, or if the cell is being
+        # deleted. (We can't rely on when the refcount will be decremented, so
+        # we need to check for deletion explicitly to prevent leaks.)
+        if deletion or (
+            context.virtual_file_registry.refcount(self.virtual_file.filename)
+            <= 0
+        ):
+            context.virtual_file_registry.remove(self.virtual_file)
+            return True
+        # refcount > 0, so need to keep this disposal hook around
+        return False
+
+
+@dataclasses.dataclass
+class VirtualFileRegistryItem:
+    # number of HTML objects that are referencing this virtual file
+    refcount: int
+
+
+@dataclasses.dataclass
+class VirtualFileRegistry:
+    """Registry of virtual files
+
+    The registry maps virtual file filenames to their contents. Each
+    registry item is reference counted: refcount > 0 means that an object
+    exists somewhere that uses the virtual file.
+
+    The registry itself doesn't maintain the reference counts, it only
+    exposes methods for incrementing, decrementing, and getting the counts.
+    """
+
+    storage: VirtualFileStorage
+    registry: dict[str, VirtualFileRegistryItem] = dataclasses.field(
+        default_factory=dict
+    )
+    shutting_down: bool = False
+
+    def __post_init__(self) -> None:
+        # Set singleton reference for read_virtual_file()
+        manager = VirtualFileStorageManager()
+        if manager.storage is None:
+            # Not set yet, _or_ was stale
+            manager.storage = self.storage
+        elif self.storage is not manager.storage:
+            # Long running asgi apps, and embedded cases trigger this.
+            LOGGER.debug(
+                "Expected shared global storage but VirtualFileRegistry was initialized "
+                "with new storage instance. Overriding with global storage.",
+            )
+            self.storage = manager.storage
+
+    def __del__(self) -> None:
+        self.shutdown()
+
+    def has(self, filename: str) -> bool:
+        return filename in self.registry
+
+    def filenames(self) -> Iterable[str]:
+        return self.registry.keys()
+
+    def reference(self, filename: str) -> None:
+        """Increment the reference count"""
+        if filename in self.registry:
+            self.registry[filename].refcount += 1
+
+    def dereference(self, filename: str) -> None:
+        """Decrement the reference count"""
+        if filename in self.registry:
+            self.registry[filename].refcount -= 1
+
+    def refcount(self, filename: str) -> int:
+        """Get the reference count"""
+        if filename in self.registry:
+            return self.registry[filename].refcount
+        return 0
+
+    def add(self, virtual_file: VirtualFile, context: RuntimeContext) -> None:
+        if not context.virtual_files_supported:
+            return
+
+        key = virtual_file.filename
+        if key in self.registry:
+            LOGGER.debug(
+                "Virtual file (key=%s) already registered", virtual_file
+            )
+            return
+
+        buffer = virtual_file.buffer
+        # Skip adding if buffer is empty
+        if len(buffer) == 0:
+            return
+
+        self.storage.store(key, buffer)
+        self.registry[key] = VirtualFileRegistryItem(refcount=0)
+
+    def remove(self, virtual_file: VirtualFile) -> None:
+        key = virtual_file.filename
+        if key in self.registry:
+            self.storage.remove(key)
+            del self.registry[key]
+
+    def shutdown(self) -> None:
+        # Try to make this method re-entrant since it's called in the
+        # sigterm handler
+        #
+        # https://www.gnu.org/software/libc/manual/html_node/Nonreentrancy.html
+        if self.shutting_down:
+            return
+        try:
+            self.shutting_down = True
+            self.storage.shutdown(keys=self.registry.keys())
+            self.registry.clear()
+        finally:
+            self.shutting_down = False
+
+
+def _without_leading_dot(ext: str) -> str:
+    return ext.removeprefix(".")
+
+
+def read_virtual_file(filename: str, byte_length: int) -> bytes:
+    try:
+        return VirtualFileStorageManager().read(filename, byte_length)
+    except KeyError as err:
+        raise HTTPException(
+            HTTPStatus.NOT_FOUND,
+            detail="File not found",
+        ) from err
+
+
+def read_virtual_file_chunked(
+    filename: str, byte_length: int, start: int = 0
+) -> Iterator[bytes]:
+    """Read a virtual file in chunks for streaming responses.
+
+    Yields chunks of bytes, avoiding holding the entire file in memory
+    as a single bytes object.
+
+    Args:
+        filename: virtual file name
+        byte_length: number of bytes to read (after applying ``start``)
+        start: offset in bytes to begin reading from (for HTTP Range requests)
+    """
+    try:
+        yield from VirtualFileStorageManager().read_chunked(
+            filename, byte_length, start=start
+        )
+    except KeyError as err:
+        raise HTTPException(
+            HTTPStatus.NOT_FOUND,
+            detail="File not found",
+        ) from err

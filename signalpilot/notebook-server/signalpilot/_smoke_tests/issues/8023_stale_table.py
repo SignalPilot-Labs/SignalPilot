@@ -1,0 +1,54 @@
+import signalpilot
+app = sp.App()
+
+@app.cell
+def _():
+    import signalpilot
+    import pandas as pd
+    return sp, pd
+
+@app.cell
+def _(sp):
+    data_version, set_data_version = sp.state(0)
+    return data_version, set_data_version
+
+@app.cell
+def _():
+    data = [
+        {"id": 1, "status": "pending", "value": 10},
+        {"id": 2, "status": "pending", "value": 20},
+        {"id": 3, "status": "pending", "value": 30},
+        {"id": 4, "status": "pending", "value": 40},
+    ]
+    return (data,)
+
+@app.cell
+def _(data, data_version, sp, pd):
+    _ = data_version()
+    df = pd.DataFrame(data)
+    table = sp.ui.table(df, selection="single", page_size=3)
+    sp.output.replace(table)
+    return (table,)
+
+@app.cell
+def _(sp):
+    approve_btn = sp.ui.run_button(label="Approve")
+    sp.output.replace(approve_btn)
+    return (approve_btn,)
+
+@app.cell
+def _(approve_btn, data, set_data_version, table):
+    import time
+    if approve_btn.value:
+        _sel = table.value
+        if _sel is not None and len(_sel) > 0:
+            _id = _sel.iloc[0]["id"]
+            for item in data:
+                if item["id"] == _id:
+                    item["status"] = "approved"
+                    break
+            set_data_version(time.time())
+    return
+
+if __name__ == "__main__":
+    app.run()

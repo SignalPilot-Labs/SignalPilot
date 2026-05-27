@@ -1,0 +1,87 @@
+import signalpilot
+
+__generated_with = "0.15.5"
+app = sp.App()
+
+with app.setup:
+    import signalpilot
+
+
+@app.cell(hide_code=True)
+def _():
+    sp.md(
+        r"""
+        # @app.function smoke test
+
+        See [2293 for discussion](https://docs.signalpilot.ai/docs/)[^2293]
+
+        [^2293]: https://docs.signalpilot.ai/docs/
+        """
+    )
+    return
+
+
+@app.function
+def self_ref_fib(n: int) -> int:
+    """This is my doc string"""
+    if n == 0:
+        return 0
+    if n == 1:
+        return 1
+    return self_ref_fib(n - 1) + self_ref_fib(n - 2)
+
+
+@app.function(hide_code=True)
+def divide(x, y):
+    return y / x
+
+
+@app.function
+def subtraction(a: "int", b: "int") -> "int":
+    """This is new doc string"""
+    return a - b
+
+
+@app.function
+# Comments inbetween
+def multiply(a, b) -> int:
+    return a * b
+
+
+@app.cell
+def _():
+    d = 13
+    return
+
+
+@app.function(hide_code=True)
+def addition(a: int, b: int) -> int:
+    # int is considered no good, re-eval.
+    return a + b
+
+
+@app.function
+# Has an external ref currently does not work
+def bad_divide_curry(x):
+    # Filler line
+    # To push the error
+    return divide(0, x)
+
+
+@app.cell
+def _():
+    # Should be be a regular cell
+    print(addition(21, 56))
+    print(multiply(21, 56))
+    print(self_ref_fib(10))
+    return
+
+
+@app.cell
+def _():
+    a = bad_divide_curry(1)
+    return
+
+
+if __name__ == "__main__":
+    app.run()

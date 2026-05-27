@@ -1,0 +1,92 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+import copy
+from typing import cast
+
+from signalpilot import _loggers
+from signalpilot._config.config import CacheConfig, StoreKey
+from signalpilot._entrypoints.registry import EntryPointRegistry
+from signalpilot._save.stores.file import FileStore
+from signalpilot._save.stores.redis import RedisStore
+from signalpilot._save.stores.rest import RestStore
+from signalpilot._save.stores.store import Store, StoreType
+from signalpilot._save.stores.tiered import TieredStore
+
+LOGGER = _loggers.sp_logger()
+
+
+CACHE_STORES: dict[StoreKey, StoreType] = {
+    "file": FileStore,
+    "redis": RedisStore,
+    "rest": RestStore,
+    "tiered": TieredStore,
+}
+DEFAULT_STORE_KEY: StoreKey = "file"
+DEFAULT_STORE: StoreType = CACHE_STORES[DEFAULT_STORE_KEY]
+
+_STORE_REGISTRY = EntryPointRegistry[StoreType](
+    "sp.cache.store",
+)
+
+
+def get_store(current_path: str | None = None) -> Store:
+    from signalpilot._config.manager import get_default_config_manager
+
+    cache_config: CacheConfig | None = (
+        get_default_config_manager(current_path=current_path)
+        .get_config()
+        .get("experimental", {})
+        .get("cache", None)
+    )
+
+    return _get_store_from_config(cache_config)
+
+
+def _get_store_from_config(
+    config: CacheConfig | None,
+    registry: EntryPointRegistry[StoreType] = _STORE_REGISTRY,
+) -> Store:
+    if config is None:
+        return DEFAULT_STORE()
+
+    cache_stores = copy.copy(cast(dict[str, StoreType], CACHE_STORES))
+    cache_stores.update(
+        {name: registry.get(name) for name in registry.names()}
+    )
+
+    if isinstance(config, list):
+        sub_stores = [
+            _get_store_from_config(item) for item in config if item is not None
+        ]
+        if len(sub_stores) == 0:
+            return DEFAULT_STORE()
+        if len(sub_stores) == 1:
+            return sub_stores[0]
+        return TieredStore(sub_stores)
+    else:
+        store_type = cast(StoreKey, config.get("store", DEFAULT_STORE_KEY))
+        if store_type not in cache_stores:
+            LOGGER.error(f"Invalid store type: {store_type}")
+            store_type = DEFAULT_STORE_KEY
+
+        try:
+            store_args = config.get("args", {})
+            return cache_stores[store_type](**store_args)
+        except Exception as e:
+            LOGGER.error(f"Error creating store: {e}")
+            return DEFAULT_STORE()
+
+
+__all__ = [
+    "CACHE_STORES",
+    "DEFAULT_STORE",
+    "FileStore",
+    "RedisStore",
+    "RestStore",
+    "Store",
+    "StoreKey",
+    "StoreType",
+    "TieredStore",
+    "get_store",
+]

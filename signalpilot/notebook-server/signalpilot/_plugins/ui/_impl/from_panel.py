@@ -1,0 +1,382 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+import base64
+import sys
+from dataclasses import dataclass
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    TypeVar,
+    cast,
+)
+
+from signalpilot import _loggers
+from signalpilot._output.rich_help import mddoc
+from signalpilot._plugins.ui._core.ui_element import InitializationArgs, UIElement
+from signalpilot._runtime.functions import Function
+from signalpilot._runtime.virtual_file.virtual_file import VirtualFile
+
+if TYPE_CHECKING:
+    from panel.viewable import Viewable
+
+LOGGER = _loggers.sp_logger()
+
+comm_class: type[Any] | None = None
+loaded_extension: int = 0
+loaded_extensions: list[str] = []
+
+T = TypeVar("T", bound=dict[str, Any])
+
+
+@dataclass
+class SendToWidgetArgs:
+    message: Any
+    buffers: list[Any] | None = None
+
+
+# Singleton, we only create one instance of this class
+def _get_comm_class() -> type[Any]:
+    global comm_class
+    if comm_class:
+        return comm_class
+
+    from pyviz_comms import Comm  # type: ignore
+
+    from signalpilot._messaging.notification import (
+        UIElementMessageNotification,
+    )
+    from signalpilot._messaging.notification_utils import (
+        broadcast_notification,
+    )
+    from signalpilot._plugins.ui._impl.comm import _ensure_bytes
+    from signalpilot._types.ids import UIElementId
+
+    class SpPanelComm(Comm):  # type: ignore
+        def __init__(self, *args: Any, **kwargs: Any):
+            super().__init__(*args, **kwargs)
+            self._ui_element_id: str | None = None
+            # Panel's push() checks `comm._comm` before sending
+            # document updates to the frontend. Without a truthy
+            # value, backend changes (e.g. DynamicMap overlays) are
+            # silently dropped. Setting a sentinel makes push() call
+            # send(comm, msg) which routes through our send() override.
+            self._comm = True  # type: ignore[assignment]
+            if self._on_open:
+                self._on_open({})
+
+        @classmethod
+        def decode(cls, msg: SendToWidgetArgs) -> dict[str, Any]:
+            buffers: dict[int, Any] = {
+                i: memoryview(base64.b64decode(v))
+                for i, v in enumerate(msg.buffers or [])
+            }
+            return dict(msg.message, _buffers=buffers)
+
+        def send(
+            self,
+            data: Any = None,
+            metadata: Any = None,
+            buffers: Any = None,
+        ) -> None:
+            del metadata
+            if self._ui_element_id is None:
+                return
+            raw_buffers = buffers or []
+            broadcast_notification(
+                UIElementMessageNotification(
+                    ui_element=UIElementId(self._ui_element_id),
+                    message={"content": data},
+                    buffers=[_ensure_bytes(b) for b in raw_buffers],
+                )
+            )
+
+    comm_class = SpPanelComm
+    return comm_class
+
+
+def render_extension(load_timeout: int = 500, loaded: bool = False) -> str:
+    """
+    Render Panel extension JavaScript.
+
+    Args:
+        load_timeout: Timeout for loading resources (in milliseconds)
+        loaded: Whether the extension has been loaded before
+
+    Returns:
+        JavaScript code for Panel extension
+    """
+    # See panel.io.notebook.py
+    from panel.config import panel_extension
+
+    new_exts: list[str] = [
+        ext
+        for ext in panel_extension._loaded_extensions
+        if ext not in loaded_extensions
+    ]
+    if loaded and not new_exts:
+        return ""
+
+    from bokeh.io.notebook import curstate  # type: ignore
+    from bokeh.resources import CDN, INLINE
+    from panel.config import config
+    from panel.io.notebook import (  # type: ignore
+        Resources,
+        _autoload_js,
+        bundle_resources,
+        require_components,
+        state,
+    )
+    from panel.io.resources import set_resource_mode  # type: ignore
+
+    curstate().output_notebook()
+
+    resources = INLINE if config.inline else CDN
+    nb_endpoint = not state._is_pyodide
+    with set_resource_mode(resources.mode):
+        resources = Resources.from_bokeh(resources, notebook=nb_endpoint)  # type: ignore[no-untyped-call]
+        bundle = bundle_resources(  # type: ignore[no-untyped-call]
+            None,
+            resources,
+            notebook=nb_endpoint,
+            reloading=loaded,
+            enable_mathjax="auto",
+        )
+        configs, requirements, exports, skip_imports = require_components()  # type: ignore[no-untyped-call]
+        ipywidget = "ipywidgets_bokeh" in sys.modules
+        bokeh_js = _autoload_js(  # type: ignore[no-untyped-call]
+            bundle=bundle,
+            configs=configs,
+            requirements=requirements,
+            exports=exports,
+            skip_imports=skip_imports,
+            ipywidget=ipywidget,
+            reloading=loaded,
+            load_timeout=load_timeout,
+        )
+    loaded_extensions.extend(new_exts)
+    return bokeh_js  # type: ignore[no-any-return]
+
+
+def render_component(
+    obj: Viewable,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """
+    Render a Panel component.
+
+    Args:
+        obj: Panel Viewable object
+
+    Returns:
+        Tuple containing reference ID, docs JSON, and render JSON
+    """
+    from bokeh.document import Document
+    from bokeh.embed.util import standalone_docs_json_and_render_items
+    from panel.io.model import add_to_doc
+
+    doc = Document()
+    comm = _get_comm_class()()
+    root = obj._render_model(doc, comm)
+    ref = root.ref["id"]
+    obj._comms[ref] = (comm, comm)
+    add_to_doc(root, doc, True)
+    (docs_json, [render_item]) = standalone_docs_json_and_render_items(
+        [root], suppress_callback_warning=True
+    )
+    render_json = render_item.to_json()
+    return ref, docs_json, render_json  # type: ignore[return-value]
+
+
+def _extract_holoviews_settings(obj: Any) -> dict[str, Any]:
+    """
+    Extract renderer settings from holoviews objects to pass to Panel.
+
+    This ensures that settings like widget_location configured via hv.output()
+    are respected when rendering holoviews objects through Panel.
+    """
+    try:
+        import holoviews as hv  # type: ignore[import-not-found,import-untyped,unused-ignore]
+
+        # Check if the object is a holoviews object
+        if not isinstance(
+            obj,
+            (
+                hv.core.ViewableElement,
+                hv.core.Layout,
+                hv.HoloMap,
+                hv.DynamicMap,
+                hv.core.spaces.HoloMap,
+                hv.core.ndmapping.UniformNdMapping,
+                hv.core.ndmapping.NdMapping,
+            ),
+        ):
+            return {}
+
+        # Get the current backend
+        # Try to determine which backend is active
+        backend = None
+        if hasattr(hv.Store, "current_backend"):
+            backend = hv.Store.current_backend
+        elif hasattr(hv, "extension") and hasattr(
+            hv.extension, "_loaded_backends"
+        ):
+            # Get the first loaded backend
+            loaded_backends = list(hv.extension._loaded_backends.keys())
+            if loaded_backends:
+                backend = loaded_backends[0]
+
+        if not backend:
+            return {}
+
+        # Get the renderer for the active backend
+        try:
+            renderer = hv.renderer(backend)
+        except Exception:
+            return {}
+
+        # Extract relevant settings that Panel's HoloViews pane accepts
+        panel_kwargs: dict[str, Any] = {}
+
+        # widget_location is a common setting that affects widget placement
+        if (
+            hasattr(renderer, "widget_location")
+            and renderer.widget_location is not None
+        ):
+            panel_kwargs["widget_location"] = renderer.widget_location
+
+        # center is another setting that can be configured
+        if hasattr(renderer, "center") and renderer.center is not None:
+            panel_kwargs["center"] = renderer.center
+
+        return panel_kwargs
+
+    except ImportError:
+        # holoviews is not installed
+        return {}
+    except Exception as e:
+        # Log the error but don't fail - just don't apply settings
+        LOGGER.debug(f"Failed to extract holoviews settings: {e}")
+        return {}
+
+
+@mddoc
+class panel(UIElement[T, T]):
+    """Create a UIElement from a Panel component.
+
+    This proxies all the widget's attributes and methods, allowing seamless
+    integration of Panel components with SignalPilot's UI system.
+
+    Examples:
+        ```python
+        import signalpilot
+        import panel as pn
+
+        slider = pn.widgets.IntSlider(start=0, end=10, value=5)
+        rx_stars = sp.ui.panel(slider.rx() * "*")
+
+        # In another cell, access its value
+        # This works for all widgets
+        slider.value
+        ```
+
+    Attributes:
+        obj (Viewable): The widget being wrapped.
+
+    Args:
+        obj (Viewable): The widget to wrap.
+    """
+
+    def __init__(self, obj: Any):
+        from panel.models.comm_manager import CommManager as PanelCommManager
+        from panel.pane import panel as panel_func
+
+        # Extract holoviews renderer settings if the object is a holoviews object
+        panel_kwargs = _extract_holoviews_settings(obj)
+
+        self.obj: Viewable = panel_func(obj, **panel_kwargs)  # type: ignore[assignment]
+        # This gets set to True in super().__init__()
+        self._initialized = False
+
+        ref, docs_json, render_json = render_component(self.obj)
+        self._ref = ref
+        self._manager = PanelCommManager(plot_id=ref)  # type: ignore[no-untyped-call]
+
+        global loaded_extension
+        extension = render_extension(loaded=loaded_extension == id(self))
+        if loaded_extension == 0:
+            loaded_extension = id(self)
+
+        # Serve the extension script as a virtual file rather than passing
+        # the raw JavaScript through the DOM. The frontend refuses to load
+        # scripts that don't come from `./@file/...`, which prevents a
+        # maliciously crafted <sp-panel> element (embedded via raw HTML
+        # in a markdown cell) from executing attacker-controlled JavaScript
+        # at same origin before any cell has run.
+        extension_url: str | None = None
+        if extension:
+            extension_vfile = VirtualFile.create_and_register(
+                extension.encode("utf-8"), "js"
+            )
+            extension_url = extension_vfile.url
+
+        super().__init__(
+            component_name="sp-panel",
+            initial_value=cast(T, {}),
+            label="",
+            args={
+                "extension-url": extension_url,
+                "render_json": render_json,
+                "docs_json": docs_json,
+            },
+            on_change=None,
+            functions=(
+                Function(
+                    name="send_to_widget",
+                    arg_cls=SendToWidgetArgs,
+                    function=self._handle_msg,
+                ),
+            ),
+        )
+
+    def _handle_msg(self, msg: SendToWidgetArgs) -> None:
+        ref = self._ref
+        comm = self.obj._comms[ref][0]  # type: ignore[attr-defined]
+        decoded = comm.decode(msg)
+        try:
+            self.obj._on_msg(ref, self._manager, decoded)  # type: ignore[attr-defined]
+        except Exception as e:
+            # Deserialization or buffer errors from echo/stale patches
+            LOGGER.debug("Panel _on_msg error (likely harmless echo): %s", e)
+            return
+        comm.send(data={"type": "ACK"})
+
+    def _initialize(
+        self,
+        initialization_args: InitializationArgs[T, T],
+    ) -> None:
+        super()._initialize(initialization_args)
+        for comm, _ in self.obj._comms.values():  # type: ignore[attr-defined]
+            comm._ui_element_id = self._id
+
+    def _convert_value(self, value: T) -> T:
+        return value
+
+    # After the panel component has been initialized
+    # forward all setattr to the component
+    def __setattr__(self, name: str, value: Any) -> None:
+        if self._initialized:
+            # If the widget has the attribute, set it
+            if hasattr(self.obj, name):
+                return setattr(self.obj, name, value)
+            return super().__setattr__(name, value)
+        return super().__setattr__(name, value)
+
+    # After the panel component has been initialized
+    # forward all getattr to the component
+    def __getattr__(self, name: str) -> Any:
+        if name in ("widget", "_initialized"):
+            try:
+                return self.__getattribute__(name)
+            except AttributeError:
+                return None
+        return getattr(self.obj, name)

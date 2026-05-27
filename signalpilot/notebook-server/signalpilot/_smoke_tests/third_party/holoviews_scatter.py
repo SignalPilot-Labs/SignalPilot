@@ -1,0 +1,60 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "bokeh==3.6.2",
+#     "hvplot==0.11.2",
+#     "sp",
+#     "panel==1.5.5",
+# ]
+# ///
+
+import signalpilot
+
+__generated_with = "0.15.5"
+app = sp.App(width="medium")
+
+
+@app.cell
+def _():
+    import hvplot.pandas
+    import panel
+
+    from bokeh.sampledata.iris import flowers as df
+
+    df.sample(n=5)
+
+    df.hvplot.scatter(
+        x="sepal_length",
+        y="sepal_width",
+        by="species",
+        legend="top",
+        height=400,
+        width=400,
+    )
+    return
+
+
+@app.cell
+def _():
+    import signalpilot
+    return (sp,)
+
+
+@app.cell
+def _(sp):
+    sp.ui.panel({1: 2})
+    return
+
+
+@app.cell
+def _(sp):
+    import panel as pn
+
+    slider = pn.widgets.IntSlider(start=0, end=10, value=5)
+    rx_stars = sp.ui.panel(slider.rx() * "*")
+    rx_stars
+    return
+
+
+if __name__ == "__main__":
+    app.run()

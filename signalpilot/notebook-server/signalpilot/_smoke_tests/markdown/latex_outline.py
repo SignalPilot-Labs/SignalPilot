@@ -1,0 +1,75 @@
+import signalpilot
+
+__generated_with = "0.20.2"
+app = sp.App()
+
+
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md(r"""
+    # Introduction
+
+    This notebook tests that LaTeX renders correctly in the outline panel.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md(r"""
+    ## The equation $E = mc^2$
+
+    Einstein's famous mass-energy equivalence.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md(r"""
+    ## Inline math: $\alpha + \beta = \gamma$
+
+    Greek letters in a heading.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md(r"""
+    ## Display math
+
+    $$\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}$$
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md(r"""
+    ## Mixed: text and $\sum_{i=1}^{n} x_i$
+
+    A heading with both plain text and a summation.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md(r"""
+    ## Plain heading (no LaTeX)
+
+    This heading has no math for comparison.
+    """)
+    return
+
+
+@app.cell
+def _():
+    import signalpilot
+
+    return (sp,)
+
+
+if __name__ == "__main__":
+    app.run()

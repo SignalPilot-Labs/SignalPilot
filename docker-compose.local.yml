@@ -1,0 +1,58 @@
+# SignalPilot — Local Mode (no K8s pods)
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#
+# Replaces K3s pod orchestration with a single notebook-server container.
+# Faster startup, simpler debugging, no K8s overhead.
+
+services:
+  # ─── Notebook Server (replaces K8s pods) ─────────────────────────
+  notebook:
+    build:
+      context: ./signalpilot/notebook-server
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:2718:2718"
+    environment:
+      SP_LOG_DIR: /tmp/sp-logs
+    volumes:
+      - signalpilot-workspace:/workspace
+      - signalpilot-shared:/shared:ro
+    depends_on:
+      - gateway
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:2718/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ─── Override gateway to use local notebook instead of K8s ───────
+  gateway:
+    # Switch from K3s network to default compose network
+    network_mode: ""
+    ports:
+      - "3300:3300"
+    environment:
+      SP_NOTEBOOK_UPSTREAM_MODE: direct
+      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
+      SP_K8S_HOST: ""
+      KUBECONFIG: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      notebook:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+
+  # ─── Disable K3s in local mode ──────────────────────────────────
+  k3s:
+    profiles:
+      - k8s-only
+
+volumes:
+  signalpilot-workspace:

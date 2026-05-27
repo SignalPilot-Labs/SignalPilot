@@ -1,0 +1,185 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "sp",
+# ]
+# ///
+# Copyright 2026 SignalPilot. All rights reserved.
+
+import signalpilot
+
+__generated_with = "0.15.5"
+app = sp.App()
+
+
+@app.cell
+def _(sp):
+    sp.md("""# Scale""")
+    return
+
+
+@app.cell
+def _(sp):
+    s = sp.ui.slider(1, 10)
+    s
+    return (s,)
+
+
+@app.cell
+def _(sp, s):
+    sliders_as_md = sp.md(f"""{s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} {s} """)
+
+    sliders_as_tree = (s,) * 10 + (sp.ui.slider(1, 10),) + (s,) * 10
+
+
+    sliders_as_nested_tree = sp.as_html(
+        [
+            sp.as_html([s, s.value]),
+            sp.as_html([s, s.value]),
+            sp.as_html(
+                [
+                    sp.as_html([s, s.value]),
+                    sp.as_html([s, s.value]),
+                    sp.as_html(
+                        [
+                            sp.as_html([s, s.value]),
+                            sp.as_html([s, s.value]),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+
+    sp.tabs({
+        "As MD": sliders_as_md,
+        "As Flat Tree": sliders_as_tree,
+        "As Nested Tree": sliders_as_nested_tree,
+    })
+    return
+
+
+@app.cell
+def _(sp):
+    b = sp.ui.button()
+
+    button_as_md = sp.md(
+        f"""{b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b} {b}"""
+    )
+
+    button_as_tree = (b,) * 10
+
+    sp.tabs(
+        {
+            "As MD": button_as_md,
+            "As Tree": button_as_tree,
+        }
+    )
+    return
+
+
+@app.cell
+def _(s):
+    [s, s.value]
+    return
+
+
+@app.cell
+def _(sp):
+    t = sp.ui.text()
+
+    distinct = sp.ui.array(
+        [
+            sp.ui.text(),
+            sp.ui.text(),
+            sp.ui.array(
+                [
+                    sp.ui.text(),
+                    sp.ui.text(),
+                    sp.ui.array(
+                        [
+                            sp.ui.text(),
+                            sp.ui.text(),
+                            sp.ui.array([sp.ui.text(), sp.ui.text()]),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+
+    same = sp.ui.array(
+        [
+            t,
+            t,
+            sp.ui.array(
+                [
+                    t,
+                    t,
+                    sp.ui.array(
+                        [
+                            t,
+                            t,
+                            sp.ui.array([t, t]),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+
+    sp.hstack([same, distinct])
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
+def _(sp):
+    sp.md(
+        """
+        ---
+
+        # h1 Heading
+        ## h2 Heading
+        ### h3 Heading
+        #### h4 Heading
+        ##### h5 Heading
+        ###### h6 Heading
+
+
+        ## Emphasis
+
+        **This is bold text**
+
+        __This is bold text__
+
+        *This is italic text*
+
+        _This is italic text_
+
+        ~~Strikethrough~~
+
+
+        ## Blockquotes
+
+
+        > Blockquotes can also be nested...
+        >> ...by using additional greater-than signs right next to each other...
+        > > > ...or with spaces between arrows.
+        """
+    )
+    return
+
+
+@app.cell
+def _():
+    import signalpilot
+    return (sp,)
+
+
+if __name__ == "__main__":
+    app.run()

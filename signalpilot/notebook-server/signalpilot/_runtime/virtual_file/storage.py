@@ -1,0 +1,319 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+import sys
+from typing import TYPE_CHECKING, Literal, Protocol
+
+from signalpilot._utils.platform import is_pyodide
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
+DEFAULT_CHUNK_SIZE = 256 * 1024  # 256KB
+
+VirtualFileStorageType = Literal["in_memory", "shared_memory"]
+
+if not is_pyodide():
+    # the shared_memory module is not supported in the Pyodide distribution
+    from multiprocessing import shared_memory
+
+
+class VirtualFileStorage(Protocol):
+    """Protocol for virtual file storage backends."""
+
+    def store(self, key: str, buffer: bytes) -> None:
+        """Store buffer data by key."""
+        ...
+
+    def read(self, key: str, byte_length: int) -> bytes:
+        """Read buffer data by key.
+
+        Raises:
+            KeyError: If key not found
+        """
+        ...
+
+    def read_chunked(
+        self,
+        key: str,
+        byte_length: int,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        start: int = 0,
+    ) -> Iterator[bytes]:
+        """Read buffer data by key in chunks.
+
+        Yields chunks of bytes, avoiding allocating the full buffer at once.
+        Useful for streaming large files over HTTP.
+
+        Args:
+            key: storage key
+            byte_length: total number of bytes to yield (after applying ``start``)
+            chunk_size: chunk size in bytes
+            start: offset in bytes to begin reading from (default 0)
+
+        Raises:
+            KeyError: If key not found
+        """
+        ...
+
+    def remove(self, key: str) -> None:
+        """Remove stored data by key."""
+        ...
+
+    def shutdown(self, keys: Iterable[str] | None = None) -> None:
+        """Clean up storage resources.
+
+        Args:
+            keys: If provided, only remove these keys. If None, clear all.
+                  Implementations may ignore this if storage is not shared.
+        """
+        ...
+
+    def has(self, key: str) -> bool:
+        """Check if key exists in storage."""
+        ...
+
+    @property
+    def stale(self) -> bool:
+        """Whether storage has been fully shut down and is no longer usable."""
+        ...
+
+
+class SharedMemoryStorage(VirtualFileStorage):
+    """Storage backend using multiprocessing shared memory.
+
+    Used in `edit` mode when kernel runs in a separate process.
+    """
+
+    def __init__(self) -> None:
+        self._storage: dict[str, shared_memory.SharedMemory] = {}
+        self._shutting_down = False
+        self._stale = False
+
+    @property
+    def stale(self) -> bool:
+        return self._stale
+
+    def store(self, key: str, buffer: bytes) -> None:
+        if key in self._storage:
+            return  # Already stored
+
+        # Immediately writes the contents of the file to an in-memory
+        # buffer; not lazy.
+        #
+        # To retrieve the buffer from another process, use:
+        #
+        # ```
+        # try:
+        #   shm = shared_memory.SharedMemory(name=key)
+        #   buffer_contents = bytes(shm.buf)
+        # except FileNotFoundError:
+        #   # virtual file was removed
+        # ```
+        shm = shared_memory.SharedMemory(
+            name=key,
+            create=True,
+            size=len(buffer),
+        )
+        shm.buf[: len(buffer)] = buffer
+        # we can safely close this shm, since we don't need to access its
+        # buffer; we do need to keep it around so we can unlink it later
+        if sys.platform != "win32":
+            # don't call close() on Windows, due to a bug in the Windows
+            # Python implementation. On Windows, close() actually unlinks
+            # (destroys) the shared_memory:
+            # https://stackoverflow.com/questions/63713241/segmentation-fault-using-python-shared-memory/63717188#63717188
+            shm.close()
+        # We have to keep a reference to the shared memory to prevent it from
+        # being destroyed on Windows
+        self._storage[key] = shm
+
+    def read(self, key: str, byte_length: int) -> bytes:
+        if is_pyodide():
+            raise RuntimeError(
+                "Shared memory is not supported on this platform"
+            )
+        # Read from shared memory by name (works cross-process)
+        shm = None
+        try:
+            shm = shared_memory.SharedMemory(name=key)
+            # Slice the memoryview first, then copy — avoids allocating
+            # a bytes object for the entire buffer when only a prefix
+            # is needed.
+            buffer_contents = bytes(shm.buf[:byte_length])
+        except FileNotFoundError as err:
+            raise KeyError(f"Virtual file not found: {key}") from err
+        finally:
+            if shm is not None:
+                shm.close()
+        return buffer_contents
+
+    def read_chunked(
+        self,
+        key: str,
+        byte_length: int,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        start: int = 0,
+    ) -> Iterator[bytes]:
+        if is_pyodide():
+            raise RuntimeError(
+                "Shared memory is not supported on this platform"
+            )
+        shm = None
+        view = None
+        try:
+            shm = shared_memory.SharedMemory(name=key)
+            view = shm.buf[start : start + byte_length]
+            for i in range(0, byte_length, chunk_size):
+                yield bytes(view[i : i + chunk_size])
+        except FileNotFoundError as err:
+            raise KeyError(f"Virtual file not found: {key}") from err
+        finally:
+            # Release the memoryview before closing the shared memory,
+            # otherwise close() fails with "cannot close exported pointers".
+            if view is not None:
+                view.release()
+            if shm is not None:
+                shm.close()
+
+    def remove(self, key: str) -> None:
+        if key in self._storage:
+            if sys.platform == "win32":
+                self._storage[key].close()
+            self._storage[key].unlink()
+            del self._storage[key]
+
+    def shutdown(self, keys: Iterable[str] | None = None) -> None:
+        if self._shutting_down:
+            return
+        try:
+            self._shutting_down = True
+            if keys is not None:
+                for key in list(keys):
+                    self.remove(key)
+                return
+
+            for shm in self._storage.values():
+                if sys.platform == "win32":
+                    shm.close()
+                shm.unlink()
+            self._storage.clear()
+        finally:
+            self._shutting_down = False
+            if keys is None:
+                self._stale = True
+
+    def has(self, key: str) -> bool:
+        return key in self._storage
+
+
+class InMemoryStorage(VirtualFileStorage):
+    """Storage backend using simple in-memory dictionary.
+
+    Used in `run` mode when kernel runs in the same process as the server.
+    """
+
+    def __init__(self) -> None:
+        self._storage: dict[str, bytes] = {}
+
+    @property
+    def stale(self) -> bool:
+        return False  # Never stale - can be shared
+
+    def store(self, key: str, buffer: bytes) -> None:
+        self._storage[key] = buffer
+
+    def read(self, key: str, byte_length: int) -> bytes:
+        if key not in self._storage:
+            raise KeyError(f"Virtual file not found: {key}")
+        return self._storage[key][:byte_length]
+
+    def read_chunked(
+        self,
+        key: str,
+        byte_length: int,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        start: int = 0,
+    ) -> Iterator[bytes]:
+        if key not in self._storage:
+            raise KeyError(f"Virtual file not found: {key}")
+        buffer = self._storage[key]
+        end = min(start + byte_length, len(buffer))
+        for i in range(start, end, chunk_size):
+            yield buffer[i : min(i + chunk_size, end)]
+
+    def remove(self, key: str) -> None:
+        if key in self._storage:
+            del self._storage[key]
+
+    def shutdown(self, keys: Iterable[str] | None = None) -> None:
+        if keys is not None:
+            for key in keys:
+                self.remove(key)
+        else:
+            self._storage.clear()
+
+    def has(self, key: str) -> bool:
+        return key in self._storage
+
+
+class VirtualFileStorageManager:
+    """Singleton manager for virtual file storage access."""
+
+    _instance: VirtualFileStorageManager | None = None
+    _storage: VirtualFileStorage | None = None
+
+    def __new__(cls) -> VirtualFileStorageManager:  # noqa: PYI034
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @property
+    def storage(self) -> VirtualFileStorage | None:
+        if self._storage is not None and self._storage.stale:
+            self._storage = None
+        return self._storage
+
+    @storage.setter
+    def storage(self, value: VirtualFileStorage | None) -> None:
+        self._storage = value
+
+    def read(self, filename: str, byte_length: int) -> bytes:
+        """Read from storage, with cross-process fallback for EDIT mode server.
+
+        Raises:
+            KeyError: If file not found
+            RuntimeError: When ``SharedMemoryStorage`` is used on the Pyodide platform.
+        """
+        storage = self.storage
+        if storage is None:
+            # Never initialized so in a separate thread from the kernel.
+            # Use SharedMemoryStorage to read by name across processes
+            return SharedMemoryStorage().read(filename, byte_length)
+        return storage.read(filename, byte_length)
+
+    def read_chunked(
+        self,
+        filename: str,
+        byte_length: int,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        start: int = 0,
+    ) -> Iterator[bytes]:
+        """Read from storage in chunks, with cross-process fallback.
+
+        Yields chunks of bytes for streaming. Avoids holding the entire
+        file in memory as a single bytes object.
+
+        Raises:
+            KeyError: If file not found
+            RuntimeError: When ``SharedMemoryStorage`` is used on the Pyodide platform.
+        """
+        storage = self.storage
+        if storage is None:
+            yield from SharedMemoryStorage().read_chunked(
+                filename, byte_length, chunk_size, start
+            )
+        else:
+            yield from storage.read_chunked(
+                filename, byte_length, chunk_size, start
+            )

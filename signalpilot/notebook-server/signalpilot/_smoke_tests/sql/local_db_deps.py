@@ -1,0 +1,44 @@
+import signalpilot
+
+__generated_with = "0.15.5"
+app = sp.App(width="medium")
+
+
+@app.cell
+def _():
+    import signalpilot
+    return (sp,)
+
+
+@app.cell
+def _(sp):
+    _df = sp.sql(
+        f"""
+        ATTACH 'my_db.db' as my_db;
+        """
+    )
+    return
+
+
+@app.cell
+def _(sp):
+    _df = sp.sql(
+        f"""
+        CREATE OR REPLACE TABLE my_db.my_table as (SELECT 42);
+        """
+    )
+    return
+
+
+@app.cell
+def _(sp):
+    _df = sp.sql(
+        f"""
+        SELECT * FROM my_db.main.my_table LIMIT 100
+        """
+    )
+    return
+
+
+if __name__ == "__main__":
+    app.run()

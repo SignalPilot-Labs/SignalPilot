@@ -1,0 +1,28 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+
+import signalpilot
+
+__generated_with = "0.15.5"
+app = sp.App()
+
+
+@app.cell
+def _():
+    def percentile(xs, p):
+        "Something with a bug"
+        xs = sorted(xs)
+        idx = round(p / 100 * len(xs))  # here there be bugs
+        return xs[idx]
+    # percentile([1, 2, 3], 100)
+    return
+
+
+@app.cell
+def _():
+    import pdb
+    pdb.set_trace()
+    return
+
+
+if __name__ == "__main__":
+    app.run()

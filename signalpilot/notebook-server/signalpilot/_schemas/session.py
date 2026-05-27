@@ -1,0 +1,101 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+"""This file contains the schema for the notebook session.
+
+It may be externally used and must be kept backwards compatible.
+
+* We generate the OpenAPI schema using a sp notebook: `python scripts/generate_schemas.py`
+* We generate frontend types using `make fe-codegen`
+* We check for backwards compatibility using a GitHub action: `.github/workflows/test_schemas.yaml`
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from signalpilot._messaging.mimetypes import KnownMimeType
+from signalpilot._schemas.common import BaseDict
+
+
+# Metadata types
+class TimeMetadata(BaseDict):
+    started: str | None
+    completed: str | None
+    duration: float | None
+
+
+# Output types
+#
+# NB: No two outputs can have the same `type` field.
+class StreamOutput(BaseDict):
+    type: Literal["stream"]
+    name: Literal["stdout", "stderr"]
+    text: str
+    mimetype: KnownMimeType | None
+
+
+class StreamMediaOutput(BaseDict):
+    type: Literal["streamMedia"]
+    name: Literal["media"]
+    data: str
+    mimetype: KnownMimeType
+
+
+class ErrorOutput(BaseDict):
+    type: Literal["error"]
+    ename: str
+    evalue: str
+    traceback: list[str]
+
+
+class DataOutput(BaseDict):
+    type: Literal["data"]
+    data: dict[str, Any]  # MIME-type bundles
+
+
+# Union of all possible output types
+# Dict[str, Any],  # For future output types, forwards-compatible
+OutputType = ErrorOutput | DataOutput
+
+ConsoleType = StreamOutput | StreamMediaOutput
+
+
+class Cell(BaseDict):
+    """Code cell specific structure"""
+
+    id: str
+    code_hash: str | None
+    outputs: list[OutputType]
+    console: list[ConsoleType]
+
+    # We don't need to store code or cell config
+    # since that exists in the notebook.py itself
+
+
+# Notebook session metadata
+class NotebookSessionMetadata(BaseDict):
+    """Metadata about the notebook"""
+
+    signalpilot_version: str | None
+    script_metadata_hash: str | None
+
+    # We don't need to store AppConfig
+    # since that exists in the notebook.py itself
+
+
+# Main notebook structure
+class NotebookSessionV1(BaseDict):
+    """Main notebook structure"""
+
+    # The notebook format version
+    version: str
+    # Metadata about the notebook
+    metadata: NotebookSessionMetadata
+    # The cells in the notebook
+    cells: list[Cell]
+
+    # In future, we may want to add
+    # - variables
+    # - datasets
+
+
+VERSION = "1"

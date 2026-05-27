@@ -1,0 +1,142 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+from typing import Any, cast
+
+from signalpilot import _loggers
+from signalpilot._config.config import DatasourcesConfig
+from signalpilot._config.manager import get_default_config_manager
+from signalpilot._data.models import Database, DataSourceConnection
+from signalpilot._runtime.context.types import (
+    ContextNotInitializedError,
+    get_context,
+)
+from signalpilot._sql.engines.adbc import AdbcDBAPIEngine
+from signalpilot._sql.engines.clickhouse import (
+    ClickhouseEmbedded,
+    ClickhouseServer,
+)
+from signalpilot._sql.engines.dbapi import DBAPIEngine
+from signalpilot._sql.engines.duckdb import INTERNAL_DUCKDB_ENGINE, DuckDBEngine
+from signalpilot._sql.engines.ibis import IbisEngine
+from signalpilot._sql.engines.pyiceberg import PyIcebergEngine
+from signalpilot._sql.engines.redshift import RedshiftEngine
+from signalpilot._sql.engines.sqlalchemy import SQLAlchemyEngine
+from signalpilot._sql.engines.types import (
+    BaseEngine,
+    EngineCatalog,
+)
+from signalpilot._types.ids import VariableName
+
+LOGGER = _loggers.sp_logger()
+
+# TODO: this is O(n) and can be O(1) using similar logic to the
+# formatters, but order does matter here
+SUPPORTED_ENGINES: list[type[BaseEngine[Any]]] = [
+    SQLAlchemyEngine,
+    IbisEngine,
+    DuckDBEngine,
+    ClickhouseEmbedded,
+    ClickhouseServer,
+    PyIcebergEngine,
+    RedshiftEngine,
+    AdbcDBAPIEngine,
+    DBAPIEngine,
+]
+
+
+def get_engines_from_variables(
+    variables: list[tuple[VariableName, object]],
+) -> list[tuple[VariableName, BaseEngine[Any]]]:
+    engines: list[tuple[VariableName, BaseEngine[Any]]] = []
+
+    for variable_name, value in variables:
+        for sql_engine in SUPPORTED_ENGINES:
+            if sql_engine.is_compatible(value):
+                engines.append(
+                    (
+                        variable_name,
+                        sql_engine(
+                            cast(Any, value), engine_name=variable_name
+                        ),
+                    )
+                )
+                break
+
+    return engines
+
+
+def engine_to_data_source_connection(
+    variable_name: VariableName, engine: BaseEngine[Any]
+) -> DataSourceConnection:
+    databases: list[Database] = []
+    default_database: str | None = None
+    default_schema: str | None = None
+
+    if not isinstance(engine, EngineCatalog):
+        return DataSourceConnection(
+            source=engine.source,
+            dialect=engine.dialect,
+            name=variable_name,
+            display_name=variable_name,
+            databases=[],
+        )
+
+    try:
+        default_database = engine.get_default_database()
+        default_schema = engine.get_default_schema()
+        inference_config = engine.inference_config
+
+        config = get_datasources_config()
+        databases = engine.get_databases(
+            include_schemas=config.get(
+                "auto_discover_schemas", inference_config.auto_discover_schemas
+            ),
+            include_tables=config.get(
+                "auto_discover_tables", inference_config.auto_discover_tables
+            ),
+            include_table_details=config.get(
+                "auto_discover_columns", inference_config.auto_discover_columns
+            ),
+        )
+    except Exception as e:
+        LOGGER.warning(f"Failed to introspect datasource: {e}")
+
+    display_name = (
+        f"{engine.dialect} ({variable_name})"
+        if variable_name != INTERNAL_DUCKDB_ENGINE
+        else f"{engine.dialect} (In-Memory)"
+    )
+
+    return DataSourceConnection(
+        source=engine.source,
+        dialect=engine.dialect,
+        name=variable_name,
+        display_name=display_name,
+        databases=databases,
+        default_database=default_database,
+        default_schema=default_schema,
+    )
+
+
+def get_datasources_config() -> DatasourcesConfig:
+    try:
+        return get_context().signalpilot_config.get("datasources", {})
+    except ContextNotInitializedError:
+        pass
+    except Exception as e:
+        LOGGER.warning(
+            f"Failed to get datasources config from context: {e}. Falling back to default config."
+        )
+
+    try:
+        return (
+            get_default_config_manager(current_path=None)
+            .get_config()
+            .get("datasources", {})
+        )
+    except Exception as e:
+        LOGGER.warning(
+            f"Failed to get datasources config from default config: {e}. Returning empty config."
+        )
+        return {}

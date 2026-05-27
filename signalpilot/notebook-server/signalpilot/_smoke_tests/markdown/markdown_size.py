@@ -1,0 +1,114 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+
+import signalpilot
+
+__generated_with = "0.15.5"
+app = sp.App(width="medium")
+
+
+@app.cell
+def _():
+    from vega_datasets import data
+
+    cars = data.cars()
+    return (cars,)
+
+
+@app.cell
+def _(sp):
+    size = sp.ui.slider(
+        steps=[0, 1, 2, 3],
+        value=1,
+        label="Size",
+    )
+    sizes = ["sm", "base", "lg", "2xl"]
+    return size, sizes
+
+
+@app.cell
+def _(sp, size, sizes):
+    sp.md(f"""{size} **{sizes[size.value]}**""")
+    return
+
+
+@app.cell
+def _(cars, sp):
+    sp.md(
+        f"""
+    # kitchen sink
+
+    ## table
+
+    | col 1 | col 2 | col 3 |
+    | --- | --- | --- |
+    | 1 | 2 | 3 |
+    | 4 | 5 | 6 |
+
+    {sp.as_html(sp.plain(cars))}
+
+
+    ## code
+
+    ```python
+    print("hello world")
+    ```
+
+
+    ## math
+
+    $$
+    a^2 + b^2 = c^2
+    $$
+
+
+    ## image
+
+    ![alt text](https://picsum.photos/200/300)
+
+    ## bullets
+
+    - item 1
+    - item 2
+
+
+    ## ordered list
+
+    1. item 1
+    2. item 2
+
+
+    ## blockquote
+
+    > blockquote
+
+
+    ## link
+
+    [link](https://google.com)
+
+    ## inline code
+
+    `inline code`
+    """,
+    )
+    return
+
+
+@app.cell
+def _():
+    {
+        "string": "hello",
+        "int": 10,
+        "float": 10.5,
+    }
+    return
+
+
+@app.cell
+def _():
+    import signalpilot
+    return (sp,)
+
+
+if __name__ == "__main__":
+    app.run()

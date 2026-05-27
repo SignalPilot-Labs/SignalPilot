@@ -1,0 +1,117 @@
+# Copyright 2026 SignalPilot. All rights reserved.
+from __future__ import annotations
+
+import functools
+from typing import TYPE_CHECKING, Any
+
+from signalpilot._config.config import Theme
+from signalpilot._messaging.mimetypes import KnownMimeType
+from signalpilot._output.builder import h
+from signalpilot._output.formatters.formatter_factory import FormatterFactory
+from signalpilot._output.formatters.utils import src_or_src_doc
+from signalpilot._output.utils import flatten_string
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+class BokehFormatter(FormatterFactory):
+    @staticmethod
+    def package_name() -> str:
+        return "bokeh"
+
+    def register(self) -> Callable[[], None]:
+        import bokeh.io  # type: ignore[import-not-found,import-untyped,unused-ignore]
+        import bokeh.models  # type: ignore[import-not-found,import-untyped,unused-ignore]
+        import bokeh.plotting  # type: ignore[import-not-found,import-untyped,unused-ignore]
+
+        from signalpilot._output import formatting
+        from signalpilot._runtime.output import _output
+
+        old_show = bokeh.plotting.show
+        old_io_show = bokeh.io.show
+        # bokeh always starts with output_notebook() in Jupyter, but this
+        # brings in a dependency on IPython, which we don't need.
+        old_output_notebook = bokeh.plotting.output_notebook
+
+        @functools.wraps(old_show)
+        def show(*args: Any, **kwargs: Any) -> None:
+            # Imperatively display the Bokeh object in the sp output
+            # area.
+            if args:
+                obj = args[0]
+            else:
+                obj = kwargs.get("obj", None)
+            if obj is not None:
+                _output.append(obj)
+
+        @functools.wraps(old_output_notebook)
+        def output_notebook(*args: Any, **kwargs: Any) -> None:
+            # Noop
+            del args
+            del kwargs
+
+        bokeh.plotting.show = show
+        bokeh.plotting.output_notebook = output_notebook
+        bokeh.io.show = show
+
+        def unpatch() -> None:
+            bokeh.plotting.show = old_show
+            bokeh.plotting.output_notebook = old_output_notebook
+            bokeh.io.show = old_io_show
+
+        @formatting.formatter(bokeh.models.Model)
+        @formatting.formatter(bokeh.document.Document)
+        def _show_plot(
+            plot: bokeh.models.Model | bokeh.document.Document,
+        ) -> tuple[KnownMimeType, str]:
+            import bokeh.embed  # type: ignore[import-not-found,import-untyped,unused-ignore]
+            import bokeh.resources  # type: ignore[import-not-found,import-untyped,unused-ignore]
+            from bokeh.io import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
+                curdoc,
+            )
+
+            current_theme = curdoc().theme
+            html_content = bokeh.embed.file_html(
+                plot, bokeh.resources.CDN, theme=current_theme
+            )
+
+            # Try to get the background fill color
+            background_fill_color: str | None = None
+            try:
+                attrs = current_theme._json.get("attrs", {})
+                background_fill_color = attrs.get("BaseColorBar", {}).get(
+                    "background_fill_color"
+                ) or attrs.get("Plot", {}).get("background_fill_color")
+            except Exception:
+                pass
+
+            # Maybe add <style> to the content
+            if background_fill_color is not None:
+                style_to_add = (
+                    "<style>"
+                    f"body{{background-color:{background_fill_color}}}"
+                    "</style>"
+                )
+                # Add above the </head> tag
+                html_content = html_content.replace(
+                    "</head>", style_to_add + "</head>"
+                )
+
+            return (
+                "text/html",
+                flatten_string(
+                    h.iframe(
+                        **src_or_src_doc(html_content),
+                        onload="__resizeIframe(this)",
+                        style="width: 100%",
+                    )
+                ),
+            )
+
+        return unpatch
+
+    def apply_theme(self, theme: Theme) -> None:
+        from bokeh.io import curdoc  # type: ignore
+
+        curdoc().theme = "dark_minimal" if theme == "dark" else None  # type: ignore

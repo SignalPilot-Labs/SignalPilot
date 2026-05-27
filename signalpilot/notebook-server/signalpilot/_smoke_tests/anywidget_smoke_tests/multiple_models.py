@@ -1,0 +1,63 @@
+import signalpilot
+
+__generated_with = "0.19.7"
+app = sp.App(width="medium")
+
+
+@app.cell
+def _():
+    import signalpilot
+    import anywidget
+
+    import ipywidgets
+    import traitlets
+
+
+    class ModelOnlyWidget(ipywidgets.Widget):
+        value = traitlets.Int(42).tag(sync=True)
+
+
+    class Widget(anywidget.AnyWidget):
+        _esm = """
+        async function render({ model, el }) {
+
+            let fooModel = await model.widget_manager.get_model(
+                model.get("foo").slice("IPY_MODEL_".length)
+            )
+            console.log(fooModel)
+
+            let button = document.createElement("button");
+            el.appendChild(button);
+
+            button.innerText = "count is " + fooModel.get("value");
+
+            button.onclick = async () => {
+                fooModel.set("value", fooModel.get("value") + 1);
+                fooModel.save_changes();
+            }
+
+            fooModel.on("change:value", () => {
+                button.innerText = "count is " + fooModel.get("value");
+            });
+
+        }
+        export default { render }
+        """
+        foo = traitlets.Instance(ModelOnlyWidget).tag(
+            sync=True, **ipywidgets.widget_serialization
+        )
+
+
+    m = ModelOnlyWidget()
+    sp.ui.anywidget(Widget(foo=m))
+    return (m,)
+
+
+@app.cell
+def _(m):
+    m.value
+    return
+
+
+if __name__ == "__main__":
+    app.run()

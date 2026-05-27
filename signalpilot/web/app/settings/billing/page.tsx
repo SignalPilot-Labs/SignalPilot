@@ -16,19 +16,19 @@ import {
   Building2,
   Mail,
 } from "lucide-react";
-import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
-import type { PlanInfo, PlanPrice } from "@/lib/backend-client";
-import { useSubscription } from "@/lib/subscription-context";
-import { usePlan } from "@/lib/hooks/use-gateway-data";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { BillingSkeleton } from "@/components/ui/skeleton";
-import { TierBadge } from "@/components/branding/tier-badge";
-import { TierAccent } from "@/components/branding/tier-accent";
+import { useAppAuth } from "~/lib/auth-context";
+import { useBackendClient } from "~/lib/backend-client";
+import type { PlanInfo, PlanPrice } from "~/lib/backend-client";
+import { useSubscription } from "~/lib/subscription-context";
+import { usePlan } from "~/lib/hooks/use-gateway-data";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { BillingSkeleton } from "~/components/ui/skeleton";
+import { TierBadge } from "~/components/branding/tier-badge";
+import { TierAccent } from "~/components/branding/tier-accent";
 
 // ---------------------------------------------------------------------------
 // Helpers

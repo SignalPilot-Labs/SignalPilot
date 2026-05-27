@@ -1,0 +1,107 @@
+import { useAtom, useAtomValue } from "jotai";
+import {
+  contextAwarePanelOpen,
+  contextAwarePanelOwner,
+  contextAwarePanelType,
+  isCellAwareAtom,
+} from "@/components/editor/chrome/panels/context-aware-panel/atoms";
+import type { PanelType } from "@/components/editor/chrome/panels/context-aware-panel/context-aware-panel";
+import { useCellFocusActions, useLastFocusedCellId } from "@/core/cells/focus";
+import type { CellId } from "@/core/cells/ids";
+import { Logger } from "@/utils/Logger";
+
+interface PanelOwnershipResult {
+  isPanelOpen: (panelType: PanelType) => boolean;
+  isAnyPanelOpen: boolean;
+  togglePanel: (panelType?: PanelType) => void;
+  panelType: PanelType | null;
+  setPanelType: (panelType: PanelType) => void;
+}
+
+export function usePanelOwnership(
+  id: string,
+  cellId?: CellId | null,
+): PanelOwnershipResult {
+  let isPanelCellAware = useAtomValue(isCellAwareAtom);
+  const { focusCell } = useCellFocusActions();
+  const lastFocusedCellId = useLastFocusedCellId();
+  const [panelType, setPanelType] = useAtom(contextAwarePanelType);
+  const [panelOwner, setPanelOwner] = useAtom(contextAwarePanelOwner);
+  const [isContextAwarePanelOpen, setContextAwarePanelOpen] = useAtom(
+    contextAwarePanelOpen,
+  );
+  const panelId = getPanelId(id, cellId);
+
+  if (!cellId && isPanelCellAware) {
+    Logger.error("CellId is not found, defaulting to fixed mode");
+    isPanelCellAware = false;
+  }
+
+  const isPanelOpen = (currentPanel: PanelType) =>
+    panelOwner === panelId &&
+    isContextAwarePanelOpen &&
+    currentPanel === panelType;
+
+  const thisCellIsFocused = lastFocusedCellId === cellId;
+  const currentOwnerIsInThisCell =
+    panelOwner && isPanelOwner(panelOwner, cellId);
+
+  // In cell-aware mode, update panel owner when cell is focused
+  // Only set panel owner if no other table in this cell is currently the owner
+  if (
+    isPanelCellAware &&
+    thisCellIsFocused &&
+    panelOwner !== panelId &&
+    !currentOwnerIsInThisCell
+  ) {
+    setPanelOwner(panelId);
+  }
+
+  const isAnyPanelOpen = panelOwner === panelId && isContextAwarePanelOpen;
+
+  function togglePanel(requestedType?: PanelType) {
+    if (isAnyPanelOpen) {
+      setPanelOwner(null);
+      setContextAwarePanelOpen(false);
+    } else {
+      setPanelOwner(panelId);
+      if (isPanelCellAware && cellId) {
+        focusCell({ cellId });
+      }
+      setContextAwarePanelOpen(true);
+      // Only set type if explicitly requested and no previous type exists
+      if (requestedType && !panelType) {
+        setPanelType(requestedType);
+      }
+    }
+  }
+
+  return {
+    isPanelOpen,
+    isAnyPanelOpen,
+    togglePanel,
+    panelType,
+    setPanelType,
+  };
+}
+
+/**
+ * Get the unique ID for the panel based on the cell ID.
+ * If the cell ID is not provided, the panel ID is just the table ID.
+ */
+function getPanelId(id: string, cellId?: CellId | null) {
+  if (cellId) {
+    return `${cellId}-${id}`;
+  }
+  return id;
+}
+
+/**
+ * Check if the panel is owned by the cell.
+ */
+function isPanelOwner(panelId: string, cellId?: CellId | null) {
+  if (cellId) {
+    return panelId.startsWith(cellId);
+  }
+  return false;
+}

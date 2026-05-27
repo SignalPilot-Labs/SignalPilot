@@ -47,7 +47,7 @@ from gateway.mcp.tools.model_verify import (
     compare_join_types,
     validate_model_output,
 )
-from gateway.mcp.tools.projects import get_project, list_projects
+from gateway.mcp.tools.workspace_projects import list_workspace_projects
 from gateway.mcp.tools.query import (
     check_budget,
     debug_cte_query,
@@ -124,8 +124,7 @@ __all__ = [
     "validate_model_output",
     "audit_model_sources",
     "compare_join_types",
-    "list_projects",
-    "get_project",
+    "list_workspace_projects",
     # Internal context helpers
     "_gateway_url",
     "_gw_headers",

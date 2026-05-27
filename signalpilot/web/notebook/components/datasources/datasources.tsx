@@ -1,0 +1,891 @@
+import { spApiUrl } from "@/core/network/api";
+import { CommandList } from "cmdk";
+import { atom, useAtomValue, useSetAtom } from "jotai";
+import { PlusIcon, PlusSquareIcon, XIcon } from "lucide-react";
+import React from "react";
+import { dbDisplayName } from "@/components/databases/display";
+import { EngineVariable } from "@/components/databases/engine-variable";
+import { DatabaseLogo } from "@/components/databases/icon";
+import { RefreshIconButton } from "@/components/editor/file-tree/tree-actions";
+import { CopyClipboardIcon } from "@/components/icons/copy-icon";
+import { Button } from "@/components/ui/button";
+import { Command, CommandInput, CommandItem } from "@/components/ui/command";
+import { Tooltip } from "@/components/ui/tooltip";
+import { maybeAddSpImport } from "@/core/cells/add-missing-import";
+import { cellIdsAtom, useCellActions } from "@/core/cells/cells";
+import { useLastFocusedCellId } from "@/core/cells/focus";
+import { autoInstantiateAtom } from "@/core/config/config";
+import {
+  type DataSourceConnection,
+  dataConnectionsMapAtom,
+  type SQLTableContext,
+  useDataSourceActions,
+} from "@/core/datasets/data-source-connections";
+import {
+  DEFAULT_DUCKDB_DATABASE,
+  DUCKDB_ENGINE,
+  INTERNAL_SQL_ENGINES,
+} from "@/core/datasets/engines";
+import {
+  PreviewSQLSchemaList,
+  PreviewSQLTable,
+  PreviewSQLTableList,
+} from "@/core/datasets/request-registry";
+import {
+  closeAllColumnsAtom,
+  datasetTablesAtom,
+  expandedColumnsAtom,
+  useDatasets,
+} from "@/core/datasets/state";
+import type {
+  Database,
+  DatabaseSchema,
+  DataTable,
+  DataTableColumn,
+} from "@/core/kernel/messages";
+import { useRequestClient } from "@/core/network/requests";
+import { variablesAtom } from "@/core/variables/state";
+import type { VariableName } from "@/core/variables/types";
+import { useAsyncData } from "@/hooks/useAsyncData";
+import { sortBy } from "@/utils/arrays";
+import { logNever } from "@/utils/assertNever";
+import { cn } from "@/utils/cn";
+import { Events } from "@/utils/events";
+import {
+  DatabaseIcon,
+  SchemaIcon,
+  TableIcon,
+  ViewIcon,
+} from "../databases/namespace-icons";
+import { ErrorBoundary } from "../editor/boundary/ErrorBoundary";
+import { PythonIcon } from "../editor/cell/code/icons";
+import { useAddCodeToNewCell } from "../editor/cell/useAddCell";
+import { PanelEmptyState } from "../editor/chrome/panels/empty-state";
+import { AddConnectionDialog } from "../editor/connections/add-connection-dialog";
+import { DatasetColumnPreview } from "./column-preview";
+import {
+  ColumnName,
+  DatasourceLabel,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  RotatingChevron,
+} from "./components";
+import { isSchemaless, sqlCode } from "./utils";
+
+// Indentation classes for the datasource tree hierarchy.
+const INDENT = {
+  engineEmpty: "pl-3",
+  engine: "pl-3 pr-2",
+  database: "pl-4",
+  schemaEmpty: "pl-8",
+  schema: "pl-7",
+  schemaLoading: "pl-8",
+  tableLoading: "pl-11",
+  tableSchemaless: "pl-8",
+  tableWithSchema: "pl-12",
+  columnLocal: "pl-5",
+  columnSql: "pl-13",
+  columnPreview: "pl-10",
+};
+
+const sortedTablesAtom = atom((get) => {
+  const tables = get(datasetTablesAtom);
+  const variables = get(variablesAtom);
+  const cellIds = get(cellIdsAtom);
+
+  // Sort tables by the index of the variable they are defined in
+  return sortBy(tables, (table) => {
+    // Put at the top
+    if (!table.variable_name) {
+      return -1;
+    }
+    const variable = Object.values(variables).find(
+      (v) => v.name === table.variable_name,
+    );
+    if (!variable) {
+      return 0;
+    }
+
+    const index = cellIds.inOrderIds.indexOf(variable.declaredBy[0]);
+    if (index === -1) {
+      return 0;
+    }
+    return index;
+  });
+});
+
+/**
+ * This atom is used to get the data connections that are available to the user.
+ * It filters out the internal engines if it has no databases or if it has only the in-memory database and no schemas.
+ */
+export const connectionsAtom = atom((get) => {
+  const dataConnections = new Map(get(dataConnectionsMapAtom));
+
+  // Filter out the internal engines if it has no databases
+  // Or if it has only the in-memory database and no schemas
+  for (const engine of INTERNAL_SQL_ENGINES) {
+    const connection = dataConnections.get(engine);
+    if (!connection) {
+      continue;
+    }
+
+    if (connection.databases.length === 0) {
+      dataConnections.delete(engine);
+    }
+
+    if (
+      connection.databases.length === 1 &&
+      connection.databases[0].name === DEFAULT_DUCKDB_DATABASE &&
+      connection.databases[0].schemas.length === 0
+    ) {
+      dataConnections.delete(engine);
+    }
+  }
+
+  // Put internal engines last to prioritize user-defined connections
+  return sortBy([...dataConnections.values()], (connection) =>
+    INTERNAL_SQL_ENGINES.has(connection.name) ? 1 : 0,
+  );
+});
+
+export const DataSources: React.FC = () => {
+  const [searchValue, setSearchValue] = React.useState<string>("");
+
+  const closeAllColumns = useSetAtom(closeAllColumnsAtom);
+  const tables = useAtomValue(sortedTablesAtom);
+  const dataConnections = useAtomValue(connectionsAtom);
+  const { addDataSourceConnection } = useDataSourceActions();
+
+  // Fetch gateway connections on mount (works without a kernel session)
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch(spApiUrl("/datasources/gateway_connections"))
+      .then((r) => r.json() as Promise<{ connections?: DataSourceConnection[] }>)
+      .then((data) => {
+        if (cancelled || !data.connections?.length) {return;}
+        addDataSourceConnection({ connections: data.connections });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  if (tables.length === 0 && dataConnections.length === 0) {
+    return (
+      <PanelEmptyState
+        title="No data sources"
+        description="Connections from the SignalPilot Gateway will appear here. Dataframes in global scope will also be shown."
+        icon={<DatabaseIcon />}
+      />
+    );
+  }
+
+  const hasSearch = !!searchValue.trim();
+
+  return (
+    <Command
+      className="border-b bg-background rounded-md h-full pb-10 overflow-auto outline-hidden"
+      shouldFilter={false}
+    >
+      <div className="flex items-center w-full border-b">
+        <CommandInput
+          placeholder="Search tables..."
+          className="h-6 m-1"
+          value={searchValue}
+          onValueChange={(value) => {
+            // If searching, remove open previews
+            closeAllColumns(value.length > 0);
+            setSearchValue(value);
+          }}
+          rootClassName="flex-1 border-r border-b-0"
+        />
+        {hasSearch && (
+          <button
+            type="button"
+            className="float-right border-b px-2 m-0 h-full hover:bg-accent hover:text-accent-foreground"
+            onClick={() => setSearchValue("")}
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        )}
+
+        <AddConnectionDialog>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="px-2 rounded-md focus-visible:outline-hidden"
+          >
+            <PlusIcon className="h-4 w-4" />
+          </Button>
+        </AddConnectionDialog>
+      </div>
+
+      <CommandList className="flex flex-col">
+        {dataConnections.map((connection) => (
+          <Engine
+            key={connection.name}
+            connection={connection}
+            hasChildren={connection.databases.length > 0}
+          >
+            {connection.databases.map((database) => (
+              <DatabaseItem
+                key={database.name}
+                engineName={connection.name}
+                database={database}
+                hasSearch={hasSearch}
+              >
+                <SchemaList
+                  schemas={database.schemas}
+                  defaultSchema={connection.default_schema}
+                  defaultDatabase={connection.default_database}
+                  engineName={connection.name}
+                  databaseName={database.name}
+                  hasSearch={hasSearch}
+                  searchValue={searchValue}
+                  dialect={connection.dialect}
+                />
+              </DatabaseItem>
+            ))}
+          </Engine>
+        ))}
+
+        {dataConnections.length > 0 && tables.length > 0 && (
+          <DatasourceLabel className={INDENT.engine}>
+            <PythonIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-xs">Python</span>
+          </DatasourceLabel>
+        )}
+        {tables.length > 0 && (
+          <TableList tables={tables} searchValue={searchValue} />
+        )}
+      </CommandList>
+    </Command>
+  );
+};
+
+const Engine: React.FC<{
+  connection: DataSourceConnection;
+  children: React.ReactNode;
+  hasChildren?: boolean;
+}> = ({ connection, children, hasChildren }) => {
+  // The internal duckdb connection is updated automatically, so we do not need to refresh.
+  const internalEngine = connection.name === DUCKDB_ENGINE;
+  const engineName = internalEngine ? "In-Memory" : connection.name;
+  const { previewDataSourceConnection } = useRequestClient();
+
+  const handleRefreshConnection = async () => {
+    await previewDataSourceConnection({
+      engine: connection.name,
+    });
+  };
+
+  return (
+    <>
+      <DatasourceLabel className={INDENT.engine}>
+        <DatabaseLogo
+          className="h-4 w-4 text-muted-foreground"
+          name={connection.dialect}
+        />
+        <span className="text-xs">{dbDisplayName(connection.dialect)}</span>
+        <span className="text-xs text-muted-foreground">
+          (<EngineVariable variableName={engineName as VariableName} />)
+        </span>
+        {!internalEngine && (
+          <RefreshIconButton
+            onClick={handleRefreshConnection}
+            tooltip="Refresh connection"
+            className="ml-auto h-4 p-0"
+            iconClassName="h-3.5 w-3.5"
+          />
+        )}
+      </DatasourceLabel>
+      {hasChildren ? (
+        children
+      ) : (
+        <EmptyState
+          content="No databases available"
+          className={INDENT.engineEmpty}
+        />
+      )}
+    </>
+  );
+};
+
+const DatabaseItem: React.FC<{
+  hasSearch: boolean;
+  engineName: string;
+  database: Database;
+  children: React.ReactNode;
+}> = ({ hasSearch, engineName, database, children }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const [isSelected, setIsSelected] = React.useState(false);
+  const [prevHasSearch, setPrevHasSearch] = React.useState(hasSearch);
+
+  if (prevHasSearch !== hasSearch) {
+    setPrevHasSearch(hasSearch);
+    setIsExpanded(hasSearch);
+  }
+
+  return (
+    <>
+      <CommandItem
+        className={cn(
+          "text-sm flex flex-row gap-1 items-center cursor-pointer rounded-md",
+          INDENT.database,
+        )}
+        onSelect={() => {
+          setIsExpanded(!isExpanded);
+          setIsSelected(!isSelected);
+        }}
+        value={`${engineName}:${database.name}`}
+      >
+        <RotatingChevron isExpanded={isExpanded} />
+        <DatabaseIcon
+          className={cn(
+            "h-4 w-4",
+            isSelected && isExpanded
+              ? "text-foreground"
+              : "text-muted-foreground",
+          )}
+        />
+        <span className={cn(isSelected && isExpanded && "font-semibold")}>
+          {database.name === "" ? <i>Not connected</i> : database.name}
+        </span>
+      </CommandItem>
+      {isExpanded && children}
+    </>
+  );
+};
+
+const SchemaList: React.FC<{
+  schemas: DatabaseSchema[];
+  defaultSchema?: string | null;
+  defaultDatabase?: string | null;
+  dialect: string;
+  engineName: string;
+  databaseName: string;
+  hasSearch: boolean;
+  searchValue?: string;
+}> = ({
+  schemas,
+  defaultSchema,
+  defaultDatabase,
+  dialect,
+  engineName,
+  databaseName,
+  hasSearch,
+  searchValue,
+}) => {
+  const { addSchemaList } = useDataSourceActions();
+  const [schemasRequested, setSchemasRequested] = React.useState(false);
+
+  // Custom loading state, we need to wait for the data to propagate once requested
+  // useAsyncData's loading state may return false before data has propagated
+  const [schemasLoading, setSchemasLoading] = React.useState(false);
+
+  const { isPending, error } = useAsyncData(async () => {
+    if (schemas.length === 0 && engineName && !schemasRequested) {
+      setSchemasRequested(true);
+      setSchemasLoading(true);
+      try {
+        const previewSchemaList = await PreviewSQLSchemaList.request({
+          engine: engineName,
+          database: databaseName,
+        });
+
+        addSchemaList({
+          schemas: previewSchemaList.schemas ?? [],
+          sqlSchemaContext: {
+            engine: engineName,
+            database: databaseName,
+          },
+        });
+      } finally {
+        setSchemasLoading(false);
+      }
+    }
+  }, [schemas.length, engineName, databaseName, schemasRequested]);
+
+  if (isPending || schemasLoading) {
+    return (
+      <LoadingState
+        message="Loading schemas..."
+        className={INDENT.schemaLoading}
+      />
+    );
+  }
+
+  if (error) {
+    return <ErrorState error={error} className={INDENT.schemaLoading} />;
+  }
+
+  if (schemas.length === 0) {
+    return (
+      <EmptyState
+        content="No schemas available"
+        className={INDENT.schemaEmpty}
+      />
+    );
+  }
+
+  const filteredSchemas = schemas.filter((schema) => {
+    if (searchValue) {
+      return schema.tables.some((table) =>
+        table.name.toLowerCase().includes(searchValue.toLowerCase()),
+      );
+    }
+    return true;
+  });
+
+  return (
+    <>
+      {filteredSchemas.map((schema) => (
+        <SchemaItem
+          key={schema.name}
+          databaseName={databaseName}
+          schema={schema}
+          hasSearch={hasSearch}
+        >
+          <TableList
+            tables={schema.tables}
+            searchValue={searchValue}
+            sqlTableContext={{
+              engine: engineName,
+              database: databaseName,
+              schema: schema.name,
+              defaultSchema: defaultSchema,
+              defaultDatabase: defaultDatabase,
+              dialect: dialect,
+            }}
+          />
+        </SchemaItem>
+      ))}
+    </>
+  );
+};
+
+const SchemaItem: React.FC<{
+  databaseName: string;
+  schema: DatabaseSchema;
+  children: React.ReactNode;
+  hasSearch: boolean;
+}> = ({ databaseName, schema, children, hasSearch }) => {
+  const [isExpanded, setIsExpanded] = React.useState(hasSearch);
+  const [isSelected, setIsSelected] = React.useState(false);
+  const uniqueValue = `${databaseName}:${schema.name}`;
+
+  if (isSchemaless(schema.name)) {
+    return children;
+  }
+
+  return (
+    <>
+      <CommandItem
+        className={cn(
+          "text-sm flex flex-row gap-1 items-center cursor-pointer rounded-md",
+          INDENT.schema,
+        )}
+        onSelect={() => {
+          setIsExpanded(!isExpanded);
+          setIsSelected(!isSelected);
+        }}
+        value={uniqueValue}
+      >
+        <RotatingChevron isExpanded={isExpanded} />
+        <SchemaIcon
+          className={cn(
+            "h-4 w-4 text-muted-foreground",
+            isSelected && isExpanded && "text-foreground",
+          )}
+        />
+        <span className={cn(isSelected && isExpanded && "font-semibold")}>
+          {schema.name}
+        </span>
+      </CommandItem>
+      {isExpanded && children}
+    </>
+  );
+};
+
+const TableList: React.FC<{
+  tables: DataTable[];
+  sqlTableContext?: SQLTableContext;
+  searchValue?: string;
+}> = ({ tables, sqlTableContext, searchValue }) => {
+  const { addTableList } = useDataSourceActions();
+  const [tablesRequested, setTablesRequested] = React.useState(false);
+
+  // Custom loading state, we need to wait for the data to propagate once requested
+  // useAsyncData's loading state may return false before data has propagated
+  const [tablesLoading, setTablesLoading] = React.useState(false);
+
+  const { isPending, error } = useAsyncData(async () => {
+    if (tables.length === 0 && sqlTableContext && !tablesRequested) {
+      setTablesRequested(true);
+      setTablesLoading(true);
+
+      const { engine, database, schema } = sqlTableContext;
+      const previewTableList = await PreviewSQLTableList.request({
+        engine: engine,
+        database: database,
+        schema: schema,
+      });
+
+      if (!previewTableList?.tables) {
+        setTablesLoading(false);
+        throw new Error("No tables available");
+      }
+
+      addTableList({
+        tables: previewTableList.tables,
+        sqlTableContext: sqlTableContext,
+      });
+      setTablesLoading(false);
+    }
+  }, [tables.length, sqlTableContext, tablesRequested]);
+
+  if (isPending || tablesLoading) {
+    return (
+      <LoadingState
+        message="Loading tables..."
+        className={INDENT.tableLoading}
+      />
+    );
+  }
+
+  if (error) {
+    return <ErrorState error={error} className={INDENT.tableLoading} />;
+  }
+
+  if (tables.length === 0) {
+    return (
+      <EmptyState content="No tables found" className={INDENT.tableLoading} />
+    );
+  }
+
+  const filteredTables = tables.filter((table) => {
+    if (searchValue) {
+      return table.name.toLowerCase().includes(searchValue.toLowerCase());
+    }
+    return true;
+  });
+
+  return (
+    <>
+      {filteredTables.map((table) => (
+        <DatasetTableItem
+          key={table.name}
+          table={table}
+          sqlTableContext={sqlTableContext}
+          isSearching={!!searchValue}
+        />
+      ))}
+    </>
+  );
+};
+
+const DatasetTableItem: React.FC<{
+  table: DataTable;
+  sqlTableContext?: SQLTableContext;
+  isSearching: boolean;
+}> = ({ table, sqlTableContext, isSearching }) => {
+  const { addTable } = useDataSourceActions();
+
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const [tableDetailsRequested, setTableDetailsRequested] =
+    React.useState(false);
+  const tableDetailsExist = table.columns.length > 0;
+
+  const { isFetching, isPending, error } = useAsyncData(async () => {
+    if (
+      isExpanded &&
+      !tableDetailsExist &&
+      sqlTableContext &&
+      !tableDetailsRequested
+    ) {
+      setTableDetailsRequested(true);
+      const { engine, database, schema } = sqlTableContext;
+      const previewTable = await PreviewSQLTable.request({
+        engine: engine,
+        database: database,
+        schema: schema,
+        tableName: table.name,
+      });
+
+      if (!previewTable?.table) {
+        throw new Error("No table details available");
+      }
+
+      addTable({
+        table: previewTable.table,
+        sqlTableContext: sqlTableContext,
+      });
+    }
+  }, [isExpanded, tableDetailsExist]);
+
+  const autoInstantiate = useAtomValue(autoInstantiateAtom);
+  const lastFocusedCellId = useLastFocusedCellId();
+  const { createNewCell } = useCellActions();
+  const addCodeToNewCell = useAddCodeToNewCell();
+
+  const handleAddTable = () => {
+    maybeAddSpImport({
+      autoInstantiate,
+      createNewCell,
+      fromCellId: lastFocusedCellId,
+    });
+    const getCode = () => {
+      if (table.source_type === "catalog") {
+        const identifier = sqlTableContext?.database
+          ? `${sqlTableContext.database}.${table.name}`
+          : table.name;
+        return `${table.engine}.load_table("${identifier}")`;
+      }
+
+      if (sqlTableContext) {
+        return sqlCode({ table, columnName: "*", sqlTableContext });
+      }
+
+      switch (table.source_type) {
+        case "local":
+          return `sp.ui.table(${table.name})`;
+        case "duckdb":
+        case "connection":
+          return sqlCode({ table, columnName: "*", sqlTableContext });
+        default:
+          logNever(table.source_type);
+          return "";
+      }
+    };
+
+    addCodeToNewCell(getCode());
+  };
+
+  const renderRowsByColumns = () => {
+    const label: string[] = [];
+    if (table.num_rows != null) {
+      label.push(`${table.num_rows} rows`);
+    }
+    if (table.num_columns != null) {
+      label.push(`${table.num_columns} columns`);
+    }
+
+    if (label.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="flex flex-row gap-2 items-center pl-6 group-hover:hidden">
+        <span className="text-xs text-muted-foreground">
+          {label.join(", ")}
+        </span>
+      </div>
+    );
+  };
+
+  const renderColumns = () => {
+    if (isPending || isFetching) {
+      return (
+        <LoadingState
+          message="Loading columns..."
+          className={INDENT.tableLoading}
+        />
+      );
+    }
+
+    if (error) {
+      return <ErrorState error={error} className={INDENT.tableLoading} />;
+    }
+
+    const columns = table.columns;
+
+    if (columns.length === 0) {
+      return (
+        <EmptyState
+          content="No columns found"
+          className={INDENT.tableLoading}
+        />
+      );
+    }
+
+    return columns.map((column) => (
+      <DatasetColumnItem
+        key={column.name}
+        table={table}
+        column={column}
+        sqlTableContext={sqlTableContext}
+      />
+    ));
+  };
+
+  const renderTableType = () => {
+    if (table.source_type === "local") {
+      return;
+    }
+
+    const TableTypeIcon = table.type === "table" ? TableIcon : ViewIcon;
+    return (
+      <TableTypeIcon
+        className="h-3 w-3"
+        strokeWidth={isExpanded || isSearching ? 2.5 : undefined}
+      />
+    );
+  };
+
+  const uniqueId = sqlTableContext
+    ? `${sqlTableContext.database}.${sqlTableContext.schema}.${table.name}`
+    : table.name;
+
+  return (
+    <>
+      <CommandItem
+        className={cn(
+          "rounded-md group h-8 cursor-pointer",
+          sqlTableContext &&
+            (isSchemaless(sqlTableContext.schema)
+              ? INDENT.tableSchemaless
+              : INDENT.tableWithSchema),
+          (isExpanded || isSearching) && "font-semibold",
+        )}
+        value={uniqueId}
+        aria-selected={isExpanded}
+        forceMount={true}
+        onSelect={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex gap-2 items-center flex-1 pl-1">
+          {renderTableType()}
+          <span className="text-sm">{table.name}</span>
+        </div>
+        {renderRowsByColumns()}
+        <Tooltip content="Add table to notebook" delayDuration={400}>
+          <Button
+            className="group-hover:inline-flex hidden"
+            variant="text"
+            size="icon"
+            onClick={Events.stopPropagation(() => handleAddTable())}
+          >
+            <PlusSquareIcon className="h-3 w-3" />
+          </Button>
+        </Tooltip>
+      </CommandItem>
+      {isExpanded && renderColumns()}
+    </>
+  );
+};
+
+const DatasetColumnItem: React.FC<{
+  table: DataTable;
+  column: DataTableColumn;
+  sqlTableContext?: SQLTableContext;
+}> = ({ table, column, sqlTableContext }) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
+  const closeAllColumns = useAtomValue(closeAllColumnsAtom);
+  const setExpandedColumns = useSetAtom(expandedColumnsAtom);
+
+  if (closeAllColumns && isExpanded) {
+    setIsExpanded(false);
+  }
+
+  if (isExpanded) {
+    setExpandedColumns(
+      (prev) => new Set([...prev, `${table.name}:${column.name}`]),
+    );
+  } else {
+    setExpandedColumns((prev) => {
+      prev.delete(`${table.name}:${column.name}`);
+      return new Set(prev);
+    });
+  }
+
+  const addCodeToNewCell = useAddCodeToNewCell();
+
+  const { columnsPreviews } = useDatasets();
+  const isPrimaryKey = table.primary_keys?.includes(column.name) || false;
+  const isIndexed = table.indexes?.includes(column.name) || false;
+
+  const handleAddColumn = (chartCode: string) => {
+    addCodeToNewCell(chartCode);
+  };
+
+  const renderItemSubtext = ({
+    tooltipContent,
+    content,
+  }: {
+    tooltipContent: string;
+    content: string;
+  }) => {
+    return (
+      <Tooltip content={tooltipContent} delayDuration={100}>
+        <span className="text-xs text-black bg-gray-100 dark:invert rounded px-1">
+          {content}
+        </span>
+      </Tooltip>
+    );
+  };
+
+  const columnText = (
+    <span className={isExpanded ? "font-semibold" : ""}>{column.name}</span>
+  );
+
+  return (
+    <>
+      <CommandItem
+        className="rounded-md py-1 group cursor-pointer"
+        key={`${table.name}.${column.name}`}
+        value={`${table.name}.${column.name}`}
+        onSelect={() => setIsExpanded(!isExpanded)}
+      >
+        <div
+          className={cn(
+            "flex flex-row gap-2 items-center flex-1",
+            sqlTableContext ? INDENT.columnSql : INDENT.columnLocal,
+          )}
+        >
+          <ColumnName columnName={columnText} dataType={column.type} />
+          {isPrimaryKey &&
+            renderItemSubtext({ tooltipContent: "Primary key", content: "PK" })}
+          {isIndexed &&
+            renderItemSubtext({ tooltipContent: "Indexed", content: "IDX" })}
+        </div>
+        <Tooltip content="Copy column name" delayDuration={400}>
+          <Button
+            variant="text"
+            size="icon"
+            className="group-hover:opacity-100 opacity-0 hover:bg-muted text-muted-foreground hover:text-foreground"
+          >
+            <CopyClipboardIcon
+              tooltip={false}
+              value={column.name}
+              className="h-3 w-3"
+            />
+          </Button>
+        </Tooltip>
+        <span className="text-xs text-muted-foreground">
+          {column.external_type}
+        </span>
+      </CommandItem>
+      {isExpanded && (
+        <div
+          className={cn(
+            INDENT.columnPreview,
+            "pr-2 py-2 bg-(--slate-1) shadow-inner border-b",
+          )}
+        >
+          <ErrorBoundary>
+            <DatasetColumnPreview
+              table={table}
+              column={column}
+              onAddColumnChart={handleAddColumn}
+              preview={columnsPreviews.get(
+                sqlTableContext
+                  ? `${sqlTableContext.database}.${sqlTableContext.schema}.${table.name}:${column.name}`
+                  : `${table.name}:${column.name}`,
+              )}
+              sqlTableContext={sqlTableContext}
+            />
+          </ErrorBoundary>
+        </div>
+      )}
+    </>
+  );
+};

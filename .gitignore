@@ -78,3 +78,5 @@ build/
 .gstack/
 autocode-auth/.next/
 autocode-auth/node_modules/
+test_notebook_e2e.py
+test_cloud_notebook.py

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncGenerator
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -42,9 +43,25 @@ def _get_database_url() -> str:
 
 
 def _requires_ssl() -> bool:
-    """Check if the original DATABASE_URL had sslmode (e.g. Neon)."""
-    raw = os.environ.get("DATABASE_URL", "")
-    return "sslmode=" in raw
+    """Check if the original DATABASE_URL requested SSL via sslmode, ssl, or channel_binding."""
+    raw = os.environ.get("DATABASE_URL", "") or ""
+    if not raw:
+        return False
+    try:
+        q = parse_qs(urlparse(raw).query)
+    except Exception:
+        return False
+    sslmode = (q.get("sslmode", [""])[0] or "").lower()
+    if sslmode in {"require", "verify-ca", "verify-full"}:
+        return True
+    ssl_param = (q.get("ssl", [""])[0] or "").lower()
+    if ssl_param in {"true", "require"}:
+        return True
+    if q.get("channel_binding"):
+        cb = (q.get("channel_binding", [""])[0] or "").lower()
+        if cb in {"require", "prefer"}:
+            return True
+    return False
 
 
 def get_engine():
@@ -260,6 +277,124 @@ async def _ensure_audit_indexes(engine) -> None:
     logger.info("Ensured performance indexes on gateway_audit_logs")
 
 
+async def _ensure_knowledge_columns(engine) -> None:
+    """Create partial unique indexes and optional trigram index for knowledge docs.
+
+    SQLAlchemy create_all cannot express partial unique indexes, so they are
+    created here idempotently.  The trigram index is wrapped in a try/except
+    because pg_trgm may not be installed on all deployments.
+    """
+    async with engine.begin() as conn:
+        # Try to create pg_trgm extension (no-op if already exists)
+        try:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        except Exception:
+            logger.info("pg_trgm extension not available — trigram search disabled")
+
+        # Partial unique index: uniqueness when scope_ref IS NULL (org-scoped docs)
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_doc_org_null "
+                "ON gateway_knowledge_docs (org_id, scope, category, title) "
+                "WHERE scope_ref IS NULL"
+            )
+        )
+        # Partial unique index: uniqueness when scope_ref IS NOT NULL (project/connection-scoped docs)
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_doc_scoped "
+                "ON gateway_knowledge_docs (org_id, scope, scope_ref, category, title) "
+                "WHERE scope_ref IS NOT NULL"
+            )
+        )
+
+    # Trigram index: best-effort, requires pg_trgm
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_knowledge_title_trgm "
+                    "ON gateway_knowledge_docs USING gin (title gin_trgm_ops)"
+                )
+            )
+    except Exception:
+        logger.info("Could not create trigram index on knowledge docs — pg_trgm likely unavailable")
+
+    logger.info("Ensured knowledge doc indexes")
+
+
+async def _ensure_chat_columns(engine) -> None:
+    """Add columns to gateway_chat_conversations that were added after initial table creation."""
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS agent_session_id VARCHAR"))
+        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS model VARCHAR(50)"))
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_tokens INTEGER NOT NULL DEFAULT 0")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0")
+        )
+    logger.info("Ensured chat conversation columns")
+
+
+async def _ensure_branch_columns(engine) -> None:
+    """Add branch columns to gateway_workspace_projects."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS default_branch VARCHAR(100) NOT NULL DEFAULT 'main'")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS protected_branches JSONB")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS git_remote VARCHAR(500)")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'managed'")
+        )
+    logger.info("Ensured branch columns on gateway_workspace_projects")
+
+
+async def _ensure_notebook_session_columns(engine) -> None:
+    """Add access_token column to gateway_notebook_sessions if it doesn't exist."""
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS access_token VARCHAR"))
+    logger.info("Ensured notebook session columns")
+
+
+async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
+    """Add pod_ip_internal column to gateway_notebook_sessions if it does not exist.
+
+    Idempotent ADD COLUMN IF NOT EXISTS. No index needed (lookup is by PK).
+    The proxy uses this column to reach the pod inside the cluster, distinct
+    from pod_ip which is the legacy NodePort address kept for R3 cleanup.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS pod_ip_internal TEXT")
+        )
+    logger.info("Ensured pod_ip_internal column on gateway_notebook_sessions")
+
+
+async def _ensure_notebook_session_org_id(engine) -> None:
+    """Idempotent: ensure org_id column on gateway_notebook_sessions and backfill legacy NULLs.
+
+    1. ADD COLUMN IF NOT EXISTS org_id TEXT (no-op if already present).
+    2. Backfill org_id = user_id WHERE org_id IS NULL (safe default for personal/local mode).
+
+    In local/personal mode the org_id collapses to user_id; this backfill is safe for all
+    legacy rows.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS org_id TEXT")
+        )
+        await conn.execute(
+            text("UPDATE gateway_notebook_sessions SET org_id = user_id WHERE org_id IS NULL")
+        )
+    logger.info("Ensured org_id column on gateway_notebook_sessions")
+
+
 async def init_db() -> None:
     """Create gateway tables if they don't exist. Called at startup."""
     engine = get_engine()
@@ -275,6 +410,14 @@ async def init_db() -> None:
     await _ensure_audit_parent_id_column(engine)
     await _ensure_audit_user_id_nullable(engine)
     await _ensure_audit_indexes(engine)
+    await _ensure_knowledge_columns(engine)
+    await _ensure_chat_columns(engine)
+    await _ensure_branch_columns(engine)
+    await _ensure_notebook_session_columns(engine)
+    await _ensure_notebook_session_org_id(engine)
+    await _ensure_notebook_session_pod_ip_internal(engine)
+    # GitHub tables are created by metadata.create_all above; this is a placeholder
+    # for future column additions via ALTER TABLE IF NOT EXISTS.
     logger.info("Gateway database tables initialized")
 
 

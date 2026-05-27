@@ -12,7 +12,7 @@ import {
   TestTube,
   Pencil,
 } from "lucide-react";
-import { useAppAuth } from "@/lib/auth-context";
+import { useAppAuth } from "~/lib/auth-context";
 import {
   getNotionIntegrations,
   createNotionIntegration,
@@ -20,12 +20,12 @@ import {
   deleteNotionIntegration,
   testNotionIntegration,
   type NotionIntegration,
-} from "@/lib/api";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
-import { ApiKeysSkeleton } from "@/components/ui/skeleton";
+} from "~/lib/api";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
+import { ApiKeysSkeleton } from "~/components/ui/skeleton";
 
 // ---------------------------------------------------------------------------
 // Helpers

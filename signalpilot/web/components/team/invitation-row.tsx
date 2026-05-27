@@ -7,10 +7,10 @@
 
 import { useState } from "react";
 import type { OrganizationInvitationResource } from "@clerk/types";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { PendingButton } from "@/components/ui/pending-button";
-import { roleLabel } from "@/lib/team/roles";
-import { NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { PendingButton } from "~/components/ui/pending-button";
+import { roleLabel } from "~/lib/team/roles";
+import { NEUTRAL_CLASS } from "~/components/auth/auth-primitives";
 
 export interface InvitationRowProps {
   invitation: OrganizationInvitationResource;

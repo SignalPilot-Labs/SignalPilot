@@ -1,0 +1,31 @@
+.react-grid-item.react-grid-placeholder {
+  background-color: var(--grass-9);
+}
+
+.react-resizable-handle {
+  visibility: hidden;
+}
+
+.react-grid-item:hover .react-resizable-handle {
+  visibility: visible;
+}
+
+.dark .react-grid-item > .react-resizable-handle::after {
+  border-right: 2px solid rgba(255, 255, 255, 0.5);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.5);
+}
+
+.disable-animation .react-grid-item {
+  transition: none !important;
+  transition-property: none !important;
+}
+
+/* for images we expand the image to fill the grid item */
+.react-grid-item .output img {
+  height: 100%;
+  object-fit: contain;
+}
+
+#App.grid-bordered {
+  background-color: var(--slate-1);
+}

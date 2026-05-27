@@ -1,0 +1,104 @@
+import type { MermaidConfig } from "mermaid";
+import mermaid from "mermaid";
+import React, { useState } from "react";
+import { useAsyncData } from "@/hooks/useAsyncData";
+import { ErrorBanner } from "@/plugins/impl/common/error-banner";
+import { useTheme } from "@/theme/useTheme";
+import { Logger } from "@/utils/Logger";
+
+interface Props {
+  diagram: string;
+  theme?: string;
+  themeVariables?: Record<string, string>;
+  config?: MermaidConfig;
+}
+
+const DEFAULT_CONFIG: MermaidConfig = {
+  startOnLoad: true,
+  theme: "forest",
+  logLevel: "fatal",
+  securityLevel: "strict",
+  fontFamily: "var(--text-font)",
+  arrowMarkerAbsolute: false,
+  flowchart: {
+    htmlLabels: true,
+    curve: "linear",
+  },
+  sequence: {
+    diagramMarginX: 50,
+    diagramMarginY: 10,
+    actorMargin: 50,
+    width: 150,
+    height: 65,
+    boxMargin: 10,
+    boxTextMargin: 5,
+    noteMargin: 10,
+    messageMargin: 35,
+    mirrorActors: true,
+    bottomMarginAdj: 1,
+    useMaxWidth: true,
+    rightAngles: false,
+    showSequenceNumbers: false,
+  },
+  gantt: {
+    titleTopMargin: 25,
+    barHeight: 20,
+    barGap: 4,
+    topPadding: 50,
+    leftPadding: 75,
+    gridLineStartPadding: 35,
+    fontSize: 11,
+    numberSectionStyles: 4,
+    axisFormat: "%Y-%m-%d",
+  },
+};
+
+function randomAlpha() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz";
+  const length = 6;
+  return Array.from(
+    { length },
+    () => alphabet[Math.floor(Math.random() * alphabet.length)],
+  ).join("");
+}
+
+const Mermaid: React.FC<Props> = ({ diagram, theme, themeVariables }) => {
+  // oxlint-disable-next-line react/hook-use-state
+  const [id] = useState(() => randomAlpha());
+
+  const darkMode = useTheme().theme === "dark";
+  const resolvedTheme = theme ?? (darkMode ? "dark" : "forest");
+  mermaid.initialize({
+    ...DEFAULT_CONFIG,
+    theme: resolvedTheme as MermaidConfig["theme"],
+    themeVariables,
+    darkMode: darkMode,
+  });
+
+  // Frontmatter does not work with newlines, so we trim the diagram to avoid these errors
+  const trimmedDiagram = diagram.trim();
+
+  const { data: svg, error } = useAsyncData(async () => {
+    const result = await mermaid
+      .render(id, trimmedDiagram, undefined)
+      .catch((error) => {
+        document.getElementById(id)?.remove();
+        Logger.warn("Failed to render mermaid diagram", error);
+        throw error;
+      });
+
+    return result.svg;
+  }, [trimmedDiagram, id, darkMode, resolvedTheme, themeVariables]);
+
+  if (error) {
+    return <ErrorBanner error={error} />;
+  }
+
+  if (!svg) {
+    return null;
+  }
+
+  return <div dangerouslySetInnerHTML={{ __html: svg }} />;
+};
+
+export default Mermaid;

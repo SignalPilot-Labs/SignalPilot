@@ -41,6 +41,12 @@ function applySecurityHeaders(
   let connectSrc = "'self'";
   if (isSafeUrl(gatewayUrl)) {
     connectSrc += ` ${gatewayUrl}`;
+    // WebSocket connections to the gateway (notebook kernel) use ws:// or wss://
+    try {
+      const gwUrl = new URL(gatewayUrl);
+      const wsScheme = gwUrl.protocol === "https:" ? "wss:" : "ws:";
+      connectSrc += ` ${wsScheme}//${gwUrl.host}`;
+    } catch {}
   } else {
     console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
   }
@@ -49,13 +55,37 @@ function applySecurityHeaders(
   // is generated in middleware but Next.js renders inline scripts at build time).
   // 'unsafe-eval' is REMOVED — this is the main XSS hardening win, blocking
   // eval(), new Function(), setTimeout(string), etc.
-  let scriptSrc = "'self' 'unsafe-inline'";
-  let imgSrc = "'self' data: blob:";
+  let scriptSrc = process.env.NODE_ENV === "development"
+    ? "'self' 'unsafe-inline' 'unsafe-eval'"
+    : "'self' 'unsafe-inline'";
+  let imgSrc = `'self' data: blob: ${gatewayUrl}`;
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 
   let workerSrc = "'self'";
 
+  // frame-src: always allow 'self'. Add the gateway origin if it differs from
+  // the web app origin (cross-origin gateway deployment). NEXT_PUBLIC_GATEWAY_URL
+  // is a build-time constant — never sourced from a runtime API response so a
+  // malicious script cannot swap it to a different origin.
   let frameSrc = "'self'";
+  const gatewayOrigin = (() => {
+    try {
+      const u = new URL(gatewayUrl);
+      return u.origin; // e.g. "http://localhost:3300"
+    } catch {
+      return null;
+    }
+  })();
+  // Include localhost wildcard for dev convenience only — in production the
+  // gatewayOrigin covers the exact gateway host and there is no need to allow
+  // arbitrary localhost ports. L-1: gate on NODE_ENV to avoid widening frame-src
+  // in production builds.
+  if (process.env.NODE_ENV === "development") {
+    frameSrc += " http://localhost:* https://localhost:*";
+  }
+  if (gatewayOrigin && isSafeUrl(gatewayUrl) && gatewayOrigin !== "null") {
+    frameSrc += ` ${gatewayOrigin}`;
+  }
 
   if (withClerk) {
     connectSrc +=
@@ -87,7 +117,7 @@ function applySecurityHeaders(
       `frame-src ${frameSrc}`,
       "object-src 'none'",
       "frame-ancestors 'none'",
-      "base-uri 'self'",
+      `base-uri 'self' ${gatewayUrl}`,
       "form-action 'self'",
     ].join("; ")
   );
@@ -116,6 +146,27 @@ function applySecurityHeaders(
 // so @clerk/nextjs/server is never loaded and CLERK_SECRET_KEY is not needed.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Notebook proxy — rewrite /notebook/* to the gateway
+// ---------------------------------------------------------------------------
+
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+
+function isNotebookPath(pathname: string): boolean {
+  return pathname.startsWith("/notebook/");
+}
+
+function proxyNotebook(req: NextRequest): NextResponse {
+  const target = new URL(req.nextUrl.pathname + req.nextUrl.search, GATEWAY_URL);
+  return NextResponse.rewrite(target, {
+    headers: req.headers,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Middleware export
+// ---------------------------------------------------------------------------
+
 let middlewareExport: NextMiddleware;
 
 if (clerkEnabled) {
@@ -128,12 +179,17 @@ if (clerkEnabled) {
     "/sign-up(.*)",
     "/onboarding(.*)",
     "/",
+    "/notebook(.*)",
   ]);
 
   middlewareExport = clerkMiddleware(async (auth, req) => {
+    // Notebook paths proxy to gateway — no Clerk auth needed (gateway handles it)
+    if (isNotebookPath(req.nextUrl.pathname)) {
+      return proxyNotebook(req);
+    }
+
     const { userId } = await auth();
 
-    // In cloud mode, protect non-public routes (unauthenticated users only)
     if (IS_CLOUD_MODE && !isPublicRoute(req) && !userId) {
       await auth.protect();
     }
@@ -144,6 +200,11 @@ if (clerkEnabled) {
   });
 } else {
   middlewareExport = (req: NextRequest) => {
+    // Notebook paths proxy to gateway
+    if (isNotebookPath(req.nextUrl.pathname)) {
+      return proxyNotebook(req);
+    }
+
     const response = NextResponse.next();
     applySecurityHeaders(response, false, req);
     return response;

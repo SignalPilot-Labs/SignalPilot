@@ -1,0 +1,66 @@
+@reference "../css/globals.css";
+
+/* Edge padding for flush tables (--sp-table-edge-padding inherits through shadow DOM) */
+[part="table-wrapper"] th:first-child {
+  padding-left: var(--sp-table-edge-padding, 0.5rem);
+}
+
+[part="table-wrapper"] th:last-child {
+  padding-right: var(--sp-table-edge-padding, 0.5rem);
+}
+
+[part="table-wrapper"] td:first-child {
+  padding-left: var(--sp-table-edge-padding, 0.375rem);
+}
+
+[part="table-wrapper"] td:last-child {
+  padding-right: var(--sp-table-edge-padding, 0.375rem);
+}
+
+[part="label"] {
+  padding-left: var(--sp-table-edge-padding, 0);
+}
+
+.markdown table,
+table.dataframe {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.markdown table thead,
+table.dataframe thead {
+  vertical-align: bottom;
+
+  @apply border-input;
+}
+
+.markdown table tbody tr:nth-child(odd),
+table.dataframe tbody tr:nth-child(odd) {
+  background: #0a0a0a;
+}
+
+.markdown table tbody tr:nth-child(even),
+table.dataframe tbody tr:nth-child(even) {
+  background: #050505;
+}
+
+.markdown table tbody tr:hover,
+table.dataframe tbody tr:hover {
+  background: #111111;
+}
+
+.markdown table tr,
+.markdown table th,
+.markdown table td,
+table.dataframe tr,
+table.dataframe th,
+table.dataframe td {
+  text-align: right;
+  vertical-align: middle;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  line-height: normal;
+  border: none;
+}

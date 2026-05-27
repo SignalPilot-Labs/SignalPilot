@@ -38,6 +38,21 @@ async def get_store(
 
 StoreD = Annotated[Store, Depends(get_store)]
 
+# ─── S3 dependency ──────────────────────────────────────────────────────────
+
+
+async def get_s3_client(org_id: OrgID):
+    """FastAPI dependency: yields an org-scoped S3Client."""
+    from ..s3 import S3Client, get_s3
+
+    client = get_s3(org_id)
+    return client
+
+
+from ..s3.client import S3Client as _S3Client
+
+S3D = Annotated[_S3Client, Depends(get_s3_client)]
+
 # ─── SQLglot dialect mapping ─────────────────────────────────────────────────
 
 SQLGLOT_DIALECTS: dict[str, str] = {

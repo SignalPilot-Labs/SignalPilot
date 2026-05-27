@@ -6,7 +6,7 @@ import re
 
 # Input validation patterns
 _CONN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
-_MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9_.]{1,256}$")
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,2}$")
 _MAX_SQL_LENGTH = 100_000
 
 

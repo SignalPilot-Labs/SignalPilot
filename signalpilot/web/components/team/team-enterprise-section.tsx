@@ -10,16 +10,16 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { ShieldCheck, ChevronDown, ChevronUp } from "lucide-react";
-import { SectionHeader } from "@/components/ui/section-header";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SectionHeader } from "~/components/ui/section-header";
+import { Skeleton } from "~/components/ui/skeleton";
 import {
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
   SECONDARY_BTN_CLASS,
-} from "@/components/auth/auth-primitives";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
-import type { EnterpriseConnectionDTO } from "@/app/api/team/enterprise/route";
+} from "~/components/auth/auth-primitives";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
+import type { EnterpriseConnectionDTO } from "~/app/api/team/enterprise/route";
 
 // Re-export for consumers that want the DTO type
 export type { EnterpriseConnectionDTO };

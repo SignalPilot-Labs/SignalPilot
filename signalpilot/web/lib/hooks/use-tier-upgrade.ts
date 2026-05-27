@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
-import type { BrandTier } from "@/lib/tier-branding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
+import type { BrandTier } from "~/lib/tier-branding";
 
 const STORAGE_KEY = "sp_tier_last_seen";
 

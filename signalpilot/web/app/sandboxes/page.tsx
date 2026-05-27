@@ -15,14 +15,14 @@ import {
   Database,
   ArrowRight,
 } from "lucide-react";
-import { getSandboxes, createSandbox, deleteSandbox } from "@/lib/api";
-import type { SandboxInfo } from "@/lib/types";
-import { useConnection } from "@/lib/connection-context";
-import { EmptySandbox, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot, MiniBar } from "@/components/ui/data-viz";
-import { useToast } from "@/components/ui/toast";
-import { TimeAgo } from "@/components/ui/time-ago";
+import { getSandboxes, createSandbox, deleteSandbox } from "~/lib/api";
+import type { SandboxInfo } from "~/lib/types";
+import { useConnection } from "~/lib/connection-context";
+import { EmptySandbox, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot, MiniBar } from "~/components/ui/data-viz";
+import { useToast } from "~/components/ui/toast";
+import { TimeAgo } from "~/components/ui/time-ago";
 
 const statusConfig: Record<string, { indicator: string; label: string }> = {
   ready: { indicator: "bg-blue-400", label: "ready" },

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import random
 import time
 from collections.abc import AsyncIterator
@@ -258,23 +259,9 @@ class PoolManager:
                 if db_type == "duckdb" and connection_string and not connection_string.startswith("md:"):
                     raise RuntimeError("Only MotherDuck (md:) DuckDB connections are available in cloud mode")
 
-            # Use sandboxed connectors for local file-based databases (DuckDB, SQLite)
-            # that live on the host filesystem and can't be opened directly from Docker.
-            if (
-                db_type == "duckdb"
-                and connection_string
-                and not connection_string.startswith("md:")
-                and connection_string != ":memory:"
-            ):
-                from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
-
-                connector = SandboxedDuckDBConnector()
-            elif db_type == "sqlite" and connection_string and connection_string != ":memory:":
-                from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
-
-                connector = SandboxedSQLiteConnector()
-            else:
-                connector = get_connector(db_type)
+            # Use the registry to get the right connector — it respects
+            # SP_SANDBOX_ENABLED and SP_DISABLE_SANDBOX for file-based DBs.
+            connector = get_connector(db_type)
 
             # Pass credential extras to connector via standardized interface.
             # Each connector's set_credential_extras() extracts what it needs

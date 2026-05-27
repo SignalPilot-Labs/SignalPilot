@@ -15,7 +15,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useSignUp, useAuth } from "@clerk/nextjs";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthShell } from "~/components/auth/auth-shell";
 import { Loader2 } from "lucide-react";
 
 const INPUT_CLASS =

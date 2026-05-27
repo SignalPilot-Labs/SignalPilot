@@ -2,8 +2,8 @@
 
 import React, { useId, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { CopyButton } from "@/components/ui/copy-button";
-import { PRIMARY_BTN_CLASS } from "@/components/auth/auth-primitives";
+import { CopyButton } from "~/components/ui/copy-button";
+import { PRIMARY_BTN_CLASS } from "~/components/auth/auth-primitives";
 
 export interface RevealOnceProps {
   title: string;

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import { useUser } from "@clerk/nextjs";
 
 export interface OnboardingStatus {
@@ -17,7 +18,7 @@ export function useOnboardingStatus(): OnboardingStatus {
     ? user?.unsafeMetadata?.onboardingCompleted === true
     : null;
 
-  async function markComplete(): Promise<void> {
+  const markComplete = useCallback(async (): Promise<void> => {
     if (!user) throw new Error("No authenticated user");
     await user.update({
       unsafeMetadata: {
@@ -25,7 +26,7 @@ export function useOnboardingStatus(): OnboardingStatus {
         onboardingCompleted: true,
       },
     });
-  }
+  }, [user]);
 
   return { isComplete: isComplete ?? null, markComplete, isLoading };
 }

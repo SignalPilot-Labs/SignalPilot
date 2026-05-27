@@ -8,8 +8,8 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
+import { useAppAuth } from "~/lib/auth-context";
+import { useBackendClient } from "~/lib/backend-client";
 
 // ---------------------------------------------------------------------------
 // Types

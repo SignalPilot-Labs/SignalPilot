@@ -1,8 +1,8 @@
 "use client";
 
 import { useOrganization } from "@clerk/nextjs";
-import { type TierBrand } from "@/lib/tier-branding";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { type TierBrand } from "~/lib/tier-branding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 
 /**
  * TierSeal — sidebar footer brand mark. Branches by tier so inner components

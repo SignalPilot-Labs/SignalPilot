@@ -1,0 +1,104 @@
+# ── Stage 1: Build frontend ──────────────────────────────────────
+FROM node:22-slim AS frontend-builder
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN npm install -g pnpm@9 turbo
+
+WORKDIR /build
+
+ARG NOTEBOOK_REPO=https://github.com/SignalPilot-Labs/signalpilot-notebook.git
+ARG NOTEBOOK_BRANCH=feature/cloud-filesystem
+ARG GIT_TOKEN=""
+ARG CACHEBUST=""
+RUN if [ -n "$GIT_TOKEN" ]; then \
+      git clone --depth 1 --branch ${NOTEBOOK_BRANCH} https://${GIT_TOKEN}@github.com/SignalPilot-Labs/signalpilot-notebook.git . ; \
+    else \
+      git clone --depth 1 --branch ${NOTEBOOK_BRANCH} ${NOTEBOOK_REPO} . ; \
+    fi
+
+RUN pnpm install --no-frozen-lockfile && \
+    NODE_ENV=production pnpm turbo build --filter "@sp-team/frontend" --force
+
+# ── Stage 2: Source (clean copy without .git) ────────────────────
+FROM alpine/git AS source
+ARG NOTEBOOK_REPO=https://github.com/SignalPilot-Labs/signalpilot-notebook.git
+ARG NOTEBOOK_BRANCH=feature/cloud-filesystem
+ARG GIT_TOKEN=""
+ARG CACHEBUST=""
+RUN if [ -n "$GIT_TOKEN" ]; then \
+      git clone --depth 1 --branch ${NOTEBOOK_BRANCH} https://${GIT_TOKEN}@github.com/SignalPilot-Labs/signalpilot-notebook.git /src ; \
+    else \
+      git clone --depth 1 --branch ${NOTEBOOK_BRANCH} ${NOTEBOOK_REPO} /src ; \
+    fi && \
+    rm -rf /src/.git /src/frontend/node_modules /src/frontend/dist /src/.venv
+
+# ── Stage 3: Runtime ─────────────────────────────────────────────
+FROM python:3.13-slim
+
+# Create non-root user FIRST so all subsequent layers are owned correctly.
+RUN groupadd -g 10001 notebook && \
+    useradd -r -u 10001 -g notebook notebook && \
+    mkdir -p /workspace /home/notebook/.sp && \
+    apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/sp-notebook
+
+# Copy source without .git (saves ~200MB vs full clone)
+COPY --from=source --chown=notebook:notebook /src .
+# Overlay freshly built frontend assets
+COPY --from=frontend-builder --chown=notebook:notebook /build/frontend/dist/ /opt/sp-notebook/signalpilot/_static/
+
+# Single consolidated pip install — avoids duplicate transitive deps across layers.
+RUN pip install --no-cache-dir \
+    -e . \
+    "starlette==1.0.0" \
+    "uvicorn==0.47.0" \
+    "httpx==0.28.1" \
+    "msgspec==0.21.1" \
+    "pydantic==2.13.4" \
+    "pydantic-settings==2.14.1" \
+    "websockets==16.0" \
+    "sse-starlette==3.4.4" \
+    "pyjwt==2.12.1" \
+    "dbt-core==1.11.10" \
+    "dbt-duckdb==1.10.1" \
+    "dbt-postgres>=1.9" \
+    "dbt-snowflake>=1.9" \
+    "duckdb==1.5.2" \
+    "polars>=1.0" \
+    "pandas==3.0.3" \
+    "pyarrow==24.0.0" \
+    "numpy==2.4.4" \
+    "sqlglot==30.8.0" \
+    "altair==6.1.0" \
+    "matplotlib==3.10.9" \
+    "plotly==6.7.0" \
+    "seaborn>=0.13" \
+    "scikit-learn>=1.5" \
+    "scipy>=1.14" \
+    "anthropic>=0.40" \
+    "openai==2.36.0" \
+    "claude-agent-sdk==0.1.81" \
+    "mcp==1.27.1" \
+    "pydantic-ai-slim==1.96.0" \
+    "tiktoken==0.12.0" \
+    "pyyaml==6.0.3" \
+    "jinja2==3.1.6" \
+    "python-dotenv==1.2.2" \
+    "requests==2.34.2" && \
+    # Pre-compile bytecode to speed up Python import time on container start.
+    python -m compileall -q /opt/sp-notebook/signalpilot /usr/local/lib/python3.13/site-packages 2>/dev/null || true && \
+    chown -R notebook:notebook /opt/sp-notebook
+
+USER notebook
+WORKDIR /workspace
+
+EXPOSE 2718
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
+    CMD curl -sf http://localhost:2718/api/health || curl -sf http://localhost:2718/ -o /dev/null || exit 1
+
+ENV SP_GATEWAY_URL=""
+ENV SP_API_KEY=""
+
+CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless", "/workspace"]

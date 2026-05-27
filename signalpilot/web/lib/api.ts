@@ -40,7 +40,7 @@ function _fetchLocalKey(): Promise<string | null> {
   if (typeof window === "undefined") return Promise.resolve(null);
   return fetch("/api/local-key")
     .then((r) => r.ok ? r.json() : null)
-    .then((data) => {
+    .then((data: any) => {
       if (data?.key) {
         sessionStorage.setItem("sp_api_key", data.key);
         return data.key as string;
@@ -291,7 +291,7 @@ export const importConnections = (manifest: Record<string, unknown>) =>
     errors: { name: string; error: string }[];
   }>("/api/connections/import", { method: "POST", body: JSON.stringify(manifest) });
 
-// Projects
+// Projects (legacy dbt projects)
 export const getProjects = () => request<import("./types").ProjectInfo[]>("/api/projects");
 export const getProject = (name: string) => request<import("./types").ProjectInfo>(`/api/projects/${name}`);
 export const createProject = (p: Record<string, unknown>) =>
@@ -305,6 +305,65 @@ export const discoverDbtCloudProjects = (token: string, account_id: string, host
     method: "POST",
     body: JSON.stringify({ token, account_id, host }),
   });
+
+// Workspace Projects (S3-backed)
+export const getWorkspaceProjects = (status?: string) =>
+  request<{ projects: import("./types").WorkspaceProjectInfo[]; total: number }>(
+    `/api/workspace-projects${status ? `?status=${status}` : ""}`
+  );
+export const getWorkspaceProject = (id: string) =>
+  request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`);
+export const createWorkspaceProject = (p: {
+  name: string;
+  display_name: string;
+  description?: string;
+  source?: "managed" | "github" | "dbt-cloud";
+  connection_name?: string;
+  git_remote?: string;
+  tags?: string[];
+}) =>
+  request<import("./types").WorkspaceProjectInfo>("/api/workspace-projects", { method: "POST", body: JSON.stringify(p) });
+export const updateWorkspaceProject = (id: string, p: Record<string, unknown>) =>
+  request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`, { method: "PUT", body: JSON.stringify(p) });
+export const deleteWorkspaceProject = (id: string) =>
+  request<void>(`/api/workspace-projects/${id}`, { method: "DELETE" });
+
+// Workspace Project Branches
+export const getWorkspaceBranches = (projectId: string) =>
+  request<{ branches: import("./types").WorkspaceBranchInfo[] }>(`/api/workspace-projects/${projectId}/branches`);
+export const createWorkspaceBranch = (projectId: string, name: string, fromBranch = "main") =>
+  request<import("./types").WorkspaceBranchInfo>(`/api/workspace-projects/${projectId}/branches`, {
+    method: "POST",
+    body: JSON.stringify({ name, from_branch: fromBranch }),
+  });
+export const deleteWorkspaceBranch = (projectId: string, branch: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/branches/${branch}`, { method: "DELETE" });
+
+// Workspace Project Files (branch-scoped)
+export const getWorkspaceFiles = (projectId: string, branch = "main", prefix?: string) =>
+  request<{ project_id: string; branch: string; prefix: string; files: import("./types").WorkspaceFileInfo[] }>(
+    `/api/workspace-projects/${projectId}/branches/${branch}/files${prefix ? `?prefix=${prefix}` : ""}`
+  );
+export const getWorkspaceFile = (projectId: string, branch: string, path: string) =>
+  request<string>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, {}, true);
+export const uploadWorkspaceFile = (projectId: string, branch: string, path: string, content: string) =>
+  request<{ key: string; size: number }>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, {
+    method: "PUT",
+    body: content,
+    headers: { "Content-Type": "text/plain" },
+  });
+export const deleteWorkspaceFile = (projectId: string, branch: string, path: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, { method: "DELETE" });
+
+// User Session
+export const getUserSession = (projectId: string) =>
+  request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
+    `/api/workspace-projects/${projectId}/user-session`
+  );
+export const switchBranch = (projectId: string, branch: string) =>
+  request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
+    `/api/workspace-projects/${projectId}/user-session`, { method: "PUT", body: JSON.stringify({ branch }) }
+  );
 
 // API Keys (org-scoped)
 export const getApiKeys = () =>
@@ -367,6 +426,71 @@ export const createBudget = (session_id: string, budget_usd: number) =>
   });
 export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
+
+// Notebook Sessions
+// access_token is intentionally absent: the gateway issues an HttpOnly cookie
+// at /_init and never surfaces the token to frontend JavaScript.
+export type NotebookSession = {
+  id: string;
+  status: string;
+  project_id: string | null;
+  branch: string | null;
+  notebook_url: string | null;
+  pod_ip: string | null;
+  last_ping: number | null;
+  created_at: number;
+};
+
+export const createNotebookSession = (body: { project_id: string; branch: string }) =>
+  request<NotebookSession>("/api/notebook-sessions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const getNotebookSession = () =>
+  request<NotebookSession | null>("/api/notebook-sessions");
+
+export const deleteNotebookSession = () =>
+  request<void>("/api/notebook-sessions", { method: "DELETE" });
+
+export const pingNotebookSession = () =>
+  request<void>("/api/notebook-sessions/ping", { method: "POST" });
+
+// GitHub App
+export const getGitHubInstallUrl = () =>
+  request<{ install_url: string }>("/api/github/install-url");
+
+export const getGitHubInstallations = () =>
+  request<GitHubInstallation[]>("/api/github/installations");
+
+export const deleteGitHubInstallation = (id: string) =>
+  request<void>(`/api/github/installations/${id}`, { method: "DELETE" });
+
+export const getGitHubRepos = (installationId: string) =>
+  request<GitHubRepo[]>(`/api/github/installations/${installationId}/repos`);
+
+export const linkGitHubRepo = (body: {
+  project_id: string;
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+}) =>
+  request<GitHubRepoLink>("/api/github/repo-links", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const unlinkGitHubRepo = (linkId: string) =>
+  request<void>(`/api/github/repo-links/${linkId}`, { method: "DELETE" });
+
+export const getGitHubRepoLinks = (projectId?: string) =>
+  request<GitHubRepoLink[]>(
+    `/api/github/repo-links${projectId ? `?project_id=${projectId}` : ""}`
+  );
+
+export const getGitCredentials = (projectId: string) =>
+  request<GitCredentials>(`/api/github/credentials/${projectId}`);
 
 // Health
 export const getHealth = () => request<Record<string, unknown>>("/health");
@@ -567,6 +691,35 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
+// Knowledge Base
+import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+import type { GitHubInstallation, GitHubRepo, GitHubRepoLink, GitCredentials } from "./types";
+
+export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
+  const qs = params ? new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][]
+  ).toString() : "";
+  return request<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`);
+};
+export const getKnowledgeUsage = () => request<KnowledgeUsage>("/api/knowledge/usage");
+export const getKnowledgeDoc = (id: string) => request<KnowledgeDoc>(`/api/knowledge/${id}`);
+export const createKnowledgeDoc = (payload: {
+  scope: KnowledgeDoc["scope"];
+  scope_ref: string | null;
+  category: KnowledgeDoc["category"];
+  title: string;
+  body: string;
+  status?: KnowledgeDoc["status"];
+}) => request<KnowledgeDoc>("/api/knowledge", { method: "POST", body: JSON.stringify(payload) });
+export const updateKnowledgeDoc = (id: string, body: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}`, { method: "PUT", body: JSON.stringify({ body }) });
+export const archiveKnowledgeDoc = (id: string) =>
+  request<void>(`/api/knowledge/${id}`, { method: "DELETE" });
+export const approveKnowledgeDoc = (id: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}/approve`, { method: "POST" });
+export const listKnowledgeEdits = (id: string, limit = 20) =>
+  request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
+
 // Notion Integrations
 export type NotionIntegration = { id: string; name: string; search_page_ids: string[]; report_parent_page_id: string | null; status: string; created_at: number; org_id: string | null };
 export const getNotionIntegrations = () => request<NotionIntegration[]>("/api/integrations/notion");
@@ -618,7 +771,7 @@ export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) =
           buf = lines.pop() ?? "";
           for (const line of lines) {
             if (line.startsWith("data: ")) {
-              try { cb(JSON.parse(line.slice(6))); } catch {}
+              try { cb(JSON.parse(line.slice(6)) as any); } catch {}
             }
           }
         }

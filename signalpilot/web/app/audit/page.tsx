@@ -14,16 +14,16 @@ import {
   ChevronRight,
   Wrench,
 } from "lucide-react";
-import { getAuditExportUrl } from "@/lib/api";
-import type { AuditEntry } from "@/lib/types";
-import { useAudit, useAuditStats, usePlan } from "@/lib/hooks/use-gateway-data";
-import { useToast } from "@/components/ui/toast";
-import { PageLoader } from "@/components/ui/page-loader";
-import { EmptyList, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { ActivityDots, StatusDot, Sparkline } from "@/components/ui/data-viz";
-import { SqlHighlight } from "@/components/ui/sql-highlight";
-import { TimeAgo } from "@/components/ui/time-ago";
+import { getAuditExportUrl } from "~/lib/api";
+import type { AuditEntry } from "~/lib/types";
+import { useAudit, useAuditStats, usePlan } from "~/lib/hooks/use-gateway-data";
+import { useToast } from "~/components/ui/toast";
+import { PageLoader } from "~/components/ui/page-loader";
+import { EmptyList, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { ActivityDots, StatusDot, Sparkline } from "~/components/ui/data-viz";
+import { SqlHighlight } from "~/components/ui/sql-highlight";
+import { TimeAgo } from "~/components/ui/time-ago";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
@@ -69,7 +69,7 @@ export default function AuditPage() {
     setExporting(format);
     toast("preparing report — this may take a moment for large audit logs", "info");
     try {
-      const { getAuthHeaders } = await import("@/lib/api");
+      const { getAuthHeaders } = await import("~/lib/api");
       const headers = await getAuthHeaders();
       const url = getAuditExportUrl(format, typeFilter || undefined);
       const res = await fetch(url, { headers });

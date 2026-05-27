@@ -13,12 +13,12 @@ import {
   Key,
   Shield,
 } from "lucide-react";
-import { getConnectionSchema, getSchemaRefreshStatus, detectPII, getConnectionSchemaDDL } from "@/lib/api";
-import { useConnection } from "@/lib/connection-context";
-import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot, StackedBar } from "@/components/ui/data-viz";
-import { Tooltip } from "@/components/ui/tooltip";
+import { getConnectionSchema, getSchemaRefreshStatus, detectPII, getConnectionSchemaDDL } from "~/lib/api";
+import { useConnection } from "~/lib/connection-context";
+import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot, StackedBar } from "~/components/ui/data-viz";
+import { Tooltip } from "~/components/ui/tooltip";
 
 interface Column {
   name: string;

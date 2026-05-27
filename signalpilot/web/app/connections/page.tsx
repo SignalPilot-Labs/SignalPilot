@@ -60,17 +60,17 @@ import {
   exploreColumns,
   getConnectionHealthHistory,
   browseFiles,
-} from "@/lib/api";
-import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "@/lib/types";
-import { useConnections, useConnectionsHealth, usePlan, invalidateConnections, invalidateHealth } from "@/lib/hooks/use-gateway-data";
-import { PageLoader } from "@/components/ui/page-loader";
-import { EmptyDatabase, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot, MiniBar, Sparkline } from "@/components/ui/data-viz";
-import { Tooltip } from "@/components/ui/tooltip";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { useConnection } from "@/lib/connection-context";
+} from "~/lib/api";
+import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SSLConfig } from "~/lib/types";
+import { useConnections, useConnectionsHealth, usePlan, invalidateConnections, invalidateHealth } from "~/lib/hooks/use-gateway-data";
+import { PageLoader } from "~/components/ui/page-loader";
+import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot, MiniBar, Sparkline } from "~/components/ui/data-viz";
+import { Tooltip } from "~/components/ui/tooltip";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { useConnection } from "~/lib/connection-context";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
@@ -2373,7 +2373,7 @@ export default function ConnectionsPage() {
     try {
       const match = msg.match(/\{.*"validation_errors".*\}/);
       if (match) {
-        const parsed = JSON.parse(match[0]);
+        const parsed = JSON.parse(match[0]) as { validation_errors?: string[] };
         if (parsed.validation_errors) {
           return parsed.validation_errors.join("; ");
         }
@@ -2720,7 +2720,7 @@ export default function ConnectionsPage() {
     if (!file) return;
     try {
       const text = await file.text();
-      const manifest = JSON.parse(text);
+      const manifest = JSON.parse(text) as Record<string, unknown>;
       const result = await importConnections(manifest);
       refresh();
       const msg = [`Imported: ${result.imported}`];

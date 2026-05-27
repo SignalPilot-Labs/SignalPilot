@@ -1,0 +1,733 @@
+"use no memo";
+
+import { Popover as PopoverPrimitive } from "radix-ui";
+
+const PopoverClose = PopoverPrimitive.Close;
+
+import type { Column, ColumnDef } from "@tanstack/react-table";
+import { formatDate, isValid } from "date-fns";
+import { useLocale, useNumberFormatter } from "react-aria";
+import { WithLocale } from "@/core/i18n/with-locale";
+import type { DataType } from "@/core/kernel/messages";
+import type { CalculateTopKRows } from "@/plugins/impl/DataTablePlugin";
+import { cn } from "@/utils/cn";
+import { type DateFormat, exactDateTime, getDateFormat } from "@/utils/dates";
+import { Logger } from "@/utils/Logger";
+import { Maps } from "@/utils/maps";
+import { maxFractionalDigits } from "@/utils/numbers";
+import { Objects } from "@/utils/objects";
+import { parseContent } from "@/utils/url-parser";
+import { EmotionCacheProvider } from "../editor/output/EmotionCacheProvider";
+import { JsonOutput } from "../editor/output/JsonOutput";
+import { CopyClipboardIcon } from "../icons/copy-icon";
+import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Tooltip } from "../ui/tooltip";
+import { DataTableColumnHeader } from "./column-header";
+import type { ColumnChartSpecModel } from "./column-summary/chart-spec-model";
+import { TableColumnSummary } from "./column-summary/column-summary";
+import { COLUMN_WRAPPING_STYLES } from "./column-wrapping/feature";
+import { DatePopover } from "./date-popover";
+import type { FilterType } from "./filters";
+import { getMimeValues, MimeCell } from "./mime-cell";
+import {
+  type DataTableSelection,
+  extractTimezone,
+  type FieldTypesWithExternalType,
+  INDEX_COLUMN_NAME,
+  isNumericType,
+} from "./types";
+import { SentinelCell, WhitespaceMarkers } from "./sentinel-cell";
+import { detectSentinel, splitLeadingTrailingWhitespace } from "./utils";
+import { uniformSample } from "./uniformSample";
+import { MarkdownUrlDetector, UrlDetector } from "./url-detector";
+
+// Artificial limit to display long strings
+const MAX_STRING_LENGTH = 50;
+const SELECT_ID = "__select__";
+
+function inferDataType(value: unknown): [type: DataType, displayType: string] {
+  if (typeof value === "string") {
+    return ["string", "string"];
+  }
+  if (typeof value === "number") {
+    return ["number", "number"];
+  }
+  if (value instanceof Date) {
+    return ["datetime", "datetime"];
+  }
+  if (typeof value === "boolean") {
+    return ["boolean", "boolean"];
+  }
+  if (value == null) {
+    return ["unknown", "object"];
+  }
+  return ["unknown", "object"];
+}
+
+export function inferFieldTypes<T>(items: T[]): FieldTypesWithExternalType {
+  // No items
+  if (items.length === 0) {
+    return [];
+  }
+
+  // Not an object
+  if (typeof items[0] !== "object") {
+    return [];
+  }
+
+  const fieldTypes: Record<string, [DataType, string]> = {};
+
+  // This can be slow for large datasets,
+  // so only sample 10 evenly distributed rows
+  uniformSample(items, 10).forEach((item) => {
+    if (typeof item !== "object" || item === null) {
+      return;
+    }
+    // We will be a bit defensive and assume values are not homogeneous.
+    // If any is a mimetype, then we will treat it as a mimetype (i.e. not sortable)
+    Object.entries(item).forEach(([key, value]) => {
+      const currentValue = fieldTypes[key];
+      if (!currentValue) {
+        // Set for the first time
+        fieldTypes[key] = inferDataType(value);
+      }
+
+      // If its not null, override the type
+      if (value != null) {
+        // This can be lossy as we infer take the last seen type
+        fieldTypes[key] = inferDataType(value);
+      }
+    });
+  });
+
+  return Objects.entries(fieldTypes);
+}
+
+export const NAMELESS_COLUMN_PREFIX = "__m_column__";
+
+export function generateColumns<T>({
+  rowHeaders,
+  selection,
+  fieldTypes,
+  chartSpecModel,
+  textJustifyColumns,
+  wrappedColumns,
+  headerTooltip,
+  showDataTypes,
+  calculateTopKRows,
+  fractionDigitsByColumn,
+}: {
+  rowHeaders: FieldTypesWithExternalType;
+  selection: DataTableSelection;
+  fieldTypes: FieldTypesWithExternalType;
+  chartSpecModel?: ColumnChartSpecModel<unknown>;
+  textJustifyColumns?: Record<string, "left" | "center" | "right">;
+  wrappedColumns?: string[];
+  headerTooltip?: Record<string, string>;
+  showDataTypes?: boolean;
+  calculateTopKRows?: CalculateTopKRows;
+  fractionDigitsByColumn?: Record<string, number>;
+}): ColumnDef<T>[] {
+  // Row-headers are typically index columns
+  const rowHeadersSet = new Set(rowHeaders.map(([columnName]) => columnName));
+
+  const typesByColumn = Maps.keyBy(fieldTypes, (entry) => entry[0]);
+
+  const getMeta = (key: string) => {
+    const types = typesByColumn.get(key)?.[1];
+    const isRowHeader = rowHeadersSet.has(key);
+
+    if (isRowHeader || !types) {
+      const types = rowHeaders.find(([columnName]) => columnName === key)?.[1];
+      return {
+        rowHeader: isRowHeader,
+        dtype: types?.[1],
+        dataType: types?.[0],
+        minFractionDigits: fractionDigitsByColumn?.[key],
+      };
+    }
+
+    return {
+      rowHeader: isRowHeader,
+      filterType: getFilterTypeForFieldType(types[0]),
+      dtype: types[1],
+      dataType: types[0],
+      minFractionDigits: fractionDigitsByColumn?.[key],
+    };
+  };
+
+  const getJustify = (key: string): "left" | "center" | "right" | undefined => {
+    // Explicit user override takes precedence
+    if (textJustifyColumns?.[key]) {
+      return textJustifyColumns[key];
+    }
+    // Auto right-align numeric columns
+    const dataType = getMeta(key).dataType;
+    if (isNumericType(dataType)) {
+      return "right";
+    }
+    return undefined;
+  };
+
+  const columnKeys: string[] = [
+    ...rowHeadersSet,
+    ...fieldTypes.map(([columnName]) => columnName),
+  ];
+
+  // Remove the index column if it exists
+  const indexColumnIdx = columnKeys.indexOf(INDEX_COLUMN_NAME);
+  if (indexColumnIdx !== -1) {
+    columnKeys.splice(indexColumnIdx, 1);
+  }
+
+  const columns = columnKeys.map(
+    (key, idx): ColumnDef<T> => ({
+      id: key || `${NAMELESS_COLUMN_PREFIX}${idx}`,
+      // Use an accessorFn instead of an accessorKey because column names
+      // may have periods in them ...
+      // https://github.com/TanStack/table/issues/1671
+      accessorFn: (row) => {
+        return row[key as keyof T];
+      },
+
+      header: ({ column, table }) => {
+        const stats = chartSpecModel?.getColumnStats(key);
+        const dtype = column.columnDef.meta?.dtype;
+        const headerTitle = headerTooltip?.[key];
+        const headerJustify = textJustifyColumns?.[key];
+
+        const dtypeHeader =
+          showDataTypes && dtype ? (
+            <div
+              className={cn(
+                "flex flex-row gap-1",
+                headerJustify === "center" && "justify-center",
+                headerJustify === "right" && "justify-end",
+              )}
+            >
+              <span className="text-xs text-muted-foreground">{dtype}</span>
+              {stats && typeof stats.nulls === "number" && stats.nulls > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  (nulls: {stats.nulls})
+                </span>
+              )}
+            </div>
+          ) : null;
+
+        const headerName = (
+          <span
+            className={cn(
+              "font-bold",
+              headerTitle && "underline decoration-dotted",
+            )}
+          >
+            {key === "" ? " " : key}
+          </span>
+        );
+
+        const headerWithTooltip = headerTitle ? (
+          <Tooltip content={headerTitle} delayDuration={300}>
+            {headerName}
+          </Tooltip>
+        ) : (
+          headerName
+        );
+
+        const dataTableColumnHeader = (
+          <DataTableColumnHeader
+            header={headerWithTooltip}
+            subheader={dtypeHeader}
+            column={column}
+            justify={headerJustify}
+            calculateTopKRows={calculateTopKRows}
+            table={table}
+          />
+        );
+
+        // Row headers have no summaries
+        if (rowHeadersSet.has(key)) {
+          return dataTableColumnHeader;
+        }
+
+        return (
+          <div
+            className={cn(
+              "flex flex-col h-full pt-0.5 pb-3 justify-between items-start",
+              headerJustify === "center" && "items-center",
+              headerJustify === "right" && "items-end",
+            )}
+          >
+            {dataTableColumnHeader}
+            <TableColumnSummary columnId={key} />
+          </div>
+        );
+      },
+
+      cell: ({ column, renderValue, getValue, cell }) => {
+        function selectCell() {
+          if (selection !== "single-cell" && selection !== "multi-cell") {
+            return;
+          }
+
+          cell.toggleSelected?.();
+        }
+
+        const justify = getJustify(key);
+        const wrapped = wrappedColumns?.includes(key);
+        const isCellSelected = cell?.getIsSelected?.() || false;
+        const canSelectCell =
+          (selection === "single-cell" || selection === "multi-cell") &&
+          !isCellSelected;
+
+        const dataType = column.columnDef.meta?.dataType;
+        const isNumeric = isNumericType(dataType);
+        const cellStyles = getCellStyleClass({
+          justify,
+          wrapped,
+          canSelectCell,
+          isSelected: isCellSelected,
+          isNumeric,
+        });
+
+        const renderedCell = renderCellValue({
+          column,
+          renderValue,
+          getValue,
+          selectCell,
+          cellStyles,
+        });
+
+        // Row headers are bold
+        if (rowHeadersSet.has(key)) {
+          return <b>{renderedCell}</b>;
+        }
+
+        return renderedCell;
+      },
+      // Remove any default filtering
+      filterFn: undefined,
+      // Can only sort if key is defined
+      // For example, unnamed index columns, won't be sortable
+      enableSorting: !!key,
+      meta: getMeta(key),
+    }),
+  );
+
+  if (selection === "single" || selection === "multi") {
+    columns.unshift({
+      id: SELECT_ID,
+      maxSize: 40,
+      header: ({ table }) =>
+        selection === "multi" ? (
+          <Checkbox
+            data-testid="select-all-checkbox"
+            checked={table.getIsAllPageRowsSelected()}
+            onCheckedChange={(value) =>
+              table.toggleAllPageRowsSelected(!!value)
+            }
+            aria-label="Select all"
+            className="mx-1.5 my-4"
+          />
+        ) : null,
+      cell: ({ row }) => (
+        <Checkbox
+          data-testid="select-row-checkbox"
+          checked={row.getIsSelected()}
+          onCheckedChange={(value) => row.toggleSelected(!!value)}
+          aria-label="Select row"
+          className="mx-2"
+          onMouseDown={(e) => {
+            // Prevent cell underneath from being selected
+            e.stopPropagation();
+          }}
+        />
+      ),
+      enableSorting: false,
+      enableHiding: false,
+    });
+  }
+
+  return columns;
+}
+
+const PopoutColumn = ({
+  cellStyles,
+  selectCell,
+  rawStringValue,
+  edges,
+  contentClassName,
+  buttonText,
+  wrapped,
+  children,
+}: {
+  cellStyles?: string;
+  selectCell?: () => void;
+  rawStringValue: string;
+  // Edge whitespace shown as visible markers in the trigger; copy/title
+  // still use `rawStringValue`. Middle is sliced from `rawStringValue`.
+  edges?: { leading: string; trailing: string };
+  contentClassName?: string;
+  buttonText?: string;
+  wrapped?: boolean;
+  children: React.ReactNode;
+}) => {
+  const hasEdgeWhitespace =
+    edges !== undefined &&
+    (edges.leading.length > 0 || edges.trailing.length > 0);
+
+  const displayText = hasEdgeWhitespace
+    ? rawStringValue.slice(
+        edges.leading.length,
+        rawStringValue.length - edges.trailing.length,
+      )
+    : rawStringValue;
+
+  return (
+    <EmotionCacheProvider container={null}>
+      <Popover>
+        <PopoverTrigger
+          className={cn(cellStyles, "max-w-fit outline-hidden")}
+          onClick={selectCell}
+          onMouseDown={(e) => {
+            // Prevent cell underneath from being selected
+            e.stopPropagation();
+          }}
+        >
+          <span
+            className={cn(
+              "cursor-pointer hover:text-link",
+              wrapped && COLUMN_WRAPPING_STYLES,
+            )}
+            title={rawStringValue}
+          >
+            {edges ? <WhitespaceMarkers value={edges.leading} /> : null}
+            {displayText}
+            {edges ? <WhitespaceMarkers value={edges.trailing} /> : null}
+          </span>
+        </PopoverTrigger>
+        <PopoverContent
+          className={contentClassName}
+          align="start"
+          alignOffset={10}
+        >
+          <div className="absolute top-2 right-2">
+            <CopyClipboardIcon
+              value={rawStringValue}
+              className="w-2.5 h-2.5"
+              tooltip={false}
+            />
+            <PopoverClose>
+              <Button variant="link" size="xs">
+                {buttonText ?? "Close"}
+              </Button>
+            </PopoverClose>
+          </div>
+          {children}
+        </PopoverContent>
+      </Popover>
+    </EmotionCacheProvider>
+  );
+};
+
+function isPrimitiveOrNullish(value: unknown): boolean {
+  if (value == null) {
+    return true;
+  }
+  const isObject = typeof value === "object";
+  return !isObject;
+}
+
+function getFilterTypeForFieldType(
+  type: DataType | undefined,
+): FilterType | undefined {
+  if (type === undefined) {
+    return undefined;
+  }
+  switch (type) {
+    case "string":
+      return "text";
+    case "number":
+      return "number";
+    case "integer":
+      return "number";
+    case "date":
+      return "date";
+    case "datetime":
+      return "datetime";
+    case "time":
+      return "time";
+    case "boolean":
+      return "boolean";
+    default:
+      return undefined;
+  }
+}
+
+function getCellStyleClass({
+  justify = "left",
+  wrapped,
+  canSelectCell,
+  isSelected,
+  isNumeric = false,
+}: {
+  justify: "left" | "center" | "right" | undefined;
+  wrapped: boolean | undefined;
+  canSelectCell: boolean;
+  isSelected: boolean;
+  isNumeric?: boolean;
+}): string {
+  return cn(
+    canSelectCell && "cursor-pointer",
+    isSelected &&
+      "relative before:absolute before:inset-0 before:bg-(--blue-3) before:rounded before:-z-10 before:mx-[-4px] before:my-[-2px]",
+    "w-full",
+    "text-left",
+    "truncate",
+    isNumeric && "tabular-nums",
+    justify === "center" && "text-center",
+    justify === "right" && "text-right",
+    wrapped && `${COLUMN_WRAPPING_STYLES} break-words`,
+  );
+}
+
+function renderAny(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function renderDate({
+  value,
+  dataType,
+  dtype,
+  format,
+  locale,
+}: {
+  value: Date;
+  dataType?: DataType;
+  dtype?: string;
+  format?: DateFormat | null;
+  locale: string;
+}): React.ReactNode {
+  const type = dataType === "date" ? "date" : "datetime";
+  const timezone = extractTimezone(dtype);
+
+  const exactValue = format
+    ? formatDate(value, format)
+    : exactDateTime(value, timezone, locale);
+
+  return (
+    <DatePopover date={value} type={type}>
+      {exactValue}
+    </DatePopover>
+  );
+}
+
+export function renderCellValue<TData, TValue>({
+  column,
+  renderValue,
+  getValue,
+  selectCell,
+  cellStyles,
+}: {
+  column: Column<TData, TValue>;
+  renderValue: () => TValue | null;
+  getValue: () => TValue;
+  selectCell?: () => void;
+  cellStyles?: string;
+}) {
+  const value = getValue();
+  const format = column.getColumnFormatting?.();
+
+  const dataType = column.columnDef.meta?.dataType;
+  const dtype = column.columnDef.meta?.dtype;
+
+  const isWrapped = column.getColumnWrapping?.() === "wrap";
+
+  // Sentinel values (null, whitespace, NaN, Infinity, NaT) rendered specially.
+  // Empty strings are left as-is
+  const sentinel = detectSentinel(value, dataType);
+  if (sentinel && sentinel.type !== "empty-string") {
+    return (
+      <div onClick={selectCell} className={cellStyles}>
+        <SentinelCell sentinel={sentinel} />
+      </div>
+    );
+  }
+
+  if (dataType === "datetime" && typeof value === "string") {
+    try {
+      if (!isValid(value)) {
+        return (
+          <div onClick={selectCell} className={cellStyles}>
+            {value}
+          </div>
+        );
+      }
+
+      const date = new Date(value);
+      const format = getDateFormat(value);
+      return (
+        <WithLocale>
+          {(locale) =>
+            renderDate({ value: date, dataType, dtype, format, locale })
+          }
+        </WithLocale>
+      );
+    } catch (error) {
+      Logger.error("Error parsing datetime, fallback to string", error);
+    }
+  }
+
+  if (value instanceof Date) {
+    if (!isValid(value)) {
+      return (
+        <div onClick={selectCell} className={cellStyles}>
+          {value.toString()}
+        </div>
+      );
+    }
+
+    // e.g. 2010-10-07 17:15:00
+    return (
+      <WithLocale>
+        {(locale) => renderDate({ value, dataType, dtype, locale })}
+      </WithLocale>
+    );
+  }
+
+  if (typeof value === "string") {
+    const stringValue = format
+      ? String(column.applyColumnFormatting(value))
+      : String(renderValue());
+
+    const { leading, middle, trailing } =
+      splitLeadingTrailingWhitespace(stringValue);
+    const hasEdgeWhitespace = leading.length > 0 || trailing.length > 0;
+
+    // Parse only the inner content for URL detection so URLDetector doesn't
+    // split on the whitespace padding.
+    const parts = parseContent(hasEdgeWhitespace ? middle : stringValue);
+    const allMarkup = parts.every((part) => part.type !== "text");
+    if (allMarkup || stringValue.length < MAX_STRING_LENGTH || isWrapped) {
+      return (
+        <div
+          onClick={selectCell}
+          className={cn(cellStyles, isWrapped && COLUMN_WRAPPING_STYLES)}
+        >
+          <WhitespaceMarkers value={leading} />
+          <UrlDetector parts={parts} />
+          <WhitespaceMarkers value={trailing} />
+        </div>
+      );
+    }
+
+    return (
+      <PopoutColumn
+        cellStyles={cellStyles}
+        selectCell={selectCell}
+        rawStringValue={stringValue}
+        edges={{ leading, trailing }}
+        contentClassName="max-h-64 overflow-auto whitespace-pre-wrap break-words text-sm w-96"
+        buttonText="X"
+        wrapped={isWrapped}
+      >
+        <MarkdownUrlDetector
+          content={stringValue}
+          parts={parseContent(stringValue)}
+        />
+      </PopoutColumn>
+    );
+  }
+
+  if (format) {
+    return (
+      <div onClick={selectCell} className={cellStyles}>
+        {column.applyColumnFormatting(value)}
+      </div>
+    );
+  }
+
+  // Format to the correct locale
+  if (typeof value === "number") {
+    return (
+      <div onClick={selectCell} className={cellStyles}>
+        <LocaleNumber
+          value={value}
+          minFractionDigits={column.columnDef.meta?.minFractionDigits}
+        />
+      </div>
+    );
+  }
+
+  if (typeof value === "boolean") {
+    return (
+      <div onClick={selectCell} className={cellStyles}>
+        {value ? "True" : "False"}
+      </div>
+    );
+  }
+
+  if (isPrimitiveOrNullish(value)) {
+    const rendered = renderValue();
+    return (
+      <div onClick={selectCell} className={cellStyles}>
+        {rendered == null ? "" : String(rendered)}
+      </div>
+    );
+  }
+
+  const mimeValues = getMimeValues(value);
+  if (mimeValues) {
+    return (
+      <div onClick={selectCell} className={cellStyles}>
+        {mimeValues.map((mimeValue, idx) => (
+          <MimeCell key={idx} value={mimeValue} />
+        ))}
+      </div>
+    );
+  }
+
+  if (Array.isArray(value) || typeof value === "object") {
+    const rawStringValue = renderAny(value);
+    return (
+      <PopoutColumn
+        cellStyles={cellStyles}
+        selectCell={selectCell}
+        rawStringValue={rawStringValue}
+        wrapped={isWrapped}
+      >
+        <JsonOutput data={value} format="tree" className="max-h-64" />
+      </PopoutColumn>
+    );
+  }
+
+  return (
+    <div onClick={selectCell} className={cellStyles}>
+      {renderAny(value)}
+    </div>
+  );
+}
+
+export const LocaleNumber = ({
+  value,
+  minFractionDigits,
+}: {
+  value: number;
+  minFractionDigits?: number;
+}) => {
+  const { locale } = useLocale();
+  const format = useNumberFormatter({
+    minimumFractionDigits: minFractionDigits,
+    maximumFractionDigits: maxFractionalDigits(locale),
+  });
+  return format.format(value);
+};

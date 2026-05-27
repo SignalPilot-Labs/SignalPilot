@@ -114,16 +114,28 @@ export async function apiCall<T>(
   const url = buildURL(baseUrl, path);
   const method = body !== undefined ? "POST" : "GET";
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  }).catch((error) => {
-    Logger.error(`Error requesting ${url}`, error);
-    throw error;
-  });
-
-  return parseResponse<T>(response, url);
+  let retries = 2;
+  let lastError: unknown;
+  while (retries >= 0) {
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      return await parseResponse<T>(response, url);
+    } catch (error) {
+      lastError = error;
+      if (retries > 0) {
+        await new Promise((r) => setTimeout(r, 1000));
+        retries--;
+      } else {
+        Logger.error(`Error requesting ${url}`, error);
+        throw error;
+      }
+    }
+  }
+  throw lastError;
 }
 
 /**

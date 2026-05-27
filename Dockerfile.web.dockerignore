@@ -1,7 +1,0 @@
-**/node_modules
-**/.next
-**/.venv
-**/.git
-**/benchmark
-**/test-results
-**/*.tar

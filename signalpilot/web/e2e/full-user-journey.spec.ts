@@ -230,9 +230,8 @@ test("Full user journey: create project → file tree → expand → click files
   await clickFile(page, "intro.py");
   await page.waitForTimeout(3000);
 
-  // Wait for cells to render (intro.py has 3 cells)
   let cellCount = 0;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 5; i++) {
     cellCount = await page.locator(".cm-editor").count();
     if (cellCount >= 2) break;
     await page.waitForTimeout(2000);

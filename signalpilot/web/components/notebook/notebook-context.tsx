@@ -19,6 +19,8 @@ export interface NotebookConfig {
 
 const NotebookContext = React.createContext<NotebookConfig | null>(null);
 
+let _config: NotebookConfig | null = null;
+
 export function NotebookProvider({
   children,
   value,
@@ -26,9 +28,9 @@ export function NotebookProvider({
   children: React.ReactNode;
   value: NotebookConfig;
 }) {
-  // Also update the module-level config so non-React code can access it
   React.useEffect(() => {
-    setNotebookConfig(value);
+    _config = value;
+    return () => { _config = null; };
   }, [value]);
 
   return (
@@ -46,12 +48,6 @@ export function useNotebookConfig(): NotebookConfig {
 }
 
 // ── Non-React access (for apiCall and boot-phase code) ──────────
-
-let _config: NotebookConfig | null = null;
-
-export function setNotebookConfig(config: NotebookConfig): void {
-  _config = config;
-}
 
 export function getNotebookConfig(): NotebookConfig {
   if (!_config) throw new Error("NotebookConfig not set");

@@ -1,8 +1,10 @@
+import { atom } from "jotai";
 import { init } from "@paralleldrive/cuid2";
 import { Logger } from "@/utils/Logger";
 import type { TypedString } from "@/utils/typed";
 import { updateQueryParams } from "@/utils/urls";
 import { KnownQueryParams } from "../constants";
+import { store } from "../state/jotai";
 
 export type SessionId = TypedString<"SessionId">;
 
@@ -36,7 +38,7 @@ function getProjectDirFromStorage(): string | null {
       return JSON.parse(raw) as string | null;
     }
   } catch {
-    // ignore
+    // localStorage may throw in sandboxed iframes
   }
   return null;
 }
@@ -50,10 +52,7 @@ function isNotebookFileInUrl(): boolean {
   );
 }
 
-// Mutable session ID — can be updated for in-page notebook switching.
-// During SSR (no window) we generate a placeholder ID; the client-side
-// hydration will re-run the full URL-based logic via getSessionId().
-let sessionId: SessionId = (() => {
+function computeInitialSessionId(): SessionId {
   if (typeof window === "undefined") {
     return generateSessionId();
   }
@@ -89,32 +88,23 @@ let sessionId: SessionId = (() => {
     return projectSessionId;
   }
 
-  Logger.debug("Starting a new session", { sessionId: id });
   return generateSessionId();
-})();
+}
 
-/**
- * Get the current session ID.
- */
+export const sessionIdAtom = atom<SessionId>(computeInitialSessionId());
+
 export function getSessionId(): SessionId {
-  return sessionId;
+  return store.get(sessionIdAtom);
 }
 
-/**
- * Set the session ID to a specific value. Used by the embed boot
- * to reuse an existing pod session instead of creating a new one.
- */
 export function setSessionId(id: SessionId): void {
-  sessionId = id;
-  Logger.debug("Set session ID", { sessionId });
+  store.set(sessionIdAtom, id);
+  Logger.debug("Set session ID", { sessionId: id });
 }
 
-/**
- * Generate a new session ID and update the module-level variable.
- * Used for in-page notebook switching.
- */
 export function regenerateSessionId(): SessionId {
-  sessionId = generateSessionId();
-  Logger.debug("Regenerated session ID", { sessionId });
-  return sessionId;
+  const id = generateSessionId();
+  store.set(sessionIdAtom, id);
+  Logger.debug("Regenerated session ID", { sessionId: id });
+  return id;
 }

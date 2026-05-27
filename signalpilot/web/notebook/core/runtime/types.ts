@@ -31,4 +31,9 @@ export interface RuntimeConfig {
    * Accepts a static string or a thunk — see {@link AuthTokenProvider}.
    */
   readonly authToken?: AuthTokenProvider | null;
+  /**
+   * If true, skip the health check retry loop — the caller already
+   * verified the runtime is reachable (e.g. NotebookBoot's pre-check).
+   */
+  readonly healthVerified?: boolean;
 }

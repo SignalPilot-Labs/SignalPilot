@@ -39,7 +39,7 @@ import {
 } from "./cells/cells";
 import type { AppConfig, UserConfig } from "./config/config-schema";
 import { RuntimeState } from "./kernel/RuntimeState";
-import { getSessionId } from "./kernel/session";
+import { getSessionId, setSessionId } from "./kernel/session";
 import { useTogglePresenting } from "./layout/useTogglePresenting";
 import { viewStateAtom } from "./mode";
 import { useRequestClient } from "./network/requests";
@@ -229,8 +229,14 @@ export const EditApp: React.FC<AppProps> = ({
       const params = new URL(window.location.href).searchParams;
       const file = params.get(KnownQueryParams.filePath);
       if (!file || file.startsWith("__new__")) return;
-      if (activeTabPathRef.current === file) return; // already active
-      openFileInTab(file);
+      // Resolve relative paths (e.g. "notebooks/intro.py" → "/workspace/.../notebooks/intro.py")
+      let filePath = file;
+      const projectDir = store.get(dbtProjectDirAtom);
+      if (projectDir && !filePath.startsWith("/")) {
+        filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
+      }
+      if (activeTabPathRef.current === filePath) return;
+      openFileInTab(filePath);
     };
     window.addEventListener("popstate", onUrlChange);
     window.addEventListener(SPA_NAVIGATE_EVENT, onUrlChange);
@@ -288,7 +294,7 @@ export const EditApp: React.FC<AppProps> = ({
     });
   }, [activeTab, filename]);
 
-  // Reconnect the kernel WS when the active notebook file changes
+  // Reconnect the kernel WS when the active notebook file changes.
   const currentWsPath = useRef<string | null>(null);
   useEffect(() => {
     if (activeTab?.type !== "notebook") {return;}
@@ -331,6 +337,13 @@ export const EditApp: React.FC<AppProps> = ({
   );
 
   const renderContent = () => {
+    console.log("[renderContent]", {
+      activeTab: activeTab ? { id: activeTab.id, type: activeTab.type, path: activeTab.path?.slice(-30), sessionId: activeTab.sessionId } : null,
+      hasCells,
+      connection: connection.state,
+      filename: filename?.slice(-30),
+    });
+
     // Active tab is a raw file — show raw file editor
     if (activeTab?.type === "raw") {
       return <RawFileEditor filePath={activeTab.path} />;

@@ -23,7 +23,9 @@ export class RuntimeManager {
       );
     }
 
-    if (!this.lazy) {
+    if (config.healthVerified) {
+      this.initialHealthyCheck.resolve();
+    } else if (!this.lazy) {
       this.init();
     }
   }
@@ -144,7 +146,6 @@ export class RuntimeManager {
     // Merge in current page's query parameters
     const currentParams = new URLSearchParams(window.location.search);
     currentParams.forEach((value, key) => {
-      // Don't override base URL params
       if (!searchParams.has(key)) {
         searchParams.set(key, value);
       }

@@ -95,14 +95,16 @@ export default function NotebookBoot({
       // If the pod already has a session for our file, the notebook should
       // reconnect to it instead of creating a new one (which would be rejected
       // with SP_ALREADY_CONNECTED).
+      // Step 3: Find an existing session for our file and take it over.
+      // The takeover disconnects any stale WebSocket from a previous page
+      // load so our new connection won't be rejected with SP_ALREADY_CONNECTED.
       setPhase("sessions");
-      let existingSessionId: string | undefined;
       try {
         const sessResp = await fetch(`${runtimeUrl}/api/sessions`, { headers });
         if (sessResp.ok) {
           const sessions = (await sessResp.json()) as Record<string, { filename?: string | null }>;
+          let existingSessionId: string | undefined;
           if (config.file) {
-            // Find a session whose filename ends with our target file
             for (const [sid, info] of Object.entries(sessions)) {
               if (info.filename && info.filename.endsWith(config.file)) {
                 existingSessionId = sid;
@@ -110,26 +112,20 @@ export default function NotebookBoot({
               }
             }
           }
-          // Clear sessions that DON'T match our file (truly stale)
-          for (const sid of Object.keys(sessions)) {
-            if (sid !== existingSessionId) {
-              await fetch(`${runtimeUrl}/api/home/shutdown_session`, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ sessionId: sid }),
-              }).catch(() => {});
-            }
+          if (existingSessionId || Object.keys(sessions).length > 0) {
+            await fetch(`${runtimeUrl}/api/kernel/takeover`, {
+              method: "POST",
+              headers,
+              body: "{}",
+            }).catch(() => {});
+          }
+          if (existingSessionId) {
+            const { setSessionId } = await import("@/core/kernel/session");
+            setSessionId(existingSessionId as any);
           }
         }
       } catch {}
       if (cancelled) return;
-
-      // Step 4: If we found a reusable session, set it as the active session ID
-      // so the notebook reconnects to it instead of creating a new one.
-      if (existingSessionId) {
-        const { setSessionId } = await import("@/core/kernel/session");
-        setSessionId(existingSessionId as any);
-      }
 
       const client = createSignalpilotClient({
         runtimeConfig: {

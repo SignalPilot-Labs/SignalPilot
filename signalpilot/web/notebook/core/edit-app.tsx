@@ -1,6 +1,7 @@
 import { usePrevious } from "@dnd-kit/utilities";
 import { Tooltip } from "radix-ui";
 import { spApiUrl } from "@/core/network/api";
+import { apiCall } from "@/core/network/api-call";
 
 const TooltipProvider = Tooltip.Provider;
 
@@ -18,6 +19,7 @@ import { SPA_NAVIGATE_EVENT } from "./router/spa-navigate";
 import { activeTabIdAtom, openFileInTab, openTabsAtom, useActiveTab } from "./file-tabs";
 import { isSwitchingNotebookAtom } from "./notebook-switcher";
 import { dbtProjectDirAtom, dbtProjectInfoAtom } from "@/components/editor/dbt/use-dbt";
+import type { DbtProjectInfo } from "@/components/editor/dbt/types";
 import { gatewayBranchIdAtom } from "@/core/branch/branch-state";
 import { getGatewayBranchId, getGatewayProjectId, setGatewayBranchId, setGatewayProjectId } from "./network/api";
 import { getApiHeaders } from "./network/api-headers";
@@ -167,7 +169,6 @@ export const EditApp: React.FC<AppProps> = ({
         // Cloud project: sync-down if not already synced by NotebookBoot.
         // dbtProjectDirAtom being set means boot already synced.
         try {
-          const { apiCall } = await import("@/core/network/api-call");
           const result = await apiCall<{ local_dir?: string; file_count?: number }>("/project/sync-down", {});
           if (result.local_dir) {
             console.log(`[Sync] Synced ${result.file_count} files to ${result.local_dir}`);
@@ -175,15 +176,13 @@ export const EditApp: React.FC<AppProps> = ({
 
             // Pre-detect dbt project so the panel is ready when opened.
             // Uses apiCall() which only needs the runtime health check — no kernel.
-            import("@/core/network/api-call").then(({ apiCall }) =>
-              apiCall("/dbt/project_info", { projectDir: result.local_dir })
-                .then((info: any) => {
-                  if (info?.found) {
-                    store.set(dbtProjectInfoAtom, info);
-                  }
-                })
-                .catch(() => {})
-            );
+            apiCall<DbtProjectInfo>("/dbt/project_info", { projectDir: result.local_dir })
+              .then((info) => {
+                if (info?.found) {
+                  store.set(dbtProjectInfoAtom, info);
+                }
+              })
+              .catch(() => {});
           }
         } catch (e) {
           console.error("[Sync] Failed:", e);

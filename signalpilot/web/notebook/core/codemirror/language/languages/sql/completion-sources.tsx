@@ -5,10 +5,19 @@ import {
 } from "@codemirror/lang-sql";
 import type { EditorState } from "@codemirror/state";
 import { DefaultSqlTooltipRenders } from "@/packages/codemirror-sql";
-import { once } from "@/utils/once";
+import type { SqlKeywordInfo } from "@/packages/codemirror-sql/sql/hover";
+import * as commonKeywordsJson from "@/packages/codemirror-sql/data/common-keywords.json";
+import * as duckdbKeywordsJson from "@/packages/codemirror-sql/data/duckdb-keywords.json";
 import { languageMetadataField } from "../../metadata";
 import { SCHEMA_CACHE } from "./completion-store";
 import type { SQLLanguageAdapterMetadata } from "./sql";
+
+// Merged keyword docs map — common SQL keywords plus DuckDB-specific keywords.
+// Include DuckDB for now, but we can remove this once we have a better way to handle dialect-specific keywords
+const KEYWORD_DOCS: Record<string, SqlKeywordInfo> = {
+  ...commonKeywordsJson.keywords,
+  ...duckdbKeywordsJson.keywords,
+};
 
 function getSQLMetadata(state: EditorState): SQLLanguageAdapterMetadata {
   return state.field(languageMetadataField) as SQLLanguageAdapterMetadata;
@@ -60,9 +69,8 @@ export function customKeywordCompletionSource(): CompletionSource {
       return {
         label,
         type,
-        info: async () => {
-          const keywordDocs = await getKeywordDocs();
-          const keywordInfo = keywordDocs[label.toLocaleLowerCase()];
+        info: () => {
+          const keywordInfo = KEYWORD_DOCS[label.toLocaleLowerCase()];
           if (!keywordInfo) {
             return null;
           }
@@ -86,16 +94,3 @@ export function customKeywordCompletionSource(): CompletionSource {
     return result;
   };
 }
-
-// e.g. lazily load keyword docs
-const getKeywordDocs = once(async (): Promise<Record<string, unknown>> => {
-  const keywords =
-    await import("@/packages/codemirror-sql/data/common-keywords.json");
-  // Include DuckDB for now, but we can remove this once we have a better way to handle dialect-specific keywords
-  const duckdbKeywords =
-    await import("@/packages/codemirror-sql/data/duckdb-keywords.json");
-  return {
-    ...keywords.default.keywords,
-    ...duckdbKeywords.default.keywords,
-  };
-});

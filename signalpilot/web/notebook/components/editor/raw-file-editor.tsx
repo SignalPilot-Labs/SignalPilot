@@ -1,4 +1,5 @@
 import { spApiUrl } from "@/core/network/api";
+import { apiCall } from "@/core/network/api-call";
 import {
   bracketMatching,
   foldGutter,
@@ -102,7 +103,6 @@ export function isRawFile(filename: string | null): boolean {
 
 
 async function fetchFileContents(path: string): Promise<string> {
-  const { apiCall } = await import("@/core/network/api-call");
   const data = await apiCall<{ contents?: string }>("/files/file_details", { path });
   return data.contents || "";
 }
@@ -111,7 +111,6 @@ async function saveFileContents(
   path: string,
   contents: string,
 ): Promise<boolean> {
-  const { apiCall } = await import("@/core/network/api-call");
   const data = await apiCall<{ success: boolean }>("/files/update", { path, contents });
   return data.success;
 }

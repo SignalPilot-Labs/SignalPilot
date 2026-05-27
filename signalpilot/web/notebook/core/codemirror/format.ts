@@ -22,6 +22,10 @@ import {
 } from "./language/utils";
 import { replaceEditorContent } from "./replace-editor-content";
 
+// Module-level promise: started immediately, awaited in formatSQL and getSqlFormatterDialect.
+// Preserves the existing lazy chunk-split while de-duplicating the promise.
+const sqlFormatterPromise = import("sql-formatter");
+
 export const formattingChangeEffect = StateEffect.define<boolean>();
 
 /**
@@ -81,8 +85,7 @@ export function formatAll() {
  * don't want to tie the two together (just yet).
  */
 export async function formatSQL(editor: EditorView, engine: ConnectionName) {
-  // Lazy import sql-formatter
-  const { formatDialect } = await import("sql-formatter");
+  const { formatDialect } = await sqlFormatterPromise;
 
   const sqlDialect = SCHEMA_CACHE.getInternalDialect(engine);
   const formatterDialect = await getSqlFormatterDialect(sqlDialect);
@@ -147,7 +150,7 @@ async function getSqlFormatterDialect(
     transactsql,
     singlestoredb,
     snowflake,
-  } = await import("sql-formatter");
+  } = await sqlFormatterPromise;
 
   const defaultDialect = sql;
 

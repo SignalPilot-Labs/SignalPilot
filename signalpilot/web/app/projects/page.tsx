@@ -52,7 +52,8 @@ export default function ProjectsPage() {
 
   const urlProject = searchParams.get("project") || "";
   const urlBranch = searchParams.get("branch") || "";
-  const urlFile = searchParams.get("file") || "";
+  const rawFile = searchParams.get("file") || "";
+  const urlFile = rawFile === "__new__project" ? "" : rawFile;
   const hasDeepLink = Boolean(urlProject);
 
   const [state, setState] = useState<AppState>("loading");

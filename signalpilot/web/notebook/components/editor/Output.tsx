@@ -393,10 +393,16 @@ export const OutputArea = React.memo(
 );
 OutputArea.displayName = "OutputArea";
 
+const CUSTOM_PROPS = new Set(["cellId", "forceExpand"]);
 const Div = React.forwardRef<
   HTMLDivElement,
-  React.ComponentPropsWithoutRef<"div">
->((props, ref) => <div ref={ref} {...props} />);
+  React.ComponentPropsWithoutRef<"div"> & Record<string, unknown>
+>((props, ref) => {
+  const filtered = Object.fromEntries(
+    Object.entries(props).filter(([k]) => !CUSTOM_PROPS.has(k)),
+  );
+  return <div ref={ref} {...filtered} />;
+});
 Div.displayName = "Div";
 
 /**

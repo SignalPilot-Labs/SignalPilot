@@ -354,7 +354,11 @@ export function registerReactComponent<T>(plugin: IPlugin<T, unknown>): void {
 
     disconnectedCallback() {
       this.observer.disconnect();
-      this.root?.unmount();
+      // Defer unmount to avoid "synchronously unmount during render" race.
+      const root = this.root;
+      if (root) {
+        setTimeout(() => root.unmount(), 0);
+      }
       if (this.mounted) {
         this.mounted = false;
       }

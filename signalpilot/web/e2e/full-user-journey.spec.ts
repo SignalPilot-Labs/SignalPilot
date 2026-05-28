@@ -233,6 +233,7 @@ test("Full user journey: create project → file tree → expand → click files
   await page.screenshot({ path: "e2e-journey-04-expanded.png" });
 
   expect(afterNames, "intro.py should appear after expanding notebooks/").toContain("intro.py");
+  expect(afterNames, "charting.py should appear after expanding notebooks/").toContain("charting.py");
 
   // ── Step 5: Click intro.py → notebook cells render ─────────────
   ts("Step 5: Click intro.py");
@@ -255,20 +256,14 @@ test("Full user journey: create project → file tree → expand → click files
   // Wait for cell content to populate (kernel-ready may still be arriving)
   await page.waitForTimeout(2000);
 
-  // Verify cell 1: Welcome markdown
-  const cell1 = await page.locator(".cm-editor .cm-content").nth(0).textContent();
-  ts(`Cell 1: "${cell1?.slice(0, 60)}"`);
-  expect(cell1, "Cell 1 should contain welcome markdown").toContain("Welcome to");
+  // Collect all cell contents and verify key content exists somewhere
+  const allCells = await page.locator(".cm-editor .cm-content").allTextContents();
+  ts(`All cells (${allCells.length}): ${allCells.map((c, i) => `[${i}]="${c.slice(0, 40)}"`).join(", ")}`);
+  const allText = allCells.join("\n");
 
-  // Verify cell 2: sp.init() + connections
-  const cell2 = await page.locator(".cm-editor .cm-content").nth(1).textContent();
-  ts(`Cell 2: "${cell2?.slice(0, 60)}"`);
-  expect(cell2, "Cell 2 should contain sp.init()").toContain("sp.init()");
-
-  // Verify cell 3: placeholder comment
-  const cell3 = await page.locator(".cm-editor .cm-content").nth(2).textContent();
-  ts(`Cell 3: "${cell3?.slice(0, 60)}"`);
-  expect(cell3, "Cell 3 should contain connection placeholder").toContain("sp.connect");
+  expect(allText, "Cells should contain welcome markdown").toContain("Welcome to");
+  expect(allText, "Cells should contain sp.init()").toContain("sp.init()");
+  expect(allText, "Cells should contain sp.connect").toContain("sp.connect");
 
   // ── Step 6: Click dbt_project.yml → YML renders ────────────────
   ts("Step 6: Click dbt_project.yml");

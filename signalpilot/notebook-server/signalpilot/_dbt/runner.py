@@ -447,53 +447,335 @@ def scaffold_dbt_project(
     # intro notebook
     f = project_dir / "notebooks" / "intro.py"
     f.write_text(
-        'import signalpilot as sp\n'
-        '\n'
-        '__generated_with = "0.1.0"\n'
-        'app = sp.App()\n'
-        '\n'
-        '\n'
-        '@app.cell\n'
-        'def _():\n'
-        '    sp.md("""\n'
-        f'    # Welcome to {safe_name}\n'
-        '\n'
-        '    This is your project notebook. Use it to explore data, run queries,\n'
-        '    and build analyses alongside your dbt models.\n'
-        '\n'
-        '    ## Getting started\n'
-        '\n'
-        '    1. Connect to your data warehouse with `sp.connect()`\n'
-        '    2. Run SQL queries with `db.query()`\n'
-        '    3. Build dbt models in the `models/` directory\n'
-        '    """)\n'
-        '    return\n'
-        '\n'
-        '\n'
-        '@app.cell\n'
-        'def _():\n'
-        '    import signalpilot as sp\n'
-        '\n'
-        '    sp.init()\n'
-        '    conns = sp.connections()\n'
-        '    conns\n'
-        '    return\n'
-        '\n'
-        '\n'
-        '@app.cell\n'
-        'def _():\n'
-        '    # db = sp.connect("your_connection")\n'
-        '    # db.tables()\n'
-        '    return\n'
-        '\n'
-        '\n'
-        'if __name__ == "__main__":\n'
-        '    app.run()\n',
+        _INTRO_NOTEBOOK.format(name=safe_name),
         encoding="utf-8",
     )
     created.append(str(f))
 
+    # charting demo notebook
+    f = project_dir / "notebooks" / "charting.py"
+    f.write_text(_CHARTING_NOTEBOOK, encoding="utf-8")
+    created.append(str(f))
+
     return str(project_dir), created
+
+
+# ── Notebook templates ─────────────────────────────────────────────
+
+_INTRO_NOTEBOOK = '''\
+import signalpilot
+
+__generated_with = "0.1.0"
+app = signalpilot.App()
+
+
+@app.cell
+def _():
+    import signalpilot as sp
+    return (sp,)
+
+
+@app.cell
+def _(sp):
+    sp.md("""
+    # Welcome to {name}
+
+    This is your project notebook. Use it to explore data, run queries,
+    and build analyses alongside your dbt models.
+
+    ## Getting started
+
+    1. Connect to your data warehouse using the connections panel
+    2. Run SQL queries with `db.query()`
+    3. Build dbt models in the `models/` directory
+    4. Check out **charting.py** for a demo of all visualization types
+    """)
+
+
+@app.cell
+def _(sp):
+    sp.vstack([
+        sp.md("## Your connections"),
+        sp.callout("Run this cell to see available data connections.", kind="info"),
+    ])
+
+
+@app.cell
+def _(sp):
+    sp.init()
+    conns = sp.connections()
+    conns
+    return (conns,)
+
+
+@app.cell
+def _(sp):
+    sp.md("""
+    ## Next steps
+
+    ```python
+    db = sp.connect("your_connection")
+    db.tables()
+    df = db.query("SELECT * FROM your_table LIMIT 100")
+    sp.ui.table(df)
+    ```
+    """)
+
+
+if __name__ == "__main__":
+    app.run()
+'''
+
+_CHARTING_NOTEBOOK = '''\
+import signalpilot
+
+__generated_with = "0.1.0"
+app = signalpilot.App()
+
+
+@app.cell
+def _():
+    import signalpilot as sp
+    import pandas as pd
+    import numpy as np
+    import altair as alt
+    return (sp, pd, np, alt)
+
+
+@app.cell
+def _(sp):
+    sp.md("""
+    # Charting & Visualization Demo
+
+    Every chart type, widget, and layout element available in SignalPilot.
+    All data is generated — no database connection required.
+    """)
+
+
+@app.cell
+def _(pd, np):
+    np.random.seed(42)
+    _n = 60
+    sample_df = pd.DataFrame({
+        "date": pd.date_range("2024-01-01", periods=_n, freq="D"),
+        "revenue": np.cumsum(np.random.uniform(800, 3000, _n)).round(2),
+        "orders": np.random.randint(10, 200, _n),
+        "category": np.random.choice(["Electronics", "Clothing", "Food", "Books"], _n),
+        "region": np.random.choice(["North", "South", "East", "West"], _n),
+        "score": np.random.normal(75, 15, _n).round(1),
+    })
+    return (sample_df,)
+
+
+@app.cell
+def _(sp):
+    sp.md("## Stat Cards")
+
+
+@app.cell
+def _(sp):
+    sp.hstack([
+        sp.stat(value="1,234", label="Users", caption="+12%", direction="increase"),
+        sp.stat(value="$56K", label="Revenue", caption="+8%", direction="increase"),
+        sp.stat(value="98.5%", label="Uptime", caption="-0.2%", direction="decrease"),
+        sp.stat(value="42ms", label="Latency", caption="-5ms", direction="decrease", target_direction="decrease"),
+    ])
+
+
+@app.cell
+def _(sp):
+    sp.md("## Callouts")
+
+
+@app.cell
+def _(sp):
+    sp.vstack([
+        sp.callout("This is an **info** callout — use for tips and context.", kind="info"),
+        sp.callout("This is a **warn** callout — use for important notices.", kind="warn"),
+        sp.callout("This is a **danger** callout — use for errors and warnings.", kind="danger"),
+        sp.callout("This is a **success** callout — use for confirmations.", kind="success"),
+    ])
+
+
+@app.cell
+def _(sp):
+    sp.md("## Altair Charts")
+
+
+@app.cell
+def _(sp, sample_df, alt):
+    _chart = alt.Chart(sample_df).mark_bar().encode(
+        x=alt.X("category:N", title="Category"),
+        y=alt.Y("sum(revenue):Q", title="Total Revenue"),
+        color="category:N",
+    ).properties(width=500, height=300, title="Revenue by Category")
+    sp.vstack([sp.md("### Bar Chart"), _chart])
+
+
+@app.cell
+def _(sp, sample_df, alt):
+    _line = alt.Chart(sample_df).mark_line(point=True).encode(
+        x="date:T",
+        y="revenue:Q",
+        tooltip=["date:T", "revenue:Q", "category:N"],
+    ).properties(width=600, height=300, title="Cumulative Revenue Over Time")
+    sp.vstack([sp.md("### Line Chart"), _line])
+
+
+@app.cell
+def _(sp, sample_df, alt):
+    _scatter = alt.Chart(sample_df).mark_circle(size=60).encode(
+        x="orders:Q",
+        y="revenue:Q",
+        color="category:N",
+        tooltip=["date:T", "orders:Q", "revenue:Q", "category:N"],
+    ).properties(width=500, height=300, title="Orders vs Revenue")
+    sp.vstack([sp.md("### Scatter Plot"), _scatter])
+
+
+@app.cell
+def _(sp, sample_df, alt):
+    _heatmap = alt.Chart(sample_df).mark_rect().encode(
+        x=alt.X("region:N"),
+        y=alt.Y("category:N"),
+        color=alt.Color("mean(score):Q", scale=alt.Scale(scheme="blues")),
+        tooltip=["region:N", "category:N", "mean(score):Q"],
+    ).properties(width=400, height=250, title="Avg Score by Region × Category")
+    sp.vstack([sp.md("### Heatmap"), _heatmap])
+
+
+@app.cell
+def _(sp):
+    sp.md("## Data Tables")
+
+
+@app.cell
+def _(sp, sample_df):
+    sp.vstack([
+        sp.md("### Interactive Table (`sp.ui.table`)"),
+        sp.ui.table(sample_df.head(10)),
+    ])
+
+
+@app.cell
+def _(sp, sample_df):
+    sp.vstack([
+        sp.md("### Data Explorer (`sp.ui.dataframe`)"),
+        sp.md("Filter, sort, search, and transform data interactively."),
+        sp.ui.dataframe(sample_df),
+    ])
+
+
+@app.cell
+def _(sp):
+    sp.md("## Layout Elements")
+
+
+@app.cell
+def _(sp):
+    sp.accordion({
+        "What is SignalPilot?": sp.md("An open-source platform for governed AI database access and notebook-driven analytics."),
+        "How do I connect?": sp.md("Use `sp.connect('name')` with a connection configured in the connections panel."),
+        "Where are my models?": sp.md("dbt models live in the `models/` directory. Run them with the build button."),
+    })
+
+
+@app.cell
+def _(sp, sample_df):
+    sp.tabs({
+        "Summary": sp.vstack([
+            sp.md(f"**{len(sample_df)}** rows, **{len(sample_df.columns)}** columns"),
+            sample_df.describe(),
+        ]),
+        "By Category": sp.ui.table(
+            sample_df.groupby("category").agg({"revenue": "sum", "orders": "sum"}).reset_index()
+        ),
+        "By Region": sp.ui.table(
+            sample_df.groupby("region").agg({"revenue": "sum", "orders": "sum"}).reset_index()
+        ),
+    })
+
+
+@app.cell
+def _(sp):
+    sp.tree({
+        "project/": {
+            "models/": {"staging/": ["stg_orders.sql"], "marts/": ["fct_revenue.sql"]},
+            "notebooks/": ["intro.py", "charting.py"],
+            "dbt_project.yml": None,
+        }
+    })
+
+
+@app.cell
+def _(sp):
+    sp.md("## Interactive Widgets")
+
+
+@app.cell
+def _(sp):
+    chart_type = sp.ui.dropdown(
+        options=["Bar", "Line", "Scatter", "Heatmap"],
+        value="Bar",
+        label="Chart type",
+    )
+    chart_type
+    return (chart_type,)
+
+
+@app.cell
+def _(sp, sample_df, alt, chart_type):
+    _type = chart_type.value
+    if _type == "Bar":
+        _c = alt.Chart(sample_df).mark_bar().encode(x="category:N", y="sum(orders):Q", color="category:N")
+    elif _type == "Line":
+        _c = alt.Chart(sample_df).mark_line().encode(x="date:T", y="orders:Q")
+    elif _type == "Scatter":
+        _c = alt.Chart(sample_df).mark_circle().encode(x="orders:Q", y="score:Q", color="region:N")
+    else:
+        _c = alt.Chart(sample_df).mark_rect().encode(x="region:N", y="category:N", color="count():Q")
+    sp.vstack([
+        sp.md(f"### Reactive {_type} Chart"),
+        _c.properties(width=500, height=280),
+    ])
+
+
+@app.cell
+def _(sp):
+    vis_slider = sp.ui.slider(start=1, stop=60, value=30, label="Days to show")
+    vis_slider
+    return (vis_slider,)
+
+
+@app.cell
+def _(sp, sample_df, vis_slider):
+    _subset = sample_df.head(vis_slider.value)
+    sp.vstack([
+        sp.md(f"Showing **{vis_slider.value}** of {len(sample_df)} days"),
+        sp.ui.table(_subset),
+    ])
+
+
+@app.cell
+def _(sp):
+    sp.md("## Mermaid Diagrams")
+
+
+@app.cell
+def _(sp):
+    sp.mermaid("""
+    graph LR
+        A[Frontend] -->|WebSocket| B[Gateway]
+        B -->|Proxy| C[Notebook Pod]
+        C -->|kernel-ready| A
+        B -->|SQL| D[(Database)]
+        D -->|Results| B
+    """)
+
+
+if __name__ == "__main__":
+    app.run()
+'''
 
 
 def clone_git_repo(

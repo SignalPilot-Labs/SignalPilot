@@ -10,6 +10,7 @@ import { dbtProjectDirAtom } from "../editor/dbt/use-dbt";
 import { Header } from "./components";
 import { store } from "@/core/state/jotai";
 import { gatewayUrlAtom, gatewayApiKeyAtom } from "@/core/meta/state";
+import { getWorkspaceProjects as getWorkspaceProjectsApi, deleteWorkspaceProject as deleteWorkspaceProjectApi } from "~/lib/api";
 import { cn } from "@/utils/cn";
 import { timeAgo } from "@/utils/dates";
 
@@ -47,16 +48,8 @@ function gatewayHeaders(key: string): Record<string, string> {
 }
 
 async function fetchGatewayProjects(): Promise<GatewayProject[]> {
-  const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
-
-  const resp = await fetch(`${gatewayUrl}/api/workspace-projects?status=active&limit=50`, {
-    headers: gatewayHeaders(apiKey),
-  });
-  if (!resp.ok) {
-    throw new Error(`Gateway error: ${resp.status}`);
-  }
-  const data = await resp.json() as { projects?: GatewayProject[] };
-  return data.projects || [];
+  const result = await getWorkspaceProjectsApi("active");
+  return (result.projects || []) as unknown as GatewayProject[];
 }
 
 export const DbtProjectList: React.FC<Props> = ({ onRefresh }) => {
@@ -327,21 +320,9 @@ const DeleteProjectModal: React.FC<{
     setError("");
 
     try {
-      const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
-      const resp = await fetch(
-        `${gatewayUrl}/api/workspace-projects/${project.id}`,
-        {
-          method: "DELETE",
-          headers: gatewayHeaders(apiKey),
-        },
-      );
-      if (resp.ok || resp.status === 204) {
-        toast({ title: "Project deleted", description: `${projectName} has been permanently deleted.` });
-        onDeleted();
-      } else {
-        const data = await resp.text().catch(() => "");
-        setError(`Failed to delete: ${data || resp.statusText}`);
-      }
+      await deleteWorkspaceProjectApi(project.id);
+      toast({ title: "Project deleted", description: `${projectName} has been permanently deleted.` });
+      onDeleted();
     } catch (e) {
       setError(String(e));
     }

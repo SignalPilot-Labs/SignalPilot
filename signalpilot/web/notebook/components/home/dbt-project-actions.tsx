@@ -14,11 +14,19 @@ import { setGatewayBranchId, setGatewayProjectId, spApiUrl } from "@/core/networ
 import { getApiHeaders } from "@/core/network/api-headers";
 import { store } from "@/core/state/jotai";
 import { cn } from "@/utils/cn";
-import { gatewayUrlAtom } from "@/core/meta/state";
-import { getAuthHeaders } from "~/lib/api";
+import { gatewayUrlAtom, gatewayApiKeyAtom } from "@/core/meta/state";
 
-function getGatewayUrl(): string {
-  return store.get(gatewayUrlAtom) || localStorage.getItem("sp:gateway-url") || "http://localhost:3300";
+function getGatewayConfig(): { url: string; key: string } {
+  return {
+    url: store.get(gatewayUrlAtom) || localStorage.getItem("sp:gateway-url") || "http://localhost:3300",
+    key: store.get(gatewayApiKeyAtom) || localStorage.getItem("sp:api-key") || "",
+  };
+}
+
+function gatewayHeaders(key: string): Record<string, string> {
+  if (!key) {return {};}
+  if (key.includes(".")) {return { Authorization: `Bearer ${key}` };}
+  return { "X-API-Key": key };
 }
 
 interface Props {
@@ -94,9 +102,8 @@ const CreateProjectForm: React.FC<{
 
     setLoading(true);
     try {
-      const gatewayUrl = getGatewayUrl();
-      const authHdrs = await getAuthHeaders();
-      const hdrs = { ...authHdrs, "Content-Type": "application/json" };
+      const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
+      const hdrs = { ...gatewayHeaders(apiKey), "Content-Type": "application/json" };
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
 
       // 1. Create project on gateway
@@ -269,12 +276,12 @@ const GitHubImportForm: React.FC<{
   const [selectedInstall, setSelectedInstall] = useState<GitHubInstallation | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
 
-  const gatewayUrl = getGatewayUrl();
+  const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
+  const hdrs = gatewayHeaders(apiKey);
 
   const loadInstallations = useCallback(async () => {
     setLoadingInstalls(true);
     try {
-      const hdrs = await getAuthHeaders();
       const resp = await fetch(`${gatewayUrl}/api/github/installations`, { headers: hdrs });
       if (resp.ok) {
         const data = await resp.json() as GitHubInstallation[] | { installations?: GitHubInstallation[] };
@@ -286,7 +293,7 @@ const GitHubImportForm: React.FC<{
       }
     } catch {}
     setLoadingInstalls(false);
-  }, [gatewayUrl]);
+  }, [gatewayUrl, apiKey]);
 
   useEffect(() => {
     loadInstallations();
@@ -295,21 +302,18 @@ const GitHubImportForm: React.FC<{
   useEffect(() => {
     if (!selectedInstall) {return;}
     setLoadingRepos(true);
-    getAuthHeaders().then((hdrs) =>
-      fetch(`${gatewayUrl}/api/github/installations/${selectedInstall.id}/repos`, { headers: hdrs })
-        .then((r) => r.ok ? r.json() as Promise<GitHubRepo[] | { repos?: GitHubRepo[] }> : Promise.resolve([] as GitHubRepo[]))
-        .then((data) => setRepos(Array.isArray(data) ? data : data.repos || []))
-        .catch(() => setRepos([]))
-        .finally(() => setLoadingRepos(false))
-    );
-  }, [selectedInstall, gatewayUrl]);
+    fetch(`${gatewayUrl}/api/github/installations/${selectedInstall.id}/repos`, { headers: hdrs })
+      .then((r) => r.ok ? r.json() as Promise<GitHubRepo[] | { repos?: GitHubRepo[] }> : Promise.resolve([] as GitHubRepo[]))
+      .then((data) => setRepos(Array.isArray(data) ? data : data.repos || []))
+      .catch(() => setRepos([]))
+      .finally(() => setLoadingRepos(false));
+  }, [selectedInstall, gatewayUrl, apiKey]);
 
   const handleImportRepo = async (repo: GitHubRepo) => {
     if (!selectedInstall) {return;}
     setImporting(repo.full_name);
 
     try {
-      const hdrs = await getAuthHeaders();
       // Create project on gateway
       const createResp = await fetch(`${gatewayUrl}/api/workspace-projects`, {
         method: "POST",

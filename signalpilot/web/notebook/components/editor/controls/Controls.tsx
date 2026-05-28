@@ -108,13 +108,11 @@ export const Controls = ({
               tooltip={connectionTooltip}
             />
             <ConfigButton disabled={disabled} tooltip={connectionTooltip} />
-            <ShutdownButton
-              description="This will terminate the Python kernel. You'll lose all data that's in memory."
-              disabled={disabled}
-              tooltip={connectionTooltip}
-            />
           </>
         )}
+        <ShutdownButton
+          description="This will terminate the Python kernel. You'll lose all data that's in memory."
+        />
       </div>
 
       <div className={cn(bottomRightControls)}>
@@ -170,21 +168,21 @@ const RawFileControls: React.FC<{
     <>
       <FindReplace />
 
-      {!closed && (
-        <div className={topRightControls}>
-          <DbtToolbar />
-          <NotebookMenuDropdown
-            disabled={disabled}
-            tooltip={connectionTooltip}
-          />
-          <ConfigButton disabled={disabled} tooltip={connectionTooltip} />
-          <ShutdownButton
-            description="This will terminate the Python kernel. You'll lose all data that's in memory."
-            disabled={disabled}
-            tooltip={connectionTooltip}
-          />
-        </div>
-      )}
+      <div className={topRightControls}>
+        {!closed && (
+          <>
+            <DbtToolbar />
+            <NotebookMenuDropdown
+              disabled={disabled}
+              tooltip={connectionTooltip}
+            />
+            <ConfigButton disabled={disabled} tooltip={connectionTooltip} />
+          </>
+        )}
+        <ShutdownButton
+          description="This will terminate the Python kernel. You'll lose all data that's in memory."
+        />
+      </div>
 
       <div className={cn(bottomRightControls)}>
         <Tooltip content={renderShortcut("global.save")}>

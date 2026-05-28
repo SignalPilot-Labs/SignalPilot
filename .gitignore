@@ -80,3 +80,21 @@ autocode-auth/.next/
 autocode-auth/node_modules/
 test_notebook_e2e.py
 test_cloud_notebook.py
+
+# Scratch / working files
+*.png
+!signalpilot/web/public/**/*.png
+!signalpilot/web/app/**/*.png
+handoff*.md
+agent-notebooks.md
+blog-post.md
+bm-prompting.md
+knowledge-base-spec.md
+local-instructions.md
+marimo-ref.md
+security-audit.md
+dashboard_products.py
+Dockerfile.web.dockerignore
+signalpilot/web/e2e-*.png
+signalpilot/web/e2e-journey-*.png
+signalpilot/web/test-results/

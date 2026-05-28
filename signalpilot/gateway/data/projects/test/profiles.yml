@@ -3,4 +3,4 @@ test:
   outputs:
     dev:
       type: duckdb
-      path: 'C:\Users\kiwi0\Desktop\SPEcosystem\spider2-repo\spider2-dbt\evaluation_suite\gold\activity001\activity.duckdb'
+      path: './activity.duckdb'

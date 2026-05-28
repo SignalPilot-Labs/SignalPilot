@@ -1,17 +1,14 @@
 import { ArrowLeftIcon } from "lucide-react";
-import { navigate } from "@/embed/host-navigate";
 
 import { Tooltip } from "../../ui/tooltip";
 import { Button } from "../inputs/Inputs";
 
 interface Props {
   description?: string;
-  disabled?: boolean;
   tooltip?: string;
 }
 
 export const ShutdownButton: React.FC<Props> = ({
-  disabled = false,
   tooltip = "Back to home",
 }) => {
   return (
@@ -21,13 +18,11 @@ export const ShutdownButton: React.FC<Props> = ({
         data-testid="back-button"
         shape="circle"
         size="small"
-        color={disabled ? "disabled" : "hint-green"}
+        color="hint-green"
         className="h-[27px] w-[27px]"
-        disabled={disabled}
         onClick={(e) => {
           e.stopPropagation();
-          const withoutSearch = document.baseURI.split("?")[0];
-          navigate(withoutSearch);
+          window.location.href = "/projects";
         }}
       >
         <ArrowLeftIcon strokeWidth={1.5} />

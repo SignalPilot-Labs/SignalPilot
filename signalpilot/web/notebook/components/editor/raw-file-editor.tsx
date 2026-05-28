@@ -1,4 +1,4 @@
-import { apiCall } from "@/core/network/api-call";
+import { spApiUrl } from "@/core/network/api";
 import {
   bracketMatching,
   foldGutter,
@@ -26,6 +26,7 @@ import { toast } from "@/components/ui/use-toast";
 import { cn } from "@/utils/cn";
 import { darkTheme } from "@/core/codemirror/theme/dark";
 import { lightTheme } from "@/core/codemirror/theme/light";
+import { getApiHeaders } from "@/core/network/api-headers";
 import { filenameAtom } from "@/core/saving/file-state";
 import { useTheme } from "@/theme/useTheme";
 import { LazyAnyLanguageCodeMirror } from "@/plugins/impl/code/LazyAnyLanguageCodeMirror";
@@ -101,6 +102,7 @@ export function isRawFile(filename: string | null): boolean {
 
 
 async function fetchFileContents(path: string): Promise<string> {
+  const { apiCall } = await import("@/core/network/api-call");
   const data = await apiCall<{ contents?: string }>("/files/file_details", { path });
   return data.contents || "";
 }
@@ -109,6 +111,7 @@ async function saveFileContents(
   path: string,
   contents: string,
 ): Promise<boolean> {
+  const { apiCall } = await import("@/core/network/api-call");
   const data = await apiCall<{ success: boolean }>("/files/update", { path, contents });
   return data.success;
 }
@@ -160,13 +163,13 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
   }, [isDirty, setRawNeedsSave]);
 
   // Project context
-  const projectDir = useMemo(() => {
+  const projectDir = (() => {
     try {
       const raw = localStorage.getItem("sp:dbt-project-dir");
-      if (raw && raw !== "null") return JSON.parse(raw) as string;
+      if (raw && raw !== "null") {return JSON.parse(raw) as string;}
     } catch { /* ignore */ }
     return null;
-  }, []);
+  })();
   const projectName = projectDir?.split(/[/\\]/).pop() || null;
   const relativePath = projectDir && filename?.startsWith(projectDir)
     ? filename.slice(projectDir.length).replace(/^[/\\]/, "")

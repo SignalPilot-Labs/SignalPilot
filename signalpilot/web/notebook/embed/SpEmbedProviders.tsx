@@ -8,9 +8,11 @@ import {
 import {
   bindRegistries,
   unbindRegistries,
+  ensureModuleRegistries,
   bindClient,
   unbindClient,
 } from "./client-binding";
+import { createClientRegistries } from "./registries-factory";
 import { EmbedPortalProvider } from "./portal-container";
 import { SpEmbedConfigContext } from "./SpEmbedConfigContext";
 import { initStoreOnce } from "./initStoreOnce";
@@ -27,6 +29,8 @@ export function SpEmbedProviders({
   children,
 }: SpEmbedProvidersProps): React.ReactElement {
   const initDone = useRef(false);
+
+  ensureModuleRegistries(createClientRegistries);
 
   // Synchronously bind the client store during render so that non-hook code
   // (getRuntimeManager, API headers) can read from it immediately.

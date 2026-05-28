@@ -155,7 +155,7 @@ def _pod_manifest(
                         "sh", "-c",
                         "while [ ! -f /workspace/.sp-ready ]; do sleep 0.2; done; "
                         f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
-                        f"--no-skew-protection --allow-origins '*' "
+                        f"--no-skew-protection --allow-origins 'http://localhost:3200,http://localhost:3300' "
                         f"--base-url /notebook/{session_id} /workspace",
                     ],
                     "ports": [{"containerPort": 2718}],
@@ -166,7 +166,7 @@ def _pod_manifest(
                     },
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
-                        "readOnlyRootFilesystem": True,
+                        "readOnlyRootFilesystem": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
                     "volumeMounts": [

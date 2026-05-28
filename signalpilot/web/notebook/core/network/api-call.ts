@@ -1,4 +1,3 @@
-import { tryGetNotebookConfig, type NotebookConfig } from "~/components/notebook/notebook-context";
 import { Logger } from "@/utils/Logger";
 import { Strings } from "@/utils/strings";
 import { getRuntimeManager } from "../runtime/config";
@@ -9,78 +8,44 @@ import {
 import { waitForConnectionOpen } from "./connection";
 
 /**
- * Wait for the pod to be verified reachable.
+ * Resolve the base URL and auth headers for API calls.
  *
- * RuntimeManager.waitForHealthy() resolves once the boot sequence
- * (NotebookBoot or standalone init) confirms the pod responds to
- * health checks. This prevents API calls from firing before the pod
- * connection is established — e.g. after a page refresh where
- * NotebookConfig is set from React props but the pod hasn't been
- * re-verified yet.
+ * Tries RuntimeManager first (works after the notebook has fully initialised).
+ * Falls back to NotebookConfig (works during boot before RuntimeManager exists).
  */
-async function waitForPodReady(): Promise<void> {
-  try {
-    const rm = getRuntimeManager();
-    if (!rm.isLazy) {
-      await rm.waitForHealthy();
-    }
-  } catch {
-    // RuntimeManager not initialized yet (during early boot) — skip
-  }
-}
-
-interface BaseUrlAndHeaders {
+async function getBaseUrlAndHeaders(): Promise<{
   baseUrl: string;
   headers: Record<string, string>;
-}
+}> {
+  // Use NotebookConfig first — instant, no waiting, always available after boot.
+  try {
+    const { getNotebookConfig } = await import(
+      /* webpackIgnore: true */ "../../components/notebook/notebook-context"
+    );
+    const config = getNotebookConfig();
+    return {
+      baseUrl: `${config.gatewayUrl}/notebook/${config.sessionId}/`,
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        "Content-Type": "application/json",
+      },
+    };
+  } catch {
+    /* NotebookConfig not set — fall through to RuntimeManager */
+  }
 
-/**
- * Notebook mode: resolve URL and headers directly from NotebookConfig.
- * Config is already set by React context — no async overhead.
- */
-function resolveFromNotebookConfig(config: NotebookConfig): BaseUrlAndHeaders {
-  return {
-    baseUrl: `${config.gatewayUrl}/notebook/${config.sessionId}/`,
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
-  };
-}
-
-/**
- * Standalone mode: resolve URL and headers from the RuntimeManager.
- * Waits for the runtime to become healthy before returning.
- */
-async function resolveFromRuntimeManager(): Promise<BaseUrlAndHeaders> {
+  // Fallback: RuntimeManager (standalone mode / after full init)
   const rm = getRuntimeManager();
   await rm.waitForHealthy();
   const url = rm.httpURL;
   url.search = "";
   url.hash = "";
-  return {
-    baseUrl: Strings.withTrailingSlash(url.toString()),
-    headers: {
-      "Content-Type": "application/json",
-      ...(await rm.headers()),
-    },
+  const baseUrl = Strings.withTrailingSlash(url.toString());
+  const hdrs: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(await rm.headers()),
   };
-}
-
-/**
- * Resolve the base URL and auth headers for API calls.
- *
- * If NotebookConfig is set (notebook mode), uses that — instant, no async overhead.
- * Otherwise delegates to RuntimeManager (standalone mode).
- * Both paths wait for the pod health check before returning.
- */
-async function getBaseUrlAndHeaders(): Promise<BaseUrlAndHeaders> {
-  const config = tryGetNotebookConfig();
-  if (config) {
-    await waitForPodReady();
-    return resolveFromNotebookConfig(config);
-  }
-  return resolveFromRuntimeManager();
+  return { baseUrl, headers: hdrs };
 }
 
 /**

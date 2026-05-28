@@ -64,8 +64,7 @@ services:
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
-    ports:
-      - "3300:3300"
+    network_mode: "service:k3s"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
       SP_DATA_DIR: /data
@@ -92,7 +91,6 @@ services:
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       SP_NOTEBOOK_UPSTREAM_MODE: pod_ip
       SP_NOTEBOOK_NETWORK_POLICY: "false"
-      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_GATEWAY_NAMESPACE: signalpilot
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
       SP_PUBLIC_GATEWAY_PORT: "3300"
@@ -130,6 +128,8 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+      k3s:
+        condition: service_started
     restart: unless-stopped
 
   web:

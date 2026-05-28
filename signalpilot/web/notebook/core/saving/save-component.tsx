@@ -1,6 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { SaveIcon } from "lucide-react";
-import { isSwitchingNotebookAtom } from "@/core/notebook-switcher";
 import { useState } from "react";
 import { FilenameInput } from "@/components/editor/header/filename-input";
 import { Button as ControlButton } from "@/components/editor/inputs/Inputs";
@@ -112,6 +111,7 @@ export function useSaveNotebook() {
       }
 
       // DEFENSE: Block saves during notebook switching
+      const { isSwitchingNotebookAtom } = await import("@/core/notebook-switcher");
       if (store.get(isSwitchingNotebookAtom)) {
         Logger.log("save blocked: notebook switch in progress");
         return;

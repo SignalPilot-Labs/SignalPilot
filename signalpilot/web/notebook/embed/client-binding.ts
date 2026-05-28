@@ -1,13 +1,10 @@
 /**
  * Per-client registry bind stack — mirrors store-binding.ts.
  *
- * Both entry points (mount.tsx for standalone, SpEmbedProviders.tsx for embed)
- * explicitly call into this file. No lazy/fallback init exists.
- *
  * Circular import prevention: this file does NOT import from registries-factory.ts
  * or any concrete registry class at module-evaluation time. The module-singleton
  * registries are provided to this file via initModuleRegistries(), called from
- * mount.tsx (standalone) after all modules load.
+ * mount.tsx (standalone) and SpEmbedProviders.tsx (embed) after all modules load.
  *
  * Why not a top-level createClientRegistries() call here: UIElementRegistry and
  * friends import getCurrentRegistries() from this file. If this file eagerly
@@ -44,6 +41,29 @@ const _bindStack: ClientRegistries[] = [];
 const _clientStack: SignalpilotClient[] = [];
 
 /**
+ * Optional lazy-factory hook. When set, `_requireModuleRegistries()` calls
+ * this instead of falling back to require(). Set by `registerLazyFactory()`
+ * which is called from `setup.ts` in test environments and from
+ * `registries-factory.ts` at module-load time in production.
+ */
+let _lazyFactory: (() => ClientRegistries) | undefined;
+
+/**
+ * Register a factory function that `_requireModuleRegistries()` can call to
+ * auto-initialize when no explicit `initModuleRegistries()` has occurred.
+ *
+ * This is the safe alternative to `require("./registries-factory")` in
+ * ESM/Vitest environments where relative `require()` paths don't resolve
+ * correctly from transformed source files.
+ *
+ * Call this from `registries-factory.ts` (side-effect at module load) and
+ * from `setup.ts` in test environments.
+ */
+export function registerLazyFactory(factory: () => ClientRegistries): void {
+  _lazyFactory = factory;
+}
+
+/**
  * Called once by mount.tsx (standalone) to provide the module-singleton
  * registries and seed the bind stack. Idempotent — safe to call multiple
  * times (only the first call has effect). After this call, INSTANCE getters
@@ -58,16 +78,60 @@ export function initModuleRegistries(r: ClientRegistries): void {
   _currentRegistries = r;
 }
 
-function _requireModuleRegistries(): ClientRegistries {
+/**
+ * Ensure module registries are initialized using a factory function, if not
+ * already done. The factory is called at most once.
+ * Used by SpEmbedProviders when no explicit initModuleRegistries() call has
+ * occurred (e.g. embed-only pages that never call mount()).
+ * @internal
+ */
+export function ensureModuleRegistries(
+  factory: () => ClientRegistries,
+): ClientRegistries {
   if (!_moduleRegistriesValue) {
-    throw new Error(
-      "SignalPilot: ClientRegistries not initialized. " +
-        "Call initModuleRegistries() (standalone) or bindRegistries() (embed) " +
-        "before accessing INSTANCE getters.",
-    );
+    initModuleRegistries(factory());
+  }
+  // _moduleRegistriesValue is guaranteed non-null here (initModuleRegistries
+  // always sets it). TypeScript cannot infer this through initModuleRegistries,
+  // so we use a runtime-checked cast.
+  if (!_moduleRegistriesValue) {
+    throw new Error("SignalPilot: ensureModuleRegistries invariant violated");
   }
   return _moduleRegistriesValue;
 }
+
+function _requireModuleRegistries(): ClientRegistries {
+  if (!_moduleRegistriesValue) {
+    if (_lazyFactory) {
+      // Factory registered via registerLazyFactory() — preferred path.
+      // registries-factory.ts self-registers at module-load time (production:
+      // mount.tsx, SpEmbedProviders.tsx; tests: setup.ts or model.test.ts).
+      initModuleRegistries(_lazyFactory());
+    } else {
+      throw new Error(
+        "SignalPilot: ClientRegistries not initialized. " +
+          "Call initModuleRegistries() (standalone) or ensure registries-factory is " +
+          "imported (embed / tests) before accessing INSTANCE getters.",
+      );
+    }
+  }
+  if (!_moduleRegistriesValue) {
+    throw new Error("SignalPilot: _requireModuleRegistries invariant violated");
+  }
+  return _moduleRegistriesValue;
+}
+
+// Proxy so that consumers of _moduleRegistries always read the live, initialized
+// value even if they import it before initModuleRegistries() runs.
+export const _moduleRegistries: ClientRegistries = new Proxy(
+  {} as ClientRegistries,
+  {
+    get(_t, p) {
+      const r = _requireModuleRegistries();
+      return Reflect.get(r, p, r);
+    },
+  },
+);
 
 export function getCurrentRegistries(): ClientRegistries {
   if (_currentRegistries) {
@@ -77,9 +141,7 @@ export function getCurrentRegistries(): ClientRegistries {
 }
 
 export function bindRegistries(r: ClientRegistries): void {
-  // No module-singleton assertion: embed mode calls bindRegistries without a
-  // preceding initModuleRegistries(). The per-client registries pushed here
-  // ARE the live registries; _currentRegistries is sufficient.
+  _requireModuleRegistries(); // assert initialized
   _bindStack.push(r);
   _currentRegistries = r;
 }
@@ -96,11 +158,7 @@ export function unbindRegistries(r: ClientRegistries): void {
   }
   _bindStack.pop();
   const prev = _bindStack[_bindStack.length - 1];
-  // In standalone mode the module singleton is always in the stack; `prev` is
-  // guaranteed to be set after popping the per-client entry. In embed-only mode
-  // the stack may empty on the last client's unmount — fall back to the module
-  // singleton when available, otherwise clear _currentRegistries.
-  _currentRegistries = prev ?? _moduleRegistriesValue;
+  _currentRegistries = prev ?? _requireModuleRegistries();
 }
 
 /**
@@ -134,4 +192,18 @@ export function unbindClient(c: SignalpilotClient): void {
     );
   }
   _clientStack.pop();
+}
+
+/**
+ * Reset bind stack to initial state — exposed only for testing.
+ * Do NOT call in production code.
+ */
+export function _resetClientBindStackForTests(): void {
+  // In test environments, _moduleRegistriesValue may already be set.
+  // Allow re-seeding the stack to the module singleton.
+  const mod = _requireModuleRegistries();
+  _bindStack.length = 0;
+  _bindStack.push(mod);
+  _currentRegistries = mod;
+  _clientStack.length = 0;
 }

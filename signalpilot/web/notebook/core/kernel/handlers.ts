@@ -140,9 +140,12 @@ export function handleKernelReady(
   const cells =
     hasExistingCells && !resumed ? existingCells : buildCellData(data);
 
+  console.log("[handleKernelReady] hasExisting:", hasExistingCells, "resumed:", resumed, "using:", hasExistingCells && !resumed ? "EXISTING" : "SERVER", "cellCount:", cells.length);
+
   // Set up layout and cells
   const layoutState = buildLayoutState(data, cells, setLayoutData);
   setCells(cells, layoutState);
+  console.log("[handleKernelReady] setCells done with", cells.length, "cells");
 
   // Set app config and capabilities
   const parsedAppConfig = AppConfigSchema.safeParse(app_config);

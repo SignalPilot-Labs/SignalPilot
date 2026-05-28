@@ -87,7 +87,7 @@ export const EditApp: React.FC<AppProps> = ({
   useEffect(() => {
     RuntimeState.INSTANCE.start(sendComponentValues);
     return () => {
-      RuntimeState.INSTANCE.stop();
+      try { RuntimeState.INSTANCE.stop(); } catch { /* client already disposed */ }
     };
   }, []);
 
@@ -202,9 +202,10 @@ export const EditApp: React.FC<AppProps> = ({
       }
 
       if (filePath && !filePath.startsWith("__new__")) {
+        console.log("[EditApp.init] opening file tab:", filePath.slice(-50));
         openFileInTab(filePath, isRawFallback);
       } else if (!fileInUrl || fileInUrl.startsWith("__new__")) {
-        // Clear stale tabs from previous projects
+        console.log("[EditApp.init] __new__ project — clearing tabs");
         store.set(openTabsAtom, []);
         store.set(activeTabIdAtom, null);
       }
@@ -228,6 +229,7 @@ export const EditApp: React.FC<AppProps> = ({
     const onUrlChange = () => {
       const params = new URL(window.location.href).searchParams;
       const file = params.get(KnownQueryParams.filePath);
+      console.log("[onUrlChange] file param:", file, "activeTabPath:", activeTabPathRef.current?.slice(-30));
       if (!file || file.startsWith("__new__")) return;
       // Resolve relative paths (e.g. "notebooks/intro.py" → "/workspace/.../notebooks/intro.py")
       let filePath = file;
@@ -235,7 +237,11 @@ export const EditApp: React.FC<AppProps> = ({
       if (projectDir && !filePath.startsWith("/")) {
         filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
       }
-      if (activeTabPathRef.current === filePath) return;
+      if (activeTabPathRef.current === filePath) {
+        console.log("[onUrlChange] same path — skipping");
+        return;
+      }
+      console.log("[onUrlChange] opening:", filePath.slice(-50));
       openFileInTab(filePath);
     };
     window.addEventListener("popstate", onUrlChange);
@@ -299,16 +305,28 @@ export const EditApp: React.FC<AppProps> = ({
   useEffect(() => {
     if (activeTab?.type !== "notebook") {return;}
     const newPath = activeTab.path;
-    if (currentWsPath.current === null) {
-      currentWsPath.current = newPath;
-      return;
-    }
-    if (currentWsPath.current !== newPath) {
-      currentWsPath.current = newPath;
-      store.set(isSwitchingNotebookAtom, true);
-      forceReconnect();
-    }
+    if (currentWsPath.current === newPath) {return;}
+
+    const wasNull = currentWsPath.current === null;
+    currentWsPath.current = newPath;
+
+    // On initial mount the WS hasn't connected yet — skip reconnect.
+    // But if cells already exist (kernel session active from a previous
+    // file, e.g. __new__project), we MUST reconnect to load the new file.
+    if (wasNull && !store.get(hasCellsAtom)) {return;}
+
+    console.log("[WS-RECONNECT] path changed:", newPath.slice(-40), "wasNull:", wasNull);
+    store.set(isSwitchingNotebookAtom, true);
+    forceReconnect();
   }, [activeTab?.path, activeTab?.type, forceReconnect]);
+
+  // Sync the active tab's path to filenameAtom so the save logic
+  // knows the file is persistent (not new/unnamed).
+  useEffect(() => {
+    if (activeTab?.type === "notebook" && activeTab.path) {
+      store.set(filenameAtom, activeTab.path);
+    }
+  }, [activeTab?.path, activeTab?.type]);
 
   // Reconnect the kernel WS when the git branch changes.
   // rebootMountConfig() writes gatewayBranchIdAtom; this effect is the

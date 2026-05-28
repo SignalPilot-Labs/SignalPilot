@@ -4,7 +4,6 @@ import { useCellHandle } from "@/core/cells/cells";
 import { SETUP_CELL_ID } from "@/core/cells/ids";
 import { useCellRenderCount } from "@/hooks/useCellRenderCount";
 import { Logger } from "@/utils/Logger";
-import { derefNotNull } from "@/utils/dereference";
 import { EditableCellComponent } from "./cell/EditableCell";
 import { ReadonlyCellComponent } from "./cell/ReadonlyCell";
 import { SetupCellComponent } from "./cell/SetupCell";
@@ -27,7 +26,10 @@ const CellComponent = (props: CellProps) => {
     ref,
     () => ({
       get editorView() {
-        return derefNotNull(editorView);
+        if (editorView.current === null) {
+          return null as unknown as EditorView;
+        }
+        return editorView.current;
       },
       get editorViewOrNull() {
         return editorView.current;

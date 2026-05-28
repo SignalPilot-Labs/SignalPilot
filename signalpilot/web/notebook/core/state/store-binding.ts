@@ -31,3 +31,12 @@ export function unbindStore(s: JotaiStore): void {
   _currentStore = _bindStack[_bindStack.length - 1] ?? _moduleSingleton;
 }
 
+/**
+ * Reset bind stack to initial state — exposed only for testing.
+ * Do NOT call in production code.
+ */
+export function _resetBindStackForTests(): void {
+  _bindStack.length = 0;
+  _bindStack.push(_moduleSingleton);
+  _currentStore = _moduleSingleton;
+}

@@ -2,7 +2,7 @@ import { atom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { init } from "@paralleldrive/cuid2";
 import { classifyFile } from "./active-file";
-import { getSessionId, type SessionId } from "./kernel/session";
+import type { SessionId } from "./kernel/session";
 import { store } from "./state/jotai";
 
 const createTabId = init({ length: 8 });
@@ -95,7 +95,7 @@ export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
     type: fileType,
     sessionId:
       fileType === "notebook"
-        ? getSessionId()
+        ? (`s_${createSessionId()}` as SessionId)
         : null,
     name,
   };

@@ -9,10 +9,9 @@ import { setGatewayBranchId, setGatewayProjectId } from "@/core/network/api";
 import { dbtProjectDirAtom } from "../editor/dbt/use-dbt";
 import { Header } from "./components";
 import { store } from "@/core/state/jotai";
-import { gatewayUrlAtom } from "@/core/meta/state";
+import { gatewayUrlAtom, gatewayApiKeyAtom } from "@/core/meta/state";
 import { cn } from "@/utils/cn";
 import { timeAgo } from "@/utils/dates";
-import { getAuthHeaders } from "~/lib/api";
 
 interface GatewayProject {
   id: string;
@@ -33,16 +32,25 @@ interface Props {
   onRefresh?: () => void;
 }
 
-function getGatewayUrl(): string {
-  return store.get(gatewayUrlAtom) || localStorage.getItem("sp:gateway-url") || "http://localhost:3300";
+function getGatewayConfig(): { url: string; key: string } {
+  return {
+    url: store.get(gatewayUrlAtom) || localStorage.getItem("sp:gateway-url") || "http://localhost:3300",
+    key: store.get(gatewayApiKeyAtom) || localStorage.getItem("sp:api-key") || "",
+  };
+}
+
+function gatewayHeaders(key: string): Record<string, string> {
+  if (!key) {return {};}
+  // JWTs contain dots (header.payload.signature); sp_ keys don't
+  if (key.includes(".")) {return { Authorization: `Bearer ${key}` };}
+  return { "X-API-Key": key };
 }
 
 async function fetchGatewayProjects(): Promise<GatewayProject[]> {
-  const gatewayUrl = getGatewayUrl();
-  const headers = await getAuthHeaders();
+  const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
 
   const resp = await fetch(`${gatewayUrl}/api/workspace-projects?status=active&limit=50`, {
-    headers,
+    headers: gatewayHeaders(apiKey),
   });
   if (!resp.ok) {
     throw new Error(`Gateway error: ${resp.status}`);
@@ -319,13 +327,12 @@ const DeleteProjectModal: React.FC<{
     setError("");
 
     try {
-      const gatewayUrl = getGatewayUrl();
-      const headers = await getAuthHeaders();
+      const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
       const resp = await fetch(
         `${gatewayUrl}/api/workspace-projects/${project.id}`,
         {
           method: "DELETE",
-          headers,
+          headers: gatewayHeaders(apiKey),
         },
       );
       if (resp.ok || resp.status === 204) {

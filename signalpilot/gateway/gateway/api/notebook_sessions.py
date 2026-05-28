@@ -177,11 +177,15 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
             access_token=session_info.access_token,
         )
         # R4: wait_for_running before injecting workspace (pod must be up to exec into it).
+        logger.info("Waiting for pod %s to be running...", pod)
         await orch.wait_for_running(pod, org_id=org_id, timeout=90)
+        logger.info("Pod %s is running — populating workspace from %s", pod, hydrate_path)
         # R4: Inject workspace content; .sp-ready sentinel is written last (C1).
         await orch.populate_pod_workspace(pod, org_id=org_id, src=hydrate_path)
+        logger.info("Workspace populated — waiting for readiness probe on %s", pod)
         # R4: Now wait for readinessProbe (notebook server binds port 2718 after sentinel).
         pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=90)
+        logger.info("Pod %s is ready: ip=%s", pod, pod_info.ip)
         await ns.update_session_status(
             store.session,
             session_id=session_info.id,

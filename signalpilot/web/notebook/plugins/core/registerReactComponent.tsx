@@ -592,7 +592,10 @@ function shouldCopyStyleSheet(sheet: CSSStyleSheet): boolean {
   }
 
   if (!sheet.href) {
-    return false;
+    // Inline stylesheets (no href) — copy them. Next.js injects CSS
+    // as inline <style> tags in production; these contain the component
+    // styles needed inside Shadow DOM.
+    return true;
   }
 
   // Must stylesheet must end with .css
@@ -609,7 +612,16 @@ function shouldCopyStyleSheet(sheet: CSSStyleSheet): boolean {
   }
 
   // Copy stylesheets served from the same origin
-  return sheet.href.startsWith(window.location.origin);
+  if (sheet.href.startsWith(window.location.origin)) {
+    return true;
+  }
+
+  // Copy stylesheets from Next.js chunk paths (/_next/)
+  if (sheet.href.includes("/_next/")) {
+    return true;
+  }
+
+  return false;
 }
 
 export function isCustomSpElement(

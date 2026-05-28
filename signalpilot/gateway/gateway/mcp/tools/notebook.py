@@ -259,12 +259,13 @@ async def run_notebook(
         logger.warning("Failed to push results to git: %s", e)
         push_result = f"push failed: {e}"
 
-    # 8. Build notebook URL
-    from gateway.config.k8s import get_k8s_settings
-    gw_url = get_k8s_settings().sp_public_gateway_url
+    # 8. Build notebook URL — link to the web app, not the gateway proxy
+    import os
+    from urllib.parse import quote
+    web_url = os.getenv("SP_WEB_URL", "https://app.signalpilot.ai").rstrip("/")
     notebook_url = (
-        f"{gw_url}/notebook/{session_id}/_init"
-        f"?project={project_id}&branch={agent_branch}&file={filename}"
+        f"{web_url}/projects"
+        f"?project={project_id}&branch={quote(agent_branch)}&file={quote(filename)}"
     )
 
     # 9. Format result

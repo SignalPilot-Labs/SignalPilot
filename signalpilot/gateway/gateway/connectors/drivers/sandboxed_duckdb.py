@@ -142,20 +142,20 @@ class SandboxedDuckDBConnector(BaseConnector):
         """Translate a host path to the sandbox mount path."""
         import re
 
-        # Windows path: C:\Users\username\... → /host-data/...
-        win_match = re.match(r"^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)[/\\]?(.*)", path)
+        # Windows path: C:\Users\username\... → /host-data/username/...
+        win_match = re.match(r"^[A-Za-z]:[/\\]Users[/\\](.*)", path)
         if win_match:
-            remainder = win_match.group(2).replace("\\", "/")
+            remainder = win_match.group(1).replace("\\", "/")
             return f"/host-data/{remainder}" if remainder else "/host-data"
-        # Unix path: /home/username/... → /host-data/...
-        unix_match = re.match(r"^/home/([^/]+)/?(.*)", path)
+        # Unix path: /home/username/... → /host-data/username/...
+        unix_match = re.match(r"^/home/(.*)", path)
         if unix_match:
-            remainder = unix_match.group(2)
+            remainder = unix_match.group(1)
             return f"/host-data/{remainder}" if remainder else "/host-data"
-        # macOS: /Users/username/... → /host-data/...
-        mac_match = re.match(r"^/Users/([^/]+)/?(.*)", path)
+        # macOS: /Users/username/... → /host-data/username/...
+        mac_match = re.match(r"^/Users/(.*)", path)
         if mac_match:
-            remainder = mac_match.group(2)
+            remainder = mac_match.group(1)
             return f"/host-data/{remainder}" if remainder else "/host-data"
         # Already a sandbox path or other — use as-is
         return path

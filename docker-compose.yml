@@ -2,12 +2,11 @@
 #
 # Usage: docker compose up --build
 #
-# Starts: Postgres + MinIO + Gateway + Notebook + Web + Sandbox
+# Starts: Postgres + Gateway + Notebook + Web + Sandbox
 # No K8s, no .env file, no external dependencies. Works on any OS.
 #
 # Services:
 #   - db        (Postgres 17)          localhost:5601
-#   - minio     (S3-compatible store)  localhost:9000 (API) / 9001 (console)
 #   - gateway   (FastAPI backend)      localhost:3300
 #   - notebook  (Notebook kernel)      localhost:2718
 #   - web       (Next.js frontend)     localhost:3200
@@ -31,25 +30,6 @@ services:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U signalpilot"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
-  # ─── Object Storage ───────────────────────────────────────────
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: signalpilot
-      MINIO_ROOT_PASSWORD: changeme_dev_only
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - signalpilot-minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -96,8 +76,6 @@ services:
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       notebook:
         condition: service_healthy
@@ -187,5 +165,4 @@ volumes:
   signalpilot-shared:
   signalpilot-gateway-secrets:
   signalpilot-repos:
-  signalpilot-minio-data:
   signalpilot-workspace:

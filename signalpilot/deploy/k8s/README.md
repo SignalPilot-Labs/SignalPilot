@@ -12,9 +12,8 @@ Notebook pods run in per-org namespaces with NetworkPolicy isolation (Round 3).
 Workspaces are git-backed. Each notebook pod's entrypoint clones the
 project's bare git repository (managed by the gateway, mirrored from
 GitHub) into `/workspace` before starting `sp edit`. Changes are pushed
-back over the same channel. No object storage is required — no S3
-bucket, no IAM policy, no MinIO sidecar. Pod-local state is ephemeral;
-durability lives in git.
+back over the same channel. Pod-local state is ephemeral; durability
+lives in git.
 
 ---
 

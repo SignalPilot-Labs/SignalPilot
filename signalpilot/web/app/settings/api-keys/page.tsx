@@ -9,24 +9,24 @@ import {
   Info,
   AlertTriangle,
 } from "lucide-react";
-import { useAppAuth } from "@/lib/auth-context";
-import type { ApiKeyResponse, ApiKeyCreatedResponse } from "@/lib/backend-client";
-import { useSubscription } from "@/lib/subscription-context";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { EmptyState, EmptyList } from "@/components/ui/empty-states";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { StatusDot } from "@/components/ui/data-viz";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
-import { ApiKeysSkeleton } from "@/components/ui/skeleton";
-import { CopyButton } from "@/components/ui/copy-button";
-import { ALL_SCOPES } from "@/lib/api-key-scopes";
-import { useApiKeys, invalidateApiKeys, usePlan } from "@/lib/hooks/use-gateway-data";
-import { PageLoader } from "@/components/ui/page-loader";
+import { useAppAuth } from "~/lib/auth-context";
+import type { ApiKeyResponse, ApiKeyCreatedResponse } from "~/lib/backend-client";
+import { useSubscription } from "~/lib/subscription-context";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { EmptyState, EmptyList } from "~/components/ui/empty-states";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { StatusDot } from "~/components/ui/data-viz";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
+import { ApiKeysSkeleton } from "~/components/ui/skeleton";
+import { CopyButton } from "~/components/ui/copy-button";
+import { ALL_SCOPES } from "~/lib/api-key-scopes";
+import { useApiKeys, invalidateApiKeys, usePlan } from "~/lib/hooks/use-gateway-data";
+import { PageLoader } from "~/components/ui/page-loader";
 import {
   createApiKey,
   deleteApiKey,
-} from "@/lib/api";
+} from "~/lib/api";
 
 // ---------------------------------------------------------------------------
 // New key revealed panel

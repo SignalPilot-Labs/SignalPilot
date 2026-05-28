@@ -15,6 +15,7 @@ import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
+import gateway.store.knowledge as knowledge_mod
 import gateway.store.notion as notion_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
@@ -36,6 +37,7 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from gateway.models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeEdit, KnowledgeUsage
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
@@ -687,3 +689,295 @@ class Store:
         called from the admin-only security_status endpoint which needs a system-wide count.
         """
         return await settings_mod.get_credentials_needing_rotation(self.session)
+
+    # ─── Knowledge Base ──────────────────────────────────────────────────
+
+    async def _knowledge_limits(self):
+        """Resolve the org's plan limits for knowledge enforcement."""
+        from gateway.governance.plan_limits import get_org_limits
+
+        return await get_org_limits(self._require_org_id())
+
+    async def list_knowledge_docs(
+        self,
+        *,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        status: str = "active",
+        include_body: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[KnowledgeDoc]:
+        oid = self._require_org_id()
+        return await knowledge_mod.list_knowledge_docs(
+            self.session,
+            org_id=oid,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            status=status,
+            include_body=include_body,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def get_knowledge_doc(
+        self, doc_id: str, *, include_body: bool = True, bump_view: bool = False
+    ) -> KnowledgeDoc | None:
+        import asyncio
+
+        oid = self._require_org_id()
+        row = await knowledge_mod.get_knowledge_doc(
+            self.session, org_id=oid, doc_id=doc_id, include_body=include_body
+        )
+        if row is None:
+            return None
+        doc = knowledge_mod._row_to_doc(row, include_body=include_body)
+        if bump_view:
+            asyncio.create_task(self.increment_knowledge_view(doc_id))
+        return doc
+
+    async def get_knowledge_doc_by_key(
+        self,
+        *,
+        scope: str,
+        scope_ref: str | None,
+        category: str,
+        title: str,
+        bump_view: bool = False,
+    ) -> KnowledgeDoc | None:
+        import asyncio
+
+        oid = self._require_org_id()
+        row = await knowledge_mod.get_knowledge_doc_by_key(
+            self.session,
+            org_id=oid,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            title=title,
+        )
+        if row is None:
+            return None
+        doc = knowledge_mod._row_to_doc(row, include_body=True)
+        if bump_view:
+            asyncio.create_task(self.increment_knowledge_view(doc.id))
+        return doc
+
+    async def insert_knowledge_doc(
+        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.insert_knowledge_doc(
+            self.session,
+            org_id=oid,
+            payload=payload,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def upsert_knowledge_doc(
+        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.upsert_knowledge_doc(
+            self.session,
+            org_id=oid,
+            payload=payload,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def update_knowledge_body(
+        self,
+        doc_id: str,
+        *,
+        body: str,
+        user_id: str | None,
+        agent: str | None = None,
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.update_knowledge_body(
+            self.session,
+            org_id=oid,
+            doc_id=doc_id,
+            body=body,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def archive_knowledge_doc(self, doc_id: str) -> bool:
+        oid = self._require_org_id()
+        return await knowledge_mod.archive_knowledge_doc(self.session, org_id=oid, doc_id=doc_id)
+
+    async def approve_knowledge_doc(self, doc_id: str, *, user_id: str | None) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        return await knowledge_mod.approve_knowledge_doc(
+            self.session, org_id=oid, doc_id=doc_id, user_id=user_id
+        )
+
+    async def list_knowledge_edits(self, doc_id: str, *, limit: int = 20) -> list[KnowledgeEdit]:
+        oid = self._require_org_id()
+        return await knowledge_mod.list_knowledge_edits(
+            self.session, org_id=oid, doc_id=doc_id, limit=limit
+        )
+
+    async def search_knowledge(
+        self,
+        *,
+        query: str,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        bump_view: bool = True,
+    ) -> list[KnowledgeDoc]:
+        import asyncio
+
+        oid = self._require_org_id()
+        docs = await knowledge_mod.search_knowledge(
+            self.session,
+            org_id=oid,
+            query=query,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            limit=limit,
+        )
+        if bump_view:
+            for doc in docs:
+                asyncio.create_task(self.increment_knowledge_view(doc.id))
+        return docs
+
+    async def get_knowledge_usage(self) -> KnowledgeUsage:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        return await knowledge_mod.get_knowledge_usage(self.session, org_id=oid, limits=limits)
+
+    async def increment_knowledge_view(self, doc_id: str) -> None:
+        """Best-effort fire-and-forget view counter increment."""
+        oid = self._require_org_id()
+        from gateway.db.engine import get_session_factory
+
+        factory = get_session_factory()
+        async with factory() as session:
+            await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)
+
+    # ─── Workspace Projects ─────────────────────────────────────────────────
+
+    async def create_workspace_project(self, **kwargs):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.create_project(self.session, org_id=oid, user_id=self.user_id, **kwargs)
+
+    async def list_workspace_projects(self, **kwargs):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.list_projects(self.session, org_id=oid, **kwargs)
+
+    async def get_workspace_project(self, project_id: str):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.get_project(self.session, org_id=oid, project_id=project_id)
+
+    async def update_workspace_project(self, project_id: str, updates: dict):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.update_project(self.session, org_id=oid, project_id=project_id, updates=updates)
+
+    async def delete_workspace_project(self, project_id: str):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.delete_project(self.session, org_id=oid, project_id=project_id)
+
+    # ─── Chat ────────────────────────────────────────────────────────────────
+
+    async def create_conversation(self, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.create_conversation(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def list_conversations(self, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.list_conversations(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def get_conversation(self, conversation_id: str):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.get_conversation(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id
+        )
+
+    async def delete_conversation(self, conversation_id: str):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.delete_conversation(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id
+        )
+
+    async def append_message(self, conversation_id: str, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.append_message(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
+        )
+
+    async def list_messages(self, conversation_id: str, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.list_messages(self.session, org_id=oid, conversation_id=conversation_id, **kwargs)
+
+    # ─── Agent Runs ──────────────────────────────────────────────────────────
+
+    async def create_agent_run(self, **kwargs):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.create_run(self.session, org_id=oid, user_id=self.user_id, **kwargs)
+
+    async def list_agent_runs(self, **kwargs):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.list_runs(self.session, org_id=oid, **kwargs)
+
+    async def get_agent_run(self, run_id: str):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.get_run(self.session, org_id=oid, run_id=run_id)
+
+    async def update_agent_run(self, run_id: str, updates: dict):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.update_run(self.session, org_id=oid, run_id=run_id, updates=updates)
+
+    # ─── Branches ────────────────────────────────────────────────────────────
+
+    # Branch methods removed — branches are git refs now. Use git CLI directly.

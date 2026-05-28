@@ -2,12 +2,12 @@
 
 import React, { useState } from "react";
 import { ShieldCheck } from "lucide-react";
-import { PendingButton } from "@/components/ui/pending-button";
+import { PendingButton } from "~/components/ui/pending-button";
 import { useUser, useReverification } from "@clerk/nextjs";
 import type { TOTPResource } from "@clerk/types";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { QrCode } from "./qr-code";
 import { RevealOnce } from "./reveal-once";
 import {
@@ -16,10 +16,10 @@ import {
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
-} from "@/components/auth/auth-primitives";
-import { CopyButton } from "@/components/ui/copy-button";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
+} from "~/components/auth/auth-primitives";
+import { CopyButton } from "~/components/ui/copy-button";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
 
 export function TotpSection(): React.JSX.Element {
   const { user } = useUser();

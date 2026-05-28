@@ -12,6 +12,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +26,8 @@ from .connectors.health_monitor import health_monitor
 from .connectors.pool_manager import pool_manager
 from .connectors.schema_cache import schema_cache
 from .db.engine import close_db, get_session_factory, init_db
+from .dbt_proxy import DbtProxyServer, RunTokenStore
+from .dbt_proxy.config import DbtProxyConfig
 from .governance.context import current_org_id_var
 from .http import (
     APIKeyAuthMiddleware,
@@ -49,8 +52,62 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
 
+    from .notebook_proxy.constants import (
+        PROXY_CONNECT_TIMEOUT_SECONDS,
+        PROXY_POOL_TIMEOUT_SECONDS,
+        PROXY_READ_TIMEOUT_SECONDS,
+        PROXY_WRITE_TIMEOUT_SECONDS,
+    )
+
+    # Shared httpx client for the notebook proxy — one client, shared across requests.
+    # Closed in lifespan teardown. Timeouts: connect=5s, read=None (SSE/long-poll),
+    # write=10s, pool=10s. Per-chunk idle watchdog wraps each chunk read in the proxy.
+    proxy_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=PROXY_CONNECT_TIMEOUT_SECONDS,
+            read=PROXY_READ_TIMEOUT_SECONDS,
+            write=PROXY_WRITE_TIMEOUT_SECONDS,
+            pool=PROXY_POOL_TIMEOUT_SECONDS,
+        )
+    )
+    app.state.notebook_proxy_client = proxy_client
+
+    # Load notebook session JWT secret at startup (fail fast if misconfigured)
+    from .auth.jwt_secret import load_session_jwt_secret
+
+    try:
+        load_session_jwt_secret()
+        logger.info("STARTUP: Notebook session JWT secret loaded successfully.")
+    except RuntimeError as e:
+        logger.error("STARTUP FATAL: %s", e)
+        raise SystemExit(1) from e
+
+    # R4: Validate workspace storage settings at startup (fail-fast on bad config).
+    # Cloud mode + disabled backend → hard-fail here.
+    from .config.workspace_storage import get_workspace_storage_settings
+    from .orchestrator.workspace_sync import get_workspace_sync_coordinator
+
+    try:
+        _ws_settings = get_workspace_storage_settings()
+        _ws_coordinator = get_workspace_sync_coordinator()
+        logger.info(
+            "STARTUP: Workspace backend=%s configured.", _ws_settings.sp_workspace_backend
+        )
+    except (ValueError, RuntimeError) as exc:
+        logger.error("STARTUP FATAL: Workspace storage misconfigured: %s", exc)
+        raise SystemExit(1) from exc
+
+    # Ensure git repos directory exists
+    from .git.repos import ensure_repos_dir
+    ensure_repos_dir()
+
     # Initialize gateway DB tables
     await init_db()
+
+    # Initialize S3 storage (MinIO locally, real S3 in production)
+    from .s3 import init_s3
+
+    await init_s3()
 
     # Load persisted health state into in-memory cache
     await health_monitor.load_from_db()
@@ -233,11 +290,36 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 
+    async def _notebook_cleanup_loop():
+        """Kill notebook pods with no ping for the configured idle timeout."""
+        from .config.k8s import get_k8s_settings
+        from .orchestrator.kubernetes import KubernetesOrchestrator
+        from .store import notebook_sessions as ns
+
+        k8s_settings = get_k8s_settings()
+        orch = KubernetesOrchestrator()
+        while True:
+            await asyncio.sleep(300)
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    stale = await ns.list_stale_sessions(
+                        session, max_idle_seconds=k8s_settings.sp_notebook_idle_timeout
+                    )
+                    for s in stale:
+                        logger.info("Cleaning up stale notebook session %s (pod=%s)", s.id, s.pod_name)
+                        if s.pod_name:
+                            await orch.delete_pod(s.pod_name)
+                        await ns.mark_stopped(session, session_id=s.id)
+            except Exception as e:
+                logger.warning("Notebook cleanup loop error: %s", e)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
+    notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -245,11 +327,48 @@ async def lifespan(app: FastAPI):
         mcp_ctx = _mcp_session_manager.run()
         await mcp_ctx.__aenter__()
 
+    # Start dbt-proxy TCP listener
+    dbt_proxy_config = DbtProxyConfig()
+    dbt_proxy_config.warn_if_non_loopback()
+
+    # Fail closed: if secret is absent, token store is not created and the
+    # server.start() context manager will log an error and skip binding.
+    if dbt_proxy_config.sp_gateway_run_token_secret:
+        dbt_proxy_token_store: RunTokenStore | None = RunTokenStore(dbt_proxy_config.sp_gateway_run_token_secret)
+    else:
+        dbt_proxy_token_store = None
+    app.state.dbt_proxy_config = dbt_proxy_config
+    app.state.dbt_proxy_token_store = dbt_proxy_token_store
+
+    # DbtProxyServer.start() handles both disabled and secret-missing cases by
+    # yielding _DisabledProxyServer without binding a port. When token_store is
+    # None, the server checks config.sp_gateway_run_token_secret and aborts.
+    dbt_proxy_ctx = DbtProxyServer.start(
+        dbt_proxy_config,
+        token_store=dbt_proxy_token_store,
+        store_factory=get_session_factory,
+    )
+    dbt_proxy_server = await dbt_proxy_ctx.__aenter__()
+    app.state.dbt_proxy_server = dbt_proxy_server
+
     try:
         yield
     finally:
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
+        await dbt_proxy_ctx.__aexit__(None, None, None)
+        # R4: Drain workspace snapshots before shutdown.
+        try:
+            from .config.workspace_storage import get_workspace_storage_settings
+            from .orchestrator.workspace_sync import get_workspace_sync_coordinator
+
+            _drain_settings = get_workspace_storage_settings()
+            _drain_coordinator = get_workspace_sync_coordinator()
+            await _drain_coordinator.shutdown(
+                drain_seconds=_drain_settings.sp_workspace_shutdown_drain_seconds
+            )
+        except Exception as exc:
+            logger.warning("Workspace shutdown drain failed: %s", exc)
         # Flush any remaining health events before shutdown
         await health_monitor.flush_to_db()
         health_flush_task.cancel()
@@ -257,9 +376,11 @@ async def lifespan(app: FastAPI):
         health_ping_task.cancel()
         cleanup_task.cancel()
         refresh_task.cancel()
+        notebook_cleanup_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()
+        await proxy_client.aclose()
         from .api.deps import _sandbox_client
 
         if _sandbox_client:
@@ -290,10 +411,13 @@ def _build_allowed_origins() -> list[str]:
         origins = [o.strip() for o in raw.split(",") if o.strip()]
         validated = []
         for origin in origins:
-            if not origin.startswith("https://"):
+            if origin.startswith("http://localhost"):
+                validated.append(origin)
+            elif not origin.startswith("https://"):
                 logger.warning("CORS: Skipping non-HTTPS origin '%s' in cloud mode", origin)
                 continue
-            validated.append(origin)
+            else:
+                validated.append(origin)
         return validated
     if not raw:
         return ["http://localhost:3000", "http://localhost:3200"]
@@ -317,7 +441,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID", "Sp-Server-Token", "Sp-Session-Id", "x-runtime-url", "X-Gateway-Project-Id", "X-Gateway-Branch-Id"],
     expose_headers=["X-Request-ID"],
     allow_credentials=True,
 )
@@ -358,8 +482,11 @@ try:
     _mcp_http_app = _mcp_instance.streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
-    app.mount("/mcp", _mcp_http_app)  # New canonical path
-    app.mount("/", _mcp_http_app)  # Backward compat — remove after client migration
-    logger.info("MCP streamable-http endpoint mounted at /mcp (also / for backward compat)")
+    # MCP streamable-http app has internal route at /mcp.
+    # Mount at root so /mcp is reachable. MCPAuthMiddleware gates access.
+    # FastAPI routes take priority over mounts, so /api/*, /notebook/*, /git/*
+    # are handled by their routers before falling through to this mount.
+    app.mount("/", _mcp_http_app)
+    logger.info("MCP streamable-http endpoint mounted at /mcp (root mount, MCPAuth gated)")
 except Exception as e:
     logger.warning("Failed to mount MCP HTTP endpoint: %s", e)

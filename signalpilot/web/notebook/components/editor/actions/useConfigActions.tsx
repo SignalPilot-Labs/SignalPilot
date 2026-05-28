@@ -1,0 +1,145 @@
+import { useAppConfig, useResolvedSpConfig } from "@/core/config/config";
+import type { AppConfig, UserConfig } from "@/core/config/config-schema";
+import { getAppWidths } from "@/core/config/widths";
+import { useRequestClient } from "@/core/network/requests";
+import type { ActionButton } from "./types";
+
+export function useConfigActions() {
+  const [config, setConfig] = useResolvedSpConfig();
+  const [appConfig, setAppConfig] = useAppConfig();
+  const { saveAppConfig, saveUserConfig } = useRequestClient();
+
+  const handleUserConfig = async (values: Partial<UserConfig>) => {
+    await saveUserConfig({ config: values }).then(() => {
+      setConfig((prev) => ({ ...prev, ...values }));
+    });
+  };
+
+  const handleAppConfig = async (values: AppConfig) => {
+    await saveAppConfig({ config: values }).then(() => {
+      setAppConfig(values);
+    });
+  };
+
+  const actions: ActionButton[] = [
+    ...getAppWidths()
+      .filter((width) => width !== appConfig.width)
+      .map((width) => ({
+        label: `App config > Set width=${width}`,
+        handle: () => {
+          handleAppConfig({
+            ...appConfig,
+            width: width,
+          });
+        },
+      })),
+    {
+      label: "Config > Set theme: dark",
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            theme: "dark",
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Set theme: light",
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            theme: "light",
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Set theme: system",
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            theme: "system",
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Switch keymap to VIM",
+      hidden: config.keymap.preset === "vim",
+      handle: () => {
+        handleUserConfig({
+          keymap: {
+            ...config.keymap,
+            preset: "vim",
+          },
+        });
+      },
+    },
+    {
+      // Adding VIM here to make it easy to search
+      label: "Config > Switch keymap to default (current: VIM)",
+      hidden: config.keymap.preset === "default",
+      handle: () => {
+        handleUserConfig({
+          keymap: {
+            ...config.keymap,
+            preset: "default",
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Disable reference highlighting",
+      hidden: !config.display.reference_highlighting,
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            reference_highlighting: false,
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Enable reference highlighting",
+      hidden: config.display.reference_highlighting,
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            reference_highlighting: true,
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Set cell output area: above",
+      hidden: config.display.cell_output === "above",
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            cell_output: "above",
+          },
+        });
+      },
+    },
+    {
+      label: "Config > Set cell output area: below",
+      hidden: config.display.cell_output === "below",
+      handle: () => {
+        handleUserConfig({
+          display: {
+            ...config.display,
+            cell_output: "below",
+          },
+        });
+      },
+    },
+  ];
+
+  return actions.filter((a) => !a.hidden);
+}

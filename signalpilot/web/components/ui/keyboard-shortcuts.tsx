@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TierBadge } from "@/components/branding/tier-badge";
+import { TierBadge } from "~/components/branding/tier-badge";
 
 const NAV_SHORTCUTS = [
   { key: "1", label: "dashboard", path: "/dashboard" },

@@ -3,7 +3,7 @@
  * Pure functions — no React, no hooks, no external dependencies.
  */
 
-import type { ApiKeyResponse } from "@/lib/backend-client";
+import type { ApiKeyResponse } from "~/lib/backend-client";
 
 // ---------------------------------------------------------------------------
 // Types

@@ -1,0 +1,77 @@
+@import url("./reset.css");
+@import url("./Cell.css");
+@import url("./codemirror.css");
+@import url("./fonts.css");
+@import url("./Header.css");
+@import url("./print.css");
+@import url("./codemirror-completions.css");
+
+/* stylelint-disable unit-allowed-list */
+
+/* On smaller screens, scale everything down so more fits on the page. */
+html {
+  font-size: 90%;
+}
+
+@media screen and (height >= 1000px) {
+  html {
+    font-size: 100%;
+  }
+}
+/* stylelint-enable unit-allowed-list */
+
+:root {
+  --content-width: 740px;
+  --content-width-medium: 1110px;
+}
+
+#App {
+  position: relative;
+  margin: auto;
+  z-index: 1;
+  flex: 1;
+}
+
+.disconnected-gradient {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+
+  /* gradient sits behind noise. */
+  z-index: -2;
+
+  /* Use an image because hard to get consistent result across browsers with
+   * css gradients. */
+  background-image: url("/sp-assets/gradient.png");
+  background-repeat: no-repeat;
+
+  /* Scale gradient with zoom in/out. */
+  background-size: cover;
+}
+
+.noise {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background-image: url("/sp-assets/noise.png");
+  background-repeat: repeat;
+  opacity: 0.5;
+}
+
+/* Remove background when disconnected, only in light mode. */
+.light #App.disconnected,
+.light #App.disconnected .transparent-when-disconnected {
+  background: none;
+}
+
+.inactive-button,
+.inactive-button:hover,
+.inactive-button svg {
+  color: var(--gray-7);
+  cursor: default;
+}

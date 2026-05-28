@@ -6,7 +6,7 @@
  * Explicit focus-visible ring for dark-theme browser compat.
  */
 
-import { ROLE_OPTIONS, type TeamRole } from "@/lib/team/roles";
+import { ROLE_OPTIONS, type TeamRole } from "~/lib/team/roles";
 
 export interface RoleSelectProps {
   value: TeamRole;

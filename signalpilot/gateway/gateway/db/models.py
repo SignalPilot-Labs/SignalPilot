@@ -350,3 +350,312 @@ class GatewayApiKey(GatewayBase):
         Index("ix_gw_api_keys_org", "org_id"),
         Index("ix_gw_api_keys_hash", "key_hash"),
     )
+
+
+class GatewayKnowledgeDoc(GatewayBase):
+    """Knowledge Base documents — org/project/connection-scoped markdown docs."""
+
+    __tablename__ = "gateway_knowledge_docs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    scope_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    proposed_by_agent: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_knowledge_org_scope", "org_id", "scope", "scope_ref"),
+        Index("idx_knowledge_org_status", "org_id", "status"),
+        Index("idx_knowledge_org_cat", "org_id", "category"),
+    )
+
+
+class GatewayKnowledgeEdit(GatewayBase):
+    """Edit history for Knowledge Base documents."""
+
+    __tablename__ = "gateway_knowledge_edits"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    body_before: Mapped[str] = mapped_column(Text, nullable=False)
+    bytes_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    edited_at: Mapped[float] = mapped_column(Float, nullable=False)
+    edited_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    edit_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    __table_args__ = (
+        Index("idx_knowledge_edits_doc", "doc_id", "edited_at"),
+        Index("idx_knowledge_edits_org", "org_id"),
+    )
+
+
+# ─── Workspace Projects ─────────────────────────────────────────────────────
+
+
+class GatewayWorkspaceProject(GatewayBase):
+    """S3-backed workspace project."""
+
+    __tablename__ = "gateway_workspace_projects"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    connection_name: Mapped[str | None] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="managed")
+    s3_prefix: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    tags: Mapped[list | None] = mapped_column(JSON)
+    settings: Mapped[dict | None] = mapped_column(JSON)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    default_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    protected_branches: Mapped[list | None] = mapped_column(JSON)
+    git_remote: Mapped[str | None] = mapped_column(String(500))
+    created_by: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_gw_wsproj_org_name"),
+        Index("ix_gw_wsproj_org_id", "org_id"),
+        Index("ix_gw_wsproj_org_status", "org_id", "status"),
+    )
+
+
+class GatewayProjectBranch(GatewayBase):
+    """Branch within a workspace project."""
+
+    __tablename__ = "gateway_project_branches"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_from: Mapped[str | None] = mapped_column(String(100))
+    is_protected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_gw_branch_proj_name"),
+        Index("ix_gw_branch_project_id", "project_id"),
+        Index("ix_gw_branch_org_id", "org_id"),
+    )
+
+
+class GatewayUserSession(GatewayBase):
+    """Tracks which branch a user is on per project."""
+
+    __tablename__ = "gateway_user_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    active_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", "project_id", name="uq_gw_session_org_user_proj"),
+        Index("ix_gw_session_org_user", "org_id", "user_id"),
+    )
+
+
+# ─── Chat ────────────────────────────────────────────────────────────────────
+
+
+class GatewayChatConversation(GatewayBase):
+    """Conversation header for per-user per-project chat."""
+
+    __tablename__ = "gateway_chat_conversations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String)
+    title: Mapped[str | None] = mapped_column(String(200))
+    agent_session_id: Mapped[str | None] = mapped_column(String)
+    model: Mapped[str | None] = mapped_column(String(50))
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_conv_org_user", "org_id", "user_id"),
+        Index("ix_gw_conv_org_proj", "org_id", "project_id"),
+        Index("ix_gw_conv_updated", "org_id", "updated_at"),
+    )
+
+
+class GatewayChatMessage(GatewayBase):
+    """Individual chat message within a conversation."""
+
+    __tablename__ = "gateway_chat_messages"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String)
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_chat_conversation", "conversation_id", "sequence"),
+        Index("ix_gw_chat_org_user_proj", "org_id", "user_id", "project_id"),
+        Index("ix_gw_chat_org_created", "org_id", "created_at"),
+    )
+
+
+# ─── Agent Runs ──────────────────────────────────────────────────────────────
+
+
+class GatewayAgentRun(GatewayBase):
+    """Agent execution tracking."""
+
+    __tablename__ = "gateway_agent_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String)
+    project_id: Mapped[str | None] = mapped_column(String)
+    conversation_id: Mapped[str | None] = mapped_column(String)
+    agent_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    input_json: Mapped[dict | None] = mapped_column(JSON)
+    output_json: Mapped[dict | None] = mapped_column(JSON)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[float | None] = mapped_column(Float)
+    completed_at: Mapped[float | None] = mapped_column(Float)
+    duration_ms: Mapped[float | None] = mapped_column(Float)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_arun_org_status", "org_id", "status"),
+        Index("ix_gw_arun_org_proj", "org_id", "project_id"),
+        Index("ix_gw_arun_org_created", "org_id", "created_at"),
+        Index("ix_gw_arun_conversation", "conversation_id"),
+    )
+
+
+# ─── Notebook Sessions ──────────────────────────────────────────────────────
+
+
+class GatewayNotebookSession(GatewayBase):
+    """One active notebook pod per user."""
+
+    __tablename__ = "gateway_notebook_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String)
+    branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    pod_name: Mapped[str | None] = mapped_column(String)
+    pod_ip: Mapped[str | None] = mapped_column(String)
+    # pod_ip_internal: raw pod IP used by the gateway proxy to reach the pod inside
+    # the cluster. Distinct from pod_ip which is the legacy NodePort address.
+    pod_ip_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
+    last_ping: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_gw_nbsession_org_user"),
+        Index("ix_gw_nbsession_org_status", "org_id", "status"),
+    )
+
+
+# ─── GitHub App Installations ──────────────────────────────────────────────
+
+
+class GatewayUserSecrets(GatewayBase):
+    """Per-user secrets — encrypted at rest."""
+
+    __tablename__ = "gateway_user_secrets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    anthropic_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", name="uq_gw_usersecrets_org_user"),
+        Index("ix_gw_usersecrets_org_id", "org_id"),
+    )
+
+
+class GatewayGitHubInstallation(GatewayBase):
+    """GitHub App installation linked to an org."""
+
+    __tablename__ = "gateway_github_installations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    github_installation_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    github_account_login: Mapped[str] = mapped_column(String(200), nullable=False)
+    github_account_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    token_expires_at: Mapped[float | None] = mapped_column(Float)
+    permissions: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_by: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "github_installation_id", name="uq_gw_ghinstall_org_install"),
+        Index("ix_gw_ghinstall_org_id", "org_id"),
+    )
+
+
+class GatewayGitHubRepoLink(GatewayBase):
+    """Links a workspace project to a GitHub repo."""
+
+    __tablename__ = "gateway_github_repo_links"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    installation_id: Mapped[str] = mapped_column(String, nullable=False)
+    repo_full_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    repo_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    default_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    last_sync_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "project_id", name="uq_gw_ghrepo_org_project"),
+        Index("ix_gw_ghrepo_org_id", "org_id"),
+        Index("ix_gw_ghrepo_installation", "installation_id"),
+    )

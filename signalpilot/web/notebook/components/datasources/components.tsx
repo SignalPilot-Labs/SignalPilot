@@ -1,0 +1,105 @@
+import { LoaderCircle, XIcon } from "lucide-react";
+import type { CSSProperties } from "react";
+import { TreeChevron } from "@/components/editor/file-tree/tree-actions";
+import type { DataType } from "@/core/kernel/messages";
+import { cn } from "@/utils/cn";
+import { DATA_TYPE_ICON, getDataTypeColor } from "../datasets/icons";
+
+export const RotatingChevron: React.FC<{ isExpanded: boolean }> = ({
+  isExpanded,
+}) => <TreeChevron isExpanded={isExpanded} className="h-3 w-3" />;
+
+export const DatasourceLabel: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+}> = ({ children, className }) => {
+  return (
+    <div
+      className={cn(
+        "flex gap-1.5 items-center font-bold py-1.5 text-muted-foreground bg-(--slate-2) text-sm",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+};
+
+export const EmptyState: React.FC<{ content: string; className?: string }> = ({
+  content,
+  className,
+}) => {
+  return (
+    <div className={cn("text-sm text-muted-foreground py-1", className)}>
+      {content}
+    </div>
+  );
+};
+
+export const ErrorState: React.FC<{
+  error: Error;
+  style?: CSSProperties;
+  className?: string;
+  showIcon?: boolean;
+}> = ({ error, style, className, showIcon = true }) => {
+  return (
+    <div
+      className={cn(
+        "text-sm bg-red-50 dark:bg-red-900 text-red-600 dark:text-red-50 flex items-center gap-2 p-2 h-8",
+        className,
+      )}
+      style={style}
+    >
+      {showIcon && <XIcon className="h-4 w-4 mt-0.5" />}
+      {error.message}
+    </div>
+  );
+};
+
+export const LoadingState: React.FC<{
+  message: string;
+  className?: string;
+}> = ({ message, className }) => {
+  return (
+    <div
+      className={cn(
+        "text-sm bg-blue-50 dark:bg-(--accent) text-blue-500 dark:text-blue-50 flex items-center gap-2 p-2 h-8",
+        className,
+      )}
+    >
+      <LoaderCircle className="h-4 w-4 animate-spin" />
+      {message}
+    </div>
+  );
+};
+
+export const ColumnPreviewContainer: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+}> = ({ children, className }) => {
+  return (
+    <div className={cn("flex flex-col gap-2 relative", className)}>
+      {children}
+    </div>
+  );
+};
+
+export const ColumnName = ({
+  columnName,
+  dataType,
+}: {
+  columnName: React.ReactNode;
+  dataType: DataType;
+}) => {
+  const Icon = DATA_TYPE_ICON[dataType];
+  const color = getDataTypeColor(dataType);
+
+  return (
+    <div className="flex flex-row items-center gap-1.5">
+      <Icon
+        className={`w-4 h-4 p-0.5 rounded-sm stroke-card-foreground ${color}`}
+      />
+      {columnName}
+    </div>
+  );
+};

@@ -16,16 +16,16 @@ import {
   AlertTriangle,
   Plug,
 } from "lucide-react";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
 import { useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
-import { useAppAuth } from "@/lib/auth-context";
-import type { ApiKeyCreatedResponse } from "@/lib/backend-client";
-import { createApiKey } from "@/lib/api";
-import { useOnboardingStatus } from "@/lib/onboarding";
-import { ALL_SCOPES } from "@/lib/api-key-scopes";
-import { CopyButton } from "@/components/ui/copy-button";
-import { CodeBlock } from "@/components/ui/code-block";
-import { useToast } from "@/components/ui/toast";
+import { useAppAuth } from "~/lib/auth-context";
+import type { ApiKeyCreatedResponse } from "~/lib/backend-client";
+import { createApiKey } from "~/lib/api";
+import { useOnboardingStatus } from "~/lib/onboarding";
+import { ALL_SCOPES } from "~/lib/api-key-scopes";
+import { CopyButton } from "~/components/ui/copy-button";
+import { CodeBlock } from "~/components/ui/code-block";
+import { useToast } from "~/components/ui/toast";
 import { TeamStep } from "./team-step";
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,5 @@
 """Query tools: query_database, validate_sql, explain_query, check_budget, etc."""
 
-from __future__ import annotations
-
 import time
 
 import httpx

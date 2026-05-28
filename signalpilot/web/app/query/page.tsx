@@ -18,14 +18,14 @@ import {
   Zap,
   BookOpen,
 } from "lucide-react";
-import { executeQuery as apiExecuteQuery, getConnectionSchemaLink } from "@/lib/api";
-import { useConnection } from "@/lib/connection-context";
-import { EmptyQuery, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { useToast } from "@/components/ui/toast";
-import { SqlHighlight } from "@/components/ui/sql-highlight";
-import { Tooltip } from "@/components/ui/tooltip";
+import { executeQuery as apiExecuteQuery, getConnectionSchemaLink } from "~/lib/api";
+import { useConnection } from "~/lib/connection-context";
+import { EmptyQuery, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { useToast } from "~/components/ui/toast";
+import { SqlHighlight } from "~/components/ui/sql-highlight";
+import { Tooltip } from "~/components/ui/tooltip";
 
 /* ── Column type detection from values ── */
 const typeColorMap: Record<string, string> = {
@@ -153,7 +153,7 @@ export default function QueryExplorerPage() {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
-      if (stored) setHistory(JSON.parse(stored));
+      if (stored) setHistory(JSON.parse(stored) as typeof history);
     } catch {}
   }, []);
 
@@ -186,7 +186,7 @@ export default function QueryExplorerPage() {
       try {
         const jsonMatch = msg.match(/\d+:\s*(\{.*\})\s*$/);
         if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[1]);
+          const parsed = JSON.parse(jsonMatch[1]) as Record<string, any>;
           if (parsed.detail?.error) {
             setError(parsed.detail.error);
             setErrorHint(parsed.detail.hint || null);

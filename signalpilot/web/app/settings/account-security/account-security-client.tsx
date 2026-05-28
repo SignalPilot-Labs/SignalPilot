@@ -1,14 +1,14 @@
 "use client";
 
 import { useUser } from "@clerk/nextjs";
-import { PageHeaderSkeleton, CardSkeleton } from "@/components/ui/skeleton";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { PasswordSection } from "@/components/security/password-section";
-import { TotpSection } from "@/components/security/totp-section";
-import { SmsSection } from "@/components/security/sms-section";
-import { BackupCodesSection } from "@/components/security/backup-codes-section";
-import { ActiveSessionsSection } from "@/components/security/active-sessions-section";
+import { PageHeaderSkeleton, CardSkeleton } from "~/components/ui/skeleton";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { PasswordSection } from "~/components/security/password-section";
+import { TotpSection } from "~/components/security/totp-section";
+import { SmsSection } from "~/components/security/sms-section";
+import { BackupCodesSection } from "~/components/security/backup-codes-section";
+import { ActiveSessionsSection } from "~/components/security/active-sessions-section";
 
 export default function AccountSecurityClient() {
   const { user, isLoaded } = useUser();

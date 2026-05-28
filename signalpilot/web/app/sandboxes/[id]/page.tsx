@@ -23,13 +23,13 @@ import {
   ChevronRight,
 } from "lucide-react";
 import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
-import { getSandbox, executeSandbox, deleteSandbox } from "@/lib/api";
-import type { SandboxInfo } from "@/lib/types";
-import { StatusDot, MiniBar } from "@/components/ui/data-viz";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Breadcrumb } from "@/components/ui/breadcrumb";
-import { CodeBlock } from "@/components/ui/code-block";
+import { getSandbox, executeSandbox, deleteSandbox } from "~/lib/api";
+import type { SandboxInfo } from "~/lib/types";
+import { StatusDot, MiniBar } from "~/components/ui/data-viz";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { Breadcrumb } from "~/components/ui/breadcrumb";
+import { CodeBlock } from "~/components/ui/code-block";
 
 interface HistoryEntry {
   type: "input" | "output" | "error" | "system" | "image" | "html";

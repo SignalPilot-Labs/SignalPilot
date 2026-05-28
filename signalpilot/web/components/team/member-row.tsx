@@ -9,10 +9,10 @@ import type { OrganizationMembershipResource } from "@clerk/types";
 import { Loader2, Trash2 } from "lucide-react";
 import { InitialsAvatar } from "./initials-avatar";
 import { RoleSelect } from "./role-select";
-import { roleLabel, type TeamRole } from "@/lib/team/roles";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
-import { NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
-import { IconButton } from "@/components/ui/icon-button";
+import { roleLabel, type TeamRole } from "~/lib/team/roles";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
+import { NEUTRAL_CLASS } from "~/components/auth/auth-primitives";
+import { IconButton } from "~/components/ui/icon-button";
 
 export interface MemberRowProps {
   membership: OrganizationMembershipResource;

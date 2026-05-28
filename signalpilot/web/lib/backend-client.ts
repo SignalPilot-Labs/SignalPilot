@@ -127,7 +127,7 @@ function _getCache(): TokenCache {
 
 function _parseJwtExp(token: string): number {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
+    const payload = JSON.parse(atob(token.split(".")[1])) as any;
     return (payload.exp ?? 0) * 1000;
   } catch {
     return 0;

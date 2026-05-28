@@ -1,7 +1,5 @@
 """dbt project tools: dbt_error_parser, generate_sql_skeleton."""
 
-from __future__ import annotations
-
 import re
 
 from gateway.mcp.audit import audited_tool

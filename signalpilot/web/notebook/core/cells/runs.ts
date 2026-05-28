@@ -1,0 +1,196 @@
+import { createReducerAndAtoms } from "@/utils/createReducer";
+import type { TypedString } from "@/utils/typed";
+import type { CellMessage } from "../kernel/messages";
+import type { CellId } from "./ids";
+export type RunId = TypedString<"RunId">;
+
+export interface CellRun {
+  cellId: CellId;
+  code: string;
+  elapsedTime?: number;
+  startTime: number;
+  status: "success" | "error" | "queued" | "running";
+}
+
+export interface Run {
+  runId: RunId;
+  cellRuns: ReadonlyMap<CellId, CellRun>;
+  runStartTime: number;
+}
+
+export interface RunsState {
+  runIds: RunId[];
+  runMap: ReadonlyMap<RunId, Run>;
+}
+
+function initialState(): RunsState {
+  return {
+    runIds: [],
+    runMap: new Map(),
+  };
+}
+
+export const MAX_RUNS = 50;
+export const MAX_CODE_LENGTH = 200;
+
+const {
+  reducer,
+  createActions,
+  valueAtom: runsAtom,
+  useActions: useRunsActions,
+} = createReducerAndAtoms(initialState, {
+  addCellNotification: (
+    state: RunsState,
+    opts: { cellNotification: CellMessage; code: string },
+  ): RunsState => {
+    const { cellNotification, code } = opts;
+    const timestamp = cellNotification.timestamp ?? 0;
+    const runId = cellNotification.run_id as RunId | undefined;
+    if (!runId) {
+      return state;
+    }
+
+    const existingRun = state.runMap.get(runId);
+    // If it is a brand new run and the cell code is "pure markdown",
+    // we don't want to show the trace since it's not helpful.
+    // This spams the tracing because we re-render pure markdown on keystrokes.
+    if (!existingRun && isPureMarkdown(code)) {
+      return state;
+    }
+
+    // We determine if the cell operation errored by looking at the output
+    const erroredOutput =
+      cellNotification.output &&
+      (cellNotification.output.channel === "sp-error" ||
+        cellNotification.output.channel === "stderr");
+
+    let status: CellRun["status"] = erroredOutput
+      ? "error"
+      : cellNotification.status === "queued"
+        ? "queued"
+        : cellNotification.status === "running"
+          ? "running"
+          : "success";
+
+    // Create new run if needed
+    if (!existingRun) {
+      const newRun: Run = {
+        runId,
+        cellRuns: new Map([
+          [
+            cellNotification.cell_id,
+            {
+              cellId: cellNotification.cell_id,
+              code: code.slice(0, MAX_CODE_LENGTH),
+              elapsedTime: 0,
+              status: status,
+              startTime: timestamp,
+            },
+          ],
+        ]),
+        runStartTime: timestamp,
+      };
+
+      // Manage run history size
+      const runIds = [runId, ...state.runIds];
+      const nextRunMap = new Map(state.runMap);
+      if (runIds.length > MAX_RUNS) {
+        const oldestRunId = runIds.pop();
+        if (oldestRunId) {
+          nextRunMap.delete(oldestRunId);
+        }
+      }
+
+      nextRunMap.set(runId, newRun);
+      return {
+        runIds,
+        runMap: nextRunMap,
+      };
+    }
+
+    // Update existing run
+    const nextCellRuns = new Map(existingRun.cellRuns);
+    const existingCellRun = nextCellRuns.get(cellNotification.cell_id);
+
+    // Early return if nothing changed
+    if (
+      existingCellRun &&
+      !erroredOutput &&
+      cellNotification.status === "queued"
+    ) {
+      return state;
+    }
+
+    if (existingCellRun) {
+      const hasErroredPreviously = existingCellRun.status === "error";
+
+      // Compute new status and timing
+      status = hasErroredPreviously || erroredOutput ? "error" : status;
+
+      const startTime =
+        cellNotification.status === "running"
+          ? timestamp
+          : existingCellRun.startTime;
+
+      const elapsedTime =
+        status === "success" || status === "error"
+          ? timestamp - existingCellRun.startTime
+          : undefined;
+
+      nextCellRuns.set(cellNotification.cell_id, {
+        ...existingCellRun,
+        startTime,
+        elapsedTime,
+        status,
+      });
+    } else {
+      nextCellRuns.set(cellNotification.cell_id, {
+        cellId: cellNotification.cell_id,
+        code: code.slice(0, MAX_CODE_LENGTH),
+        elapsedTime: 0,
+        status: status,
+        startTime: timestamp,
+      });
+    }
+
+    const nextRunMap = new Map(state.runMap);
+    nextRunMap.set(runId, {
+      ...existingRun,
+      cellRuns: nextCellRuns,
+    });
+
+    return {
+      ...state,
+      runMap: nextRunMap,
+    };
+  },
+  clearRuns: (state: RunsState): RunsState => ({
+    ...state,
+    runIds: [],
+    runMap: new Map(),
+  }),
+  removeRun: (state: RunsState, runId: RunId): RunsState => {
+    const nextRunIds = state.runIds.filter((id) => id !== runId);
+    const nextRunMap = new Map(state.runMap);
+    nextRunMap.delete(runId);
+    return {
+      ...state,
+      runIds: nextRunIds,
+      runMap: nextRunMap,
+    };
+  },
+});
+
+const MARKDOWN_REGEX = /mo\.md\(\s*r?('''|""")/;
+function isPureMarkdown(code: string): boolean {
+  return code.startsWith("sp.md(") && MARKDOWN_REGEX.test(code);
+}
+
+export { runsAtom, useRunsActions };
+
+export const exportedForTesting = {
+  reducer,
+  createActions,
+  initialState,
+  isPureMarkdown,
+};

@@ -1,0 +1,487 @@
+@reference "../../css/globals.css";
+
+/*
+ * Cell can have many states:
+ * - interactive (can hover, focus, click), while in edit mode
+ * - stale
+ * - error
+ * - disabled
+ * */
+.sp-cell {
+  position: relative;
+  border-radius: 10px;
+  max-width: inherit;
+  width: 100%;
+  border: 1px solid #222222;
+
+  @apply divide-y divide-border;
+
+  &:hover {
+    border-color: #333333;
+  }
+
+  &:focus-visible {
+    outline: none;
+  }
+
+  &:has(.mo-ai-generated-cell)::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 10px;
+    pointer-events: none;
+    opacity: 0.5;
+    box-shadow: 0px 0px 10px 0px var(--cyan-9);
+    z-index: 1;
+  }
+
+  &:has(.mo-ai-generated-cell.mo-ai-setup-cell)::before {
+    border-radius: 2px;
+  }
+
+  /* Styling for cells marked for deletion by AI */
+  &:has(.mo-ai-deleted-cell) {
+    opacity: 0.7;
+    position: relative;
+
+    .output-area,
+    .cm-gutters,
+    .cm {
+      background-color: rgba(255, 68, 68, 0.05);
+    }
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 10px;
+      pointer-events: none;
+      opacity: 0.6;
+      box-shadow: 0px 0px 10px 0px #ff4444;
+      z-index: 1;
+    }
+
+    .cm-content {
+      text-decoration: line-through;
+      text-decoration-color: #ff4444;
+      text-decoration-thickness: 1px;
+    }
+  }
+
+  /* Styling for cells marked for cut */
+  &.pending-cut {
+    .output-area,
+    .cm-gutters,
+    .cm {
+      background-color: #0a0a0a;
+      opacity: 0.55;
+    }
+  }
+
+  &:focus-within {
+    z-index: 20;
+  }
+
+  &:hover {
+    z-index: 30;
+  }
+
+  /* Interactive */
+
+  &.interactive {
+    .output-area,
+    .console-output-area {
+      max-height: 610px;
+      overflow: auto;
+    }
+
+    .output-area:has(
+      > .output:only-child > sp-ui-element:only-child > sp-table
+    ) {
+      padding: 0 0 5px;
+      max-height: none;
+      overflow: hidden;
+
+      --sp-table-edge-padding: 0.75rem;
+
+      sp-table::part(table-tabs) {
+        margin-top: 0.25rem;
+        border: none;
+        border-radius: 0;
+        border-top-left-radius: 9px;
+      }
+
+      sp-table::part(table-wrapper) {
+        border: none;
+        border-radius: 0;
+      }
+
+      sp-table::part(table-footer) {
+        padding-inline: 0.25rem;
+      }
+
+      sp-table::part(filter-pills) {
+        padding-bottom: 0;
+      }
+    }
+
+    & > :first-child {
+      border-top-left-radius: 9px;
+      border-top-right-radius: 9px;
+    }
+
+    & > :last-child {
+      border-bottom-left-radius: 9px;
+      border-bottom-right-radius: 9px;
+    }
+
+    &:focus-within {
+      @apply shadow-md-solid shadow-shade;
+    }
+
+    .cm {
+      border-radius: 8px;
+    }
+  }
+
+  > [data-hidden="true"] ~ * {
+    border-top: none;
+  }
+
+  > * ~ [data-hidden="true"] {
+    border-top: none;
+  }
+
+  /* Stale styles for Cell */
+
+  &.stale,
+  &.disabled.stale {
+    .output-area,
+    .cm-gutters,
+    .cm {
+      background-color: #0a0a0a;
+      opacity: 0.5;
+    }
+  }
+
+  /* Disabled styles for Cell */
+
+  &.disabled,
+  &.disabled.has-error,
+  &.disabled:hover,
+  &.disabled.has-error:hover {
+    .output-area,
+    .cm-gutters,
+    .cm {
+      background-color: #080808;
+      opacity: 0.5;
+    }
+  }
+
+  &.disabled:hover {
+    border-color: #333333;
+  }
+
+  /* Error styles for Cell, less precedence than needs run */
+  &.has-error:not(.needs-run),
+  &.error-outline {
+    @apply border-error/20 border-1 divide-error/20 outline-1 outline-error/20;
+  }
+
+  &.has-error:not(.needs-run):hover {
+    @apply border-error/30 outline-error/30;
+  }
+
+  &.has-error:not(.needs-run):focus-within {
+    @apply border-1 outline-0 shadow-md-solid divide-error/20 shadow-error/20;
+  }
+
+  &.error-outline,
+  &.error-outline:focus-within {
+    box-shadow: 8px 8px 0 0 color-mix(in srgb, var(--error), transparent 80%);
+    background-color: rgba(255, 68, 68, 0.05);
+  }
+
+  /* Needs Run */
+
+  &.needs-run {
+    @apply border-stale border-1 divide-stale outline-1 outline-stale;
+
+    &:hover {
+      @apply border-action-foreground/30 outline-action-foreground/30;
+    }
+
+    &:focus-within {
+      @apply border-1 outline-0 divide-stale shadow-md-solid shadow-stale;
+    }
+
+    &:focus-within .cm-editor {
+      border: 1px solid transparent;
+    }
+
+    .RunButton {
+      visibility: visible;
+    }
+  }
+
+  /* Focus state — SignalPilot green accent */
+
+  &.focus-outline {
+    transition: all 0.6s;
+    border-color: #00ff88 !important;
+    @apply shadow-lg shadow-[#00ff88];
+  }
+
+  /* Published - when its just the output */
+
+  &.published {
+    border: none;
+    box-shadow: none;
+
+    .output-area {
+      display: block;
+      padding-top: 0;
+      padding-bottom: 0;
+      border: none;
+      box-shadow: none;
+      overflow: visible;
+    }
+
+    &:hover {
+      border: none;
+      box-shadow: none;
+    }
+
+    &:focus-within {
+      transform: none;
+    }
+  }
+
+  /* Borderless styles for Cell */
+  &.borderless {
+    border-color: transparent;
+
+    & > * {
+      border-bottom: none;
+    }
+
+    &:hover {
+      border: 1px solid #222222;
+    }
+  }
+
+  /* -------------------------- Shoulders/Buttons ---------------------------- */
+
+  .shoulder-right {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 100%;
+    position: absolute;
+    left: calc(100% + 12px);
+    width: fit-content;
+    gap: 4px;
+  }
+
+  .shoulder-bottom {
+    position: absolute;
+    bottom: -2px;
+    right: 2px;
+  }
+
+  @apply bg-background;
+}
+
+.dark .sp-cell {
+  @apply border-border;
+
+  &:hover {
+    border: 1px solid #444444;
+  }
+
+  &.needs-run:hover {
+    @apply border-action-foreground/30 outline-action-foreground/30;
+  }
+
+  &.has-error:hover {
+    @apply border-error/30 outline-error/30;
+  }
+
+  &.borderless {
+    border-color: transparent;
+
+    & > * {
+      border-bottom: none;
+    }
+
+    &:hover {
+      border: 1px solid #222222;
+    }
+  }
+
+  &.published {
+    border: none;
+
+    &:hover {
+      border: none;
+      box-shadow: none;
+    }
+  }
+}
+
+#cell-setup,
+#cell-setup .cm-editor,
+#cell-setup .cm-gutter {
+  background-color: #080808;
+}
+
+#App.disconnected {
+  .sp-cell,
+  .console-output-area,
+  .cm .cm-gutters,
+  .sp-cell .cm-editor.cm-focused .cm-activeLineGutter,
+  .sp-cell .cm-editor.cm-focused .cm-activeLine,
+  .sp-cell .shoulder-button {
+    background-color: transparent;
+  }
+
+  .cell-running-icon,
+  .cell-queued-icon,
+  .elapsed-time {
+    visibility: hidden;
+    animation: none;
+  }
+
+  .console-output-area {
+    border-color: transparent;
+  }
+}
+
+.tray {
+  display: flex;
+  position: relative;
+  z-index: 1;
+
+  &[data-has-output-above="false"] .cm-editor {
+    border-top-left-radius: 9px;
+    border-top-right-radius: 9px;
+  }
+
+  div[data-ai-input-open="true"] .cm-editor {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  &:last-child .cm-editor {
+    border-bottom-left-radius: 9px;
+    border-bottom-right-radius: 9px;
+  }
+
+  /* expand the hover area left and right */
+
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    width: var(--gutter-width);
+    max-width: var(--gutter-width);
+    height: 100%;
+  }
+
+  &::before {
+    left: calc(var(--gutter-width) * -1);
+  }
+
+  &::after {
+    right: calc(var(--gutter-width) * -1);
+  }
+}
+
+/* Hide tray when dragging a cell, to prevent messing up the measurements. */
+.sp-cell.is-moving {
+  .tray::before,
+  .tray::after {
+    display: none;
+  }
+}
+
+:root {
+  --gutter-width: 100px;
+}
+
+/* ------------------------ CodeMirror Editor ----------------------------- */
+.cm {
+  width: 100%;
+}
+
+.cm-editor {
+  font-size: var(--sp-code-editor-font-size, 0.9rem);
+}
+
+.cm-lineNumbers {
+  font-size: var(--sp-code-editor-font-size, 0.9rem);
+}
+
+.sp-cell .cm-editor {
+  border: 1px solid transparent;
+  padding: 3px;
+  padding-right: 24px;
+
+  &.cm-focused {
+    .cm-activeLineGutter {
+      background: #0e1e25;
+    }
+
+    .cm-activeLine:not(.cm-error-line) {
+      background: hsl(210deg 100% 2% / 20%);
+    }
+  }
+
+  .cm-activeLine:not(.cm-error-line) {
+    background: transparent;
+    border-radius: 2px;
+  }
+
+  .cm-activeLineGutter {
+    background: transparent;
+  }
+
+  .cm-content {
+    font-size: var(--sp-code-editor-font-size, 0.9rem);
+    font-family: var(--monospace-font);
+  }
+}
+
+/* ------------------------------ Output Areas ------------------------------ */
+
+.output-area {
+  max-width: inherit;
+  width: 100%;
+  padding: 1rem;
+  clear: both;
+  display: flow-root;
+  overflow: auto;
+}
+
+.sp-output-stale,
+.sp-cell.stale .output-area.sp-output-stale,
+.sp-cell.stale .console-output-area.sp-output-stale {
+  opacity: 0.8;
+  filter: grayscale(50%);
+  transition: 300ms;
+  transition-delay: 200ms;
+}
+
+.sp-output-stale.sp-output-loading,
+.sp-cell.stale .output-area.sp-output-stale.sp-output-loading,
+.sp-cell.stale
+  .console-output-area.sp-output-stale.sp-output-loading {
+  opacity: 0.4;
+  filter: grayscale(50%);
+  transition: 300ms;
+  transition-delay: 200ms;
+}
+
+.console-output-area {
+  background-color: #080808;
+}

@@ -12,7 +12,7 @@ import {
   PRIMARY_BTN_CLASS,
   SECONDARY_BTN_CLASS,
   DANGER_BTN_CLASS,
-} from "@/components/auth/auth-primitives";
+} from "~/components/auth/auth-primitives";
 
 export type PendingButtonVariant = "default" | "danger" | "secondary";
 export type PendingButtonSize = "sm" | "md";

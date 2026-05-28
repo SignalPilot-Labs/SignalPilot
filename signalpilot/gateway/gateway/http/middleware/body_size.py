@@ -41,6 +41,11 @@ class RequestBodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = scope.get("path", "")
+        if path.startswith("/git/"):
+            await self.app(scope, receive, send)
+            return
+
         # Check Content-Length header for early rejection
         headers: dict[bytes, bytes] = dict(scope.get("headers", []))
         content_length_raw = headers.get(b"content-length")

@@ -1,0 +1,122 @@
+import { type DropzoneOptions, useDropzone } from "react-dropzone";
+import { toast } from "@/components/ui/use-toast";
+import { useRequestClient } from "@/core/network/requests";
+import { withLoadingToast } from "@/utils/download";
+import { Logger } from "@/utils/Logger";
+import { type FilePath, PathBuilder } from "@/utils/paths";
+import { mapWithConcurrency } from "@/utils/semaphore";
+import { treeAtom } from "./state";
+import { store } from "@/core/state/jotai";
+
+const MAX_SIZE = 1024 * 1024 * 100; // 100MB
+const UPLOAD_CONCURRENCY = 5;
+
+export function useFileExplorerUpload(options: DropzoneOptions = {}) {
+  const { sendCreateFileOrFolder } = useRequestClient();
+  return useDropzone({
+    multiple: true,
+    maxSize: MAX_SIZE,
+    onError: (error) => {
+      Logger.error(error);
+      toast({
+        title: "File upload failed",
+        description: error.message,
+        variant: "danger",
+      });
+    },
+    onDropRejected: (rejectedFiles) => {
+      toast({
+        title: "File upload failed",
+        description: (
+          <div className="flex flex-col gap-1">
+            {rejectedFiles.map((file) => (
+              <div key={file.file.name}>
+                {file.file.name} ({file.errors.map((e) => e.message).join(", ")}
+                )
+              </div>
+            ))}
+          </div>
+        ),
+        variant: "danger",
+      });
+    },
+    onDrop: async (acceptedFiles) => {
+      if (acceptedFiles.length === 0) {
+        return;
+      }
+      const isSingle = acceptedFiles.length === 1;
+
+      const loadingTitle = isSingle
+        ? "Uploading file..."
+        : "Uploading files...";
+      const onFinish = {
+        title: isSingle
+          ? "File uploaded"
+          : `${acceptedFiles.length} files uploaded`,
+      };
+
+      await withLoadingToast(
+        loadingTitle,
+        async (progress) => {
+          progress.addTotal(acceptedFiles.length);
+          await mapWithConcurrency(
+            acceptedFiles,
+            UPLOAD_CONCURRENCY,
+            async (file) => {
+              // We strip the leading slash since File.path can return
+              // `/path/to/file`.
+              const filePath = stripLeadingSlash(getPath(file));
+              let directoryPath = "" as FilePath;
+              if (filePath) {
+                directoryPath =
+                  PathBuilder.guessDeliminator(filePath).dirname(filePath);
+              }
+
+              await sendCreateFileOrFolder({
+                path: directoryPath,
+                type: "file",
+                name: file.name,
+                file,
+              });
+              progress.increment(1);
+            },
+          );
+          await store.get(treeAtom).refresh([]);
+        },
+        onFinish,
+      );
+    },
+    ...options,
+  });
+}
+
+/**
+ * Get the path of a file.
+ *
+ * Types only have `webkitRelativePath`, but File objects in the browser
+ * can have `path` and `relativePath`.
+ */
+function getPath(file: File): FilePath | undefined {
+  if (file.webkitRelativePath) {
+    return file.webkitRelativePath as FilePath;
+  }
+  if ("path" in file && typeof file.path === "string") {
+    return file.path as FilePath;
+  }
+  if ("relativePath" in file && typeof file.relativePath === "string") {
+    return file.relativePath as FilePath;
+  }
+  return undefined;
+}
+
+/**
+ * Strip leading slashes from a path.
+ *
+ * TODO: this may not support windows paths.
+ */
+function stripLeadingSlash(path: FilePath | undefined): FilePath | undefined {
+  if (!path) {
+    return undefined;
+  }
+  return path.replace(/^\/+/, "") as FilePath;
+}

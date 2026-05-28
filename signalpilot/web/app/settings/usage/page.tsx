@@ -11,21 +11,21 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
-import type { UsageSummaryResponse, DailyUsagePoint, KeyUsageEntry } from "@/lib/backend-client";
-import { usePlan } from "@/lib/hooks/use-gateway-data";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { SectionHeader } from "@/components/ui/section-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { TimeAgo } from "@/components/ui/time-ago";
-import { useToast } from "@/components/ui/toast";
-import { UsageSkeleton } from "@/components/ui/skeleton";
+import { useAppAuth } from "~/lib/auth-context";
+import { useBackendClient } from "~/lib/backend-client";
+import type { UsageSummaryResponse, DailyUsagePoint, KeyUsageEntry } from "~/lib/backend-client";
+import { usePlan } from "~/lib/hooks/use-gateway-data";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { SectionHeader } from "~/components/ui/section-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { TimeAgo } from "~/components/ui/time-ago";
+import { useToast } from "~/components/ui/toast";
+import { UsageSkeleton } from "~/components/ui/skeleton";
 import {
   generateDailyUsage,
   generateKeyUsage,
   getRateLimitStatus,
-} from "@/lib/mock-usage";
+} from "~/lib/mock-usage";
 
 // ---------------------------------------------------------------------------
 // Custom recharts tooltip

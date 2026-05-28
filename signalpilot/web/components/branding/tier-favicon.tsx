@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 
 // Geometric SVG marks at 32×32. Solid fill-based, sharp corners, no stroke.
 // Progressive corner-cut vocabulary on a centered 16×16 shape.

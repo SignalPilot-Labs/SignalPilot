@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTierUpgrade } from "@/lib/hooks/use-tier-upgrade";
-import { TIER_BRANDS, type BrandTier, type TierBrand } from "@/lib/tier-branding";
+import { useTierUpgrade } from "~/lib/hooks/use-tier-upgrade";
+import { TIER_BRANDS, type BrandTier, type TierBrand } from "~/lib/tier-branding";
 
 // Per-tier dismiss delays — Enterprise copy is longest, gets the most time.
 const DISMISS_DELAY_MS: Record<BrandTier, number> = {

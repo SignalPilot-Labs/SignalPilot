@@ -1,7 +1,5 @@
 """Schema exploration tool: explore_column (tool 13)."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response

@@ -8,8 +8,8 @@
 
 import { Monitor, Smartphone } from "lucide-react";
 import type { SessionWithActivitiesResource } from "@clerk/types";
-import { formatDevice, formatLocation, formatLastActive } from "@/lib/sessions/format-session";
-import { NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
+import { formatDevice, formatLocation, formatLastActive } from "~/lib/sessions/format-session";
+import { NEUTRAL_CLASS } from "~/components/auth/auth-primitives";
 
 export interface SessionRowProps {
   session: SessionWithActivitiesResource;

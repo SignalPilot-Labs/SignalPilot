@@ -40,8 +40,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      minio:
-        condition: service_healthy
       notebook:
         condition: service_healthy
       sandbox:

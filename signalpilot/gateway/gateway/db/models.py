@@ -404,7 +404,7 @@ class GatewayKnowledgeEdit(GatewayBase):
 
 
 class GatewayWorkspaceProject(GatewayBase):
-    """S3-backed workspace project."""
+    """Git-backed workspace project."""
 
     __tablename__ = "gateway_workspace_projects"
 
@@ -415,7 +415,6 @@ class GatewayWorkspaceProject(GatewayBase):
     description: Mapped[str | None] = mapped_column(Text)
     connection_name: Mapped[str | None] = mapped_column(String(100))
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="managed")
-    s3_prefix: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     tags: Mapped[list | None] = mapped_column(JSON)
     settings: Mapped[dict | None] = mapped_column(JSON)

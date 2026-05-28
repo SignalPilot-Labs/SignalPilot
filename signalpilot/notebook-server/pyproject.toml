@@ -525,8 +525,8 @@ warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q -v --ignore tests/_cli/fixtures --ignore tests/_ast/codegen_data --ignore tests/_ast/app_data"
-testpaths = ["tests"]
+addopts = "-ra -q -v --import-mode=importlib --ignore tests/_cli/fixtures --ignore tests/_ast/codegen_data --ignore tests/_ast/app_data"
+testpaths = ["tests", "signalpilot"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 120 # seconds, per test (Windows CI needs extra headroom)

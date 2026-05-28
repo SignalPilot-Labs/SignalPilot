@@ -57,6 +57,10 @@ export interface SignalpilotClient {
 export interface SignalpilotMountConfig {
   filename?: string;
   initialCode?: string;
+  /** Pre-fetched session snapshot (outputs). Threaded into mountOptionsSchema.session. */
+  session?: unknown; // NotebookSessionV1 | null at runtime; mountOptionsSchema revalidates
+  /** Pre-fetched notebook snapshot (structural metadata). Threaded into mountOptionsSchema.notebook. */
+  notebook?: unknown; // NotebookV1 | null at runtime; mountOptionsSchema revalidates
   /**
    * Validated by the existing `parseUserConfig` in mount.tsx.
    * Accepts the raw userConfig object; unknown shape is intentional here.

@@ -376,6 +376,19 @@ async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
     logger.info("Ensured pod_ip_internal column on gateway_notebook_sessions")
 
 
+async def _ensure_drop_s3_prefix_column(engine) -> None:
+    """Drop s3_prefix column from gateway_workspace_projects if it still exists.
+
+    Single-phase idempotent: DROP COLUMN IF EXISTS handles both new deployments
+    (column never existed) and existing deployments (column present from R4).
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_workspace_projects DROP COLUMN IF EXISTS s3_prefix")
+        )
+    logger.info("Ensured s3_prefix column dropped from gateway_workspace_projects")
+
+
 async def _ensure_notebook_session_org_id(engine) -> None:
     """Idempotent: ensure org_id column on gateway_notebook_sessions and backfill legacy NULLs.
 
@@ -416,6 +429,7 @@ async def init_db() -> None:
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)
     await _ensure_notebook_session_pod_ip_internal(engine)
+    await _ensure_drop_s3_prefix_column(engine)
     # GitHub tables are created by metadata.create_all above; this is a placeholder
     # for future column additions via ALTER TABLE IF NOT EXISTS.
     logger.info("Gateway database tables initialized")

@@ -341,7 +341,6 @@ async def git_force_reset(*, request: Request) -> Response:
     from signalpilot._server.files.project_sync import (
         local_project_dir,
         sync_down,
-        workspace_clear,
     )
 
     repo = local_project_dir(project_id)
@@ -366,9 +365,6 @@ async def git_force_reset(*, request: Request) -> Response:
                 shutil.rmtree(str(repo), ignore_errors=True)
 
         LOGGER.info(f"[Force Reset] Deleted {repo}")
-
-    # Clear S3 workspace too (it may have stale/corrupt files)
-    workspace_clear(project_id)
 
     # Fresh clone
     result = sync_down(project_id, branch)
@@ -501,12 +497,6 @@ async def git_info(*, request: Request) -> Response:
             if y != " ":
                 changed_count += 1
 
-    # Workspace status
-    workspace = None
-    if os.environ.get("SP_USER_ID"):
-        from signalpilot._server.files.project_sync import workspace_status
-        workspace = workspace_status(project_id)
-
     return JSONResponse({
         "branch": current_branch.strip(),
         "last_commit": last_commit.strip(),
@@ -516,5 +506,4 @@ async def git_info(*, request: Request) -> Response:
         "staged_count": staged_count,
         "changed_count": changed_count,
         "untracked_count": untracked_count,
-        "workspace": workspace,
     })

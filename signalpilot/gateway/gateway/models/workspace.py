@@ -6,7 +6,6 @@ import time
 
 from pydantic import BaseModel, Field
 
-
 # ─── Workspace Projects ─────────────────────────────────────────────────────
 
 
@@ -38,7 +37,6 @@ class WorkspaceProjectInfo(BaseModel):
     description: str | None = None
     source: str = "managed"
     connection_name: str | None = None
-    s3_prefix: str
     status: str = "active"
     tags: list[str] | None = None
     settings: dict | None = None

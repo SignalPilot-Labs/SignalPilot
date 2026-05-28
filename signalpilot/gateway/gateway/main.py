@@ -82,32 +82,12 @@ async def lifespan(app: FastAPI):
         logger.error("STARTUP FATAL: %s", e)
         raise SystemExit(1) from e
 
-    # R4: Validate workspace storage settings at startup (fail-fast on bad config).
-    # Cloud mode + disabled backend → hard-fail here.
-    from .config.workspace_storage import get_workspace_storage_settings
-    from .orchestrator.workspace_sync import get_workspace_sync_coordinator
-
-    try:
-        _ws_settings = get_workspace_storage_settings()
-        _ws_coordinator = get_workspace_sync_coordinator()
-        logger.info(
-            "STARTUP: Workspace backend=%s configured.", _ws_settings.sp_workspace_backend
-        )
-    except (ValueError, RuntimeError) as exc:
-        logger.error("STARTUP FATAL: Workspace storage misconfigured: %s", exc)
-        raise SystemExit(1) from exc
-
     # Ensure git repos directory exists
     from .git.repos import ensure_repos_dir
     ensure_repos_dir()
 
     # Initialize gateway DB tables
     await init_db()
-
-    # Initialize S3 storage (MinIO locally, real S3 in production)
-    from .s3 import init_s3
-
-    await init_s3()
 
     # Load persisted health state into in-memory cache
     await health_monitor.load_from_db()
@@ -155,8 +135,8 @@ async def lifespan(app: FastAPI):
     # sessions still show "running" in the DB. Mark them stopped so users
     # get a fresh pod on next connect instead of 502s or SP_ALREADY_CONNECTED loops.
     try:
-        from .store.notebook_sessions import list_stale_sessions, mark_stopped
         from .orchestrator.kubernetes import KubernetesOrchestrator
+        from .store.notebook_sessions import list_stale_sessions, mark_stopped
         orch = KubernetesOrchestrator()
         factory = get_session_factory()
         async with factory() as db_session:
@@ -380,18 +360,6 @@ async def lifespan(app: FastAPI):
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
         await dbt_proxy_ctx.__aexit__(None, None, None)
-        # R4: Drain workspace snapshots before shutdown.
-        try:
-            from .config.workspace_storage import get_workspace_storage_settings
-            from .orchestrator.workspace_sync import get_workspace_sync_coordinator
-
-            _drain_settings = get_workspace_storage_settings()
-            _drain_coordinator = get_workspace_sync_coordinator()
-            await _drain_coordinator.shutdown(
-                drain_seconds=_drain_settings.sp_workspace_shutdown_drain_seconds
-            )
-        except Exception as exc:
-            logger.warning("Workspace shutdown drain failed: %s", exc)
         # Flush any remaining health events before shutdown
         await health_monitor.flush_to_db()
         health_flush_task.cancel()

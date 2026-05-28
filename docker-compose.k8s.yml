@@ -41,8 +41,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      minio:
-        condition: service_healthy
       sandbox:
         condition: service_healthy
       k3s:

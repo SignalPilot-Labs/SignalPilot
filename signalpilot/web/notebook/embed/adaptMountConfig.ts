@@ -23,6 +23,8 @@ export function adaptMountConfig(source: {
     mode,
     filename: config.filename,
     code: config.initialCode,
+    session: config.session,
+    notebook: config.notebook,
     version: config.version,
     config: config.userConfig,
     appConfig: config.appConfig,

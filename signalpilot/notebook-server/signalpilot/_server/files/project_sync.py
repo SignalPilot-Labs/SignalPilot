@@ -8,8 +8,12 @@ Local layout:
 """
 from __future__ import annotations
 
+import base64
 import os
+import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +24,26 @@ from signalpilot import _loggers
 LOGGER = _loggers.sp_logger()
 
 PROJECTS_ROOT = Path.home() / ".sp" / "projects"
+
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _validate_branch(branch: str) -> None:
+    """Reject branch names that could be used for argument injection."""
+    if not branch or branch.startswith("-") or not _BRANCH_RE.match(branch):
+        raise ValueError(f"Invalid branch name: {branch!r}")
+
+
+def _validate_project_id(project_id: str) -> None:
+    """Reject project IDs that are not valid UUIDs."""
+    if not project_id or not _UUID_RE.match(project_id):
+        raise ValueError(f"Invalid project ID: {project_id!r}")
+
+
+def _redact_url(url: str) -> str:
+    """Strip userinfo from a URL to prevent credential leakage in logs."""
+    return re.sub(r"://[^@]*@", "://", url)
 
 
 def _gateway_url() -> str:
@@ -48,6 +72,24 @@ def _run_git(repo: Path, *args: str, timeout: int = 60) -> tuple[int, str, str]:
         timeout=timeout,
     )
     return result.returncode, result.stdout, result.stderr
+
+
+def _run_git_authed(repo: Path, auth_header: str, *args: str, timeout: int = 60) -> tuple[int, str, str]:
+    """Run a git command with HTTP auth header passed via -c (not URL-embedded)."""
+    result = subprocess.run(
+        ["git", "-c", f"http.extraHeader=Authorization: {auth_header}", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+def _make_basic_auth_header(username: str, token: str) -> str:
+    """Return the value for an Authorization header using HTTP Basic Auth."""
+    encoded = base64.b64encode(f"{username}:{token}".encode()).decode()
+    return f"Basic {encoded}"
 
 
 # ── Project name cache ───────────────────────────────────────────
@@ -112,19 +154,18 @@ def get_clone_info(project_id: str) -> dict[str, Any]:
     return {"clone_url": None, "default_branch": "main", "source": "managed"}
 
 
-def _get_clone_url(project_id: str) -> str | None:
-    """Return the authenticated clone URL (token embedded for git Basic Auth)."""
+def _get_clone_url_and_auth(project_id: str) -> tuple[str | None, str | None]:
+    """Return (clean_url, auth_header_value) without embedding credentials in the URL."""
     info = get_clone_info(project_id)
     base_url = info.get("clone_url")
     if not base_url:
-        return None
+        return None, None
 
     token = info.get("auth_token", "")
     username = info.get("auth_username", "x-access-token")
-    if token and "://" in base_url:
-        scheme, rest = base_url.split("://", 1)
-        return f"{scheme}://{username}:{token}@{rest}"
-    return base_url
+    if token:
+        return base_url, _make_basic_auth_header(username, token)
+    return base_url, None
 
 
 def _get_github_remote(project_id: str) -> str | None:
@@ -176,18 +217,17 @@ def local_project_dir(project_id: str, branch: str = "") -> Path:
 
 def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
     """Clone or pull latest from gateway bare repo."""
+    _validate_branch(branch)
     repo = local_project_dir(project_id)
-    clone_url = _get_clone_url(project_id)
+    clone_url, auth_header = _get_clone_url_and_auth(project_id)
 
     if not clone_url:
         return {"error": "No clone URL available", "local_dir": str(repo)}
 
     if not (repo / ".git").exists():
         # Fresh clone — remove dir if it exists (may be leftover from failed clone)
-        import shutil
-        import sys as _sys
         if repo.exists():
-            if _sys.platform == "win32":
+            if sys.platform == "win32":
                 subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(repo)],
                                capture_output=True, timeout=10)
             if repo.exists():
@@ -200,28 +240,45 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
                 except Exception:
                     pass
         repo.parent.mkdir(parents=True, exist_ok=True)
-        LOGGER.info(f"Cloning project {project_id} to {repo}")
-        code, out, err = _run_git(
-            repo.parent, "clone", "--branch", branch, clone_url, str(repo),
-            timeout=120,
-        )
-        if code != 0:
-            # Branch might not exist, try without --branch
-            LOGGER.warning(f"Clone with branch failed: {err.strip()}, trying default")
-            code, out, err = _run_git(
-                repo.parent, "clone", clone_url, str(repo),
+        LOGGER.info("Cloning project %s to %s", project_id, repo)
+        if auth_header:
+            code, out, err = _run_git_authed(
+                repo.parent, auth_header,
+                "clone", "--branch", branch, clone_url, str(repo),
                 timeout=120,
             )
+        else:
+            code, out, err = _run_git(
+                repo.parent, "clone", "--branch", branch, clone_url, str(repo),
+                timeout=120,
+            )
+        if code != 0:
+            LOGGER.warning("Clone with branch failed: %s, trying default", err.strip())
+            if auth_header:
+                code, out, err = _run_git_authed(
+                    repo.parent, auth_header,
+                    "clone", clone_url, str(repo),
+                    timeout=120,
+                )
+            else:
+                code, out, err = _run_git(
+                    repo.parent, "clone", clone_url, str(repo),
+                    timeout=120,
+                )
             if code != 0:
-                LOGGER.error(f"Clone failed: {err}")
+                LOGGER.error("Clone failed: %s", _redact_url(err))
                 return {"error": f"Clone failed: {err.strip()}", "local_dir": str(repo)}
 
         _run_git(repo, "config", "user.email", "notebook@signalpilot.dev")
         _run_git(repo, "config", "user.name", "SignalPilot")
+        if auth_header:
+            _run_git(repo, "config", "--local", "http.extraHeader",
+                     f"Authorization: {auth_header}")
     else:
-        # Existing repo — fetch latest
-        # Update remote URL (token may have refreshed)
-        _run_git(repo, "remote", "set-url", "origin", clone_url)
+        # Existing repo — refresh auth config and fetch latest
+        if auth_header:
+            _run_git(repo, "config", "--local", "http.extraHeader",
+                     f"Authorization: {auth_header}")
         _run_git(repo, "fetch", "origin")
 
     # Checkout the requested branch — hard reset, discard all local changes
@@ -241,7 +298,6 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
     if _git_remote_branch_exists(repo, branch):
         code, out, err = _run_git(repo, "pull", "--ff-only", "origin", branch)
         if code != 0:
-            # ff-only failed (diverged), try regular pull
             _run_git(repo, "pull", "origin", branch, "--no-edit")
 
     file_count = sum(
@@ -249,7 +305,7 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
         if f.is_file() and ".git" not in f.parts
     )
 
-    LOGGER.info(f"Sync complete: {repo} branch={branch} files={file_count}")
+    LOGGER.info("Sync complete: %s branch=%s files=%d", repo, branch, file_count)
     return {
         "local_dir": str(repo),
         "file_count": file_count,
@@ -259,18 +315,20 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
 
 def sync_up(project_id: str, branch: str = "main") -> dict[str, Any]:
     """Commit and push local changes to gateway."""
+    _validate_branch(branch)
     repo = local_project_dir(project_id)
     if not (repo / ".git").exists():
         return {"error": "No local repo"}
 
-    # Update remote URL (token refresh)
-    clone_url = _get_clone_url(project_id)
-    if clone_url:
-        _run_git(repo, "remote", "set-url", "origin", clone_url)
+    # Refresh auth config (token may have been refreshed)
+    _, auth_header = _get_clone_url_and_auth(project_id)
+    if auth_header:
+        _run_git(repo, "config", "--local", "http.extraHeader",
+                 f"Authorization: {auth_header}")
 
     code, out, err = _run_git(repo, "push", "origin", branch)
     if code != 0:
-        LOGGER.error(f"Push failed: {err}")
+        LOGGER.error("Push failed: %s", _redact_url(err))
         return {"error": err.strip()}
 
     return {"success": True, "output": out.strip()}
@@ -295,6 +353,7 @@ def _git_remote_branch_exists(repo: Path, branch: str) -> bool:
 
 def checkout_branch(project_id: str, branch: str) -> dict[str, Any]:
     """Switch to a git branch. Creates from origin if needed."""
+    _validate_branch(branch)
     repo = local_project_dir(project_id)
     if not repo.exists():
         return {"error": "Project not synced yet"}
@@ -315,173 +374,14 @@ def checkout_branch(project_id: str, branch: str) -> dict[str, Any]:
         code, _, err = _run_git(repo, "checkout", "-b", branch)
 
     if code != 0:
-        LOGGER.error(f"Checkout failed: {err}")
+        LOGGER.error("Checkout failed: %s", err)
         return {"error": err.strip()}
 
     return {"branch": branch, "switched": True}
 
 
-# ── User workspace (S3 flat file backup) ────────────────────────
-
-def _is_agent_mode() -> bool:
-    return os.environ.get("SP_AGENT_MODE", "").lower() in ("true", "1", "yes")
-
-
-def _user_id() -> str | None:
-    if _is_agent_mode():
-        return None
-    return os.environ.get("SP_USER_ID")
-
-
-def _workspace_url(project_id: str) -> str:
-    return f"{_gateway_url()}/api/workspaces/{project_id}"
-
-
-def workspace_status(project_id: str) -> dict[str, Any] | None:
-    """Check if user workspace exists on S3."""
-    uid = _user_id()
-    if not uid:
-        return None
-
-    try:
-        resp = httpx.get(
-            f"{_workspace_url(project_id)}/status",
-            headers=_gateway_headers(),
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception:
-        pass
-    return None
-
-
-def workspace_restore(project_id: str) -> dict[str, Any]:
-    """Restore user workspace from S3 to local disk.
-    Faster than git clone because it includes uncommitted work."""
-    uid = _user_id()
-    if not uid:
-        return {"restored": False, "reason": "no user ID"}
-
-    status = workspace_status(project_id)
-    if not status or not status.get("exists") or status.get("file_count", 0) == 0:
-        return {"restored": False, "reason": "no workspace"}
-
-    repo = local_project_dir(project_id)
-    repo.mkdir(parents=True, exist_ok=True)
-    headers = _gateway_headers()
-    base = _workspace_url(project_id)
-
-    # List workspace files
-    resp = httpx.get(f"{base}/files", headers=headers, timeout=30.0)
-    if resp.status_code != 200:
-        return {"restored": False, "reason": "failed to list files"}
-
-    files = resp.json().get("files", [])
-    restored = 0
-
-    for f in files:
-        key = f.get("key", "")
-        if not key:
-            continue
-
-        file_resp = httpx.get(
-            f"{base}/files/{key}",
-            headers=headers,
-            timeout=30.0,
-        )
-        if file_resp.status_code != 200:
-            continue
-
-        local_path = repo / key
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(file_resp.content)
-        restored += 1
-
-    LOGGER.info(f"Workspace restored: {restored} files to {repo}")
-    return {"restored": True, "file_count": restored, "local_dir": str(repo)}
-
-
-def workspace_save_file(project_id: str, relative_path: str, content: bytes) -> bool:
-    """Save a single file to the user's S3 workspace."""
-    uid = _user_id()
-    if not uid:
-        return False
-
-    headers = _gateway_headers()
-    ext = os.path.splitext(relative_path)[1].lower()
-    ct = {
-        ".sql": "text/sql", ".yml": "text/yaml", ".yaml": "text/yaml",
-        ".py": "text/x-python", ".json": "application/json", ".csv": "text/csv",
-    }.get(ext, "application/octet-stream")
-
-    try:
-        resp = httpx.put(
-            f"{_workspace_url(project_id)}/files/{relative_path}",
-            content=content,
-            headers={**headers, "Content-Type": ct},
-            timeout=15.0,
-        )
-        return resp.status_code == 201
-    except Exception as e:
-        LOGGER.debug(f"Workspace save failed for {relative_path}: {e}")
-        return False
-
-
-def workspace_delete_file(project_id: str, relative_path: str) -> bool:
-    """Delete a file from the user's S3 workspace."""
-    uid = _user_id()
-    if not uid:
-        return False
-
-    try:
-        resp = httpx.delete(
-            f"{_workspace_url(project_id)}/files/{relative_path}",
-            headers=_gateway_headers(),
-            timeout=10.0,
-        )
-        return resp.status_code == 204
-    except Exception:
-        return False
-
-
-def workspace_clear(project_id: str) -> bool:
-    """Clear the user's workspace for this project."""
-    uid = _user_id()
-    if not uid:
-        return False
-
-    try:
-        resp = httpx.delete(
-            _workspace_url(project_id),
-            headers=_gateway_headers(),
-            timeout=15.0,
-        )
-        return resp.status_code == 204
-    except Exception:
-        return False
-
-
 # ── Unified entry point ─────────────────────────────────────────
 
 def sync_project(project_id: str, branch: str = "main") -> dict[str, Any]:
-    """Sync a project to local disk.
-
-    1. Git clone/pull (always, this is the source of truth)
-    2. Overlay workspace files on top (uncommitted work from last session)
-    """
-    # Always git clone/pull first
-    result = sync_down(project_id, branch)
-    if "error" in result:
-        return result
-
-    # Then overlay workspace files (restores uncommitted changes)
-    if _user_id():
-        ws = workspace_restore(project_id)
-        if ws.get("restored"):
-            LOGGER.info(f"Overlaid {ws.get('file_count', 0)} workspace files on top of clone")
-            result["workspace_restored"] = ws.get("file_count", 0)
-
-    return result
-
-
+    """Sync a project to local disk via git clone/pull."""
+    return sync_down(project_id, branch)

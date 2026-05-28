@@ -34,13 +34,18 @@ from signalpilot._server.api.endpoints.fs_events import (
     router as fs_events_router,
 )
 from signalpilot._server.api.endpoints.git import router as git_router
-from signalpilot._server.api.endpoints.health import router as health_router
-from signalpilot._server.api.endpoints.health import root_health_router
+from signalpilot._server.api.endpoints.health import (
+    root_health_router,
+    router as health_router,
+)
 from signalpilot._server.api.endpoints.home import router as home_router
 from signalpilot._server.api.endpoints.login import router as login_router
 from signalpilot._server.api.endpoints.lsp import router as lsp_router
 from signalpilot._server.api.endpoints.mount_config import (
     router as mount_config_router,
+)
+from signalpilot._server.api.endpoints.notebook_static import (
+    router as notebook_static_router,
 )
 from signalpilot._server.api.endpoints.packages import (
     router as packages_router,
@@ -118,6 +123,11 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
     app_router.include_router(lsp_router, prefix="/api/lsp", name="lsp")
     app_router.include_router(health_router, prefix="/api", name="health")
     app_router.include_router(root_health_router, name="root_health")
+    app_router.include_router(
+        notebook_static_router,
+        prefix="/api/notebook",
+        name="notebook_static",
+    )
     # mount_config_router MUST be last — its /api prefix would shadow
     # more-specific /api/* mounts if placed earlier
     app_router.include_router(

@@ -2,12 +2,11 @@
 #
 # Usage: docker compose up --build
 #
-# Starts: Postgres + MinIO + Gateway + Notebook + Web + Sandbox
+# Starts: Postgres + Gateway + Notebook + Web + Sandbox
 # No K8s, no .env file, no external dependencies. Works on any OS.
 #
 # Services:
 #   - db        (Postgres 17)          localhost:5601
-#   - minio     (S3-compatible store)  localhost:9000 (API) / 9001 (console)
 #   - gateway   (FastAPI backend)      localhost:3300
 #   - notebook  (Notebook kernel)      localhost:2718
 #   - web       (Next.js frontend)     localhost:3200
@@ -36,25 +35,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ─── Object Storage ───────────────────────────────────────────
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: signalpilot
-      MINIO_ROOT_PASSWORD: changeme_dev_only
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - signalpilot-minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   # ─── Gateway (API + proxy) ────────────────────────────────────
   gateway:
     build:
@@ -68,16 +48,6 @@ services:
       SP_DEPLOYMENT_MODE: local
       SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:3300,http://localhost:2718
-      # S3 / MinIO
-      SP_S3_ENDPOINT_URL: http://minio:9000
-      SP_S3_ACCESS_KEY: signalpilot
-      SP_S3_SECRET_KEY: changeme_dev_only
-      SP_S3_BUCKET: signalpilot-data
-      SP_S3_REGION: us-east-1
-      SP_WORKSPACE_BACKEND: s3
-      SP_WORKSPACE_S3_BUCKET: signalpilot-data
-      SP_WORKSPACE_S3_REGION: us-east-1
-      SP_WORKSPACE_S3_ENDPOINT_URL: http://minio:9000
       # Notebook: direct mode (no K8s)
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_UPSTREAM_MODE: direct
@@ -106,8 +76,6 @@ services:
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       notebook:
         condition: service_healthy
@@ -197,5 +165,4 @@ volumes:
   signalpilot-shared:
   signalpilot-gateway-secrets:
   signalpilot-repos:
-  signalpilot-minio-data:
   signalpilot-workspace:

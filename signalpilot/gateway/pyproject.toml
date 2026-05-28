@@ -31,17 +31,15 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # File-based connectors (installed in Dockerfile, needed for local dev without sandbox)
     "duckdb>=1.0.0",
-    # S3 storage (MinIO locally, real AWS in production)
+    # AWS SDK — BYOK KMS + connector IAM auth (Redshift/RDS)
     "boto3>=1.34.0",
     # Kubernetes orchestrator (K3s locally, EKS in production)
-    # Pinned to >=32,<33 — R4 uses kubernetes_asyncio.stream.WsApiClient (S9).
+    # Pinned to >=32,<33 — uses kubernetes_asyncio.stream.WsApiClient (S9).
     "kubernetes-asyncio>=32,<33",
-    # Async S3 client for workspace persistence (R4).
-    "aioboto3>=13,<14",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.28.0", "moto[kms,s3]>=5.0.0", "boto3>=1.34.0", "ruff>=0.7.0", "aioboto3>=13,<14"]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.28.0", "moto[kms]>=5.0.0", "boto3>=1.34.0", "ruff>=0.7.0"]
 aws = ["boto3>=1.34.0"]
 snowflake = ["snowflake-connector-python>=3.6.0"]
 bigquery = ["google-cloud-bigquery>=3.20.0"]

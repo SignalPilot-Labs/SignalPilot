@@ -6,21 +6,14 @@ import { Loader2 } from "lucide-react";
 import { SignalpilotEditor, type SignalpilotClient } from "@/embed";
 import { spaNavigate } from "@/core/router/spa-navigate";
 import { useNotebookConfig } from "./notebook-context";
-import { bootRuntime, type BootPhase } from "./boot-runtime";
+import { bootRuntime, type NotebookStaticData } from "./boot-runtime";
 
-const PHASE_LABELS: Record<BootPhase, string> = {
-  health: "waiting for runtime...",
-  syncing: "syncing project files...",
-  sessions: "clearing stale sessions...",
-  ready: "",
-};
-
-function LoadingSpinner({ phase }: { phase: BootPhase }) {
+function LoadingSpinner() {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4">
       <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-dim)]" />
       <span className="text-xs text-[var(--color-text-dim)] tracking-wider uppercase">
-        {PHASE_LABELS[phase]}
+        loading notebook...
       </span>
     </div>
   );
@@ -37,15 +30,24 @@ export default function NotebookBoot({
 }) {
   const config = useNotebookConfig();
   const router = useRouter();
-  const [phase, setPhase] = useState<BootPhase>("health");
   const [error, setError] = useState<string | null>(null);
   const clientRef = useRef<SignalpilotClient | null>(null);
+  const staticDataRef = useRef<NotebookStaticData | null>(null);
   const [ready, setReady] = useState(false);
 
-  const handlePhase = useCallback((p: BootPhase) => {
-    setPhase(p);
-    onPhaseChange?.(p);
+  const onReadyRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  const onPhaseChangeRef = useRef<((phase: string) => void) | undefined>(undefined);
+  useEffect(() => {
+    onPhaseChangeRef.current = onPhaseChange;
   }, [onPhaseChange]);
+
+  const handlePhase = useCallback((p: string) => {
+    onPhaseChangeRef.current?.(p);
+  }, []);
 
   const hostNavigate = useCallback((href: string) => {
     try {
@@ -68,18 +70,19 @@ export default function NotebookBoot({
     const controller = new AbortController();
 
     bootRuntime(config, handlePhase, hostNavigate, controller.signal)
-      .then(async (result) => {
+      .then((result) => {
         clientRef.current = result.client;
-        if (result.syncResult?.localDir) {
-          const { dbtProjectDirAtom } = await import("@/components/editor/dbt/use-dbt");
-          result.client.store.set(dbtProjectDirAtom, result.syncResult.localDir);
-        }
+        staticDataRef.current = result.staticData;
         setReady(true);
-        onReady?.();
+        onReadyRef.current?.();
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setError(err instanceof Error ? err.message : String(err));
+          // Log the raw server error for debugging but do not surface it in the
+          // UI — error bodies can contain internal paths, stack traces, or other
+          // sensitive details that should not be shown to end users.
+          console.error("[NotebookBoot] Failed to load notebook:", err);
+          setError("Failed to load notebook");
         }
       });
 
@@ -89,9 +92,10 @@ export default function NotebookBoot({
         try { clientRef.current.dispose(); } catch { /* disposal is best-effort */ }
         clientRef.current = null;
       }
+      staticDataRef.current = null;
       setReady(false);
     };
-  }, [config.sessionId, config.token, config.gatewayUrl, config.project, config.branch, hostNavigate, handlePhase, onReady]);
+  }, [config.sessionId, config.token, config.gatewayUrl, config.project, config.branch, hostNavigate, handlePhase]);
 
   if (error) {
     return (
@@ -101,9 +105,11 @@ export default function NotebookBoot({
     );
   }
 
-  if (!ready || !clientRef.current) {
-    return <LoadingSpinner phase={phase} />;
+  if (!ready || !clientRef.current || !staticDataRef.current) {
+    return <LoadingSpinner />;
   }
+
+  const staticData = staticDataRef.current;
 
   return (
     <>
@@ -112,6 +118,10 @@ export default function NotebookBoot({
         config={{
           gatewayUrl: config.gatewayUrl,
           gatewayApiKey: config.apiKey,
+          filename: staticData.filename,
+          initialCode: staticData.code,
+          session: staticData.session,
+          notebook: staticData.notebook,
         }}
         className="h-full"
       />

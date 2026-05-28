@@ -130,17 +130,27 @@ class PathValidator:
     ) -> None:
         """Check that filepath is inside directory."""
         if filepath_abs == directory_abs:
+            LOGGER.debug(
+                "Access denied: file %s is the same as directory %s",
+                filepath,
+                directory,
+            )
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN,
-                detail=f"Access denied: File {filepath} is the same as directory {directory}",
+                detail="forbidden",
             )
 
         try:
             filepath_abs.relative_to(directory_abs)
         except ValueError:
+            LOGGER.debug(
+                "Access denied: file %s is outside the allowed directory %s",
+                filepath,
+                directory,
+            )
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN,
-                detail=f"Access denied: File {filepath} is outside the allowed directory {directory}",
+                detail="forbidden",
             ) from None
 
     def validate_inside_directory(

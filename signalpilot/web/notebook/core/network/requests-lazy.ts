@@ -45,26 +45,36 @@ const ACTIONS: Record<keyof AllRequests, Action> = {
   sendModelValue: "startConnection",
   sendInstantiate: "startConnection",
   sendRun: "startConnection",
-  sendDeleteCell: "startConnection",
   sendRunScratchpad: "startConnection",
-  saveAppConfig: "startConnection",
-  saveCellConfig: "startConnection",
 
   // Export operations start a connection
   exportAsHTML: "startConnection",
   exportAsIPYNB: "startConnection",
   exportAsMarkdown: "startConnection",
   exportAsPDF: "startConnection",
-  readCode: "startConnection",
-  sendCopy: "throwError",
+
+  // Package operations start a connection (user-initiated install intent)
+  addPackage: "startConnection",
+  removePackage: "startConnection",
+
+  // sendRestart uses startConnection so it matches sendRun semantics: if the
+  // kernel is not running, Restart will spin it up rather than hanging silently.
+  // waitForConnectionOpen caused a silent dead-click before the first Run.
+  sendRestart: "startConnection",
 
   // Throw errors for operations that are not supported offline
+  sendCopy: "throwError",
   sendFormat: "throwError",
-  sendRestart: "throwError",
+  sendShutdown: "throwError",
+  getPackageList: "throwError",
+  getDependencyTree: "throwError",
 
   // These wait until the connection is open, but don't start a connection
   sendSave: "waitForConnectionOpen",
   sendFunctionRequest: "waitForConnectionOpen",
+  sendDeleteCell: "waitForConnectionOpen",
+  saveAppConfig: "waitForConnectionOpen",
+  saveCellConfig: "waitForConnectionOpen",
 
   // Session-based operations that wait for connection
   sendRename: "waitForConnectionOpen",
@@ -72,39 +82,6 @@ const ACTIONS: Record<keyof AllRequests, Action> = {
   autoExportAsMarkdown: "waitForConnectionOpen",
   autoExportAsIPYNB: "waitForConnectionOpen",
   updateCellOutputs: "waitForConnectionOpen",
-
-  // Sidebar operations that wait for connection
-  listSecretKeys: "throwError",
-  writeSecret: "throwError",
-  clearCache: "throwError",
-  getCacheInfo: "throwError",
-
-  // Operations that throw errors (sessionless but not supported offline)
-  saveUserConfig: "throwError",
-  sendShutdown: "throwError",
-  getPackageList: "throwError",
-  getDependencyTree: "throwError",
-  addPackage: "throwError",
-  removePackage: "throwError",
-
-  // File operations only need the HTTP API, not the kernel WebSocket
-  sendListFiles: "waitForRuntime",
-  sendSearchFiles: "waitForRuntime",
-  sendCreateFileOrFolder: "waitForRuntime",
-  sendDeleteFileOrFolder: "waitForRuntime",
-  sendCopyFileOrFolder: "waitForRuntime",
-  sendRenameFileOrFolder: "waitForRuntime",
-  sendUpdateFile: "waitForRuntime",
-  sendFileDetails: "waitForRuntime",
-  openFile: "waitForRuntime",
-
-  // Home operations only need the HTTP API, not the kernel WebSocket
-  getRecentFiles: "waitForRuntime",
-  getWorkspaceFiles: "waitForRuntime",
-  getRunningNotebooks: "waitForRuntime",
-  shutdownSession: "waitForRuntime",
-  openTutorial: "waitForRuntime",
-  getUsageStats: "waitForConnectionOpen",
 
   // These wait for connection
   sendStdin: "waitForConnectionOpen",
@@ -123,6 +100,33 @@ const ACTIONS: Record<keyof AllRequests, Action> = {
   // Sync operations that wait for connection
   sendDocumentTransaction: "waitForConnectionOpen",
   sendCodeCompletionRequest: "waitForConnectionOpen",
+
+  // File operations only need the HTTP API, not the kernel WebSocket
+  sendListFiles: "waitForRuntime",
+  sendSearchFiles: "waitForRuntime",
+  sendCreateFileOrFolder: "waitForRuntime",
+  sendDeleteFileOrFolder: "waitForRuntime",
+  sendCopyFileOrFolder: "waitForRuntime",
+  sendRenameFileOrFolder: "waitForRuntime",
+  sendUpdateFile: "waitForRuntime",
+  sendFileDetails: "waitForRuntime",
+  openFile: "waitForRuntime",
+  readCode: "waitForRuntime",
+
+  // Home operations only need the HTTP API, not the kernel WebSocket
+  getRecentFiles: "waitForRuntime",
+  getWorkspaceFiles: "waitForRuntime",
+  getRunningNotebooks: "waitForRuntime",
+  shutdownSession: "waitForRuntime",
+  openTutorial: "waitForRuntime",
+  getUsageStats: "waitForRuntime",
+
+  // Sidebar HTTP-backed operations
+  listSecretKeys: "waitForRuntime",
+  writeSecret: "waitForRuntime",
+  clearCache: "waitForRuntime",
+  getCacheInfo: "waitForRuntime",
+  saveUserConfig: "waitForRuntime",
 };
 
 /**

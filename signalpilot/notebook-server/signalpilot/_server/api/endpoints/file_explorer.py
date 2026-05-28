@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from starlette.authentication import requires
 
 from signalpilot import _loggers
 from signalpilot._server.api.deps import AppState
-from signalpilot._server.api.utils import parse_multipart_request, parse_request
+from signalpilot._server.api.utils import (
+    parse_multipart_request,
+    parse_request,
+)
 from signalpilot._server.files.file_system import FileSystem
 from signalpilot._server.files.os_file_system import OSFileSystem
 from signalpilot._server.models.files import (
@@ -288,28 +290,6 @@ async def update_file(
         if isinstance(fs, OSFileSystem):
             session_manager = app_state.session_manager
             await session_manager.trigger_file_change(body.path)
-
-        # Auto-save to user workspace (background, non-blocking)
-        ctx = _get_cloud_context(request)
-        if ctx and os.environ.get("SP_USER_ID") and not os.environ.get("SP_AGENT_MODE", "").lower() in ("true", "1", "yes"):
-            import threading
-            from signalpilot._server.files.project_sync import (
-                local_project_dir,
-                workspace_save_file,
-            )
-
-            project_id, _ = ctx
-            local_dir = local_project_dir(project_id)
-            try:
-                from pathlib import Path as _Path
-                rel = _Path(body.path).relative_to(local_dir).as_posix()
-                threading.Thread(
-                    target=workspace_save_file,
-                    args=(project_id, rel, body.contents.encode("utf-8")),
-                    daemon=True,
-                ).start()
-            except (ValueError, Exception):
-                pass
 
         return FileUpdateResponse(success=True, info=info)
     except Exception as e:

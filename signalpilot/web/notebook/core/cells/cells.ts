@@ -1109,6 +1109,7 @@ const {
     });
   },
   setCells: (state, cells: CellData[]) => {
+    console.log(`[setCells] ${cells.length} cells:`, cells.map(c => `[${c.id}] code="${c.code.slice(0, 40)}${c.code.length > 40 ? "..." : ""}"`));
     const cellData = Object.fromEntries(cells.map((cell) => [cell.id, cell]));
 
     const cellRuntime = Object.fromEntries(

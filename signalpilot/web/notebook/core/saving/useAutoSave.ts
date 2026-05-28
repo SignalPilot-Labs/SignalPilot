@@ -47,12 +47,16 @@ export function useAutoSave(opts: {
       }
 
       if (needsSave && connStatus.state === WebSocketState.OPEN) {
+        console.log(`[AUTOSAVE] scheduling save in ${config.autosave_delay}ms for "${filename}"`);
         // Capture current filename when scheduling
         scheduledFilenameRef.current = filename;
         autosaveTimeoutId.current = setTimeout(() => {
           // DEFENSE: Only save if filename hasn't changed since scheduling
           if (scheduledFilenameRef.current === filename) {
+            console.log(`[AUTOSAVE] firing save for "${filename}"`);
             onSave();
+          } else {
+            console.log(`[AUTOSAVE] SKIPPED — filename changed from "${scheduledFilenameRef.current}" to "${filename}"`);
           }
         }, config.autosave_delay);
       }

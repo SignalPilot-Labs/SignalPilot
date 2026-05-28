@@ -127,10 +127,10 @@ export function useSaveNotebook() {
         return;
       }
 
-      Logger.log("saving to ", filename);
+      console.log(`[SAVE] saving to "${filename}" userInitiated=${userInitiated}`);
 
       if (userInitiated && autoSaveConfig.format_on_save) {
-        Logger.log("formatting notebook (onSave)");
+        console.log("[SAVE] formatting notebook (onSave)");
         await formatAll();
       }
 
@@ -143,8 +143,18 @@ export function useSaveNotebook() {
       const configs = getCellConfigs(notebook);
       const layout = store.get(layoutStateAtom);
 
+      console.log(`[SAVE] ${codes.length} cells, codes: ${codes.map((c, i) => `[${cellIds[i]}]=${c.slice(0, 40)}`).join(" | ")}`);
+
       // Don't save if there are no cells
       if (codes.length === 0) {
+        console.log("[SAVE] ABORTED — 0 cells");
+        return;
+      }
+
+      // Don't save if all cells are empty (prevents overwriting scaffolded content)
+      const hasContent = codes.some((c) => c.trim().length > 0);
+      if (!hasContent) {
+        console.log("[SAVE] ABORTED — all cells empty, refusing to overwrite");
         return;
       }
 
@@ -157,6 +167,7 @@ export function useSaveNotebook() {
         layout: getSerializedLayout(),
         persist: true,
       });
+      console.log("[SAVE] sendSave complete");
 
       setLastSavedNotebook({
         names: cellNames,

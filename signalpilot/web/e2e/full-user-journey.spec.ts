@@ -117,6 +117,15 @@ test("Full user journey: create project → file tree → expand → click files
   test.setTimeout(300_000);
   const ts = timer();
   const errors = trackErrors(page);
+  // Capture ALL browser console logs with our prefixes
+  page.on("console", (msg) => {
+    const text = msg.text();
+    if (text.includes("[SAVE]") || text.includes("[AUTOSAVE]") || text.includes("[NET]") ||
+        text.includes("[setCells]") || text.includes("[buildCellData]") || text.includes("[handleKernelReady]") ||
+        text.includes("[boot]") || text.includes("[WS]")) {
+      console.log(`  BROWSER: ${text}`);
+    }
+  });
   // Dump errors every 15s so we don't have to wait for the end
   const errorDumpInterval = setInterval(() => {
     if (errors.network.length > 0) {
@@ -153,7 +162,7 @@ test("Full user journey: create project → file tree → expand → click files
   await page.goto("/projects", { waitUntil: "domcontentloaded" });
 
   // Either already running or need to click "Open IDE"
-  const runningText = page.getByText("running");
+  const runningText = page.getByText("running", { exact: true }).first();
   const openBtn = page.getByRole("button", { name: /open ide/i });
   await Promise.race([
     runningText.waitFor({ timeout: 30_000 }),
@@ -243,9 +252,23 @@ test("Full user journey: create project → file tree → expand → click files
   ts(`URL: ${savedUrls["intro.py"]}`);
   expect(cellCount, "intro.py should render notebook cells").toBeGreaterThanOrEqual(2);
 
-  const cellText = await page.locator(".cm-editor .cm-content").first().textContent();
-  ts(`First cell: "${cellText?.slice(0, 50)}"`);
-  expect(cellText?.length, "Cells should have content").toBeGreaterThan(3);
+  // Wait for cell content to populate (kernel-ready may still be arriving)
+  await page.waitForTimeout(2000);
+
+  // Verify cell 1: Welcome markdown
+  const cell1 = await page.locator(".cm-editor .cm-content").nth(0).textContent();
+  ts(`Cell 1: "${cell1?.slice(0, 60)}"`);
+  expect(cell1, "Cell 1 should contain welcome markdown").toContain("Welcome to");
+
+  // Verify cell 2: sp.init() + connections
+  const cell2 = await page.locator(".cm-editor .cm-content").nth(1).textContent();
+  ts(`Cell 2: "${cell2?.slice(0, 60)}"`);
+  expect(cell2, "Cell 2 should contain sp.init()").toContain("sp.init()");
+
+  // Verify cell 3: placeholder comment
+  const cell3 = await page.locator(".cm-editor .cm-content").nth(2).textContent();
+  ts(`Cell 3: "${cell3?.slice(0, 60)}"`);
+  expect(cell3, "Cell 3 should contain connection placeholder").toContain("sp.connect");
 
   // ── Step 6: Click dbt_project.yml → YML renders ────────────────
   ts("Step 6: Click dbt_project.yml");

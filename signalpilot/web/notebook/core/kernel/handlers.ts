@@ -40,7 +40,7 @@ export function buildCellData(data: KernelReadyData): CellData[] {
   const lastExecutedCode = last_executed_code || {};
   const lastExecutionTime = last_execution_time || {};
 
-  return codes.map((code, i) => {
+  const cells = codes.map((code, i) => {
     const cellId = cell_ids[i];
     const lastCodeRun = lastExecutedCode[cellId];
 
@@ -57,6 +57,8 @@ export function buildCellData(data: KernelReadyData): CellData[] {
       config: configs[i],
     });
   });
+  console.log(`[buildCellData] ${cells.length} cells built:`, cells.map(c => `[${c.id}] code=${c.code.slice(0, 40)}${c.code.length > 40 ? "..." : ""}`));
+  return cells;
 }
 
 /**
@@ -134,13 +136,19 @@ export function handleKernelReady(
   const { resumed, ui_values, app_config, capabilities, auto_instantiated } =
     data;
 
-  // Use existing cells if provided (local pre-connect edits), otherwise build from kernel-ready
+  // Use existing cells if provided (local pre-connect edits), otherwise build from kernel-ready.
   // If the kernel was resumed, we don't want to use the existing cells because they may be stale.
+  // If the existing cells have different IDs than the server data, we're switching files
+  // and must use the server data (existing cells belong to the previous notebook).
   const hasExistingCells = existingCells && existingCells.length > 0;
-  const cells =
-    hasExistingCells && !resumed ? existingCells : buildCellData(data);
+  const serverCellIds = new Set(data.cell_ids);
+  const existingMatchServer = hasExistingCells &&
+    existingCells.length === data.cell_ids.length &&
+    existingCells.every((c) => serverCellIds.has(c.id));
+  const useExisting = hasExistingCells && !resumed && existingMatchServer;
+  const cells = useExisting ? existingCells : buildCellData(data);
 
-  console.log("[handleKernelReady] hasExisting:", hasExistingCells, "resumed:", resumed, "using:", hasExistingCells && !resumed ? "EXISTING" : "SERVER", "cellCount:", cells.length);
+  console.log("[handleKernelReady] hasExisting:", hasExistingCells, "resumed:", resumed, "idsMatch:", existingMatchServer, "using:", useExisting ? "EXISTING" : "SERVER", "cellCount:", cells.length);
 
   // Set up layout and cells
   const layoutState = buildLayoutState(data, cells, setLayoutData);

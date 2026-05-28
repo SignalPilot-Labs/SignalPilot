@@ -183,8 +183,8 @@ export const DataTableBody = <TData,>({
           onMouseOver={(e) => handleCellMouseOver(e, cell)}
           onContextMenu={() => handleContextMenu(cell)}
         >
-          <CellRangeSelectionIndicator cellId={cell.id} />
-          <div className="relative">
+          <CellRangeSelectionIndicator key="sel" cellId={cell.id} />
+          <div key="val" className="relative">
             {flexRender(cell.column.columnDef.cell, cell.getContext())}
           </div>
         </TableCell>

@@ -86,12 +86,12 @@ const Dropdown = (props: DropdownProps): JSX.Element => {
         id={id}
       >
         {allowSelectNone ? (
-          <option value={EMPTY_VALUE} selected={value.length === 0}>
+          <option value={EMPTY_VALUE}>
             --
           </option>
         ) : null}
         {options.map((option) => (
-          <option value={option} selected={value.includes(option)} key={option}>
+          <option value={option} key={option}>
             {option}
           </option>
         ))}

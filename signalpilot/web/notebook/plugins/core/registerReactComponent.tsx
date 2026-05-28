@@ -432,6 +432,7 @@ export function registerReactComponent<T>(plugin: IPlugin<T, unknown>): void {
       // Use the real Jotai store (not the proxy) so the Provider
       // passes Jotai's internal buildStore validation.
       const currentStore = getCurrentStore();
+      console.log("[registerReactComponent] mounting", plugin.tagName, "store=", currentStore, "hasGet=", typeof currentStore?.get);
       this.root.render(
         <Provider store={currentStore}>
           <LocaleProvider>

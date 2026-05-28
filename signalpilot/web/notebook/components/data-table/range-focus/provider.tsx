@@ -1,12 +1,13 @@
-import { ScopeProvider } from "jotai-scope";
-import { cellSelectionStateAtom } from "./atoms";
+import { Provider, createStore } from "jotai";
+import { useRef } from "react";
 
 export const CellSelectionProvider = ({
   children,
 }: {
   children: React.ReactNode;
 }) => {
-  return (
-    <ScopeProvider atoms={[cellSelectionStateAtom]}>{children}</ScopeProvider>
-  );
+  // Each table gets its own store so cell selection state is isolated
+  // without needing jotai-scope (which requires buildStore-compatible stores).
+  const storeRef = useRef(createStore());
+  return <Provider store={storeRef.current}>{children}</Provider>;
 };

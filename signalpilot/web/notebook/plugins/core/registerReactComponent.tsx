@@ -242,7 +242,7 @@ function PluginSlotInternal<T>(
       Objects.mapValues(hostElement.dataset, (value) =>
         typeof value === "string" ? parseAttrValue(value) : value,
       ),
-      hostElement.shadowRoot,
+      hostElement.shadowRoot ?? hostElement,
     );
   }
 
@@ -303,14 +303,17 @@ export function registerReactComponent<T>(plugin: IPlugin<T, unknown>): void {
     private root?: Root;
     private mounted = false;
     private pluginRef = createRef<PluginSlotHandle>();
+    private _renderContainer: HTMLDivElement;
     protected __type__ = customElementLocator;
 
     constructor() {
       super();
-      // Create a shadow root so we can store the React tree on the shadow root, while the original
-      // element's children are still on the DOM
-      this.attachShadow({ mode: "open" });
-      this.copyStyles();
+      // Render into a light-DOM container instead of Shadow DOM.
+      // Shadow DOM blocks CSS inheritance, which breaks styling on
+      // production builds (Vercel) where copyStyles can't reliably
+      // replicate all stylesheets into the shadow root.
+      this._renderContainer = document.createElement("div");
+      this._renderContainer.style.display = "contents";
 
       // This observer is used to detect changes to the children and re-render the component
       this.observer = new MutationObserver(() => {
@@ -320,24 +323,17 @@ export function registerReactComponent<T>(plugin: IPlugin<T, unknown>): void {
 
     connectedCallback() {
       // Skip mounting if this element is in the light DOM of another
-      // sp custom element. The parent element's shadow DOM will
-      // re-create this element via getChildren() -> renderHTML(), so
-      // this light DOM copy should remain inert to avoid duplicate
-      // side-effects (e.g., sp.lazy firing load() twice).
+      // sp custom element.
       if (this.isLightDOMChildOfSpElement()) {
         return;
       }
 
       if (!this.mounted) {
-        // Create a React root on the shadow root
-        invariant(this.shadowRoot, "Shadow root should exist");
-        // If we already have a root, unmount it before creating a new one
+        this.appendChild(this._renderContainer);
         if (this.root) {
-          // This can't happen in disconnectedCallback because we want React to
-          // handle the descendants unmounting.
           this.root.unmount();
         }
-        this.root = ReactDOM.createRoot(this.shadowRoot);
+        this.root = ReactDOM.createRoot(this._renderContainer);
 
         // Render the component for the first time
         this.mountReactComponent();
@@ -410,16 +406,17 @@ export function registerReactComponent<T>(plugin: IPlugin<T, unknown>): void {
      * Get the children of the element as React nodes.
      */
     private getChildren(): React.ReactNode {
-      // We don't sanitize the HTML here because it could be an iframe inside of tabs or accordions
-      // If we have multiple children, we need to render each one separately
-      if (this.children.length === 0) {
+      // Filter out the render container from children
+      const kids = Array.from(this.children).filter(
+        (c) => c !== this._renderContainer,
+      );
+      if (kids.length === 0) {
         return null;
       }
-      if (this.children.length === 1) {
-        return renderHTML({ html: this.innerHTML, alwaysSanitizeHtml: false });
+      if (kids.length === 1) {
+        return renderHTML({ html: kids[0].outerHTML, alwaysSanitizeHtml: false });
       }
-      // Multiple children - render each one
-      return Array.from(this.children).map((child, index) => (
+      return kids.map((child, index) => (
         <React.Fragment key={index}>
           {renderHTML({ html: child.outerHTML, alwaysSanitizeHtml: false })}
         </React.Fragment>

@@ -61,7 +61,6 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponseReturnNull);
     },
     sendDocumentTransaction: async (request) => {
-      console.log("[NET] sendDocumentTransaction:", JSON.stringify(request).slice(0, 200));
       await waitForConnectionOpen();
       return getClient()
         .POST("/api/document/transaction", {
@@ -79,7 +78,6 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponseReturnNull);
     },
     sendSave: (request) => {
-      console.log(`[NET] sendSave: filename="${request.filename}" cells=${request.codes?.length} codes=${request.codes?.map((c: string) => c.slice(0, 30)).join(" | ")}`);
       return getClient()
         .POST("/api/kernel/save", {
           body: request,

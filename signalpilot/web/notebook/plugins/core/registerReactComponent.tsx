@@ -31,6 +31,7 @@ import { UIElementRegistry } from "@/core/dom/uiregistry";
 import { FUNCTIONS_REGISTRY } from "@/core/functions/FunctionRegistry";
 import { LocaleProvider } from "@/core/i18n/locale-provider";
 import { store } from "@/core/state/jotai";
+import { getCurrentStore } from "@/core/state/store-binding";
 import { isStaticNotebook } from "@/core/static/static-state";
 import {
   type HTMLElementNotDerivedFromRef,
@@ -428,8 +429,11 @@ export function registerReactComponent<T>(plugin: IPlugin<T, unknown>): void {
       this.mounted = true;
 
       invariant(this.root, "Root must be defined");
+      // Use the real Jotai store (not the proxy) so the Provider
+      // passes Jotai's internal buildStore validation.
+      const currentStore = getCurrentStore();
       this.root.render(
-        <Provider store={store}>
+        <Provider store={currentStore}>
           <LocaleProvider>
             <PluginSlot
               hostElement={this}

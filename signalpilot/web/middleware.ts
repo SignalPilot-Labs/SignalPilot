@@ -51,13 +51,10 @@ function applySecurityHeaders(
     console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
   }
   // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
-  // scripts for hydration/chunk preloading that cannot carry a nonce (the nonce
-  // is generated in middleware but Next.js renders inline scripts at build time).
-  // 'unsafe-eval' is REMOVED — this is the main XSS hardening win, blocking
-  // eval(), new Function(), setTimeout(string), etc.
-  let scriptSrc = process.env.NODE_ENV === "development"
-    ? "'self' 'unsafe-inline' 'unsafe-eval'"
-    : "'self' 'unsafe-inline'";
+  // scripts for hydration/chunk preloading that cannot carry a nonce.
+  // 'unsafe-eval' is required because Vega (used by Altair charts) compiles
+  // expressions via new Function(). Without it, all Altair/Vega charts fail.
+  let scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'";
   let imgSrc = `'self' data: blob: ${gatewayUrl}`;
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 

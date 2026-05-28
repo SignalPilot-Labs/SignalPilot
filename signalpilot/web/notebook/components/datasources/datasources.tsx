@@ -1,4 +1,5 @@
 import { spApiUrl } from "@/core/network/api";
+import { getApiHeaders } from "@/core/network/api-headers";
 import { CommandList } from "cmdk";
 import { atom, useAtomValue, useSetAtom } from "jotai";
 import { PlusIcon, PlusSquareIcon, XIcon } from "lucide-react";
@@ -160,7 +161,10 @@ export const DataSources: React.FC = () => {
   // Fetch gateway connections on mount (works without a kernel session)
   React.useEffect(() => {
     let cancelled = false;
-    fetch(spApiUrl("/datasources/gateway_connections"))
+    getApiHeaders()
+      .then((hdrs) =>
+        fetch(spApiUrl("/datasources/gateway_connections"), { headers: hdrs })
+      )
       .then((r) => r.json() as Promise<{ connections?: DataSourceConnection[] }>)
       .then((data) => {
         if (cancelled || !data.connections?.length) {return;}

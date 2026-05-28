@@ -12,22 +12,10 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { setGatewayBranchId, setGatewayProjectId, spApiUrl } from "@/core/network/api";
 import { getApiHeaders } from "@/core/network/api-headers";
-import { store } from "@/core/state/jotai";
 import { cn } from "@/utils/cn";
-import { gatewayUrlAtom, gatewayApiKeyAtom } from "@/core/meta/state";
+import { request } from "~/lib/api";
 
-function getGatewayConfig(): { url: string; key: string } {
-  return {
-    url: store.get(gatewayUrlAtom) || localStorage.getItem("sp:gateway-url") || "http://localhost:3300",
-    key: store.get(gatewayApiKeyAtom) || localStorage.getItem("sp:api-key") || "",
-  };
-}
-
-function gatewayHeaders(key: string): Record<string, string> {
-  if (!key) {return {};}
-  if (key.includes(".")) {return { Authorization: `Bearer ${key}` };}
-  return { "X-API-Key": key };
-}
+const GATEWAY_AUTH_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
 interface Props {
   onProjectCreated: () => void;
@@ -102,14 +90,11 @@ const CreateProjectForm: React.FC<{
 
     setLoading(true);
     try {
-      const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
-      const hdrs = { ...gatewayHeaders(apiKey), "Content-Type": "application/json" };
       const slug = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
 
       // 1. Create project on gateway
-      const createResp = await fetch(`${gatewayUrl}/api/workspace-projects`, {
+      const project = await request<{ id: string; default_branch?: string | null }>("/api/workspace-projects", {
         method: "POST",
-        headers: hdrs,
         body: JSON.stringify({
           name: slug,
           display_name: name.trim(),
@@ -118,11 +103,6 @@ const CreateProjectForm: React.FC<{
           tags: ["dbt", adapter],
         }),
       });
-      if (!createResp.ok) {
-        const err = await createResp.text();
-        throw new Error(`Failed to create project: ${err}`);
-      }
-      const project = await createResp.json() as { id: string; default_branch?: string | null };
 
       // 2. Scaffold dbt files into the bare repo via the notebook backend
       setGatewayProjectId(project.id);
@@ -276,24 +256,18 @@ const GitHubImportForm: React.FC<{
   const [selectedInstall, setSelectedInstall] = useState<GitHubInstallation | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
 
-  const { url: gatewayUrl, key: apiKey } = getGatewayConfig();
-  const hdrs = gatewayHeaders(apiKey);
-
   const loadInstallations = useCallback(async () => {
     setLoadingInstalls(true);
     try {
-      const resp = await fetch(`${gatewayUrl}/api/github/installations`, { headers: hdrs });
-      if (resp.ok) {
-        const data = await resp.json() as GitHubInstallation[] | { installations?: GitHubInstallation[] };
-        const installs = Array.isArray(data) ? data : data.installations || [];
-        setInstallations(installs);
-        if (installs.length === 1) {
-          setSelectedInstall(installs[0]);
-        }
+      const data = await request<GitHubInstallation[] | { installations?: GitHubInstallation[] }>("/api/github/installations");
+      const installs = Array.isArray(data) ? data : data.installations || [];
+      setInstallations(installs);
+      if (installs.length === 1) {
+        setSelectedInstall(installs[0]);
       }
     } catch {}
     setLoadingInstalls(false);
-  }, [gatewayUrl, apiKey]);
+  }, []);
 
   useEffect(() => {
     loadInstallations();
@@ -302,12 +276,11 @@ const GitHubImportForm: React.FC<{
   useEffect(() => {
     if (!selectedInstall) {return;}
     setLoadingRepos(true);
-    fetch(`${gatewayUrl}/api/github/installations/${selectedInstall.id}/repos`, { headers: hdrs })
-      .then((r) => r.ok ? r.json() as Promise<GitHubRepo[] | { repos?: GitHubRepo[] }> : Promise.resolve([] as GitHubRepo[]))
+    request<GitHubRepo[] | { repos?: GitHubRepo[] }>(`/api/github/installations/${selectedInstall.id}/repos`)
       .then((data) => setRepos(Array.isArray(data) ? data : data.repos || []))
       .catch(() => setRepos([]))
       .finally(() => setLoadingRepos(false));
-  }, [selectedInstall, gatewayUrl, apiKey]);
+  }, [selectedInstall]);
 
   const handleImportRepo = async (repo: GitHubRepo) => {
     if (!selectedInstall) {return;}
@@ -315,9 +288,8 @@ const GitHubImportForm: React.FC<{
 
     try {
       // Create project on gateway
-      const createResp = await fetch(`${gatewayUrl}/api/workspace-projects`, {
+      const project = await request<{ id: string; default_branch?: string | null }>("/api/workspace-projects", {
         method: "POST",
-        headers: { ...hdrs, "Content-Type": "application/json" },
         body: JSON.stringify({
           name: repo.name,
           display_name: repo.name,
@@ -327,18 +299,9 @@ const GitHubImportForm: React.FC<{
         }),
       });
 
-      if (!createResp.ok) {
-        toast({ title: "Error", description: "Failed to create project", variant: "danger" });
-        setImporting(null);
-        return;
-      }
-
-      const project = await createResp.json() as { id: string; default_branch?: string | null };
-
       // Link repo to project
-      const linkResp = await fetch(`${gatewayUrl}/api/github/repo-links`, {
+      await request<unknown>("/api/github/repo-links", {
         method: "POST",
-        headers: { ...hdrs, "Content-Type": "application/json" },
         body: JSON.stringify({
           project_id: project.id,
           installation_id: selectedInstall.id,
@@ -348,22 +311,12 @@ const GitHubImportForm: React.FC<{
         }),
       });
 
-      if (!linkResp.ok) {
-        toast({ title: "Error", description: "Failed to link repository", variant: "danger" });
-        setImporting(null);
-        return;
-      }
-
       // Tell the gateway to mirror the GitHub repo into its bare git storage
       toast({ title: "Syncing", description: "Mirroring repository from GitHub..." });
       try {
-        const syncGhResp = await fetch(`${gatewayUrl}/api/github/sync/${project.id}`, {
+        await request<unknown>(`/api/github/sync/${project.id}`, {
           method: "POST",
-          headers: { ...hdrs, "Content-Type": "application/json" },
         });
-        if (!syncGhResp.ok) {
-          console.warn("[Import] Gateway GitHub sync returned:", syncGhResp.status);
-        }
       } catch (e) {
         console.warn("[Import] Gateway GitHub sync failed:", e);
       }
@@ -420,7 +373,7 @@ const GitHubImportForm: React.FC<{
     }
   };
 
-  const connectUrl = `${gatewayUrl}/auth/github`;
+  const connectUrl = `${GATEWAY_AUTH_URL}/auth/github`;
 
   return (
     <div className="mt-3 p-4 border border-border rounded-lg bg-muted/30 space-y-3">

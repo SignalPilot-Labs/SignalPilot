@@ -209,7 +209,6 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponseReturnNull);
     },
     readCode: async () => {
-      await waitForConnectionOpen();
       return getClient()
         .POST("/api/kernel/read_code", {
           params: getParams(),
@@ -468,8 +467,6 @@ export function createNetworkRequests(): EditRequests & RunRequests {
       return getClient().GET("/api/packages/tree").then(handleResponse);
     },
     listSecretKeys: async (request) => {
-      // If the sidebar is already open, it may try to load before the session has been initialized
-      await waitForConnectionOpen();
       return getClient()
         .POST("/api/secrets/keys", {
           body: request,

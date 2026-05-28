@@ -35,9 +35,19 @@ export default function NotebookBoot({
   const staticDataRef = useRef<NotebookStaticData | null>(null);
   const [ready, setReady] = useState(false);
 
-  const handlePhase = useCallback((p: string) => {
-    onPhaseChange?.(p);
+  const onReadyRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
+
+  const onPhaseChangeRef = useRef<((phase: string) => void) | undefined>(undefined);
+  useEffect(() => {
+    onPhaseChangeRef.current = onPhaseChange;
   }, [onPhaseChange]);
+
+  const handlePhase = useCallback((p: string) => {
+    onPhaseChangeRef.current?.(p);
+  }, []);
 
   const hostNavigate = useCallback((href: string) => {
     try {
@@ -64,7 +74,7 @@ export default function NotebookBoot({
         clientRef.current = result.client;
         staticDataRef.current = result.staticData;
         setReady(true);
-        onReady?.();
+        onReadyRef.current?.();
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
@@ -85,7 +95,7 @@ export default function NotebookBoot({
       staticDataRef.current = null;
       setReady(false);
     };
-  }, [config.sessionId, config.token, config.gatewayUrl, config.project, config.branch, hostNavigate, handlePhase, onReady]);
+  }, [config.sessionId, config.token, config.gatewayUrl, config.project, config.branch, hostNavigate, handlePhase]);
 
   if (error) {
     return (

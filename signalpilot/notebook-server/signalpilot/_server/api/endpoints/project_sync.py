@@ -4,7 +4,6 @@ push local changes back.
 """
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from starlette.authentication import requires
@@ -68,15 +67,8 @@ async def sync_status(*, request: Request) -> Response:
         if f.is_file() and ".git" not in f.parts
     ) if has_git else 0
 
-    # Also check workspace status
-    workspace = None
-    if os.environ.get("SP_USER_ID"):
-        from signalpilot._server.files.project_sync import workspace_status
-        workspace = workspace_status(project_id)
-
     return JSONResponse({
         "synced": has_git and file_count > 0,
         "local_dir": str(local_dir),
         "file_count": file_count,
-        "workspace": workspace,
     })

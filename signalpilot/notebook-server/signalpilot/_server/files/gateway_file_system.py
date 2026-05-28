@@ -72,8 +72,8 @@ class GatewayFileSystem(FileSystem):
             timeout=30.0,
         )
 
-    def _strip_s3_prefix(self, key: str) -> str:
-        """Strip the projects/<id>/ prefix from an S3 key."""
+    def _strip_project_prefix(self, key: str) -> str:
+        """Strip the projects/<id>/ URL path prefix from a key."""
         prefix = f"projects/{self._project_id}/"
         if key.startswith(prefix):
             return key[len(prefix):]
@@ -124,7 +124,7 @@ class GatewayFileSystem(FileSystem):
         strip_prefix = (prefix + "/") if prefix else ""
 
         for f in raw_files:
-            rel = self._strip_s3_prefix(f["key"])
+            rel = self._strip_project_prefix(f["key"])
             if strip_prefix and rel.startswith(strip_prefix):
                 rel = rel[len(strip_prefix):]
             elif strip_prefix:

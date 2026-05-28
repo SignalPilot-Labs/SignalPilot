@@ -149,7 +149,6 @@ export interface WorkspaceProjectInfo {
   description: string | null;
   source: "managed" | "github" | "dbt-cloud";
   connection_name: string | null;
-  s3_prefix: string;
   status: "active" | "archived";
   tags: string[] | null;
   settings: Record<string, unknown> | null;

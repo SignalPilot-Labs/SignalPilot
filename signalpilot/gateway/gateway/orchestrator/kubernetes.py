@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from pathlib import Path
 
 from . import NotebookOrchestrator, PodInfo
 from .namespaces import ensure_org_namespace, namespace_for_org
@@ -141,19 +140,16 @@ def _pod_manifest(
                         else image
                     ),
                     "imagePullPolicy": "IfNotPresent",
-                    # R4: Sentinel-wait shim (C1). The pod CMD polls for /workspace/.sp-ready
-                    # before starting the notebook server. This ensures the gateway has finished
-                    # injecting the workspace content (via pods/exec tar) before it opens /workspace.
-                    # The pod reaches Running state but NOT Ready (readinessProbe probes the
-                    # notebook HTTP port which is not bound until after the sentinel is written).
-                    # Sequence: create_pod → wait_for_running → populate_pod_workspace
-                    #           (writes .sp-ready last) → wait_for_ready.
-                    # --no-token: pod runs without the notebook server's built-in auth; the gateway
-                    # proxy is the sole auth gate.
+                    # Pod entrypoint: runs project_sync_boot to git-clone /workspace,
+                    # then execs sp edit. wait_for_ready's TCP probe on :2718 already
+                    # gates correctly — clone failure → entrypoint exits non-zero →
+                    # :2718 never binds → wait_for_ready times out.
+                    # --no-token: pod runs without the notebook server's built-in auth;
+                    # the gateway proxy is the sole auth gate.
                     # --base-url: tells the notebook server to emit asset/WS URLs under /notebook/{session_id}.
                     "command": [
                         "sh", "-c",
-                        "while [ ! -f /workspace/.sp-ready ]; do sleep 0.2; done; "
+                        "python -m signalpilot._server.files.project_sync_boot && "
                         f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
                         f"--no-skew-protection --allow-origins 'http://localhost:3200,http://localhost:3300' "
                         f"--base-url /notebook/{session_id} /workspace",
@@ -408,8 +404,8 @@ class KubernetesOrchestrator(NotebookOrchestrator):
     async def wait_for_running(self, pod_name: str, *, org_id: str, timeout: int = 60) -> PodInfo:
         """Poll until pod phase is Running and container started=True, or timeout.
 
-        Does NOT wait for readinessProbe. Used before populate_pod_workspace so we
-        can exec into the pod as soon as the container process is up.
+        Does NOT wait for readinessProbe. Polls until the container process is up
+        so the pod entrypoint (project_sync_boot + sp edit) can proceed.
         """
         if not org_id:
             raise ValueError("org_id must not be empty")
@@ -463,8 +459,8 @@ class KubernetesOrchestrator(NotebookOrchestrator):
 
         Returns PodInfo with internal_ip set to the raw pod IP (pod_ip mode only).
         Container readiness is gated by the readinessProbe (tcpSocket on port 2718),
-        which passes only after the notebook server starts, which only happens after the sentinel
-        /workspace/.sp-ready is extracted — making this the true end of the C1 flow.
+        which passes only after `sp edit` binds port 2718, which happens after
+        project_sync_boot completes the workspace git clone.
 
         Distinct from wait_for_running: that method only checks pod phase == Running;
         this method checks that all containers have passed their readinessProbe.
@@ -492,66 +488,6 @@ class KubernetesOrchestrator(NotebookOrchestrator):
                 raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
             await asyncio.sleep(0.5)
         raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
-
-    async def populate_pod_workspace(
-        self, pod_name: str, *, org_id: str, src: Path
-    ) -> None:
-        """Inject workspace content into the pod via pods/exec tar stream.
-
-        Writes .sp-ready as the FINAL entry in the tar stream so the sentinel-wait
-        shim in the pod CMD starts the notebook server only after all workspace content is present.
-
-        Delegates to pod_exec_io.stream_tar_into_pod — the sole authorized
-        caller of the K8s exec API. Not on the NotebookOrchestrator ABC (K8s-specific).
-        """
-        if not org_id:
-            raise ValueError("org_id must not be empty")
-        await self._ensure_client()
-        if not self._core_api:
-            raise RuntimeError("K8s orchestrator not available")
-
-        # Write .sp-ready sentinel into src dir. Pass it as sentinel_last so
-        # stream_tar_into_pod guarantees it is the FINAL tar member regardless of
-        # lexicographic sort order (C1: dot-files sort before visible files in ASCII,
-        # so a naive sorted() would place ".sp-ready" first, not last).
-        sentinel = src / ".sp-ready"
-        sentinel.write_bytes(b"")
-
-        from .pod_exec_io import stream_tar_into_pod
-
-        ns = self._resolve_namespace(org_id)
-        await stream_tar_into_pod(
-            self._core_api,
-            namespace=ns,
-            pod_name=pod_name,
-            src_dir=src,
-            dest_path="/workspace/",
-            sentinel_last=sentinel,
-        )
-
-    async def snapshot_pod_workspace(
-        self, pod_name: str, *, org_id: str, dest: Path
-    ) -> None:
-        """Pull workspace content from the pod via pods/exec tar stream into dest.
-
-        Delegates to pod_exec_io.stream_tar_out_of_pod. Not on the ABC (K8s-specific).
-        """
-        if not org_id:
-            raise ValueError("org_id must not be empty")
-        await self._ensure_client()
-        if not self._core_api:
-            raise RuntimeError("K8s orchestrator not available")
-
-        from .pod_exec_io import stream_tar_out_of_pod
-
-        ns = self._resolve_namespace(org_id)
-        await stream_tar_out_of_pod(
-            self._core_api,
-            namespace=ns,
-            pod_name=pod_name,
-            src_path="/workspace/",
-            dest_dir=dest,
-        )
 
     async def exec_in_pod(
         self, pod_name: str, *, org_id: str, argv: list[str], timeout: int = 300

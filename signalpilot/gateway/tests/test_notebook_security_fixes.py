@@ -233,7 +233,6 @@ class TestGatewayUrlFromConfig:
         mock_orch.wait_for_running = AsyncMock(
             return_value=PodInfo(name="nb-url-test", ip=None, status="running")
         )
-        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready.return_value = PodInfo(
             name="nb-url-test", ip="10.0.0.5:2718", status="running"
         )
@@ -324,8 +323,8 @@ class TestAlgorithmPinning:
         }
         payload_b64 = base64.urlsafe_b64encode(json.dumps(payload_data).encode()).rstrip(b"=")
         # Sign with HS256 but put RS256 in header — this token claims RS256
-        import hmac
         import hashlib
+        import hmac
 
         signing_input = f"{header.decode()}.{payload_b64.decode()}".encode()
         sig = hmac.new(_TEST_SECRET.encode(), signing_input, hashlib.sha256).digest()
@@ -388,9 +387,10 @@ class TestCloudModeEmptyUserId:
     @pytest.mark.asyncio
     async def test_cloud_mode_empty_user_id_raises_401(self, monkeypatch):
         _patch_secret(monkeypatch)
+        from unittest.mock import AsyncMock
+
         from gateway.api import notebook_sessions as ns_api
         from gateway.store import notebook_sessions as ns_store
-        from unittest.mock import AsyncMock
 
         monkeypatch.setattr(ns_api, "is_cloud_mode", lambda: True)
 
@@ -413,12 +413,13 @@ class TestCloudModeEmptyUserId:
     async def test_local_mode_none_user_id_uses_fallback(self, monkeypatch):
         """Local mode with None user_id falls back to 'local' (no error)."""
         _patch_secret(monkeypatch)
+        from unittest.mock import AsyncMock
+
         from gateway.api import notebook_sessions as ns_api
         from gateway.config.k8s import K8sSettings
         from gateway.models.notebook_sessions import NotebookSessionInfo
         from gateway.orchestrator import PodInfo
         from gateway.store import notebook_sessions as ns_store
-        from unittest.mock import AsyncMock
 
         monkeypatch.setattr(ns_api, "is_cloud_mode", lambda: False)
 
@@ -447,7 +448,6 @@ class TestCloudModeEmptyUserId:
         mock_orch.wait_for_running = AsyncMock(
             return_value=PodInfo(name="nb-local", ip=None, status="running")
         )
-        mock_orch.populate_pod_workspace = AsyncMock()
         mock_orch.wait_for_ready.return_value = PodInfo(name="nb-local", ip="10.0.0.6:2718", status="running")
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))

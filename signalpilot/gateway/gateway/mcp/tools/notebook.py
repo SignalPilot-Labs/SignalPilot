@@ -1,9 +1,7 @@
 """MCP tool: run_notebook — execute a notebook in a cloud pod."""
 
 import logging
-import tempfile
 import uuid
-from pathlib import Path
 
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
@@ -47,7 +45,7 @@ async def run_notebook(
             return f"Error: project {project_id} not found"
 
     # 2. Create or reuse agent branch via git
-    from gateway.git.repos import repo_exists, repo_path, _run_git
+    from gateway.git.repos import _run_git, repo_exists, repo_path
 
     if not repo_exists(project_id):
         return f"Error: git repo not initialized for project {project_id}"
@@ -69,9 +67,9 @@ async def run_notebook(
             return f"Error: branch {agent_branch} not found"
 
     # 3. Get or create notebook session (pod reuse)
+    from gateway.db.engine import get_session_factory
     from gateway.orchestrator.kubernetes import KubernetesOrchestrator
     from gateway.store import notebook_sessions as ns
-    from gateway.db.engine import get_session_factory
 
     factory = get_session_factory()
     orch = KubernetesOrchestrator()
@@ -90,13 +88,9 @@ async def run_notebook(
             # Create a new session — follows the pattern from notebook_sessions.py
             import hashlib
             import os
-            import time
 
             from gateway.auth.notebook_jwt import mint_session_jwt
             from gateway.config.k8s import get_k8s_settings
-            from gateway.orchestrator.workspace_sync import get_workspace_sync_coordinator
-            from gateway.storage.notebook_id import compute_notebook_id
-            from gateway.storage.workspace_store import WorkspaceKey
 
             h = hashlib.sha256(f"{org_id}:{user_id}".encode()).hexdigest()[:12]
             pod_name = f"nb-{h}"
@@ -119,18 +113,6 @@ async def run_notebook(
                 ttl=k8s_settings.sp_session_jwt_ttl_seconds,
             )
 
-            # Hydrate workspace
-            notebook_id = compute_notebook_id(org_id, user_id, project_id)
-            ws_key = WorkspaceKey(org_id=org_id, user_id=user_id, notebook_id=notebook_id)
-            coordinator = get_workspace_sync_coordinator()
-
-            import shutil
-            try:
-                hydrate_path = await coordinator.hydrate_for_pod(ws_key)
-            except Exception as exc:
-                await ns.update_session_status(session, session_id=session_id, status="error")
-                return f"Error hydrating workspace: {exc}"
-
             try:
                 await orch.create_pod(
                     pod_name=pod_name, user_id=user_id, org_id=org_id,
@@ -142,7 +124,8 @@ async def run_notebook(
                     extra_env={"SP_AGENT_MODE": "true"},
                 )
                 await orch.wait_for_running(pod_name, org_id=org_id, timeout=90)
-                await orch.populate_pod_workspace(pod_name, org_id=org_id, src=hydrate_path)
+                # Pod entrypoint runs project_sync_boot (git clone) then exec sp edit.
+                # wait_for_ready's TCP probe on :2718 gates clone success.
                 await orch.wait_for_ready(pod_name, org_id=org_id, timeout=90)
                 pod_info = await orch.get_pod(pod_name, org_id=org_id)
                 await ns.update_session_status(
@@ -157,10 +140,9 @@ async def run_notebook(
                 except Exception:
                     pass
                 return f"Error starting notebook pod: {exc}"
-            finally:
-                shutil.rmtree(hydrate_path, ignore_errors=True)
 
-    # 4. Find or clone the specific project's git repo in the pod
+    # 4. Locate the git clone that project_sync_boot placed in the pod at boot.
+    # The entrypoint ran sync_down before sp edit, so the repo is guaranteed present.
     project_base = f"/home/notebook/.sp/projects/{project_id}"
     find_out, _, find_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
@@ -170,46 +152,18 @@ async def run_notebook(
     if find_rc == 0 and find_out.strip():
         project_dir = find_out.strip().split("\n")[0].replace("/.git", "")
     else:
-        logger.info("No git clone for project %s in pod, triggering sync_down", project_id)
-        sync_out, sync_err, sync_rc = await orch.exec_in_pod(
-            pod_name, org_id=org_id,
-            argv=["python", "-c",
-                   f"from signalpilot._server.files.project_sync import sync_down; "
-                   f"r = sync_down('{project_id}', '{agent_branch}'); print(r)"],
-            timeout=120,
-        )
-        logger.info("sync_down result: %s %s", sync_out.strip(), sync_err.strip() if sync_err else "")
-
-        find_out2, _, _ = await orch.exec_in_pod(
-            pod_name, org_id=org_id,
-            argv=["find", project_base, "-name", ".git", "-type", "d", "-maxdepth", 3],
-            timeout=10,
-        )
-        if find_out2 and find_out2.strip():
-            project_dir = find_out2.strip().split("\n")[0].replace("/.git", "")
-        else:
-            project_dir = "/workspace"
-            logger.warning("Still no git clone after sync_down, falling back to /workspace")
+        # Boot should have cloned the repo; fall back to /workspace if find fails.
+        project_dir = "/workspace"
+        logger.warning("Git clone not found at %s after ready, falling back to /workspace", project_base)
 
     # 5. Write the .py file into the project directory via exec
-    write_cmd = ["sh", "-c", f"cat > '{project_dir}/{filename}'"]
     w_out, w_err, w_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
         argv=["sh", "-c", f"cat > {project_dir}/{filename} << 'SPEOF'\n{code}\nSPEOF"],
         timeout=10,
     )
     if w_rc != 0:
-        # Fallback: tar inject
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            (tmp_path / filename).write_text(code, encoding="utf-8")
-            from gateway.orchestrator.pod_exec_io import stream_tar_into_pod
-            ns_name = orch._resolve_namespace(org_id)
-            await orch._ensure_client()
-            await stream_tar_into_pod(
-                orch._core_api, namespace=ns_name, pod_name=pod_name,
-                src_dir=tmp_path, dest_path=f"{project_dir}/",
-            )
+        logger.warning("Failed to write %s to pod %s (rc=%d): %s", filename, pod_name, w_rc, w_err.strip())
 
     # 6. Run sp export session from the project directory
     stdout, stderr, exit_code = await orch.exec_in_pod(

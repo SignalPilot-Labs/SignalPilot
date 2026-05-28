@@ -10,7 +10,7 @@ from ..models.workspace import (
     WorkspaceProjectUpdate,
 )
 from ..security.scope_guard import RequireScope
-from .deps import S3D, StoreD
+from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 
@@ -114,7 +114,6 @@ async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: S
 
 
 @router.delete("/workspace-projects/{project_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def delete_project(project_id: str, store: StoreD, s3: S3D):
-    proj = await _get_project_or_404(store, project_id)
-    await s3.delete_prefix(proj.s3_prefix)
+async def delete_project(project_id: str, store: StoreD):
+    await _get_project_or_404(store, project_id)
     await store.delete_workspace_project(project_id)

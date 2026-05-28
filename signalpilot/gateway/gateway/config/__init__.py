@@ -19,7 +19,6 @@ from .auth import AuthSettings, get_auth_settings
 from .governance import GovernanceSettings, get_governance_settings
 from .mcp import McpSettings, get_mcp_settings
 from .network import NetworkSettings, get_network_settings
-from .s3 import S3Settings, get_s3_settings
 from .storage import StorageSettings, get_storage_settings
 
 __all__ = [
@@ -27,8 +26,6 @@ __all__ = [
     "get_auth_settings",
     "GovernanceSettings",
     "get_governance_settings",
-    "S3Settings",
-    "get_s3_settings",
     "StorageSettings",
     "get_storage_settings",
     "NetworkSettings",

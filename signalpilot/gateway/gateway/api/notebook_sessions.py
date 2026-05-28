@@ -6,7 +6,6 @@ import hashlib
 import logging
 import os
 import re
-import shutil
 
 from fastapi import APIRouter, HTTPException, Response
 
@@ -15,11 +14,8 @@ from ..config.k8s import get_k8s_settings
 from ..models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
 from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
 from ..notebook_proxy.cookies import clear_proxy_cookie
-from ..orchestrator.workspace_sync import get_workspace_sync_coordinator
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
-from ..storage.notebook_id import compute_notebook_id
-from ..storage.workspace_store import WorkspaceKey
 from .deps import StoreD
 
 # Single source of truth for session_id charset validation (shared with proxy auth).
@@ -112,11 +108,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
     pod = _pod_name(org_id, user_id)
     orch = await _get_orchestrator()
 
-    # R4: Compute workspace key for this notebook.
-    notebook_id = compute_notebook_id(org_id, user_id, body.project_id)
-    ws_key = WorkspaceKey(org_id=org_id, user_id=user_id, notebook_id=notebook_id)
-    coordinator = get_workspace_sync_coordinator()
-
     session_info = await ns.create_session(
         store.session,
         org_id=org_id,
@@ -151,16 +142,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
     # JWT callback to an arbitrary origin.
     gateway_url = k8s_settings.sp_public_gateway_url
 
-    # R4: Hydrate workspace from store into a temp dir.
-    # The temp dir is always cleaned up in the finally block (H4 fix: no tmpdir leak).
-    try:
-        hydrate_path = await coordinator.hydrate_for_pod(ws_key)
-    except Exception as exc:
-        logger.error("Hydrate failed for notebook %s: %s: %s", notebook_id, type(exc).__name__, exc)
-        await ns.update_session_status(store.session, session_id=session_info.id, status="error")
-        # H1: Return generic detail; full error is in server logs only.
-        raise HTTPException(status_code=503, detail="Failed to hydrate workspace")
-
     try:
         # access_token is no longer passed to the pod env or CLI (R2: --no-token).
         # It is stored on the DB row only as the gateway proxy cookie value.
@@ -176,14 +157,12 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
             session_id=session_info.id,
             access_token=session_info.access_token,
         )
-        # R4: wait_for_running before injecting workspace (pod must be up to exec into it).
         logger.info("Waiting for pod %s to be running...", pod)
         await orch.wait_for_running(pod, org_id=org_id, timeout=90)
-        logger.info("Pod %s is running — populating workspace from %s", pod, hydrate_path)
-        # R4: Inject workspace content; .sp-ready sentinel is written last (C1).
-        await orch.populate_pod_workspace(pod, org_id=org_id, src=hydrate_path)
-        logger.info("Workspace populated — waiting for readiness probe on %s", pod)
-        # R4: Now wait for readinessProbe (notebook server binds port 2718 after sentinel).
+        # Pod entrypoint runs project_sync_boot (git clone) then exec sp edit.
+        # wait_for_ready's TCP probe on :2718 gates clone success — clone failure
+        # means the entrypoint exits non-zero, :2718 never binds, and this call times out.
+        logger.info("Pod %s is running — waiting for readiness probe (entrypoint will clone workspace)", pod)
         pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=90)
         logger.info("Pod %s is ready: ip=%s", pod, pod_info.ip)
         await ns.update_session_status(
@@ -197,21 +176,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
         session_info.pod_ip = pod_info.ip
         # Proxy-based URL — relative path, no token, no host, no port.
         session_info.notebook_url = f"/notebook/{session_info.id}/_init"
-
-        # R4: Start periodic snapshot. pull callback captures pod name + org_id.
-        async def _pull(dest_dir):
-            await orch.snapshot_pod_workspace(pod, org_id=org_id, dest=dest_dir)
-
-        await coordinator.start_periodic_snapshot(
-            key=ws_key,
-            session_id=session_info.id,
-            pull=_pull,
-        )
-
-        # S8: X-SP-Workspace-Skipped-Count header. On create it's 0 (no snapshot yet).
-        last_result = coordinator.last_snapshot_result(session_info.id)
-        skipped_count = len(last_result.skipped_paths) if last_result else 0
-        response.headers["X-SP-Workspace-Skipped-Count"] = str(skipped_count)
 
     except ValueError as e:
         logger.warning("Invalid org_id for notebook session: %s", e)
@@ -231,9 +195,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
             pass
         # H1: Return generic detail; full error is in server logs only.
         raise HTTPException(status_code=503, detail="Failed to start notebook")
-    finally:
-        # H4: Always clean up hydrate tmpdir to avoid leaking sensitive workspace bytes.
-        shutil.rmtree(hydrate_path, ignore_errors=True)
 
     return session_info
 
@@ -287,27 +248,6 @@ async def delete_session(store: StoreD, response: Response):
 
     orch = await _get_orchestrator()
 
-    # R4: Cancel periodic snapshot, run one final snapshot before deleting the pod.
-    coordinator = get_workspace_sync_coordinator()
-    await coordinator.cancel_periodic_snapshot(session.id)
-
-    if session.pod_name and org_id:
-        notebook_id = compute_notebook_id(org_id, user_id, session.project_id)
-        ws_key = WorkspaceKey(org_id=org_id, user_id=user_id, notebook_id=notebook_id)
-
-        async def _pull_final(dest_dir):
-            await orch.snapshot_pod_workspace(session.pod_name, org_id=org_id, dest=dest_dir)
-
-        try:
-            await coordinator.snapshot_for_pod(ws_key, pull=_pull_final)
-        except Exception as exc:
-            logger.error(
-                "Final snapshot failed for session %s: %s: %s",
-                session.id,
-                type(exc).__name__,
-                exc,
-            )
-
     direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
     if not direct_url and session.pod_name:
         await orch.delete_pod(session.pod_name, org_id=org_id or "")
@@ -342,28 +282,6 @@ async def delete_session_by_id(session_id: str, store: StoreD, response: Respons
         raise HTTPException(status_code=404, detail="Session not found")
 
     orch = await _get_orchestrator()
-
-    # R4: Cancel periodic snapshot, run one final snapshot before deleting the pod.
-    coordinator = get_workspace_sync_coordinator()
-    await coordinator.cancel_periodic_snapshot(session_id)
-
-    user_id_resolved = store.user_id or "local"
-    if session.pod_name and org_id:
-        notebook_id = compute_notebook_id(org_id, user_id_resolved, session.project_id)
-        ws_key = WorkspaceKey(org_id=org_id, user_id=user_id_resolved, notebook_id=notebook_id)
-
-        async def _pull_final_by_id(dest_dir):
-            await orch.snapshot_pod_workspace(session.pod_name, org_id=org_id, dest=dest_dir)
-
-        try:
-            await coordinator.snapshot_for_pod(ws_key, pull=_pull_final_by_id)
-        except Exception as exc:
-            logger.error(
-                "Final snapshot failed for session %s: %s: %s",
-                session_id,
-                type(exc).__name__,
-                exc,
-            )
 
     if session.pod_name:
         await orch.delete_pod(session.pod_name, org_id=org_id)

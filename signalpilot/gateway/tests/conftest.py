@@ -11,9 +11,6 @@ import pytest
 # Ensure the gateway package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# R4: Set workspace backend to disabled + local mode so existing tests pass unchanged.
-# Tests that need a real backend import their own fixtures and clear the lru_cache.
-os.environ.setdefault("SP_WORKSPACE_BACKEND", "disabled")
 os.environ.setdefault("SP_DEPLOYMENT_MODE", "local")
 
 

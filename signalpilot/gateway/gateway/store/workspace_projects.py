@@ -29,7 +29,6 @@ async def create_project(
 ) -> WorkspaceProjectInfo:
     project_id = str(uuid.uuid4())
     now = time.time()
-    s3_prefix = f"projects/{project_id}"
     row = GatewayWorkspaceProject(
         id=project_id,
         org_id=org_id,
@@ -38,7 +37,6 @@ async def create_project(
         description=description,
         source=source,
         connection_name=connection_name,
-        s3_prefix=s3_prefix,
         status="active",
         tags=tags,
         settings=settings,
@@ -54,7 +52,7 @@ async def create_project(
 
     # Initialize bare git repo for this project
     try:
-        from ..git.repos import init_bare_repo, clone_from_remote
+        from ..git.repos import clone_from_remote, init_bare_repo
         if source == "github" and git_remote:
             clone_from_remote(project_id, git_remote)
         else:
@@ -151,7 +149,6 @@ def _to_info(row: GatewayWorkspaceProject) -> WorkspaceProjectInfo:
         description=row.description,
         source=row.source,
         connection_name=row.connection_name,
-        s3_prefix=row.s3_prefix,
         status=row.status,
         tags=row.tags,
         settings=row.settings,

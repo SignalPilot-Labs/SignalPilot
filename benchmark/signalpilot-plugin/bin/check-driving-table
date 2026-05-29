@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Check if a model's driving table is correct.
+
+Two modes:
+1. Auto-detect: checks if ALL timestamp/date columns are ALL NULL
+2. Targeted: checks a specific column passed via --column
+
+Usage:
+    check-driving-table <project_dir> <model_name>
+    check-driving-table <project_dir> <model_name> --column conversation_created_at
+
+Output:
+    PASS — column(s) have data
+    FAIL — column is ALL NULL in N rows (data not sourced from this table)
+    SKIP — model empty, not materialized, or no timestamp columns
+"""
+
+from __future__ import annotations
+
+import io
+import sys
+from pathlib import Path
+
+if sys.stdout.encoding != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+TIMESTAMP_TYPES = {"TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ", "DATE", "DATETIME"}
+
+
+def check_driving_table(
+    work_dir: Path, model_name: str, target_column: str | None = None
+) -> tuple[str, str]:
+    """Check if a model has wrong driving table via NULL detection.
+
+    If target_column is provided, checks only that column.
+    Otherwise, checks if ALL timestamp columns are ALL NULL.
+
+    Returns: (status, detail)
+    """
+    try:
+        import duckdb
+    except ImportError:
+        return "SKIP", "duckdb not available"
+
+    for db_file in work_dir.glob("*.duckdb"):
+        try:
+            con = duckdb.connect(str(db_file), read_only=True)
+
+            try:
+                cols = con.execute(f'DESCRIBE "{model_name}"').fetchall()
+            except Exception:
+                con.close()
+                return "SKIP", f"model {model_name} not materialized"
+
+            row_count = con.execute(
+                f'SELECT COUNT(*) FROM "{model_name}"'
+            ).fetchone()[0]
+
+            if row_count == 0:
+                con.close()
+                return "SKIP", "model has 0 rows"
+
+            # Targeted mode: check one specific column
+            if target_column:
+                col_exists = any(c[0].lower() == target_column.lower() for c in cols)
+                if not col_exists:
+                    con.close()
+                    return "SKIP", f"column {target_column} not in model"
+
+                actual_col = next(c[0] for c in cols if c[0].lower() == target_column.lower())
+                non_null = con.execute(
+                    f'SELECT COUNT("{actual_col}") FROM "{model_name}"'
+                ).fetchone()[0]
+                con.close()
+
+                if non_null == 0:
+                    return (
+                        "FAIL",
+                        f"{actual_col} is ALL NULL across all {row_count} rows — "
+                        f"data not sourced from this table"
+                    )
+                return "PASS", f"{actual_col} has {non_null} non-null values"
+
+            # Auto mode: check all timestamp columns
+            ts_columns = []
+            for col_row in cols:
+                col_type = col_row[1].upper()
+                if any(t in col_type for t in TIMESTAMP_TYPES):
+                    ts_columns.append(col_row[0])
+
+            if not ts_columns:
+                con.close()
+                return "SKIP", "no timestamp columns to check"
+
+            null_cols = []
+            data_cols = []
+            for col in ts_columns:
+                non_null = con.execute(
+                    f'SELECT COUNT("{col}") FROM "{model_name}"'
+                ).fetchone()[0]
+                if non_null == 0:
+                    null_cols.append(col)
+                else:
+                    data_cols.append(col)
+
+            con.close()
+
+            if data_cols:
+                return (
+                    "PASS",
+                    f"{len(data_cols)} of {len(ts_columns)} timestamp columns "
+                    f"have data ({row_count} rows)"
+                )
+
+            null_list = ", ".join(null_cols)
+            return (
+                "FAIL",
+                f"All {len(null_cols)} timestamp columns are ALL NULL "
+                f"across {row_count} rows: {null_list}"
+            )
+
+        except Exception as e:
+            return "SKIP", f"error: {e}"
+
+    return "SKIP", "no duckdb file found"
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: check-driving-table <project_dir> <model_name> [--column <col>]")
+        sys.exit(1)
+
+    work_dir = Path(sys.argv[1]).resolve()
+    model_name = sys.argv[2]
+    target_column = None
+    if "--column" in sys.argv:
+        idx = sys.argv.index("--column")
+        if idx + 1 < len(sys.argv):
+            target_column = sys.argv[idx + 1]
+
+    status, detail = check_driving_table(work_dir, model_name, target_column)
+    print(f"{status}: {detail}")
+    sys.exit(0 if status != "FAIL" else 1)
+
+
+if __name__ == "__main__":
+    main()

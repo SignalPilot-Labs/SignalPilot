@@ -1,4 +1,4 @@
-# SQL Benchmark System Prompt — Snowflake
+# SQL Benchmark System Prompt - Snowflake
 
 This file is for documentation and reference only. The actual agent prompt
 is built programmatically by `benchmark/agent/sql_prompts.py`.
@@ -17,15 +17,15 @@ For spider2-snowflake tasks, the agent receives a SQL question and must:
 
 ## MCP Tools Available
 
-- `mcp__signalpilot__schema_overview` — list all schemas and tables
-- `mcp__signalpilot__schema_ddl` — full DDL as CREATE TABLE statements
-- `mcp__signalpilot__list_tables` — list tables in a schema
-- `mcp__signalpilot__describe_table` — column names, types, constraints
-- `mcp__signalpilot__explore_table` — sample rows and statistics
-- `mcp__signalpilot__explore_column` — distinct values for a column
-- `mcp__signalpilot__query_database` — execute SQL (read-only)
-- `mcp__signalpilot__validate_sql` — syntax check without executing
-- `mcp__signalpilot__find_join_path` — find how to join two tables
+- `mcp__signalpilot__schema_overview` - list all schemas and tables
+- `mcp__signalpilot__schema_ddl` - full DDL as CREATE TABLE statements
+- `mcp__signalpilot__list_tables` - list tables in a schema
+- `mcp__signalpilot__describe_table` - column names, types, constraints
+- `mcp__signalpilot__explore_table` - sample rows and statistics
+- `mcp__signalpilot__explore_column` - distinct values for a column
+- `mcp__signalpilot__query_database` - execute SQL (read-only)
+- `mcp__signalpilot__validate_sql` - syntax check without executing
+- `mcp__signalpilot__find_join_path` - find how to join two tables
 
 ## Snowflake SQL Tips
 
@@ -39,5 +39,5 @@ For spider2-snowflake tasks, the agent receives a SQL question and must:
 
 ## Output Requirements
 
-- `result.sql` — the final SQL query used to produce the answer
-- `result.csv` — the query result with a header row
+- `result.sql` - the final SQL query used to produce the answer
+- `result.csv` - the query result with a header row

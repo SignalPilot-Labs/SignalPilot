@@ -1,31 +1,38 @@
 ---
 name: dbt-workflow
-description: "Load at Step 1 before exploring the project. Covers Notion context gathering, output shape inference, incremental model handling, and what to trust in YML."
+description: "Load at Step 1 before exploring the project. Covers output shape inference, incremental model handling, and what to trust in YML."
 type: skill
 ---
 
 # dbt Workflow Skill — Explore and Plan
 
-## 0. Notion Context — Gather Business Context BEFORE Planning
+## 0. Load Knowledge Base Context FIRST
 
-Check if `.claude/notion-config.md` exists in the working directory.
+Project-specific conventions, decisions, and quirks live in the Knowledge Base. Always consult before exploring the project.
 
-**If config exists:** Load the `notion-context` skill and run it. The skill
-searches configured Notion pages (meeting notes, product specs, data
-dictionaries) for context relevant to the current task. It returns a structured
-NOTION CONTEXT block with definitions, decisions, and constraints.
+### Step 0a — `get_knowledge`
 
-After gathering context:
-1. Write the full NOTION CONTEXT block to `notion_context.md` in the working
-   directory (the notion-verify subagent reads this after the build).
-2. Keep the context in your working memory — reference it when making decisions
-   about grain, joins, filters, and column logic in later steps.
-3. If Notion context conflicts with YML, prefer YML for column names but prefer
-   Notion for business logic (grain, filter rules, metric definitions).
+Call once at the start of every task with a 1-line `task_description`. Returns the always-loaded baseline (org/project understanding + conventions) plus up to 5 task-relevant decisions/debugging/quirks. Treat the returned `## title` blocks as authoritative for naming, grain, and known traps.
 
-**If config does not exist:** Skip this step — Notion is optional. Proceed to
-Section 1. If the user asks about Notion context later, point them to
-`/notion-setup`.
+### Step 0b — `search_knowledge(query=...)`
+
+Call when you hit something unexpected — column meaning unclear, ambiguous join, surprising row count. Pass a 2–4 word query. It is a pure read — no side effects.
+
+### Step 0c — `propose_knowledge`
+
+Call ONLY after you have completed work and verified a finding. Use it to record:
+
+- `category="decisions"` for choices made (auto-accepted).
+- `category="debugging"` for root-cause traps you hit and resolved (auto-accepted).
+- `category="quirks"` (scope=connection) for connector/dialect oddities (auto-accepted).
+- Do NOT propose `understanding` — humans only. Do NOT propose `conventions` or `domain-rules` as part of automated runs unless explicitly asked (these queue for human review).
+- Title must be a slug (`^[a-z0-9-]+$`, ≤120 chars). Body is markdown.
+- On duplicate-title: re-call with `supersedes=<existing_id>` only if the prior doc is genuinely outdated.
+
+### What NOT to do
+
+- Do not paste raw KB text back into model SQL comments — reference the doc title instead.
+- Do not call `propose_knowledge` mid-exploration — only after success.
 
 ## 1. Output Shape — Read YML Description BEFORE Writing SQL
 

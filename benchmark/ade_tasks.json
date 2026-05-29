@@ -1,0 +1,38 @@
+{
+  "description": "ADE-bench task list: 59 ready tasks (duckdb+dbt variant)",
+  "total": 59,
+  "tasks": [
+    "airbnb001", "airbnb002", "airbnb003", "airbnb004", "airbnb005",
+    "airbnb006", "airbnb007", "airbnb008", "airbnb009", "airbnb010",
+    "airbnb011", "airbnb012", "airbnb013",
+    "analytics_engineering001", "analytics_engineering002", "analytics_engineering003",
+    "analytics_engineering004", "analytics_engineering005", "analytics_engineering006",
+    "analytics_engineering007", "analytics_engineering008",
+    "asana001", "asana002", "asana003", "asana004", "asana005",
+    "f1001", "f1002", "f1003", "f1004", "f1005", "f1006", "f1007",
+    "f1009", "f1010", "f1011",
+    "helixops_saas001", "helixops_saas002", "helixops_saas003", "helixops_saas004",
+    "helixops_saas005", "helixops_saas006", "helixops_saas007", "helixops_saas008",
+    "helixops_saas009", "helixops_saas010", "helixops_saas011", "helixops_saas012",
+    "helixops_saas013", "helixops_saas015", "helixops_saas016", "helixops_saas017",
+    "helixops_saas018",
+    "intercom001", "intercom002", "intercom003",
+    "quickbooks001", "quickbooks002", "quickbooks003", "quickbooks004"
+  ],
+  "excluded_not_ready": [
+    "f1008",
+    "shopify-analytics",
+    "simple001",
+    "simple002",
+    "workday001"
+  ],
+  "task_categories": {
+    "airbnb": 13,
+    "analytics_engineering": 8,
+    "asana": 5,
+    "f1": 10,
+    "helixops_saas": 17,
+    "intercom": 3,
+    "quickbooks": 4
+  }
+}

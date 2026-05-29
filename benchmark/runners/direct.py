@@ -21,8 +21,6 @@ import sys
 import time
 from pathlib import Path
 
-from claude_agent_sdk.types import AgentDefinition
-
 from ..agent.prompts import build_agent_prompt
 from ..agent.sdk_runner import (
     run_name_fix_agent,
@@ -51,37 +49,8 @@ DBT_BIN = shutil.which("dbt") or "/home/agentuser/.local/bin/dbt"
 
 _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_text()
 
-_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-debugging", "duckdb-sql", "notion-context", "notion-setup")
-
-
-def _build_agents(work_dir: Path, instance_id: str, instruction: str) -> dict[str, AgentDefinition]:
-    """Build verifier + notion-verify agent definitions for the main agent."""
-    verify_prompt_text = (
-        (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
-        .replace("${work_dir}", str(work_dir))
-        .replace("${instance_id}", instance_id)
-        .replace("${dbt_bin}", DBT_BIN)
-    )
-    notion_verify_prompt_text = (
-        (PROMPTS_DIR / "notion_verify_subagent.md").read_text()
-        .replace("${work_dir}", str(work_dir))
-        .replace("${instance_id}", instance_id)
-        .replace("${instruction}", instruction)
-    )
-    return {
-        "verifier": AgentDefinition(
-            description="Verification agent that checks dbt model output for correctness after the build is complete.",
-            prompt=verify_prompt_text,
-            model="claude-sonnet-4-6",
-            maxTurns=80,
-        ),
-        "notion-verify": AgentDefinition(
-            description="Notion verification agent that writes a traceability report documenting how Notion context influenced the build.",
-            prompt=notion_verify_prompt_text,
-            model="claude-sonnet-4-6",
-            maxTurns=30,
-        ),
-    }
+# Skills are provided by the signalpilot-plugin (installed at user scope).
+# No skill_names needed — the agent discovers them via the plugin.
 
 
 def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
@@ -200,9 +169,7 @@ async def run_agent(
         max_turns,
         timeout=900,
         label="main-agent",
-        skill_names=_DBT_SKILL_NAMES,
         system_prompt=system_prompt,
-        agents=_build_agents(work_dir, instance_id, instruction),
     )
 
     transcript_path = work_dir / "agent_output.json"
@@ -739,9 +706,7 @@ async def execute_dbt_task(
                 max_turns,
                 timeout=900,
                 label="main-agent",
-                skill_names=_DBT_SKILL_NAMES,
                 system_prompt=system_prompt,
-                agents=_build_agents(work_dir, instance_id, instruction),
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({
@@ -776,6 +741,46 @@ async def execute_dbt_task(
     return passed, agent_result
 
 
+def _mcp_sanity_check() -> None:
+    """Connect to the MCP server via stdio and list tools. Fails fast with diagnostics."""
+    from ..core.mcp import load_mcp_servers
+
+    servers = load_mcp_servers()
+    if "signalpilot" not in servers:
+        log("MCP SANITY: No 'signalpilot' server in config — MCP tools will be unavailable!", "ERROR")
+        return
+
+    config = servers["signalpilot"]
+    log(f"MCP SANITY: server type={config.get('type')}")
+
+    # Attempt a stdio handshake using the mcp library
+    try:
+        import asyncio as _aio
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=config["command"],
+            args=config.get("args", []),
+            env=config.get("env"),
+        )
+
+        async def _probe():
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools = await session.list_tools()
+                    return [t.name for t in tools.tools]
+
+        tool_names = _aio.run(_probe())
+        log(f"MCP SANITY: OK — {len(tool_names)} tools: {tool_names[:5]}...")
+    except Exception as e:
+        log(f"MCP SANITY: FAILED — {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run a Spider2-DBT task directly (no Docker) using Claude Agent SDK + MCP"
@@ -798,11 +803,14 @@ def main() -> None:
     _main_start = time.monotonic()
 
     log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")
-    clear_all_connections()
+    delete_local_connection(instance_id)  # Only clear THIS task's stale connection, not all
     log(f"Model:     {model}")
     log(f"Max turns: {max_turns}")
     log(f"MCP config: {MCP_CONFIG}")
     log(f"Work dir:  {WORK_DIR / instance_id}")
+
+    # ── MCP sanity check ──────────────────────────────────────────────────────
+    _mcp_sanity_check()
 
     # ── Load task ──────────────────────────────────────────────────────────────
     t0 = time.monotonic()

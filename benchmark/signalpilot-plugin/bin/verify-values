@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""Cross-validate a dbt model's aggregate values against raw source data.
+
+Queries the model's output, identifies numeric (metric) columns, then
+independently queries the upstream source tables to compare. Reports
+any discrepancies.
+
+No SQL parsing — works by querying the DB directly.
+
+Usage:
+    verify-values "<project_dir>" "<model_name>"
+"""
+
+from __future__ import annotations
+
+import io
+import sys
+from pathlib import Path
+
+if sys.stdout.encoding != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+SKIP_DIRS = (".claude", "dbt_packages", "target", "__pycache__")
+
+
+def _get_db(work_dir: Path):
+    """Connect to the project's DuckDB file."""
+    import duckdb
+    for db_file in work_dir.glob("*.duckdb"):
+        return duckdb.connect(str(db_file), read_only=True)
+    return None
+
+
+def _get_model_columns(con, model_name: str) -> list[tuple[str, str]]:
+    """Return [(col_name, col_type), ...] for a model."""
+    try:
+        return [(c[0], c[1]) for c in con.execute(f'DESCRIBE "{model_name}"').fetchall()]
+    except Exception:
+        return []
+
+
+def _is_numeric(col_type: str) -> bool:
+    t = col_type.upper()
+    return any(k in t for k in ("INT", "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "BIGINT", "HUGEINT"))
+
+
+def _is_dimension(col_type: str) -> bool:
+    t = col_type.upper()
+    return "VARCHAR" in t or "TEXT" in t or "DATE" in t
+
+
+def _find_upstream_tables(work_dir: Path, model_name: str, con) -> list[str]:
+    """Find upstream table names by reading the model's SQL for ref() and checking the DB."""
+    import re
+    # Find the model SQL
+    for sql_file in work_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in SKIP_DIRS):
+            continue
+        if sql_file.stem == model_name:
+            try:
+                content = sql_file.read_text(errors="replace")
+                refs = re.findall(r"\{\{\s*ref\(['\"](\w+)['\"]\)\s*\}\}", content)
+                return list(set(refs))
+            except Exception:
+                pass
+    # Fallback: check all tables in DB that aren't the model itself
+    try:
+        tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+        return [t for t in tables if t != model_name]
+    except Exception:
+        return []
+
+
+def verify_model(work_dir: Path, model_name: str) -> None:
+    con = _get_db(work_dir)
+    if not con:
+        print(f"## {model_name}\nNo DuckDB file found.\n")
+        return
+
+    columns = _get_model_columns(con, model_name)
+    if not columns:
+        print(f"## {model_name}\nTable not found in DB.\n")
+        con.close()
+        return
+
+    metric_cols = [(name, typ) for name, typ in columns if _is_numeric(typ)]
+    dim_cols = [(name, typ) for name, typ in columns if _is_dimension(typ)]
+
+    if not metric_cols:
+        print(f"## {model_name}\nNo numeric columns — skipping value verification.\n")
+        con.close()
+        return
+
+    # Get the top row (largest by first metric column)
+    first_metric = metric_cols[0][0]
+    try:
+        top_row = con.execute(
+            f'SELECT * FROM "{model_name}" ORDER BY "{first_metric}" DESC LIMIT 1'
+        ).fetchone()
+    except Exception as e:
+        print(f"## {model_name}\nQuery error: {e}\n")
+        con.close()
+        return
+
+    if not top_row:
+        print(f"## {model_name}\nNo rows in model.\n")
+        con.close()
+        return
+
+    col_names = [c[0] for c in columns]
+    top_dict = dict(zip(col_names, top_row))
+
+    # Identify the slice dimension (first VARCHAR/TEXT column)
+    slice_col = None
+    slice_val = None
+    for name, typ in dim_cols:
+        if top_dict.get(name) is not None:
+            slice_col = name
+            slice_val = top_dict[name]
+            break
+
+    print(f"## Value Verification: {model_name}")
+    print(f"Top row slice: {slice_col} = '{slice_val}'" if slice_col else "No dimension column for slicing")
+    print()
+
+    # Find upstream tables
+    upstreams = _find_upstream_tables(work_dir, model_name, con)
+
+    # Build a map of which upstream has which columns (for join resolution)
+    upstream_info: dict[str, list[str]] = {}
+    for up in upstreams:
+        cols = _get_model_columns(con, up)
+        if cols:
+            upstream_info[up] = [c[0] for c in cols]
+
+    # Find the main fact table (the one with the most rows, likely the grain source)
+    fact_table = None
+    fact_count = 0
+    for up in upstreams:
+        try:
+            cnt = con.execute(f'SELECT COUNT(*) FROM "{up}"').fetchone()[0]
+            if cnt > fact_count:
+                fact_count = cnt
+                fact_table = up
+        except Exception:
+            pass
+
+    if not fact_table:
+        print("No upstream tables found.\n")
+        con.close()
+        return
+
+    # Build the slice filter — may need to join through a dimension table
+    slice_sql = ""
+    if slice_col and slice_val:
+        safe_val = str(slice_val).replace("'", "''")
+        fact_cols = upstream_info.get(fact_table, [])
+
+        if slice_col.lower() in [c.lower() for c in fact_cols]:
+            # Direct: fact table has the slice column
+            slice_sql = f'WHERE "{slice_col}" = \'{safe_val}\''
+        else:
+            # Indirect: find a dimension table with the slice column and a shared key
+            for dim_table, dim_cols in upstream_info.items():
+                if dim_table == fact_table:
+                    continue
+                dim_cols_lower = [c.lower() for c in dim_cols]
+                if slice_col.lower() not in dim_cols_lower:
+                    continue
+                # Find shared key between fact and dimension
+                shared = [c for c in fact_cols if c.lower() in dim_cols_lower and c.lower().endswith("_id")]
+                if shared:
+                    join_key = shared[0]
+                    slice_sql = (
+                        f'INNER JOIN "{dim_table}" _dim ON _fact."{join_key}" = _dim."{join_key}" '
+                        f'WHERE _dim."{slice_col}" = \'{safe_val}\''
+                    )
+                    break
+
+    for metric_name, metric_type in metric_cols:
+        model_val = top_dict.get(metric_name)
+        if model_val is None:
+            continue
+
+        print(f"### Metric: {metric_name}")
+        print(f"  Model value: {model_val}")
+
+        if not slice_sql:
+            print("  (no slice filter — skipping cross-validation)")
+            print()
+            continue
+
+        # Run COUNT(*) on the fact table for this slice
+        fact_cols = upstream_info.get(fact_table, [])
+        key_cols = [c for c in fact_cols if c.lower().endswith("_id") or c.lower() == "id"]
+
+        try:
+            if "INNER JOIN" in slice_sql:
+                query = f'SELECT COUNT(*) FROM "{fact_table}" _fact {slice_sql}'
+            else:
+                query = f'SELECT COUNT(*) FROM "{fact_table}" {slice_sql}'
+            count_star = con.execute(query).fetchone()[0]
+        except Exception as e:
+            count_star = None
+            print(f"  COUNT(*) query failed: {e}")
+
+        # Run COUNT(DISTINCT) for each key column
+        count_distincts: dict[str, int] = {}
+        for key in key_cols[:3]:
+            try:
+                if "INNER JOIN" in slice_sql:
+                    query = f'SELECT COUNT(DISTINCT _fact."{key}") FROM "{fact_table}" _fact {slice_sql}'
+                else:
+                    query = f'SELECT COUNT(DISTINCT "{key}") FROM "{fact_table}" {slice_sql}'
+                cd = con.execute(query).fetchone()[0]
+                count_distincts[key] = cd
+            except Exception:
+                pass
+
+        print(f"\n  Fact table: {fact_table}")
+        if count_star is not None:
+            print(f"    COUNT(*): {count_star}")
+
+        for key, cd in count_distincts.items():
+            print(f"    COUNT(DISTINCT {key}): {cd}")
+
+        # Compare
+        if count_star is not None and model_val:
+            try:
+                mv = float(model_val)
+                cs = float(count_star)
+                if mv > 0 and cs > 0:
+                    ratio = cs / mv
+                    if 0.9 <= ratio <= 1.1:
+                        print(f"\n  ✓ Model matches COUNT(*) (ratio={ratio:.2f}x)")
+                    else:
+                        print(f"\n  ⚠ MISMATCH: model={model_val} vs COUNT(*)={count_star} ({ratio:.1f}x)")
+                        # Check if model matches a COUNT(DISTINCT) instead
+                        for key, cd in count_distincts.items():
+                            if 0.9 <= float(cd) / mv <= 1.1:
+                                print(f"  ⚠ Model matches COUNT(DISTINCT {key})={cd}")
+                                print(f"  ⚠ COUNT(*) is {cs/cd:.0f}x larger — model may be under-counting")
+                                break
+            except (ValueError, ZeroDivisionError):
+                pass
+
+        print()
+
+    con.close()
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: verify-values <project_dir> <model_name>")
+        sys.exit(1)
+
+    work_dir = Path(sys.argv[1]).resolve()
+    model_name = sys.argv[2]
+
+    if not (work_dir / "dbt_project.yml").exists():
+        print(f"(no dbt_project.yml found in {work_dir})")
+        sys.exit(1)
+
+    verify_model(work_dir, model_name)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"(verify-values error: {e})")

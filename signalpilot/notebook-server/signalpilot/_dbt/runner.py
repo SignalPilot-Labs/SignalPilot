@@ -308,6 +308,9 @@ def scaffold_dbt_project(
     else:
         project_dir = Path(parent_dir) / project_name
         safe_name = project_name.replace("-", "_").replace(" ", "_")
+
+    if safe_name and safe_name[0].isdigit():
+        safe_name = f"project_{safe_name}"
     project_dir.mkdir(parents=True, exist_ok=True)
 
     created: list[str] = []

@@ -72,7 +72,7 @@ export default function NotebookBoot({
     bootRuntime(config, handlePhase, hostNavigate, controller.signal)
       .then((result) => {
         clientRef.current = result.client;
-        staticDataRef.current = result.staticData;
+        staticDataRef.current = result.staticData ?? { filename: config.file };
         setReady(true);
         onReadyRef.current?.();
       })

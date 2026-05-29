@@ -180,9 +180,9 @@ async def git_push_to_cloud(*, request: Request) -> Response:
     project_id = request.headers.get("x-gateway-project-id", "")
 
     # Refresh remote URL (token may have changed)
-    from signalpilot._server.files.project_sync import _get_clone_url
+    from signalpilot._server.files.project_sync import _get_clone_url_and_auth
 
-    clone_url = _get_clone_url(project_id)
+    clone_url, _ = _get_clone_url_and_auth(project_id)
     if clone_url:
         _run_git(repo, "remote", "set-url", "origin", clone_url)
 
@@ -253,10 +253,10 @@ async def git_fetch(*, request: Request) -> Response:
     project_id = request.headers.get("x-gateway-project-id", "")
 
     # Refresh remote URL if GitHub-linked (token may have expired)
-    from signalpilot._server.files.project_sync import _get_clone_url
+    from signalpilot._server.files.project_sync import _get_clone_url_and_auth
 
     # Refresh remote URL (token may have expired)
-    clone_url = _get_clone_url(project_id)
+    clone_url, _ = _get_clone_url_and_auth(project_id)
     if clone_url:
         _run_git(repo, "remote", "set-url", "origin", clone_url)
 
@@ -303,10 +303,10 @@ async def git_pull(*, request: Request) -> Response:
     project_id = request.headers.get("x-gateway-project-id", "")
 
     # Refresh remote URL for GitHub projects
-    from signalpilot._server.files.project_sync import _get_clone_url
+    from signalpilot._server.files.project_sync import _get_clone_url_and_auth
 
     # Refresh remote URL (token may have expired)
-    clone_url = _get_clone_url(project_id)
+    clone_url, _ = _get_clone_url_and_auth(project_id)
     if clone_url:
         _run_git(repo, "remote", "set-url", "origin", clone_url)
 

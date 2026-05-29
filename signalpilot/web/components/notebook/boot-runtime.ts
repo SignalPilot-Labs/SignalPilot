@@ -7,9 +7,17 @@ import type { NotebookConfig } from "./notebook-context";
 
 export type BootPhase = "health" | "syncing" | "sessions" | "ready";
 
+export interface NotebookStaticData {
+  filename?: string;
+  code?: string;
+  session?: unknown;
+  notebook?: unknown;
+}
+
 export interface BootResult {
   client: SignalpilotClient;
   syncResult?: { localDir: string; fileCount: number };
+  staticData: NotebookStaticData;
 }
 
 /**
@@ -155,6 +163,28 @@ export async function bootRuntime(
     navigate,
   });
 
+  // ── Phase 5: Fetch notebook static data (file content + session) ──
+  const staticData: NotebookStaticData = { filename: config.file };
+
+  if (config.file) {
+    try {
+      const detailsResp = await fetch(`${runtimeUrl}/api/files/file_details`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ path: config.file }),
+        signal,
+      });
+      if (detailsResp.ok) {
+        const details = (await detailsResp.json()) as { contents?: string };
+        if (details.contents) {
+          staticData.code = details.contents;
+        }
+      }
+    } catch (err) {
+      if (!signal.aborted) Logger.warn("File fetch failed (non-fatal):", err);
+    }
+  }
+
   onPhase("ready");
-  return { client, syncResult };
+  return { client, syncResult, staticData };
 }

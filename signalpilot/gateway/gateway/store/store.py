@@ -549,10 +549,10 @@ class Store:
         )
 
     def _create_new_project(self, proj: projects.ProjectCreate, connection: ConnectionInfo) -> projects.ProjectInfo:
-        return projects.create_new_project(proj, connection)
+        return projects.create_new_project(proj, connection, org_id=self._require_org_id())
 
     def _create_local_project(self, proj: projects.ProjectCreate, connection: ConnectionInfo) -> projects.ProjectInfo:
-        return projects.create_local_project(proj, connection)
+        return projects.create_local_project(proj, connection, org_id=self._require_org_id())
 
     def _generate_profiles_yml(self, project_name: str, connection: ConnectionInfo) -> str:
         return projects.generate_profiles_yml(project_name, connection)
@@ -950,7 +950,9 @@ class Store:
         from . import chat
 
         oid = self._require_org_id()
-        return await chat.list_messages(self.session, org_id=oid, conversation_id=conversation_id, **kwargs)
+        return await chat.list_messages(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
+        )
 
     # ─── Agent Runs ──────────────────────────────────────────────────────────
 

@@ -362,6 +362,88 @@ class TestAllowGatewayPolicyShape:
                         "Found a 0.0.0.0/0 egress rule — PyPI must not be reachable!"
                     )
 
+    def test_egress_cidr_includes_imds_except(self):
+        """0.0.0.0/0 egress has except containing 169.254.0.0/16 and 127.0.0.0/8."""
+        policy = self._get_policy(egress_cidr="0.0.0.0/0")
+        ip_block_rules = [
+            rule for rule in policy["spec"]["egress"]
+            if any("ipBlock" in peer for peer in rule.get("to", []))
+        ]
+        assert len(ip_block_rules) == 1
+        ip_block = ip_block_rules[0]["to"][0]["ipBlock"]
+        assert "except" in ip_block
+        excepts = ip_block["except"]
+        assert "169.254.0.0/16" in excepts
+        assert "127.0.0.0/8" in excepts
+
+    def test_egress_cidr_narrow_omits_except(self):
+        """52.0.0.0/8 is not a parent of any mandatory except — no except key emitted."""
+        policy = self._get_policy(egress_cidr="52.0.0.0/8")
+        ip_block_rules = [
+            rule for rule in policy["spec"]["egress"]
+            if any("ipBlock" in peer for peer in rule.get("to", []))
+        ]
+        assert len(ip_block_rules) == 1
+        ip_block = ip_block_rules[0]["to"][0]["ipBlock"]
+        assert "except" not in ip_block
+
+    def test_egress_cidr_ipv6_imds_excepted(self):
+        """IPv6 ::/0 egress cidr has fd00:ec2::/32 in except list."""
+        policy = self._get_policy(egress_cidr="::/0")
+        ip_block_rules = [
+            rule for rule in policy["spec"]["egress"]
+            if any("ipBlock" in peer for peer in rule.get("to", []))
+        ]
+        assert len(ip_block_rules) == 1
+        ip_block = ip_block_rules[0]["to"][0]["ipBlock"]
+        assert "except" in ip_block
+        assert "fd00:ec2::/32" in ip_block["except"]
+
+    def test_egress_cidr_ipv4_with_ipv6_excepts_filtered(self):
+        """IPv4 egress cidr does not raise TypeError from IPv6 except entries."""
+        # This test verifies the family-mismatch guard in _filter_except_entries.
+        # 52.0.0.0/8 is IPv4; the mandatory list includes fd00:ec2::/32 (IPv6).
+        # The builder must not raise and must silently drop the IPv6 entries.
+        from gateway.orchestrator.namespaces import _allow_gateway_policy
+
+        # Should not raise.
+        policy = _allow_gateway_policy(
+            namespace="sp-nb-abc",
+            gateway_namespace="signalpilot",
+            gateway_pod_selector={"app": "signalpilot-gateway"},
+            gateway_port=3300,
+            egress_cidr="52.0.0.0/8",
+        )
+        ip_block_rules = [
+            rule for rule in policy["spec"]["egress"]
+            if any("ipBlock" in peer for peer in rule.get("to", []))
+        ]
+        assert len(ip_block_rules) == 1
+        ip_block = ip_block_rules[0]["to"][0]["ipBlock"]
+        # No except (no IPv4 mandatories are subnets of 52/8).
+        assert "except" not in ip_block
+
+    def test_egress_cidr_equal_to_except_drops_entry(self):
+        """When egress_cidr == an except candidate, that entry is dropped (not emitted)."""
+        from gateway.orchestrator.namespaces import _allow_gateway_policy
+
+        policy = _allow_gateway_policy(
+            namespace="sp-nb-abc",
+            gateway_namespace="signalpilot",
+            gateway_pod_selector={"app": "signalpilot-gateway"},
+            gateway_port=3300,
+            egress_cidr="169.254.0.0/16",
+        )
+        ip_block_rules = [
+            rule for rule in policy["spec"]["egress"]
+            if any("ipBlock" in peer for peer in rule.get("to", []))
+        ]
+        assert len(ip_block_rules) == 1
+        ip_block = ip_block_rules[0]["to"][0]["ipBlock"]
+        # 169.254.0.0/16 must NOT appear as its own except entry.
+        excepts = ip_block.get("except", [])
+        assert "169.254.0.0/16" not in excepts
+
 
 class TestRoleAndRoleBindingShape:
     def _get_role(self) -> dict:

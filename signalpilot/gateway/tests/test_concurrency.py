@@ -287,7 +287,11 @@ class TestCreateProjectIntegrityError:
     """IntegrityError after pre-check must be converted to ValueError."""
 
     @pytest.mark.asyncio
-    async def test_integrity_error_on_project_raises_value_error(self) -> None:
+    async def test_integrity_error_on_project_raises_value_error(self, tmp_path, monkeypatch) -> None:
+        from gateway.store import _constants
+
+        monkeypatch.setattr(_constants, "DATA_DIR", tmp_path)
+
         session = AsyncMock()
         store = Store(session, org_id="test-org", user_id="user1")
         store.get_project = AsyncMock(return_value=None)  # type: ignore[method-assign]
@@ -318,7 +322,11 @@ class TestCreateProjectIntegrityError:
         session.rollback.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_non_uniqueness_integrity_error_on_project_reraises(self) -> None:
+    async def test_non_uniqueness_integrity_error_on_project_reraises(self, tmp_path, monkeypatch) -> None:
+        from gateway.store import _constants
+
+        monkeypatch.setattr(_constants, "DATA_DIR", tmp_path)
+
         session = AsyncMock()
         store = Store(session, org_id="test-org", user_id="user1")
         store.get_project = AsyncMock(return_value=None)  # type: ignore[method-assign]

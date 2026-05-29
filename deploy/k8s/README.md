@@ -50,10 +50,21 @@ RoleBindings are created lazily by the gateway on first session per org.
 | `SP_GATEWAY_POD_SELECTOR` | `app=signalpilot-gateway` | Single k=v label selector for gateway pods. Used in NetworkPolicy ingress. |
 | `SP_GATEWAY_SERVICE_ACCOUNT` | `signalpilot-gateway` | SA name for per-namespace RoleBinding subjects. |
 | `SP_NOTEBOOK_NAMESPACE_PREFIX` | `sp-nb` | Prefix for org namespaces. **Set at bootstrap, never change** (see warning below). |
-| `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow notebook pods to reach this CIDR on port 443 (e.g. S3). |
+| `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow notebook pods to reach this CIDR on port 443 (e.g. S3). **Validator hard-fails on startup if this CIDR contains AWS IMDS (`169.254.169.254` or `fd00:ec2::/32`). `0.0.0.0/0` and `169.254.0.0/16` are rejected.** |
 | `SP_NOTEBOOK_IMAGE` | `your-registry/notebook:tag` | Container image for notebook pods. |
 
-### (d) Verification: cross-namespace network isolation
+### (d) IMDSv2 hop-limit enforcement at the EC2 node level
+
+The NetworkPolicy `except:` list blocks link-local IMDS routes at the CNI layer.
+For defense in depth, enforce IMDSv2 with hop-limit=1 at the node level so that
+even if the CNI is misconfigured, container processes cannot reach the host IMDS.
+
+- [ ] Set `HttpTokens=required` on the EKS/k3s node launch template (IMDSv2 mandatory).
+- [ ] Set `HttpPutResponseHopLimit=1` on the same launch template (prevents container processes — one hop from host — from reaching IMDS even if CNI bypasses NetworkPolicy).
+- [ ] Verify `SP_NOTEBOOK_EGRESS_CIDR` is set to the narrowest range your workload requires. `0.0.0.0/0` is rejected by the validator. `169.254.0.0/16` is rejected.
+- [ ] Confirm the deployed CNI enforces NetworkPolicy (Calico, Cilium, AWS VPC CNI with policy add-on). Without enforcement, the `except` list is documentation only.
+
+### (e) Verification: cross-namespace network isolation
 
 After deploying, verify that the CNI enforces cross-org isolation:
 
@@ -78,7 +89,7 @@ kubectl exec -n signalpilot $GATEWAY_POD -- nc -zv -w 3 $ORG_A_POD_IP 2718
 If the cross-namespace `nc` succeeds (step 2), the CNI is **not** enforcing
 NetworkPolicy. Investigate the CNI configuration before proceeding.
 
-### (e) One-way config: SP_NOTEBOOK_NAMESPACE_PREFIX
+### (f) One-way config: SP_NOTEBOOK_NAMESPACE_PREFIX
 
 `SP_NOTEBOOK_NAMESPACE_PREFIX` determines the name of every org namespace:
 `{prefix}-{sha256(org_id)[:16]}`. **Set this once at initial deployment and never

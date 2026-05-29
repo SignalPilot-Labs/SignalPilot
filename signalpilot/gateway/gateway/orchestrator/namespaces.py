@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import re
 from collections import defaultdict
@@ -47,6 +48,15 @@ DEFAULT_LIMIT_RANGE: dict = {
 # Per-org asyncio locks to prevent intra-process bootstrap races.
 # Cross-replica races rely on Kubernetes 409 AlreadyExists responses.
 _org_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Egress CIDRs that must never be reachable from user pods.
+# 169.254.0.0/16 covers AWS IMDSv4 and link-local; fd00:ec2::/32 covers IMDSv6;
+# 127.0.0.0/8 covers loopback.
+_MANDATORY_EGRESS_EXCEPT: list[str] = [
+    "169.254.0.0/16",
+    "fd00:ec2::/32",
+    "127.0.0.0/8",
+]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -246,6 +256,25 @@ def _default_deny_policy(namespace: str) -> dict:
     }
 
 
+def _filter_except_entries(egress_cidr: str, candidates: list[str]) -> list[str]:
+    """Return only candidates that are strict subnets of egress_cidr, excluding exact equality."""
+    parent = ipaddress.ip_network(egress_cidr, strict=False)
+    result = []
+    for entry in candidates:
+        candidate = ipaddress.ip_network(entry, strict=False)
+        if candidate == parent:
+            continue
+        try:
+            # subnet_of raises TypeError when address families differ (IPv4 vs IPv6).
+            # We catch it defensively and skip the entry.
+            is_subnet: bool = candidate.subnet_of(parent)  # type: ignore[arg-type]
+            if is_subnet:
+                result.append(entry)
+        except TypeError:
+            continue
+    return result
+
+
 def _allow_gateway_policy(
     *,
     namespace: str,
@@ -253,6 +282,7 @@ def _allow_gateway_policy(
     gateway_pod_selector: dict,
     gateway_port: int,
     egress_cidr: str | None,
+    extra_egress_except: list[str] | None = None,
 ) -> dict:
     """Policy 2: allow ingress from gateway and restricted egress."""
     egress_rules = [
@@ -309,9 +339,17 @@ def _allow_gateway_policy(
     ]
 
     if egress_cidr is not None:
+        all_except_candidates = list(_MANDATORY_EGRESS_EXCEPT)
+        if extra_egress_except:
+            all_except_candidates.extend(extra_egress_except)
+        filtered_except = _filter_except_entries(egress_cidr, all_except_candidates)
+        if filtered_except:
+            ip_block: dict = {"cidr": egress_cidr, "except": filtered_except}
+        else:
+            ip_block = {"cidr": egress_cidr}
         egress_rules.append(
             {
-                "to": [{"ipBlock": {"cidr": egress_cidr}}],
+                "to": [{"ipBlock": ip_block}],
                 "ports": [{"protocol": "TCP", "port": 443}],
             }
         )

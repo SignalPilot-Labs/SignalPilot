@@ -94,7 +94,19 @@ local-instructions.md
 marimo-ref.md
 security-audit.md
 dashboard_products.py
+dashboard.py
 Dockerfile.web.dockerignore
 signalpilot/web/e2e-*.png
 signalpilot/web/e2e-journey-*.png
 signalpilot/web/test-results/
+simulate-notebook-ws-connection.py
+empty.env
+
+# Runtime state / generated data
+signalpilot/gateway/data/local_api_key
+signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
+*.bak
+
+# Internal docs (not for public repo)
+signalpilot/web/clerk-research.md
+signalpilot/web/enterprise-connections.md

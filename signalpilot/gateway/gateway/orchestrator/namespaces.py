@@ -444,10 +444,12 @@ def _gateway_org_role(namespace: str) -> dict:
             # R4 F-6: gateway creates per-session Secrets (sp-jwt-<pod_name>) to stage
             # the JWT into the pod via initContainer → emptyDir. Scoped to this namespace
             # Role — NOT the cluster role.
+            # R7 F-13: "list" added for gc_orphan_jwt_secrets — no other code path
+            # lists Secrets in tenant namespaces; this verb is purely for the GC loop.
             {
                 "apiGroups": [""],
                 "resources": ["secrets"],
-                "verbs": ["create", "get", "patch", "delete"],
+                "verbs": ["create", "get", "list", "patch", "delete"],
             },
             {
                 "apiGroups": ["networking.k8s.io"],

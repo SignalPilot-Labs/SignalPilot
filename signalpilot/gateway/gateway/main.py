@@ -325,12 +325,40 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Notebook cleanup loop error: %s", e)
 
+    async def _jwt_secret_gc_loop():
+        """Delete orphaned sp-jwt-* Secrets in tenant namespaces every 10 minutes.
+
+        An orphan Secret has no ownerReference, no live Pod of matching name, and is
+        older than 15 minutes.  This catches leaks from gateway process kills between
+        create_namespaced_secret and the ownerRef patch.
+
+        In-process loop chosen over CronJob: the gateway already holds the right K8s
+        client and namespace list; a CronJob would need its own ServiceAccount and image.
+        Trade-off: GC pauses if all replicas are down.  Acceptable — Secrets are not
+        externally readable, so a missed run causes only namespace clutter.
+
+        R7 F-13 (1c).
+        """
+        from .orchestrator.jwt_secret_gc import gc_orphan_jwt_secrets
+        from .orchestrator.kubernetes import KubernetesOrchestrator
+
+        orch = KubernetesOrchestrator()
+        while True:
+            await asyncio.sleep(600)
+            try:
+                deleted = await gc_orphan_jwt_secrets(orch)
+                if deleted:
+                    logger.info("JWT Secret GC: deleted %d orphan Secret(s)", deleted)
+            except Exception as e:
+                logger.warning("JWT Secret GC loop error: %s", e)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
     notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
+    jwt_secret_gc_task = asyncio.create_task(_jwt_secret_gc_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -376,6 +404,7 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
         refresh_task.cancel()
         notebook_cleanup_task.cancel()
+        jwt_secret_gc_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

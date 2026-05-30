@@ -72,6 +72,11 @@ def _build_pod_spec(
     R4 F-7a: readOnlyRootFilesystem: True on both main and init containers.
     R4 F-7b: ephemeral-storage requests/limits; sizeLimit on every emptyDir.
 
+    R7 F-14: The jwt-stager initContainer now runs as uid/gid 10001 (non-root) with no
+    added capabilities.  Pod-level fsGroup=10001 + fsGroupChangePolicy=OnRootMismatch
+    causes kubelet to chown emptyDir mounts to gid 10001 at mount time, so the
+    initContainer can write to /var/run/sp/session_jwt without CAP_CHOWN.
+
     Main container command is argv-only (no sh -c) — satisfies the F-4 argv-only
     invariant for the main container.  The initContainer uses sh -c with a constant
     string only (no user-input interpolation).
@@ -92,6 +97,7 @@ def _build_pod_spec(
             "runAsUser": 10001,
             "runAsGroup": 10001,
             "fsGroup": 10001,
+            "fsGroupChangePolicy": "OnRootMismatch",
             "seccompProfile": {"type": "RuntimeDefault"},
         },
         "initContainers": [
@@ -99,24 +105,25 @@ def _build_pod_spec(
                 "name": "jwt-stager",
                 "image": notebook_image,
                 # Constant sh -c string — no user-input interpolation.
-                # Copies Secret file into emptyDir tmpfs and sets ownership to
-                # uid 10001 so the main container can read and unlink it.
+                # Copies Secret file into emptyDir tmpfs. Pod-level fsGroup=10001 +
+                # fsGroupChangePolicy=OnRootMismatch causes kubelet to chown the emptyDir
+                # to gid 10001 at mount time — no CAP_CHOWN needed (R7 F-14).
                 "command": [
                     "sh",
                     "-c",
                     "cp /var/run/sp/session_jwt-src/session_jwt /var/run/sp/session_jwt/session_jwt "
-                    "&& chmod 0400 /var/run/sp/session_jwt/session_jwt "
-                    "&& chown 10001:10001 /var/run/sp/session_jwt/session_jwt",
+                    "&& chmod 0400 /var/run/sp/session_jwt/session_jwt",
                 ],
                 "securityContext": {
-                    "runAsUser": 0,
-                    "runAsNonRoot": False,
+                    "runAsUser": 10001,
+                    "runAsGroup": 10001,
+                    "runAsNonRoot": True,
                     "readOnlyRootFilesystem": True,
                     "allowPrivilegeEscalation": False,
                     "capabilities": {
                         "drop": ["ALL"],
-                        "add": ["CHOWN", "FOWNER"],
                     },
+                    "seccompProfile": {"type": "RuntimeDefault"},
                 },
                 "volumeMounts": [
                     {

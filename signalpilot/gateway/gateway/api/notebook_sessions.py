@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import logging
 import os
@@ -144,11 +143,10 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
     gateway_url = k8s_settings.sp_public_gateway_url
 
     try:
-        # R4 F-6: Create a per-session Secret to hold the JWT. The pod spec
-        # mounts it via initContainer → emptyDir tmpfs so the JWT never appears
-        # as a pod env var. On pod-create failure, the Secret is deleted before
-        # re-raising so it does not leak.
-        from kubernetes_asyncio import client as k8s_client
+        # R4 F-6 / R7 F-13: Create a per-session Secret to hold the JWT, create the Pod,
+        # then patch ownerReference — all via the shared lifecycle helper that ensures
+        # "Secret has ownerRef OR is deleted; never both-absent-and-leaked."
+        from ..orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
 
         # Ensure K8s client is initialized before accessing internal APIs.
         await orch._ensure_client()  # type: ignore[attr-defined]
@@ -156,21 +154,11 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
             raise RuntimeError("K8s orchestrator not available")
         core_v1 = orch._core_api  # type: ignore[attr-defined]
         ns_name = orch._resolve_namespace(org_id)  # type: ignore[attr-defined]
-        secret_name = f"sp-jwt-{pod}"
-        await core_v1.create_namespaced_secret(
-            namespace=ns_name,
-            body=k8s_client.V1Secret(
-                metadata=k8s_client.V1ObjectMeta(name=secret_name),
-                type="Opaque",
-                data={
-                    "session_jwt": base64.b64encode(session_jwt.encode()).decode(),
-                },
-            ),
-        )
-        try:
+
+        async def _create_pod_fn():
             # access_token is no longer passed to the pod env or CLI (R2: --no-token).
             # It is stored on the DB row only as the gateway proxy cookie value.
-            pod_obj = await orch.create_pod(
+            return await orch.create_pod(
                 pod_name=pod,
                 user_id=user_id,
                 org_id=org_id,
@@ -178,39 +166,18 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
                 branch=body.branch,
                 image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
                 gateway_url=gateway_url,
-                session_jwt_secret_name=secret_name,
+                session_jwt_secret_name=f"sp-jwt-{pod}",
                 session_id=session_info.id,
                 access_token=session_info.access_token,
             )
-        except Exception:
-            # Pod-create failed — delete the Secret so it does not leak.
-            try:
-                await core_v1.delete_namespaced_secret(name=secret_name, namespace=ns_name)
-            except Exception:
-                logger.warning("Failed to delete Secret %s after pod-create failure", secret_name)
-            raise
-        # Patch ownerReference so the Secret is GC'd when the pod is deleted.
-        raw_pod = await core_v1.read_namespaced_pod(name=pod, namespace=ns_name)
-        pod_meta = raw_pod.metadata
-        await core_v1.patch_namespaced_secret(
-            name=secret_name,
+
+        await create_jwt_secret_with_owner_ref(
+            core_v1,
             namespace=ns_name,
-            body={
-                "metadata": {
-                    "ownerReferences": [
-                        {
-                            "apiVersion": "v1",
-                            "kind": "Pod",
-                            "name": pod_meta.name,
-                            "uid": pod_meta.uid,
-                            "controller": True,
-                            "blockOwnerDeletion": True,
-                        }
-                    ]
-                }
-            },
+            pod_name=pod,
+            session_jwt=session_jwt,
+            create_pod_fn=_create_pod_fn,
         )
-        _ = pod_obj
         logger.info("Waiting for pod %s to be running...", pod)
         await orch.wait_for_running(pod, org_id=org_id, timeout=90)
         # Pod entrypoint runs project_sync_boot (git clone) then exec sp edit.

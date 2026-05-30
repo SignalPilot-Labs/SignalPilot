@@ -92,3 +92,53 @@ class TestArgvOnlyMainContainer:
         cmd_str = cmd[2]
         assert "$" not in cmd_str, f"initContainer sh -c must not contain '$': {cmd_str}"
         assert "`" not in cmd_str, f"initContainer sh -c must not contain backticks: {cmd_str}"
+
+
+class TestInitContainerNonRoot:
+    """F-14: initContainer runs as uid/gid 10001, no added capabilities, seccompProfile set."""
+
+    def test_init_container_runs_as_non_root(self):
+        """initContainer runAsUser==10001, runAsGroup==10001, runAsNonRoot==True (F-14)."""
+        manifest = _make_manifest()
+        init = manifest["spec"]["initContainers"][0]
+        sc = init["securityContext"]
+        assert sc["runAsUser"] == 10001
+        assert sc["runAsGroup"] == 10001
+        assert sc["runAsNonRoot"] is True
+
+    def test_init_container_has_no_capabilities_added(self):
+        """initContainer capabilities must have no 'add' list (F-14 gate test)."""
+        manifest = _make_manifest()
+        init = manifest["spec"]["initContainers"][0]
+        caps = init["securityContext"]["capabilities"]
+        assert caps.get("add", []) == [], (
+            f"initContainer must not add any capabilities; got: {caps.get('add')}"
+        )
+        assert "ALL" in caps["drop"]
+
+    def test_init_container_seccomp_runtime_default(self):
+        """initContainer seccompProfile.type == 'RuntimeDefault' (F-14 PSS-restricted)."""
+        manifest = _make_manifest()
+        init = manifest["spec"]["initContainers"][0]
+        seccomp = init["securityContext"].get("seccompProfile", {})
+        assert seccomp.get("type") == "RuntimeDefault"
+
+    def test_init_container_chown_not_in_command(self):
+        """'chown' must not appear in initContainer command (F-14 gate: no CAP_CHOWN regression)."""
+        manifest = _make_manifest()
+        init = manifest["spec"]["initContainers"][0]
+        cmd_str = " ".join(init["command"])
+        assert "chown" not in cmd_str, (
+            f"initContainer command must not contain 'chown' — kubelet fsGroup handles ownership: {cmd_str}"
+        )
+
+
+class TestPodFsGroupChangePolicy:
+    """F-14: Pod-level fsGroupChangePolicy: OnRootMismatch."""
+
+    def test_pod_fsgroup_change_policy_on_root_mismatch(self):
+        """Pod securityContext has fsGroupChangePolicy=OnRootMismatch and fsGroup=10001 (F-14)."""
+        manifest = _make_manifest()
+        pod_sc = manifest["spec"]["securityContext"]
+        assert pod_sc["fsGroup"] == 10001
+        assert pod_sc.get("fsGroupChangePolicy") == "OnRootMismatch"

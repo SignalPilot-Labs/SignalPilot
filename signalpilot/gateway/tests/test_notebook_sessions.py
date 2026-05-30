@@ -472,8 +472,8 @@ class TestPodSpecEnv:
         assert len(init_containers) == 1
         init = init_containers[0]
         assert init["name"] == "jwt-stager"
-        # InitContainer runs as root to do the chown.
-        assert init["securityContext"]["runAsUser"] == 0
+        # InitContainer runs as uid 10001 (non-root); kubelet fsGroup chown handles ownership (R7 F-14).
+        assert init["securityContext"]["runAsUser"] == 10001
         # Constant sh -c — no user-input interpolation.
         assert init["command"][0] == "sh"
         cmd_str = init["command"][2]

@@ -111,8 +111,11 @@ export const NotebookLoadingState: React.FC = () => {
   }
 
   // Connecting or open-but-no-cells-yet: kernel is starting / streaming cells.
+  // Use min-h tied to the viewport so it centers in the page rather than
+  // collapsing to the top (it renders as a sibling after the sticky header,
+  // so h-full alone would have no height to fill).
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+    <div className="flex flex-col items-center justify-center gap-4 text-muted-foreground min-h-[70vh]">
       <Spinner className="h-6 w-6" />
       <p className="text-sm tracking-wide">Loading notebook…</p>
     </div>

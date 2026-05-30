@@ -29,6 +29,11 @@ if _UPSTREAM_MODE not in {"pod_ip", "nodeport", "direct"}:
         "Allowed values: 'pod_ip', 'nodeport', 'direct'."
     )
 
+# Mount paths for the per-session JWT secret volume (initContainer → emptyDir).
+# These must stay in sync with signalpilot/_server/entrypoint.py _JWT_PATH.
+SP_SESSION_JWT_MOUNT_DIR = "/var/run/sp/session_jwt"
+SP_SESSION_JWT_MOUNT_FILE = "/var/run/sp/session_jwt/session_jwt"
+
 
 def _parse_single_kv(selector_str: str) -> dict[str, str]:
     """Parse a single k=v selector string into a dict. Raises on violation."""
@@ -53,13 +58,28 @@ def _build_pod_spec(
     env: list[dict],
     image: str,
     session_id: str,
+    session_jwt_secret_name: str,
 ) -> dict:
     """Build the pod spec dict. Separated from _pod_manifest to keep each under 50 lines.
 
     runtimeClassName is only set when runtime_class is non-empty — never emit empty string.
-    The pod-entrypoint 'sh -c' below is NOT an LLM-injection sink: all strings are
-    gateway-controlled constants derived from validated session_id; no user input reaches here.
+
+    R4 F-6: SP_SESSION_JWT is no longer injected via pod env. Instead, the per-session
+    Secret is staged into an emptyDir tmpfs by the jwt-stager initContainer.  The main
+    container entrypoint reads and unlinks the file before execvp-ing sp edit.
+
+    R4 F-7a: readOnlyRootFilesystem: True on both main and init containers.
+    R4 F-7b: ephemeral-storage requests/limits; sizeLimit on every emptyDir.
+
+    Main container command is argv-only (no sh -c) — satisfies the F-4 argv-only
+    invariant for the main container.  The initContainer uses sh -c with a constant
+    string only (no user-input interpolation).
     """
+    notebook_image = (
+        f"docker.io/library/{image}"
+        if ":" in image and "/" not in image
+        else image
+    )
     spec: dict = {
         # Pods must not mount the SA token — no K8s API access from within notebook pods.
         "automountServiceAccountToken": False,
@@ -73,44 +93,96 @@ def _build_pod_spec(
             "fsGroup": 10001,
             "seccompProfile": {"type": "RuntimeDefault"},
         },
+        "initContainers": [
+            {
+                "name": "jwt-stager",
+                "image": notebook_image,
+                # Constant sh -c string — no user-input interpolation.
+                # Copies Secret file into emptyDir tmpfs and sets ownership to
+                # uid 10001 so the main container can read and unlink it.
+                "command": [
+                    "sh",
+                    "-c",
+                    "cp /var/run/sp/session_jwt-src/session_jwt /var/run/sp/session_jwt/session_jwt "
+                    "&& chmod 0400 /var/run/sp/session_jwt/session_jwt "
+                    "&& chown 10001:10001 /var/run/sp/session_jwt/session_jwt",
+                ],
+                "securityContext": {
+                    "runAsUser": 0,
+                    "runAsNonRoot": False,
+                    "readOnlyRootFilesystem": True,
+                    "allowPrivilegeEscalation": False,
+                    "capabilities": {
+                        "drop": ["ALL"],
+                        "add": ["CHOWN", "FOWNER"],
+                    },
+                },
+                "volumeMounts": [
+                    {
+                        "name": "session-jwt-src",
+                        "mountPath": "/var/run/sp/session_jwt-src",
+                        "readOnly": True,
+                    },
+                    {
+                        "name": "session-jwt",
+                        "mountPath": SP_SESSION_JWT_MOUNT_DIR,
+                    },
+                ],
+                "resources": {
+                    "requests": {"cpu": "10m", "memory": "16Mi"},
+                    "limits": {"cpu": "100m", "memory": "32Mi"},
+                },
+            },
+        ],
         "containers": [
             {
                 "name": "notebook",
-                "image": (
-                    f"docker.io/library/{image}"
-                    if ":" in image and "/" not in image
-                    else image
-                ),
+                "image": notebook_image,
                 "imagePullPolicy": "IfNotPresent",
-                # Pod entrypoint: runs project_sync_boot to git-clone /workspace,
-                # then execs sp edit. wait_for_ready's TCP probe on :2718 already
-                # gates correctly — clone failure → entrypoint exits non-zero →
-                # :2718 never binds → wait_for_ready times out.
-                # --no-token: pod runs without the notebook server's built-in auth;
-                # the gateway proxy is the sole auth gate.
-                # --base-url: tells the notebook server to emit asset/WS URLs under /notebook/{session_id}.
-                "command": [
-                    "sh", "-c",
-                    "python -m signalpilot._server.files.project_sync_boot && "
-                    f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
-                    f"--no-skew-protection --allow-origins 'http://localhost:3200,http://localhost:3300' "
-                    f"--base-url /notebook/{session_id} /workspace",
+                # Argv-only entrypoint — no sh -c in main container (F-4 invariant).
+                # entrypoint.py reads the JWT from the emptyDir, unlinks it, then
+                # execvp("sp", ["sp", "edit", ...]). _server.start pops SP_SESSION_JWT
+                # from os.environ at import time before the HTTP listener binds.
+                "command": ["python", "-m", "signalpilot._server.entrypoint"],
+                "args": [
+                    "--host", "0.0.0.0",
+                    "--port", "2718",
+                    "--headless",
+                    "--no-token",
+                    "--no-skew-protection",
+                    "--allow-origins", "http://localhost:3200,http://localhost:3300",
+                    "--base-url", f"/notebook/{session_id}",
+                    "/workspace",
                 ],
                 "ports": [{"containerPort": 2718}],
                 "env": env,
                 "resources": {
-                    "requests": {"memory": "512Mi", "cpu": "500m"},
-                    "limits": {"memory": "2Gi", "cpu": "2"},
+                    "requests": {
+                        "memory": "512Mi",
+                        "cpu": "500m",
+                        "ephemeral-storage": "256Mi",
+                    },
+                    "limits": {
+                        "memory": "2Gi",
+                        "cpu": "2",
+                        "ephemeral-storage": "4Gi",
+                    },
                 },
                 "securityContext": {
                     "allowPrivilegeEscalation": False,
-                    "readOnlyRootFilesystem": False,
+                    "readOnlyRootFilesystem": True,
                     "capabilities": {"drop": ["ALL"]},
                 },
                 "volumeMounts": [
                     {"name": "tmp", "mountPath": "/tmp"},
                     {"name": "home", "mountPath": "/home/notebook"},
                     {"name": "workspace", "mountPath": "/workspace"},
+                    # Writable emptyDir tmpfs — entrypoint unlinks the JWT file here.
+                    # Main container does NOT mount session-jwt-src (the Secret).
+                    {
+                        "name": "session-jwt",
+                        "mountPath": SP_SESSION_JWT_MOUNT_DIR,
+                    },
                 ],
                 "readinessProbe": {
                     "tcpSocket": {"port": 2718},
@@ -127,9 +199,23 @@ def _build_pod_spec(
             }
         ],
         "volumes": [
-            {"name": "tmp", "emptyDir": {}},
-            {"name": "home", "emptyDir": {}},
-            {"name": "workspace", "emptyDir": {}},
+            {"name": "tmp", "emptyDir": {"sizeLimit": "256Mi"}},
+            {"name": "home", "emptyDir": {"sizeLimit": "1Gi"}},
+            {"name": "workspace", "emptyDir": {"sizeLimit": "2Gi"}},
+            # emptyDir tmpfs — writable for uid 10001, unlinked by entrypoint.
+            {
+                "name": "session-jwt",
+                "emptyDir": {"medium": "Memory", "sizeLimit": "1Mi"},
+            },
+            # Read-only Secret volume — mounted only by initContainer.
+            {
+                "name": "session-jwt-src",
+                "secret": {
+                    "secretName": session_jwt_secret_name,
+                    "defaultMode": 0o400,
+                    "items": [{"key": "session_jwt", "path": "session_jwt"}],
+                },
+            },
         ],
         "restartPolicy": "Never",
         "terminationGracePeriodSeconds": 5,
@@ -149,15 +235,17 @@ def _pod_manifest(
     project_id: str | None,
     branch: str,
     gateway_url: str,
-    session_jwt: str,
     session_id: str,
+    session_jwt_secret_name: str,
     access_token: str | None,
     extra_env: dict[str, str] | None = None,
     runtime_class: str | None = None,
 ) -> dict:
     """Build the pod manifest dict for the Kubernetes API.
 
-    Injects SP_SESSION_JWT and SP_SESSION_ID into the pod env.
+    Does NOT inject SP_SESSION_JWT into the pod env (R4 F-6). The JWT is staged
+    via a per-session Secret → initContainer → emptyDir tmpfs path.  The entrypoint
+    shim reads and unlinks the file, then execs sp edit.
     Does NOT inject SP_API_KEY (replaced by per-session JWT) or SP_ACCESS_TOKEN
     (removed in R2 — the gateway proxy is the sole auth gate; the pod runs --no-token).
     --token-password is removed unconditionally; the pod runs --no-token always.
@@ -166,10 +254,12 @@ def _pod_manifest(
     injected into the pod env or CLI.
 
     R3: Adds pod-level securityContext (non-root, seccomp RuntimeDefault),
-    container-level securityContext (readOnlyRootFilesystem, drop ALL caps),
+    container-level securityContext (drop ALL caps),
     automountServiceAccountToken: false, emptyDir volumes for writable scratch,
     and env additions for HOME, PYTHONDONTWRITEBYTECODE, SP_LOG_DIR.
     R4: Adds optional runtimeClassName for gVisor/Kata sandbox isolation.
+    R4 F-6: Per-session Secret + initContainer + emptyDir replaces SP_SESSION_JWT env var.
+    R4 F-7a/b: readOnlyRootFilesystem: True; ephemeral-storage limits; emptyDir sizeLimit.
     """
     static_internal_url = os.getenv("SP_GATEWAY_INTERNAL_URL", "")
     gateway_port = os.getenv("SP_PUBLIC_GATEWAY_PORT", "3300")
@@ -186,7 +276,10 @@ def _pod_manifest(
         {"name": "SP_BRANCH", "value": branch},
         {"name": "SP_USER_ID", "value": user_id},
         {"name": "SP_ORG_ID", "value": org_id},
-        {"name": "SP_SESSION_JWT", "value": session_jwt},
+        # SP_SESSION_JWT is NOT injected as an env var (R4 F-6).
+        # It is staged via Secret → initContainer → emptyDir; the entrypoint
+        # shim reads and unlinks the file, placing the value into os.environ
+        # for the brief window before _server.start pops it at import time.
         {"name": "SP_SESSION_ID", "value": session_id},
         # Required because sp-notebook is installed at /opt/sp-notebook which is on the
         # read-only root FS; without this, Python attempts to write __pycache__/*.pyc
@@ -217,6 +310,7 @@ def _pod_manifest(
             env=env,
             image=image,
             session_id=session_id,
+            session_jwt_secret_name=session_jwt_secret_name,
         ),
     }
 
@@ -397,7 +491,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         branch: str,
         image: str,
         gateway_url: str,
-        session_jwt: str,
+        session_jwt_secret_name: str,
         session_id: str,
         access_token: str | None,
         extra_env: dict[str, str] | None = None,
@@ -441,7 +535,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             project_id=project_id,
             branch=branch,
             gateway_url=gateway_url,
-            session_jwt=session_jwt,
+            session_jwt_secret_name=session_jwt_secret_name,
             session_id=session_id,
             access_token=access_token,
             extra_env=extra_env,

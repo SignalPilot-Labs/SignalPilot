@@ -30,7 +30,7 @@ class NotebookOrchestrator(ABC):
         branch: str,
         image: str,
         gateway_url: str,
-        session_jwt: str,
+        session_jwt_secret_name: str,
         session_id: str,
         access_token: str | None,
     ) -> PodInfo:

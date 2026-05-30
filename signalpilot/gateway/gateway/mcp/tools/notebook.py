@@ -145,18 +145,44 @@ async def run_notebook(
             )
 
             try:
-                await orch.create_pod(
-                    pod_name=pod_name, user_id=user_id, org_id=org_id,
-                    project_id=project_id, branch=agent_branch,
-                    image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
-                    gateway_url=k8s_settings.sp_public_gateway_url,
-                    session_jwt=session_jwt, session_id=session_id,
-                    access_token=session_info.access_token,
-                    extra_env={"SP_AGENT_MODE": "true"},
+                import base64
+
+                from kubernetes_asyncio import client as k8s_client
+
+                from gateway.orchestrator.namespaces import namespace_for_org
+
+                ns_name = namespace_for_org(org_id, prefix=orch._namespace_prefix or "sp-nb")
+                secret_name = f"sp-jwt-{pod_name}"
+                core_v1 = orch._core_api
+                await core_v1.create_namespaced_secret(
+                    namespace=ns_name,
+                    body=k8s_client.V1Secret(
+                        metadata=k8s_client.V1ObjectMeta(name=secret_name),
+                        type="Opaque",
+                        data={
+                            "session_jwt": base64.b64encode(session_jwt.encode()).decode(),
+                        },
+                    ),
                 )
+                try:
+                    await orch.create_pod(
+                        pod_name=pod_name, user_id=user_id, org_id=org_id,
+                        project_id=project_id, branch=agent_branch,
+                        image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
+                        gateway_url=k8s_settings.sp_public_gateway_url,
+                        session_jwt_secret_name=secret_name, session_id=session_id,
+                        access_token=session_info.access_token,
+                        extra_env={"SP_AGENT_MODE": "true"},
+                    )
+                except Exception:
+                    try:
+                        await core_v1.delete_namespaced_secret(name=secret_name, namespace=ns_name)
+                    except Exception:
+                        pass
+                    raise
                 await orch.wait_for_running(pod_name, org_id=org_id, timeout=90)
-                # Pod entrypoint runs project_sync_boot (git clone) then exec sp edit.
-                # wait_for_ready's TCP probe on :2718 gates clone success.
+                # Pod entrypoint reads JWT from emptyDir, unlinks, then exec sp edit.
+                # wait_for_ready's TCP probe on :2718 gates readiness.
                 await orch.wait_for_ready(pod_name, org_id=org_id, timeout=90)
                 pod_info = await orch.get_pod(pod_name, org_id=org_id)
                 await ns.update_session_status(

@@ -297,17 +297,16 @@ class TestPodCLI:
             project_id="proj-1",
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-abc",
             access_token="some-token",
         )
-        # R4: command is now ["sh", "-c", "...sentinel shim..."]
+        # R4 F-6: main container uses argv-only entrypoint (no sh -c).
         command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--no-token" in cmd_str
-        assert "--token-password" not in cmd_str
+        args = manifest["spec"]["containers"][0].get("args", [])
+        assert "sh" not in command
+        assert "--no-token" in args
+        assert "--token-password" not in args
 
     def test_pod_cli_no_token_when_access_token_none(self):
         from gateway.orchestrator.kubernetes import _pod_manifest
@@ -321,17 +320,16 @@ class TestPodCLI:
             project_id=None,
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-xyz",
             access_token=None,
         )
-        # R4: command is now ["sh", "-c", "...sentinel shim..."]
+        # R4 F-6: main container uses argv-only entrypoint (no sh -c).
         command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--no-token" in cmd_str
-        assert "--token-password" not in cmd_str
+        args = manifest["spec"]["containers"][0].get("args", [])
+        assert "sh" not in command
+        assert "--no-token" in args
+        assert "--token-password" not in args
 
     def test_pod_cli_includes_base_url(self):
         from gateway.orchestrator.kubernetes import _pod_manifest
@@ -345,17 +343,17 @@ class TestPodCLI:
             project_id="proj-1",
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-abc",
             access_token=None,
         )
-        # R4: command is ["sh", "-c", "...sentinel shim...exec sp edit ...--base-url /notebook/{sid}..."]
+        # R4 F-6: main container uses argv-only entrypoint (no sh -c).
+        # base-url is passed as a CLI arg; check the args list.
         command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--base-url" in cmd_str
-        assert "/notebook/sess-abc" in cmd_str
+        args = manifest["spec"]["containers"][0].get("args", [])
+        assert "sh" not in command
+        assert "--base-url" in args
+        assert "/notebook/sess-abc" in args
 
     def test_pod_env_no_sp_access_token(self):
         from gateway.orchestrator.kubernetes import _pod_manifest
@@ -369,13 +367,14 @@ class TestPodCLI:
             project_id="proj-1",
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-abc",
             access_token="some-token",
         )
         env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
         assert "SP_ACCESS_TOKEN" not in env_names
-        assert "SP_SESSION_JWT" in env_names
+        # R4 F-6: SP_SESSION_JWT is now staged via Secret, not env var.
+        assert "SP_SESSION_JWT" not in env_names
 
     def test_pod_env_no_sp_access_token_when_none(self):
         from gateway.orchestrator.kubernetes import _pod_manifest
@@ -389,7 +388,7 @@ class TestPodCLI:
             project_id=None,
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-abc",
             access_token=None,
         )
@@ -1088,7 +1087,7 @@ class TestNodePortServiceGating:
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://localhost:3300",
-                session_jwt="test.jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-abc",
                 access_token="tok",
             )

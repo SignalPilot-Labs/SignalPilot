@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from signalpilot import _loggers
+from signalpilot._server.auth.session_token import load_session_jwt
 
 LOGGER = _loggers.sp_logger()
 
@@ -54,7 +55,7 @@ def _gateway_url() -> str:
 
 
 def _gateway_headers() -> dict[str, str]:
-    jwt = os.environ.get("SP_SESSION_JWT", "")
+    jwt = load_session_jwt()
     if jwt:
         return {"Authorization": f"Bearer {jwt}"}
     api_key = os.environ.get("SP_API_KEY", "")

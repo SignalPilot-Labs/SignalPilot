@@ -430,13 +430,12 @@ class TestCrossOrgScopingHTTP:
 
 
 class TestPodSpecEnv:
-    """Pod spec dict contains SP_SESSION_JWT and NOT SP_API_KEY."""
+    """Pod spec dict does NOT contain SP_SESSION_JWT — JWT is staged via Secret+emptyDir."""
 
-    def test_pod_env_contains_session_jwt_not_api_key(self, monkeypatch):
-        """_pod_manifest produces SP_SESSION_JWT and no SP_API_KEY."""
+    def _make_manifest(self, **kwargs):
         from gateway.orchestrator.kubernetes import _pod_manifest
 
-        manifest = _pod_manifest(
+        defaults = dict(
             pod_name="nb-test",
             namespace="default",
             image="signalpilot-notebook:latest",
@@ -445,35 +444,88 @@ class TestPodSpecEnv:
             project_id="proj-1",
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt.token",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-abc",
             access_token="access-abc",
         )
+        defaults.update(kwargs)
+        return _pod_manifest(**defaults)
+
+    def test_pod_env_does_not_contain_session_jwt(self, monkeypatch):
+        """_pod_manifest does NOT inject SP_SESSION_JWT as an env var (R4 F-6)."""
+        manifest = self._make_manifest()
         env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert "SP_SESSION_JWT" in env_names
+        assert "SP_SESSION_JWT" not in env_names
         assert "SP_SESSION_ID" in env_names
         assert "SP_API_KEY" not in env_names
 
-    def test_pod_env_session_jwt_value(self, monkeypatch):
-        """SP_SESSION_JWT env var gets the correct value."""
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id=None,
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="my.jwt.value",
-            session_id="sess-xyz",
-            access_token=None,
-        )
-        env_by_name = {e["name"]: e["value"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert env_by_name["SP_SESSION_JWT"] == "my.jwt.value"
+    def test_pod_env_session_id_value(self, monkeypatch):
+        """SP_SESSION_ID env var gets the correct value."""
+        manifest = self._make_manifest(session_id="sess-xyz")
+        env_by_name = {e["name"]: e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
         assert env_by_name["SP_SESSION_ID"] == "sess-xyz"
+
+    def test_init_container_present(self):
+        """jwt-stager initContainer is present and stages the JWT file."""
+        manifest = self._make_manifest()
+        init_containers = manifest["spec"]["initContainers"]
+        assert len(init_containers) == 1
+        init = init_containers[0]
+        assert init["name"] == "jwt-stager"
+        # InitContainer runs as root to do the chown.
+        assert init["securityContext"]["runAsUser"] == 0
+        # Constant sh -c — no user-input interpolation.
+        assert init["command"][0] == "sh"
+        cmd_str = init["command"][2]
+        assert "$" not in cmd_str, "initContainer command must not contain variable interpolation"
+        assert "`" not in cmd_str, "initContainer command must not contain backticks"
+        # Source mount must be read-only.
+        src_mounts = [m for m in init["volumeMounts"] if m["name"] == "session-jwt-src"]
+        assert len(src_mounts) == 1
+        assert src_mounts[0].get("readOnly") is True
+        # Destination mount (emptyDir) is writable — no readOnly key.
+        dst_mounts = [m for m in init["volumeMounts"] if m["name"] == "session-jwt"]
+        assert len(dst_mounts) == 1
+        assert "readOnly" not in dst_mounts[0] or not dst_mounts[0]["readOnly"]
+
+    def test_main_container_mounts_session_jwt_emptydir(self):
+        """Main container mounts session-jwt emptyDir (writable), NOT session-jwt-src."""
+        manifest = self._make_manifest()
+        mounts = manifest["spec"]["containers"][0]["volumeMounts"]
+        mount_names = {m["name"] for m in mounts}
+        assert "session-jwt" in mount_names
+        assert "session-jwt-src" not in mount_names, "Main container must NOT mount the Secret volume"
+        # The session-jwt mount must be writable (no readOnly: True).
+        jwt_mounts = [m for m in mounts if m["name"] == "session-jwt"]
+        assert len(jwt_mounts) == 1
+        assert not jwt_mounts[0].get("readOnly"), "session-jwt mount must be writable for unlink"
+
+    def test_session_jwt_volume_is_emptydir_memory(self):
+        """session-jwt volume is an in-memory emptyDir with sizeLimit."""
+        manifest = self._make_manifest()
+        volumes = {v["name"]: v for v in manifest["spec"]["volumes"]}
+        jwt_vol = volumes["session-jwt"]
+        assert "emptyDir" in jwt_vol
+        assert jwt_vol["emptyDir"].get("medium") == "Memory"
+        assert "sizeLimit" in jwt_vol["emptyDir"]
+
+    def test_secret_volume_references_correct_secret(self):
+        """session-jwt-src volume references the per-session Secret."""
+        manifest = self._make_manifest(session_jwt_secret_name="sp-jwt-nb-abc")
+        volumes = {v["name"]: v for v in manifest["spec"]["volumes"]}
+        src_vol = volumes["session-jwt-src"]
+        assert src_vol["secret"]["secretName"] == "sp-jwt-nb-abc"
+
+    def test_main_container_command_no_sh(self):
+        """Main container command is argv-only — no 'sh' element (F-4 invariant)."""
+        manifest = self._make_manifest()
+        command = manifest["spec"]["containers"][0]["command"]
+        assert "sh" not in command
+
+    def test_automount_service_account_token_false(self):
+        """automountServiceAccountToken is False."""
+        manifest = self._make_manifest()
+        assert manifest["spec"]["automountServiceAccountToken"] is False
 
 
 class TestSessionReuse:
@@ -600,8 +652,8 @@ class TestSessionReuse:
         assert "dead-sess" in mark_stopped_calls
 
     @pytest.mark.asyncio
-    async def test_create_pod_receives_session_jwt_not_api_key(self, monkeypatch):
-        """create_pod call does NOT pass api_key; instead passes session_jwt."""
+    async def test_create_pod_receives_secret_name_not_jwt(self, monkeypatch):
+        """create_pod call receives session_jwt_secret_name (not raw session_jwt) — R4 F-6."""
         _patch_jwt_secret(monkeypatch)
 
         import time
@@ -631,6 +683,15 @@ class TestSessionReuse:
             return_value=PodInfo(name="nb-test", ip=None, status="running")
         )
         mock_orch.wait_for_ready.return_value = PodInfo(name="nb-test", ip="10.0.0.4:2718", status="running")
+        # Mock core_v1 methods needed for Secret creation.
+        mock_orch._core_api = AsyncMock()
+        mock_orch._core_api.create_namespaced_secret = AsyncMock()
+        mock_orch._core_api.read_namespaced_pod = AsyncMock(
+            return_value=MagicMock(metadata=MagicMock(name="nb-test", uid="uid-abc"))
+        )
+        mock_orch._core_api.patch_namespaced_secret = AsyncMock()
+        mock_orch._ensure_client = AsyncMock()
+        mock_orch._resolve_namespace = MagicMock(return_value="sp-nb-org-1")
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
         monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
@@ -647,14 +708,13 @@ class TestSessionReuse:
         await ns_api.create_session(body, store, _make_mock_response())
 
         call_kwargs = mock_orch.create_pod.call_args.kwargs
-        assert "session_jwt" in call_kwargs
+        # R4 F-6: JWT is staged via Secret, not passed directly to create_pod.
+        assert "session_jwt" not in call_kwargs
+        assert "session_jwt_secret_name" in call_kwargs
+        assert call_kwargs["session_jwt_secret_name"].startswith("sp-jwt-")
         assert "api_key" not in call_kwargs
-
-        # Verify the JWT is a valid notebook session JWT
-        token = call_kwargs["session_jwt"]
-        claims = verify_session_jwt(token)
-        assert claims["sub"] == "user-1"
-        assert claims["org_id"] == "org-1"
+        # Verify the Secret was created with encoded JWT.
+        mock_orch._core_api.create_namespaced_secret.assert_called_once()
 
 
 class TestR3OrgIdEnforcement:
@@ -962,8 +1022,8 @@ class TestOptionBEntrypoint:
         assert "wait_for_ready" in call_order
         assert call_order.index("wait_for_running") < call_order.index("wait_for_ready")
 
-    def test_pod_cmd_contains_project_sync_boot(self):
-        """Pod CMD contains project_sync_boot (regression guard for entrypoint contract)."""
+    def test_pod_cmd_uses_entrypoint_shim(self):
+        """Pod CMD uses the entrypoint shim (regression guard — no sh -c in main container)."""
         from gateway.orchestrator.kubernetes import _pod_manifest
 
         manifest = _pod_manifest(
@@ -975,14 +1035,14 @@ class TestOptionBEntrypoint:
             project_id="proj-1",
             branch="main",
             gateway_url="http://localhost:3300",
-            session_jwt="test.jwt.token",
+            session_jwt_secret_name="sp-jwt-nb-test",
             session_id="sess-abc",
             access_token=None,
         )
         command = manifest["spec"]["containers"][0]["command"]
-        cmd_str = " ".join(command)
-        assert "project_sync_boot" in cmd_str
-        assert ".sp-ready" not in cmd_str
+        # R4 F-6: main container is argv-only — no sh -c.
+        assert "sh" not in command
+        assert "signalpilot._server.entrypoint" in " ".join(command)
 
     @pytest.mark.asyncio
     async def test_delete_session_deletes_pod_and_marks_stopped(self, monkeypatch):

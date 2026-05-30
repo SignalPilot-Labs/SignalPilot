@@ -4,6 +4,15 @@ import os
 import subprocess
 import threading
 from typing import TYPE_CHECKING, cast
+
+# IMPORTANT: prime the session-JWT cache at import time, BEFORE any other
+# code runs and BEFORE any kernel subprocess can be spawned. This pops
+# SP_SESSION_JWT out of os.environ so that construct_kernel_env(os.environ.copy(), ...)
+# in _session/managers/ipc.py does not inherit it into kernel subprocesses.
+from signalpilot._server.auth.session_token import load_session_jwt as _prime_jwt
+
+_prime_jwt()
+del _prime_jwt
 from urllib.parse import urlparse
 
 import uvicorn

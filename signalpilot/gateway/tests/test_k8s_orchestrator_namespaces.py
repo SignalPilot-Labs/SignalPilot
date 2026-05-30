@@ -92,7 +92,7 @@ class TestCreatePodNamespaceBehavior:
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -139,7 +139,7 @@ class TestCreatePodNamespaceBehavior:
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -218,7 +218,7 @@ class TestCreatePodNamespaceBehavior:
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -261,7 +261,7 @@ class TestCreatePodNamespaceBehavior:
                     branch="main",
                     image="signalpilot-notebook:latest",
                     gateway_url="http://gateway:3300",
-                    session_jwt="jwt",
+                    session_jwt_secret_name="sp-jwt-nb-test",
                     session_id="sess-1",
                     access_token=None,
                 )
@@ -290,7 +290,7 @@ class TestCreatePodNamespaceBehavior:
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -338,7 +338,7 @@ class TestPodSpecHardening:
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )

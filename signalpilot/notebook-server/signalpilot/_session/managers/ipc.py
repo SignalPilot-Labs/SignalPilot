@@ -137,6 +137,12 @@ def construct_kernel_env(
 ) -> dict[str, str]:
     """Build environment variables for a kernel subprocess.
 
+    Callers MUST pass a base_env from which SP_SESSION_JWT has been scrubbed
+    (see `_server.auth.session_token.load_session_jwt`, called at `_server.start`
+    import). This function trusts the base_env contract but also defensively pops
+    SP_SESSION_JWT as belt-and-braces against future callers that forget the import
+    ordering contract.
+
     Args:
         base_env: Starting environment (typically ``os.environ.copy()``).
         venv_python: Path to the Python executable in the target venv.
@@ -150,6 +156,9 @@ def construct_kernel_env(
         A **new** dict with the appropriate overrides applied.
     """
     env = dict(base_env)
+    # Belt-and-braces: ensure SP_SESSION_JWT never leaks into a kernel subprocess
+    # even if a future caller passes an unscubbed base_env.
+    env.pop("SP_SESSION_JWT", None)
 
     if kernel_pythonpath is not None:
         existing = env.get("PYTHONPATH", "")

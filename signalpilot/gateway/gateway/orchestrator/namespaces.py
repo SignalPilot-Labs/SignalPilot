@@ -437,6 +437,14 @@ def _gateway_org_role(namespace: str) -> dict:
                 "resources": ["pods/exec"],
                 "verbs": ["create"],
             },
+            # R4 F-6: gateway creates per-session Secrets (sp-jwt-<pod_name>) to stage
+            # the JWT into the pod via initContainer → emptyDir. Scoped to this namespace
+            # Role — NOT the cluster role.
+            {
+                "apiGroups": [""],
+                "resources": ["secrets"],
+                "verbs": ["create", "get", "patch", "delete"],
+            },
             {
                 "apiGroups": ["networking.k8s.io"],
                 "resources": ["networkpolicies"],

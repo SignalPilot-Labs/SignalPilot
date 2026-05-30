@@ -70,12 +70,26 @@ class K8sSettings(_GatewaySettingsBase):
         if v is None:
             return None
         try:
-            ipaddress.ip_network(v, strict=False)
+            network = ipaddress.ip_network(v, strict=False)
         except ValueError:
             raise ValueError(
                 f"SP_NOTEBOOK_EGRESS_CIDR must be a valid IP network CIDR (e.g. '10.0.0.0/8'). "
                 f"Got: {v!r}"
             )
+        # F-3: never allow an egress range that includes AWS IMDS — a pod that
+        # reaches 169.254.169.254 / fd00:ec2::/32 can steal the node IAM role.
+        if network.version == 4:
+            if ipaddress.ip_address("169.254.169.254") in network:
+                raise ValueError(
+                    "SP_NOTEBOOK_EGRESS_CIDR must not include AWS IMDS (169.254.169.254 or "
+                    "fd00:ec2::/32). Use a tighter range."
+                )
+        else:
+            if network.overlaps(ipaddress.ip_network("fd00:ec2::/32")):
+                raise ValueError(
+                    "SP_NOTEBOOK_EGRESS_CIDR must not include AWS IMDS (169.254.169.254 or "
+                    "fd00:ec2::/32). Use a tighter range."
+                )
         return v
 
     @field_validator("sp_public_gateway_port", mode="after")

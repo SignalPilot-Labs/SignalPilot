@@ -54,7 +54,7 @@ const LOCAL_MODE_SUBSCRIPTION: Omit<SubscriptionState, "canCreateKey" | "refetch
 // ---------------------------------------------------------------------------
 
 function CloudSubscriptionInner({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAppAuth();
+  const { isAuthenticated, isLoaded: authLoaded } = useAppAuth();
   const client = useBackendClient();
 
   const [planTier, setPlanTier] = useState("free");
@@ -70,6 +70,12 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const [cancelDate, setCancelDate] = useState<string | null>(null);
 
   const fetchSubscription = useCallback(async () => {
+    // Wait for Clerk to finish initializing before deciding anything. Otherwise
+    // isAuthenticated is briefly false during startup, which would mark the
+    // subscription "loaded" at the default free tier and flash gated UI.
+    if (!authLoaded) {
+      return;
+    }
     if (!isAuthenticated) {
       setIsLoaded(true);
       return;
@@ -89,7 +95,7 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
     } finally {
       setIsLoaded(true);
     }
-  }, [isAuthenticated, client]);
+  }, [authLoaded, isAuthenticated, client]);
 
   useEffect(() => {
     fetchSubscription();

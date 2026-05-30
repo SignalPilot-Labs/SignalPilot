@@ -4,6 +4,7 @@ import os
 from typing import Optional
 
 from signalpilot._gateway.client import GatewayClient
+from signalpilot._server.auth.session_token import load_session_jwt
 
 _client: Optional[GatewayClient] = None
 
@@ -25,7 +26,7 @@ def get_gateway_client() -> Optional[GatewayClient]:
     except ImportError:
         pass
 
-    jwt = os.environ.get("SP_SESSION_JWT", "")
+    jwt = load_session_jwt()
     api_key = os.environ.get("SP_API_KEY", "")
     if not api_key and not jwt:
         return None

@@ -13,6 +13,7 @@ from typing import Any, Literal
 import httpx
 
 from signalpilot import _loggers
+from signalpilot._server.auth.session_token import load_session_jwt
 from signalpilot._server.files.file_system import FileSystem
 from signalpilot._server.models.files import FileDetailsResponse, FileInfo
 
@@ -38,7 +39,7 @@ class GatewayFileSystem(FileSystem):
         self._project_id = project_id
         self._branch = branch
         self._base = f"{self._gateway_url}/api/workspace-projects/{project_id}/branches/{branch}"
-        jwt = os.environ.get("SP_SESSION_JWT", "")
+        jwt = load_session_jwt()
         if jwt:
             self._headers = {"Authorization": f"Bearer {jwt}"}
         elif api_key:

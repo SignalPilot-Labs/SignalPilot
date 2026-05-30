@@ -15,6 +15,7 @@ from signalpilot._output.utils import uri_encode_component
 from signalpilot._schemas.notebook import NotebookV1
 from signalpilot._schemas.session import NotebookSessionV1
 from signalpilot._server.api.utils import parse_title
+from signalpilot._server.auth.session_token import load_session_jwt
 from signalpilot._server.tokens import SkewProtectionToken
 from signalpilot._session.notebook import read_css_file, read_html_head_file
 from signalpilot._utils.versions import is_editable
@@ -121,8 +122,9 @@ def build_mount_config_dict(
         "runtimeConfig": runtime_config,
         "gatewayUrl": os.environ.get("SP_GATEWAY_PUBLIC_URL", "")
         or os.environ.get("SP_GATEWAY_URL", ""),
-        "gatewayApiKey": os.environ.get("SP_SESSION_JWT", "")
-        or os.environ.get("SP_API_KEY", ""),
+        # Intentional: exposes the session JWT to the authenticated user's own
+        # browser via the gateway proxy. The JWT is scoped to this session only.
+        "gatewayApiKey": load_session_jwt() or os.environ.get("SP_API_KEY", ""),
         "rawFallback": raw_fallback,
     }
 

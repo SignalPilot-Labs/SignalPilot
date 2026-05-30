@@ -1,16 +1,21 @@
-"""Git operations for cloud project local repos."""
+"""Git operations for cloud project local repos.
+
+Remote operations (fetch, push, pull) use run_git_authed — auth header is passed
+per-invocation via -c http.extraHeader and is never persisted to .git/config.
+Local-only operations use run_git.
+"""
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from starlette.authentication import requires
 from starlette.responses import JSONResponse, Response
 
 from signalpilot import _loggers
+from signalpilot._server.files.git_auth import run_git, run_git_authed
 from signalpilot._server.router import APIRouter
 
 if TYPE_CHECKING:
@@ -18,6 +23,21 @@ if TYPE_CHECKING:
 
 LOGGER = _loggers.sp_logger()
 router = APIRouter()
+
+
+def _validate_repo_relative_paths(paths: list[str]) -> str | None:
+    """Return error message if any path is absolute or contains '..'; else None."""
+    for p in paths:
+        if not isinstance(p, str) or not p:
+            return f"Invalid path: {p!r}"
+        # Reject absolute on any OS (covers '/abs' and 'C:\abs')
+        if PurePosixPath(p).is_absolute() or PureWindowsPath(p).is_absolute():
+            return f"Absolute path not allowed: {p!r}"
+        # Reject any '..' segment (covers '../x', 'a/../b', './..')
+        parts = PurePosixPath(p.replace("\\", "/")).parts
+        if ".." in parts:
+            return f"Parent-directory traversal not allowed: {p!r}"
+    return None
 
 
 def _get_repo_dir(request: Request) -> Path | None:
@@ -29,17 +49,6 @@ def _get_repo_dir(request: Request) -> Path | None:
     return d if d.exists() else None
 
 
-def _run_git(repo: Path, *args: str) -> tuple[int, str, str]:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
 @router.post("/status")
 @requires("edit")
 async def git_status(*, request: Request) -> Response:
@@ -48,7 +57,7 @@ async def git_status(*, request: Request) -> Response:
     if not repo:
         return JSONResponse({"error": "No local repo"}, status_code=400)
 
-    code, out, err = _run_git(repo, "status", "--porcelain=v1")
+    code, out, err = run_git(repo, "status", "--porcelain=v1")
     if code != 0:
         return JSONResponse({"error": err}, status_code=500)
 
@@ -92,12 +101,15 @@ async def git_stage(*, request: Request) -> Response:
 
     body = await request.json()
     if body.get("all"):
-        code, _, err = _run_git(repo, "add", "-A")
+        code, _, err = run_git(repo, "add", "-A")
     else:
         paths = body.get("paths", [])
         if not paths:
             return JSONResponse({"error": "No paths"}, status_code=400)
-        code, _, err = _run_git(repo, "add", "--", *paths)
+        err_msg = _validate_repo_relative_paths(paths)
+        if err_msg:
+            return JSONResponse({"error": err_msg}, status_code=400)
+        code, _, err = run_git(repo, "add", "--", *paths)
 
     if code != 0:
         return JSONResponse({"error": err}, status_code=500)
@@ -114,12 +126,15 @@ async def git_unstage(*, request: Request) -> Response:
 
     body = await request.json()
     if body.get("all"):
-        code, _, err = _run_git(repo, "reset", "HEAD")
+        code, _, err = run_git(repo, "reset", "HEAD")
     else:
         paths = body.get("paths", [])
         if not paths:
             return JSONResponse({"error": "No paths"}, status_code=400)
-        code, _, err = _run_git(repo, "reset", "HEAD", "--", *paths)
+        err_msg = _validate_repo_relative_paths(paths)
+        if err_msg:
+            return JSONResponse({"error": err_msg}, status_code=400)
+        code, _, err = run_git(repo, "reset", "HEAD", "--", *paths)
 
     if code != 0:
         return JSONResponse({"error": err}, status_code=500)
@@ -139,7 +154,7 @@ async def git_commit(*, request: Request) -> Response:
     if not message:
         return JSONResponse({"error": "Commit message required"}, status_code=400)
 
-    code, out, err = _run_git(repo, "commit", "-m", message)
+    code, out, err = run_git(repo, "commit", "-m", message)
     if code != 0:
         return JSONResponse({"error": err.strip() or out.strip()}, status_code=500)
     return JSONResponse({"success": True, "output": out.strip()})
@@ -155,7 +170,6 @@ async def git_checkout(*, request: Request) -> Response:
 
     body = await request.json()
     branch = body.get("branch", "").strip()
-    create = body.get("create", False)
     if not branch:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
 
@@ -179,14 +193,15 @@ async def git_push_to_cloud(*, request: Request) -> Response:
     branch = request.headers.get("x-gateway-branch-id", "main")
     project_id = request.headers.get("x-gateway-project-id", "")
 
-    # Refresh remote URL (token may have changed)
+    # Refresh remote URL (token may have changed) — URL only, no creds embedded
     from signalpilot._server.files.project_sync import _get_clone_url_and_auth
 
     clone_url, _ = _get_clone_url_and_auth(project_id)
     if clone_url:
-        _run_git(repo, "remote", "set-url", "origin", clone_url)
+        run_git(repo, "remote", "set-url", "origin", clone_url)
 
-    code, out, err = _run_git(repo, "push", "origin", branch)
+    # Auth header passed per-invocation; never persisted into .git/config.
+    code, out, err = run_git_authed(repo, project_id, "push", "origin", branch)
     if code != 0:
         return JSONResponse({"error": err.strip() or out.strip()}, status_code=500)
 
@@ -205,13 +220,13 @@ async def git_log(*, request: Request) -> Response:
 
     # Get the remote HEAD sha for this branch (if it exists)
     remote_sha: str | None = None
-    code, out, _ = _run_git(repo, "rev-parse", f"origin/{branch}")
+    code, out, _ = run_git(repo, "rev-parse", f"origin/{branch}")
     if code == 0:
         remote_sha = out.strip()
 
     # Get log with full shas for comparison
-    code, out, err = _run_git(
-        repo, "log", f"--format=%H %s", "-20",
+    code, out, err = run_git(
+        repo, "log", "--format=%H %s", "-20",
     )
     if code != 0:
         return JSONResponse({"commits": []})
@@ -219,7 +234,7 @@ async def git_log(*, request: Request) -> Response:
     # Find which commits are ahead of remote
     local_only_shas: set[str] = set()
     if remote_sha:
-        rc, ahead_out, _ = _run_git(
+        rc, ahead_out, _ = run_git(
             repo, "log", "--format=%H", f"origin/{branch}..HEAD",
         )
         if rc == 0:
@@ -252,26 +267,25 @@ async def git_fetch(*, request: Request) -> Response:
     branch = request.headers.get("x-gateway-branch-id", "main")
     project_id = request.headers.get("x-gateway-project-id", "")
 
-    # Refresh remote URL if GitHub-linked (token may have expired)
+    # Refresh remote URL (token may have expired) — URL only, no creds embedded
     from signalpilot._server.files.project_sync import _get_clone_url_and_auth
 
-    # Refresh remote URL (token may have expired)
     clone_url, _ = _get_clone_url_and_auth(project_id)
     if clone_url:
-        _run_git(repo, "remote", "set-url", "origin", clone_url)
+        run_git(repo, "remote", "set-url", "origin", clone_url)
 
-    # Fetch from remote
+    # Fetch from remote (auth passed per-invocation, not persisted)
     has_remote = False
-    code, out, _ = _run_git(repo, "remote")
+    code, out, _ = run_git(repo, "remote")
     if out.strip():
-        code, _, _ = _run_git(repo, "fetch", "origin")
+        code, _, _ = run_git_authed(repo, project_id, "fetch", "origin")
         has_remote = code == 0
 
     # Calculate ahead/behind
     ahead = 0
     behind = 0
     if has_remote:
-        code, out, _ = _run_git(
+        code, out, _ = run_git(
             repo, "rev-list", "--left-right", "--count",
             f"HEAD...origin/{branch}",
         )
@@ -281,7 +295,7 @@ async def git_fetch(*, request: Request) -> Response:
             behind = int(parts[1])
 
     # Current branch
-    _, current_branch, _ = _run_git(repo, "branch", "--show-current")
+    _, current_branch, _ = run_git(repo, "branch", "--show-current")
 
     return JSONResponse({
         "branch": current_branch.strip(),
@@ -302,18 +316,18 @@ async def git_pull(*, request: Request) -> Response:
     branch = request.headers.get("x-gateway-branch-id", "main")
     project_id = request.headers.get("x-gateway-project-id", "")
 
-    # Refresh remote URL for GitHub projects
+    # Refresh remote URL for GitHub projects — URL only, no creds embedded
     from signalpilot._server.files.project_sync import _get_clone_url_and_auth
 
-    # Refresh remote URL (token may have expired)
     clone_url, _ = _get_clone_url_and_auth(project_id)
     if clone_url:
-        _run_git(repo, "remote", "set-url", "origin", clone_url)
+        run_git(repo, "remote", "set-url", "origin", clone_url)
 
-    code, out, err = _run_git(repo, "pull", "origin", branch)
+    # Auth header passed per-invocation; never persisted into .git/config.
+    code, out, err = run_git_authed(repo, project_id, "pull", "origin", branch)
     if code != 0:
         # Check for merge conflict
-        _, status_out, _ = _run_git(repo, "status", "--porcelain=v1")
+        _, status_out, _ = run_git(repo, "status", "--porcelain=v1")
         conflicts = [l[3:] for l in status_out.split("\n") if l.startswith("UU") or l.startswith("AA")]
         if conflicts:
             return JSONResponse({
@@ -386,11 +400,11 @@ async def list_local_branches(*, request: Request) -> Response:
     if not repo:
         return JSONResponse({"error": "No local repo"}, status_code=400)
 
-    code, out, _ = _run_git(repo, "branch", "--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)")
+    code, out, _ = run_git(repo, "branch", "--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)")
     if code != 0:
         return JSONResponse({"branches": []})
 
-    _, current, _ = _run_git(repo, "branch", "--show-current")
+    _, current, _ = run_git(repo, "branch", "--show-current")
     current = current.strip()
 
     branches = []
@@ -431,7 +445,7 @@ async def git_diff(*, request: Request) -> Response:
     if file_path:
         args.extend(["--", file_path])
 
-    code, stat_out, _ = _run_git(repo, *args)
+    code, stat_out, _ = run_git(repo, *args)
 
     # Also get the actual diff content
     detail_args = ["diff"]
@@ -440,7 +454,7 @@ async def git_diff(*, request: Request) -> Response:
     if file_path:
         detail_args.extend(["--", file_path])
 
-    _, diff_out, _ = _run_git(repo, *detail_args)
+    _, diff_out, _ = run_git(repo, *detail_args)
 
     return JSONResponse({
         "stat": stat_out.strip(),
@@ -460,18 +474,18 @@ async def git_info(*, request: Request) -> Response:
     branch = request.headers.get("x-gateway-branch-id", "main")
 
     # Current branch
-    _, current_branch, _ = _run_git(repo, "branch", "--show-current")
+    _, current_branch, _ = run_git(repo, "branch", "--show-current")
 
     # Last commit
-    _, last_commit, _ = _run_git(repo, "log", "-1", "--format=%h %s (%cr)")
+    _, last_commit, _ = run_git(repo, "log", "-1", "--format=%h %s (%cr)")
 
     # Ahead/behind (if remote exists)
     ahead = 0
     behind = 0
-    code, out, _ = _run_git(repo, "remote")
+    code, out, _ = run_git(repo, "remote")
     has_remote = bool(out.strip())
     if has_remote:
-        code, out, _ = _run_git(
+        code, out, _ = run_git(
             repo, "rev-list", "--left-right", "--count",
             f"HEAD...origin/{branch}",
         )
@@ -481,7 +495,7 @@ async def git_info(*, request: Request) -> Response:
             behind = int(parts[1])
 
     # File counts
-    _, status_out, _ = _run_git(repo, "status", "--porcelain=v1")
+    _, status_out, _ = run_git(repo, "status", "--porcelain=v1")
     staged_count = 0
     changed_count = 0
     untracked_count = 0

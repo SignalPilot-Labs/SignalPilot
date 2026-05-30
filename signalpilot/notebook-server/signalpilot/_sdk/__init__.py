@@ -6,6 +6,7 @@ from typing import Any
 
 from signalpilot._sdk._client import GatewayClient, _is_local_url
 from signalpilot._sdk._connection import Connection
+from signalpilot._server.auth.session_token import load_session_jwt
 
 _gw: GatewayClient | None = None
 
@@ -24,7 +25,7 @@ def init(
     from signalpilot._utils.localhost import fix_localhost_url
     global _gw
     url = fix_localhost_url(gateway_url or os.environ.get("SP_GATEWAY_URL") or "http://localhost:3300")
-    token = session_token or api_key or os.environ.get("SP_SESSION_JWT") or os.environ.get("SP_API_KEY")
+    token = session_token or api_key or load_session_jwt() or os.environ.get("SP_API_KEY")
     if not _is_local_url(url) and not token:
         raise ValueError(
             "API key required for remote gateway. "

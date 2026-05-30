@@ -16,12 +16,12 @@ from urllib.parse import urlparse
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from signalpilot._server.auth.session_token import load_session_jwt
 from signalpilot._server.router import APIRouter
 
 router = APIRouter()
 
 _GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
-_SESSION_JWT = os.environ.get("SP_SESSION_JWT", "")
 _API_KEY = os.environ.get("SP_API_KEY", "")
 
 _parsed = urlparse(_GATEWAY_URL)
@@ -55,8 +55,9 @@ def _gw_sync(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         "Content-Type": "application/json",
         "Connection": "keep-alive",
     }
-    if _SESSION_JWT:
-        headers["Authorization"] = f"Bearer {_SESSION_JWT}"
+    session_jwt = load_session_jwt()
+    if session_jwt:
+        headers["Authorization"] = f"Bearer {session_jwt}"
     elif _API_KEY:
         headers["Authorization"] = f"Bearer {_API_KEY}"
 

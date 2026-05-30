@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 
+from signalpilot._server.auth.session_token import load_session_jwt
 from signalpilot._server.files.project_sync import (
     _validate_branch,
     _validate_project_id,
@@ -16,6 +17,9 @@ _log = logging.getLogger("signalpilot.boot")
 
 
 def main() -> int:
+    # F-6: prime the JWT cache (idempotent if _server.start already imported;
+    # mandatory if project_sync_boot runs standalone).
+    load_session_jwt()
     logging.basicConfig(level=logging.INFO, format="[boot] %(message)s")
     project_id = os.environ.get("SP_PROJECT_ID", "").strip()
     branch = os.environ.get("SP_BRANCH", "main").strip() or "main"

@@ -3,10 +3,13 @@ Branch management via local git commands.
 
 All operations run against the local git clone.
 Branches are pushed to/deleted from the gateway bare repo via git push.
+
+Remote operations (fetch, push) use run_git_authed — auth header is passed
+per-invocation via -c http.extraHeader and is never persisted to .git/config.
+Local-only operations use run_git.
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +17,8 @@ from starlette.authentication import requires
 from starlette.responses import JSONResponse, Response
 
 from signalpilot import _loggers
+from signalpilot._server.files.git_auth import run_git, run_git_authed
+from signalpilot._server.files.project_sync import _validate_branch
 from signalpilot._server.router import APIRouter
 
 if TYPE_CHECKING:
@@ -32,17 +37,6 @@ def _get_repo(request: Request) -> Path | None:
     return d if (d / ".git").exists() else None
 
 
-def _run_git(repo: Path, *args: str) -> tuple[int, str, str]:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
 @router.post("/list")
 @requires("edit")
 async def list_branches(*, request: Request) -> Response:
@@ -51,17 +45,19 @@ async def list_branches(*, request: Request) -> Response:
     if not repo:
         return JSONResponse({"branches": []})
 
-    # Fetch latest from remote
-    _run_git(repo, "fetch", "origin")
+    project_id = request.headers.get("x-gateway-project-id", "")
 
-    code, out, _ = _run_git(
+    # Fetch latest from remote (authed, per-invocation — not persisted)
+    run_git_authed(repo, project_id, "fetch", "origin")
+
+    code, out, _ = run_git(
         repo, "branch", "-a",
         "--format=%(refname:short)\t%(objectname:short)\t%(creatordate:relative)\t%(creatordate:unix)",
     )
     if code != 0:
         return JSONResponse({"branches": []})
 
-    _, current, _ = _run_git(repo, "branch", "--show-current")
+    _, current, _ = run_git(repo, "branch", "--show-current")
     current = current.strip()
 
     seen = set()
@@ -103,7 +99,7 @@ async def list_branches(*, request: Request) -> Response:
 
 
 def _branch_exists_local(repo: Path, name: str) -> bool:
-    code, _, _ = _run_git(repo, "rev-parse", "--verify", f"refs/heads/{name}")
+    code, _, _ = run_git(repo, "rev-parse", "--verify", f"refs/heads/{name}")
     return code == 0
 
 
@@ -115,6 +111,8 @@ async def create_branch(*, request: Request) -> Response:
     if not repo:
         return JSONResponse({"error": "No local repo"}, status_code=400)
 
+    project_id = request.headers.get("x-gateway-project-id", "")
+
     body = await request.json()
     name = body.get("name", "").strip()
     from_branch = body.get("source_branch") or body.get("from_branch") or ""
@@ -122,21 +120,28 @@ async def create_branch(*, request: Request) -> Response:
     if not name:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
 
+    try:
+        _validate_branch(name)
+        if from_branch:
+            _validate_branch(from_branch)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
     # Discard local changes before creating branch
-    _run_git(repo, "checkout", "--force", "--", ".")
-    _run_git(repo, "clean", "-fd")
+    run_git(repo, "checkout", "--force", "--", ".")
+    run_git(repo, "clean", "-fd")
 
     # Create from source branch if specified
     if from_branch:
-        code, _, err = _run_git(repo, "checkout", "-b", name, from_branch)
+        code, _, err = run_git(repo, "checkout", "-b", name, from_branch)
     else:
-        code, _, err = _run_git(repo, "checkout", "-b", name)
+        code, _, err = run_git(repo, "checkout", "-b", name)
 
     if code != 0:
         return JSONResponse({"error": err.strip()}, status_code=500)
 
-    # Push to remote so it exists on the gateway
-    _run_git(repo, "push", "-u", "origin", name)
+    # Push to remote so it exists on the gateway (authed, not persisted)
+    run_git_authed(repo, project_id, "push", "-u", "origin", name)
 
     return JSONResponse({"name": name, "created": True})
 
@@ -149,21 +154,28 @@ async def delete_branch(*, request: Request) -> Response:
     if not repo:
         return JSONResponse({"error": "No local repo"}, status_code=400)
 
+    project_id = request.headers.get("x-gateway-project-id", "")
+
     body = await request.json()
     name = body.get("name", "").strip()
     if not name:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
 
+    try:
+        _validate_branch(name)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
     # Don't delete current branch
-    _, current, _ = _run_git(repo, "branch", "--show-current")
+    _, current, _ = run_git(repo, "branch", "--show-current")
     if name == current.strip():
         return JSONResponse({"error": "Cannot delete current branch"}, status_code=400)
 
     # Delete local
-    _run_git(repo, "branch", "-D", name)
+    run_git(repo, "branch", "-D", name)
 
-    # Delete remote
-    _run_git(repo, "push", "origin", "--delete", name)
+    # Delete remote (authed, not persisted)
+    run_git_authed(repo, project_id, "push", "origin", "--delete", name)
 
     return JSONResponse({"name": name, "deleted": True})
 
@@ -176,7 +188,7 @@ async def get_current_branch(*, request: Request) -> Response:
     if not repo:
         return JSONResponse({"active_branch": "main"})
 
-    _, out, _ = _run_git(repo, "branch", "--show-current")
+    _, out, _ = run_git(repo, "branch", "--show-current")
     return JSONResponse({"active_branch": out.strip() or "main"})
 
 
@@ -192,6 +204,11 @@ async def switch_branch(*, request: Request) -> Response:
     branch = body.get("branch", "").strip()
     if not branch:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
+
+    try:
+        _validate_branch(branch)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     from signalpilot._server.files.project_sync import checkout_branch
 

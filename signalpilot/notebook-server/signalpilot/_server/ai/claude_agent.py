@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from signalpilot import _loggers
+from signalpilot._server.auth.session_token import load_session_jwt
 
 if TYPE_CHECKING:
     from signalpilot._server.ai.tools.base import ToolContext
@@ -217,7 +218,7 @@ def _get_mcp_servers_config() -> dict[str, Any]:
     from signalpilot._utils.localhost import fix_localhost_url
     servers: dict[str, Any] = {}
     sp_gateway_url = fix_localhost_url(os.environ.get("SP_GATEWAY_URL", "http://localhost:3300/mcp"))
-    sp_session_jwt = os.environ.get("SP_SESSION_JWT", "")
+    sp_session_jwt = load_session_jwt()
     sp_api_key = os.environ.get("SP_API_KEY", "")
     auth_token = sp_session_jwt or sp_api_key
     if auth_token:

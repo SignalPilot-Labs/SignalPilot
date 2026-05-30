@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..config.k8s import _LOCAL_GATEWAY_URL_DEFAULT, get_k8s_settings
 from ..models.workspace import (
     WorkspaceProjectCreate,
     WorkspaceProjectInfo,
     WorkspaceProjectUpdate,
 )
+from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .deps import ProjectsGate, StoreD
 
@@ -89,9 +91,19 @@ async def get_clone_url(project_id: str, store: StoreD, request: Request):
         if bearer.startswith("Bearer "):
             token = bearer[7:].strip()
 
-    scheme = request.url.scheme
-    host = request.headers.get("host", "localhost:3300")
-    base_url = f"{scheme}://{host}/git/{project_id}.git"
+    # R11-S-1: never reflect the inbound Host header in cloud mode — a spoofed
+    # Host would steer the pod's authenticated git clone to an attacker origin.
+    k8s = get_k8s_settings()
+    configured = (k8s.sp_public_gateway_url or "").rstrip("/")
+    if is_cloud_mode():
+        base_url = f"{configured}/git/{project_id}.git"
+    elif configured and configured != _LOCAL_GATEWAY_URL_DEFAULT:
+        base_url = f"{configured}/git/{project_id}.git"
+    else:
+        # Local-mode dev fallback only: derive from Host so localhost:<random> works.
+        scheme = request.url.scheme
+        host = request.headers.get("host", "localhost:3300")
+        base_url = f"{scheme}://{host}/git/{project_id}.git"
 
     return {
         "clone_url": base_url,

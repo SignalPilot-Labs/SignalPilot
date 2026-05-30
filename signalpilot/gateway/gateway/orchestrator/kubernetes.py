@@ -157,7 +157,9 @@ def _pod_manifest(
                     "ports": [{"containerPort": 2718}],
                     "env": env,
                     "resources": {
-                        "requests": {"memory": "64Mi", "cpu": "100m"},
+                        # Limit:request ratio must stay <= 4 (namespace LimitRange
+                        # maxLimitRequestRatio). 512/128 = 4, 1000m/250m = 4.
+                        "requests": {"memory": "128Mi", "cpu": "250m"},
                         "limits": {"memory": "512Mi", "cpu": "1"},
                     },
                     "securityContext": {

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
+import uuid
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from gateway.api.connections._refresh import _auto_schema_refresh
@@ -12,9 +15,35 @@ from gateway.api.deps import StoreD
 from gateway.auth import OrgAdmin
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
-from gateway.models import ConnectionCreate, ConnectionUpdate
+from gateway.models import AuditEntry, ConnectionCreate, ConnectionUpdate
 from gateway.security.scope_guard import RequireScope
 from gateway.store import CredentialEncryptionError
+
+logger = logging.getLogger(__name__)
+
+# When adding a new secret-bearing field to ConnectionUpdate, also add
+# the field name here so connection_update audit entries correctly flag
+# credential rotation. The set is intentionally explicit (not derived
+# from the model) to make the audit-policy decision visible at the
+# call site.
+_SECRET_FIELDS: frozenset[str] = frozenset({
+    "connection_string",
+    "password",
+    "credentials_json",
+    "access_token",
+    "private_key",
+    "private_key_passphrase",
+    "ssh_tunnel",
+})
+
+
+def _extract_request_meta(request: Request) -> tuple[str | None, str | None]:
+    """Extract client_ip and user_agent from the incoming HTTP request."""
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else None
+    )
+    user_agent = request.headers.get("user-agent")
+    return client_ip, user_agent
 
 
 @router.get("/connections", dependencies=[RequireScope("read")])
@@ -52,14 +81,30 @@ async def get_connection_detail(name: str, store: StoreD):
 
 
 @router.delete("/connections/{name}", status_code=204, dependencies=[RequireScope("write")])
-async def remove_connection(name: str, store: StoreD, _role: OrgAdmin):
+async def remove_connection(name: str, store: StoreD, _role: OrgAdmin, request: Request):
     if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
 
+    client_ip, user_agent = _extract_request_meta(request)
+    # Audit-DB failure must not block the completed deletion; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="connection_delete",
+                metadata={"name": name},
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for connection_delete name=%s", name)
+
 
 @router.put("/connections/{name}", dependencies=[RequireScope("write")])
-async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _role: OrgAdmin):
+async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _role: OrgAdmin, request: Request):
     """Update an existing connection. Only provided fields are changed."""
     existing = await store.get_connection(name)
     if not existing:
@@ -82,6 +127,7 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
     old_conn_str = await store.get_connection_string(name)
+    credentials_changed = bool(_SECRET_FIELDS & update_data.keys())
 
     try:
         result = await store.update_connection(name, update)
@@ -96,6 +142,22 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
     schema_cache.invalidate(name)
     if old_conn_str:
         await pool_manager.close_pool(old_conn_str)
+
+    client_ip, user_agent = _extract_request_meta(request)
+    # Audit-DB failure must not block the completed update; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="connection_update",
+                metadata={"name": name, "credentials_changed": credentials_changed},
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for connection_update name=%s", name)
 
     return result
 

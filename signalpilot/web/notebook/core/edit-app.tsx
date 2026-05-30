@@ -3,7 +3,7 @@ import { Tooltip } from "radix-ui";
 import { apiCall } from "@/core/network/api-call";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef } from "react";
-import { NotStartedConnectionAlert } from "@/components/editor/alerts/connecting-alert";
+import { NotebookLoadingState } from "@/components/editor/alerts/connecting-alert";
 import { Controls } from "@/components/editor/controls/Controls";
 import { AppHeader } from "@/components/editor/header/app-header";
 import { FilenameForm } from "@/components/editor/header/filename-form";
@@ -357,13 +357,6 @@ export const EditApp: React.FC<AppProps> = ({
   );
 
   const renderContent = () => {
-    console.log("[renderContent]", {
-      activeTab: activeTab ? { id: activeTab.id, type: activeTab.type, path: activeTab.path?.slice(-30), sessionId: activeTab.sessionId } : null,
-      hasCells,
-      connection: connection.state,
-      filename: filename?.slice(-30),
-    });
-
     // Active tab is a raw file — show raw file editor
     if (activeTab?.type === "raw") {
       return <RawFileEditor filePath={activeTab.path} />;
@@ -410,7 +403,7 @@ export const EditApp: React.FC<AppProps> = ({
             {editableCellsArray}
           </CellsRenderer>
         )}
-        {!hasCells && <NotStartedConnectionAlert />}
+        {!hasCells && <NotebookLoadingState />}
       </>
     );
   };

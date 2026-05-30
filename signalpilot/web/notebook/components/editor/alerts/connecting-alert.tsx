@@ -88,3 +88,33 @@ export const NotStartedConnectionAlert: React.FC = () => {
 
   return null;
 };
+
+/**
+ * Full-area loader shown in the notebook view while we have no cells yet.
+ *
+ * On a cold load the kernel can take several seconds to start and stream cells.
+ * During that window the connection is CONNECTING or OPEN (not NOT_STARTED), so
+ * NotStartedConnectionAlert renders nothing — leaving a blank screen. This fills
+ * that gap with a visible spinner, and still surfaces the reconnect prompt when
+ * the runtime genuinely hasn't started or the socket closed.
+ */
+export const NotebookLoadingState: React.FC = () => {
+  const isNotStarted = useAtomValue(isNotStartedAtom);
+  const isClosed = useAtomValue(isClosedAtom);
+
+  // Genuine not-connected / closed states keep their reconnect prompts.
+  if (isNotStarted) {
+    return <NotStartedConnectionAlert />;
+  }
+  if (isClosed) {
+    return <ConnectingAlert />;
+  }
+
+  // Connecting or open-but-no-cells-yet: kernel is starting / streaming cells.
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+      <Spinner className="h-6 w-6" />
+      <p className="text-sm tracking-wide">Loading notebook…</p>
+    </div>
+  );
+};

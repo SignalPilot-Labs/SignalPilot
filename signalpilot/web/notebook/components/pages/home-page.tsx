@@ -12,7 +12,8 @@ import {
   SearchIcon,
 } from "lucide-react";
 import type React from "react";
-import { Suspense, use, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, use, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { SpEmbedConfigContext } from "@/embed/SpEmbedConfigContext";
 import {
   type NodeApi,
   type NodeRendererProps,
@@ -89,6 +90,10 @@ import { Input } from "../ui/input";
 
 const HomePage: React.FC = () => {
   const [nonce, setNonce] = useState(0);
+  // Hide the notebook's own settings/back-to-home buttons when embedded in the
+  // SignalPilot app (/projects) — the app provides its own header/nav. They
+  // still render in the standalone notebook view.
+  const isEmbedded = useContext(SpEmbedConfigContext) !== null;
 
   const recentsResponse = useAsyncData(
     () => apiCall<RecentFilesResponse>("/home/recent_files", {}),
@@ -132,12 +137,14 @@ const HomePage: React.FC = () => {
           setRunningNotebooks: runningResponse.setData,
         }}
       >
-        <div className="absolute top-3 right-5 flex gap-3 z-50">
-          <ConfigButton showAppConfig={false} />
-          <ShutdownButton
-            description={`This will shutdown the notebook server and terminate all running notebooks (${running.size}). You'll lose all data that's in memory.`}
-          />
-        </div>
+        {!isEmbedded && (
+          <div className="absolute top-3 right-5 flex gap-3 z-50">
+            <ConfigButton showAppConfig={false} />
+            <ShutdownButton
+              description={`This will shutdown the notebook server and terminate all running notebooks (${running.size}). You'll lose all data that's in memory.`}
+            />
+          </div>
+        )}
         <div className="flex flex-col gap-6 max-w-6xl container pt-5 pb-20 z-10">
           <div className="flex items-center gap-3 mb-2">
             <img src="logo-192.png" alt="SignalPilot logo" className="w-8 h-8" />

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from starlette.authentication import requires
@@ -23,6 +23,21 @@ if TYPE_CHECKING:
 
 LOGGER = _loggers.sp_logger()
 router = APIRouter()
+
+
+def _validate_repo_relative_paths(paths: list[str]) -> str | None:
+    """Return error message if any path is absolute or contains '..'; else None."""
+    for p in paths:
+        if not isinstance(p, str) or not p:
+            return f"Invalid path: {p!r}"
+        # Reject absolute on any OS (covers '/abs' and 'C:\abs')
+        if PurePosixPath(p).is_absolute() or PureWindowsPath(p).is_absolute():
+            return f"Absolute path not allowed: {p!r}"
+        # Reject any '..' segment (covers '../x', 'a/../b', './..')
+        parts = PurePosixPath(p.replace("\\", "/")).parts
+        if ".." in parts:
+            return f"Parent-directory traversal not allowed: {p!r}"
+    return None
 
 
 def _get_repo_dir(request: Request) -> Path | None:
@@ -91,6 +106,9 @@ async def git_stage(*, request: Request) -> Response:
         paths = body.get("paths", [])
         if not paths:
             return JSONResponse({"error": "No paths"}, status_code=400)
+        err_msg = _validate_repo_relative_paths(paths)
+        if err_msg:
+            return JSONResponse({"error": err_msg}, status_code=400)
         code, _, err = run_git(repo, "add", "--", *paths)
 
     if code != 0:
@@ -113,6 +131,9 @@ async def git_unstage(*, request: Request) -> Response:
         paths = body.get("paths", [])
         if not paths:
             return JSONResponse({"error": "No paths"}, status_code=400)
+        err_msg = _validate_repo_relative_paths(paths)
+        if err_msg:
+            return JSONResponse({"error": err_msg}, status_code=400)
         code, _, err = run_git(repo, "reset", "HEAD", "--", *paths)
 
     if code != 0:

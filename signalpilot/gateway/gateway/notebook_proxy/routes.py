@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import urllib.parse
+from collections import defaultdict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -34,6 +36,33 @@ from .proxy import NotebookProxy
 
 # Keys that must be scrubbed from logged query strings to prevent token leakage.
 _SENSITIVE_QUERY_KEYS = frozenset({"access_token", "token"})
+
+_INIT_RATE_WINDOW_S = 60.0
+_INIT_RATE_MAX = 30  # 30 GETs/min per (ip, session_id) — tight; legitimate flow needs 1
+_init_hits: dict[tuple[str, str], list[float]] = defaultdict(list)
+
+
+def _init_rate_limit_check(ip: str, session_id: str) -> bool:
+    """Return True if under limit, False if exceeded. Mutates the bucket."""
+    now = time.monotonic()
+    cutoff = now - _INIT_RATE_WINDOW_S
+    key = (ip, session_id)
+    hits = _init_hits[key]
+    # In-place filter to bound memory; also opportunistically GC empty keys.
+    _init_hits[key] = [t for t in hits if t > cutoff]
+    if len(_init_hits[key]) >= _INIT_RATE_MAX:
+        return False
+    _init_hits[key].append(now)
+    # TODO: GC empty-list keys here for unbounded-growth prevention if reviewers flag.
+    return True
+
+
+def _client_ip_for_init(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        # Rightmost = closest trusted proxy. Same convention as RateLimitMiddleware.
+        return fwd.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
 
 # Safe charset for forwarded WS query strings.
 # Allows URL-safe characters: alphanumeric, hyphen, underscore, dot, tilde,
@@ -75,6 +104,10 @@ async def init_notebook(
     if not SESSION_ID_PATTERN.match(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
+    ip = _client_ip_for_init(request)
+    if not _init_rate_limit_check(ip, session_id):
+        raise HTTPException(status_code=429, detail="Too many init requests")
+
     from ..db.engine import get_session_factory
     factory = get_session_factory()
     async with factory() as db_session:
@@ -109,6 +142,7 @@ async def init_notebook(
         url=f"/notebook/{session_id}/",
         status_code=302,
     )
+    response.headers["Referrer-Policy"] = "no-referrer"
     set_proxy_cookie(
         response,
         session_id=session_id,

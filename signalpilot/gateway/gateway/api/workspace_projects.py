@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..config.k8s import _LOCAL_GATEWAY_URL_DEFAULT, get_k8s_settings
 from ..models.workspace import (
     WorkspaceProjectCreate,
     WorkspaceProjectInfo,
     WorkspaceProjectUpdate,
 )
+from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
@@ -87,9 +89,22 @@ async def get_clone_url(project_id: str, store: StoreD, request: Request):
         if bearer.startswith("Bearer "):
             token = bearer[7:].strip()
 
-    scheme = request.url.scheme
-    host = request.headers.get("host", "localhost:3300")
-    base_url = f"{scheme}://{host}/git/{project_id}.git"
+    k8s = get_k8s_settings()
+    configured = (k8s.sp_public_gateway_url or "").rstrip("/")
+
+    if is_cloud_mode():
+        # Cloud mode: pydantic validator guarantees this is set to a real public URL.
+        # NEVER trust inbound Host header here.
+        base_url = f"{configured}/git/{project_id}.git"
+    elif configured and configured != _LOCAL_GATEWAY_URL_DEFAULT:
+        # Local mode but operator set SP_PUBLIC_GATEWAY_URL explicitly — honor it.
+        base_url = f"{configured}/git/{project_id}.git"
+    else:
+        # Local-mode dev fallback only: derive from inbound Host so localhost:<random>
+        # works. Safe because local mode has no remote untrusted ingress.
+        scheme = request.url.scheme
+        host = request.headers.get("host", "localhost:3300")
+        base_url = f"{scheme}://{host}/git/{project_id}.git"
 
     return {
         "clone_url": base_url,

@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse, Response
 
 from signalpilot import _loggers
 from signalpilot._server.files.git_auth import run_git, run_git_authed
+from signalpilot._server.files.project_sync import _validate_branch
 from signalpilot._server.router import APIRouter
 
 if TYPE_CHECKING:
@@ -119,6 +120,13 @@ async def create_branch(*, request: Request) -> Response:
     if not name:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
 
+    try:
+        _validate_branch(name)
+        if from_branch:
+            _validate_branch(from_branch)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
     # Discard local changes before creating branch
     run_git(repo, "checkout", "--force", "--", ".")
     run_git(repo, "clean", "-fd")
@@ -152,6 +160,11 @@ async def delete_branch(*, request: Request) -> Response:
     name = body.get("name", "").strip()
     if not name:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
+
+    try:
+        _validate_branch(name)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     # Don't delete current branch
     _, current, _ = run_git(repo, "branch", "--show-current")
@@ -191,6 +204,11 @@ async def switch_branch(*, request: Request) -> Response:
     branch = body.get("branch", "").strip()
     if not branch:
         return JSONResponse({"error": "Branch name required"}, status_code=400)
+
+    try:
+        _validate_branch(branch)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     from signalpilot._server.files.project_sync import checkout_branch
 

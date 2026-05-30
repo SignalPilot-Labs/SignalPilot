@@ -32,7 +32,10 @@ async def get_conversation(conversation_id: str, store: StoreD):
     conv = await store.get_conversation(conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    messages, _ = await store.list_messages(conversation_id, limit=200)
+    try:
+        messages, _ = await store.list_messages(conversation_id, limit=200)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return {"conversation": conv, "messages": messages}
 
 
@@ -59,5 +62,8 @@ async def list_messages(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    messages, total = await store.list_messages(conversation_id, limit=limit, offset=offset)
+    try:
+        messages, total = await store.list_messages(conversation_id, limit=limit, offset=offset)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return {"messages": messages, "total": total}

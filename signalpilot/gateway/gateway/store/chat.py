@@ -107,8 +107,11 @@ async def append_message(
     content: str,
     metadata_json: dict | None = None,
 ) -> ChatMessageInfo:
+    if user_id is None:
+        raise ValueError("user_id required")
     conv_q = select(GatewayChatConversation).where(
         GatewayChatConversation.org_id == org_id,
+        GatewayChatConversation.user_id == user_id,
         GatewayChatConversation.id == conversation_id,
     )
     conv = (await session.execute(conv_q)).scalar_one_or_none()
@@ -140,10 +143,24 @@ async def list_messages(
     session: AsyncSession,
     *,
     org_id: str,
+    user_id: str,
     conversation_id: str,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[ChatMessageInfo], int]:
+    if user_id is None:
+        raise ValueError("user_id required")
+    conv_exists = (
+        await session.execute(
+            select(GatewayChatConversation).where(
+                GatewayChatConversation.id == conversation_id,
+                GatewayChatConversation.org_id == org_id,
+                GatewayChatConversation.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if conv_exists is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
     base = select(GatewayChatMessage).where(
         GatewayChatMessage.org_id == org_id,
         GatewayChatMessage.conversation_id == conversation_id,

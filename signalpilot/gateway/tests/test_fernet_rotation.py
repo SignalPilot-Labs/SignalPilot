@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 
 def _reset_multifernet_cache(monkeypatch):
@@ -88,7 +88,7 @@ class TestMultiFernetMigrationFlag:
         key_b = Fernet.generate_key()
 
         _setup_key(monkeypatch, key_b, old_keys=[key_a])
-        from gateway.store.crypto import _encrypt, _decrypt_with_migration
+        from gateway.store.crypto import _decrypt_with_migration, _encrypt
         ciphertext = _encrypt("fresh-value")
         plaintext, needs_migration = _decrypt_with_migration(ciphertext)
         assert plaintext == "fresh-value"
@@ -188,8 +188,9 @@ class TestHealthCheckPrimaryFirstInvariant:
         monkeypatch.delenv("SP_ENCRYPTION_KEY_OLD", raising=False)
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
 
-        import gateway.store.crypto as crypto
         from cryptography.fernet import MultiFernet
+
+        import gateway.store.crypto as crypto
 
         # Inject bad order: old key is first (index 0 = encryptor)
         bad_mf = MultiFernet([Fernet(key_old), Fernet(key_primary)])
@@ -234,5 +235,5 @@ class TestUserSecretsC1Routing:
         assert recovered == "sk-test-anthropic-key-1234567890"
 
         # Verify old key alone cannot decrypt the new ciphertext
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidToken):
             Fernet(key_a).decrypt(new_ciphertext)

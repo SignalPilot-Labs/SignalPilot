@@ -122,7 +122,6 @@ async def run_notebook(
             import os
 
             from gateway.auth.notebook_jwt import mint_session_jwt
-            from gateway.config.k8s import get_k8s_settings
 
             h = hashlib.sha256(f"{org_id}:{user_id}".encode()).hexdigest()[:12]
             pod_name = f"nb-{h}"

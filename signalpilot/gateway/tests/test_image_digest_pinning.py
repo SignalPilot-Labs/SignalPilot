@@ -89,7 +89,6 @@ class TestImageDigestPinningLocalMode:
 
     def test_local_no_mode_plain_tag_accepted(self):
         """Local mode (no SP_DEPLOYMENT_MODE) + plain tag → loads."""
-        env = {"SP_NOTEBOOK_IMAGE": "signalpilot-notebook:dev"}
         # Ensure SP_DEPLOYMENT_MODE is not set
         import gateway.config.k8s as k8s_mod
         k8s_mod.get_k8s_settings.cache_clear()

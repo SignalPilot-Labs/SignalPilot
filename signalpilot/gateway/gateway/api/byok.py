@@ -330,6 +330,26 @@ async def validate_byok_key(
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
+        metadata = {
+            "key_id": key_id,
+            "provider_type": "unknown",
+            "result": "error",
+            "reason": "key_not_found",
+        }
+        # Audit-DB failure must not block the error response; best-effort observability.
+        try:
+            await store.append_audit(
+                AuditEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    event_type="byok_key_validate",
+                    metadata=metadata,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to append audit log for byok_key_validate key_id=%s", key_id)
         raise HTTPException(status_code=404, detail="Key not found")
 
     result_status = "success"

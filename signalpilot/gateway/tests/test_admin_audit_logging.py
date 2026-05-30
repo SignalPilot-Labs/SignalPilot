@@ -434,6 +434,51 @@ class TestBYOKAudit:
         assert "key_alias" not in entry.metadata
 
     @pytest.mark.asyncio
+    async def test_validate_byok_key_unknown_id_emits_audit_row(self):
+        """POST to unknown key_id must 404 AND emit one audit row with key_not_found reason."""
+        from fastapi import HTTPException
+
+        from gateway.api.byok import validate_byok_key
+
+        store = _make_store()
+        request = _make_request()
+        key_id = str(uuid.uuid4())
+
+        db = AsyncMock()
+        key_result = MagicMock()
+        key_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=key_result)
+
+        import gateway.store.byok_state as byok_state
+
+        original_provider = byok_state._byok_provider
+        byok_state._byok_provider = MagicMock()
+
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await validate_byok_key(
+                    key_id=key_id,
+                    db=db,
+                    _user_id="test-user",
+                    org_id="test-org",
+                    _role=None,
+                    store=store,
+                    request=request,
+                )
+        finally:
+            byok_state._byok_provider = original_provider
+
+        assert exc_info.value.status_code == 404
+        store.append_audit.assert_called_once()
+        entry: AuditEntry = store.append_audit.call_args[0][0]
+        assert entry.event_type == "byok_key_validate"
+        assert entry.metadata["result"] == "error"
+        assert entry.metadata["reason"] == "key_not_found"
+        assert entry.metadata["provider_type"] == "unknown"
+        assert entry.metadata["key_id"] == key_id
+        assert "key_alias" not in entry.metadata
+
+    @pytest.mark.asyncio
     async def test_byok_validate_success_writes_audit_with_success(self):
         """Happy-path validation must produce audit row with result=success."""
         from gateway.api.byok import BYOK_HEALTH_CHECK_PLAINTEXT, validate_byok_key

@@ -21,8 +21,10 @@ def main() -> int:
     branch = os.environ.get("SP_BRANCH", "main").strip() or "main"
 
     if not project_id:
-        _log.error("SP_PROJECT_ID is required at pod boot")
-        return 1
+        # No project bound (scratch session). Skip the git clone and start with
+        # an empty /workspace — the user can create or open a project later.
+        _log.info("No SP_PROJECT_ID — starting scratch session with empty workspace")
+        return 0
 
     try:
         _validate_project_id(project_id)

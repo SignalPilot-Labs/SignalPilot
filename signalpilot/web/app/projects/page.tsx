@@ -129,6 +129,11 @@ export default function ProjectsPage() {
 
     let cancelled = false;
 
+    // Show the loading state (not the "Open IDE" landing) while we check for an
+    // existing session. Without this, a transient "no-session" set on an earlier
+    // render can flash the landing before the session check resolves.
+    setState((s) => (s === "booting" || s === "ready" ? s : "loading"));
+
     async function init() {
       let apiKey: string | undefined;
       if (!IS_CLOUD_MODE) {

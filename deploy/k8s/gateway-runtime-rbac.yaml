@@ -1,0 +1,62 @@
+# gateway-runtime-rbac.yaml — least-privilege EKS RBAC for the gateway running
+# on EC2 (authenticating to the cluster via its IAM role -> EKS access entry).
+#
+# This REPLACES the AmazonEKSClusterAdminPolicy that was granted during bring-up.
+# The EC2 role's EKS access entry is mapped to the Kubernetes group
+# "signalpilot-gateway-ec2" (no cluster-access-policy), and this ClusterRole is
+# bound to that group. Result: the gateway can manage notebook namespaces/pods
+# but CANNOT touch nodes, escalate via cluster RBAC, or destroy the cluster.
+#
+# Apply:  kubectl apply -f deploy/k8s/gateway-runtime-rbac.yaml
+# Map:    aws eks update-access-entry --cluster-name signalpilot \
+#           --principal-arn <ec2-role-arn> --kubernetes-groups signalpilot-gateway-ec2
+#         aws eks disassociate-access-policy --cluster-name signalpilot \
+#           --principal-arn <ec2-role-arn> \
+#           --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: signalpilot-gateway-runtime
+  labels:
+    signalpilot.ai/managed-by: gateway
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "resourcequotas", "limitranges"]
+    verbs: ["create", "get", "list", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/status"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "delete", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "list", "delete", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "get", "list", "patch"]
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: signalpilot-gateway-runtime-binding
+  labels:
+    signalpilot.ai/managed-by: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-runtime
+subjects:
+  - kind: Group
+    name: signalpilot-gateway-ec2
+    apiGroup: rbac.authorization.k8s.io

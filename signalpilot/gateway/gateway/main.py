@@ -312,7 +312,7 @@ async def lifespan(app: FastAPI):
                     for s in stale:
                         logger.info("Cleaning up stale notebook session %s (pod=%s)", s.id, s.pod_name)
                         if s.pod_name:
-                            await orch.delete_pod(s.pod_name)
+                            await orch.delete_pod(s.pod_name, org_id=s.org_id or "")
                         await ns.mark_stopped(session, session_id=s.id)
             except Exception as e:
                 logger.warning("Notebook cleanup loop error: %s", e)

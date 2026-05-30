@@ -157,8 +157,8 @@ def _pod_manifest(
                     "ports": [{"containerPort": 2718}],
                     "env": env,
                     "resources": {
-                        "requests": {"memory": "512Mi", "cpu": "500m"},
-                        "limits": {"memory": "2Gi", "cpu": "2"},
+                        "requests": {"memory": "64Mi", "cpu": "100m"},
+                        "limits": {"memory": "512Mi", "cpu": "1"},
                     },
                     "securityContext": {
                         "allowPrivilegeEscalation": False,

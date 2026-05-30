@@ -339,6 +339,7 @@ class TestRotateEndpoint:
         store = MagicMock()
         store.session = AsyncMock()
         store.session.commit = AsyncMock()
+        store.append_audit = AsyncMock()
         return store
 
     @pytest.mark.asyncio
@@ -361,6 +362,8 @@ class TestRotateEndpoint:
                         body=BYOKRotateRequest(new_key_id="key-new"),
                         store=store,
                         org_id="org1",
+                        _role=None,
+                        request=MagicMock(),
                     )
 
         assert response.rotated == 2
@@ -386,6 +389,8 @@ class TestRotateEndpoint:
                         body=BYOKRotateRequest(new_key_id="key-new"),
                         store=store,
                         org_id="org1",
+                        _role=None,
+                        request=MagicMock(),
                     )
 
         assert exc_info.value.status_code == 404
@@ -411,6 +416,8 @@ class TestRotateEndpoint:
                         body=BYOKRotateRequest(new_key_id="key-missing"),
                         store=store,
                         org_id="org1",
+                        _role=None,
+                        request=MagicMock(),
                     )
 
         assert exc_info.value.status_code == 404
@@ -433,6 +440,8 @@ class TestRotateEndpoint:
                         body=BYOKRotateRequest(new_key_id="key-same"),
                         store=store,
                         org_id="org1",
+                        _role=None,
+                        request=MagicMock(),
                     )
 
         assert exc_info.value.status_code == 400
@@ -454,6 +463,8 @@ class TestRotateEndpoint:
                     body=BYOKRotateRequest(new_key_id="key-new"),
                     store=store,
                     org_id="org1",
+                    _role=None,
+                    request=MagicMock(),
                 )
 
         assert exc_info.value.status_code == 503
@@ -478,6 +489,8 @@ class TestRotateEndpoint:
                         body=BYOKRotateRequest(new_key_id="key-new"),
                         store=store,
                         org_id="org1",
+                        _role=None,
+                        request=MagicMock(),
                     )
 
         assert old_key.status == "inactive"
@@ -505,6 +518,8 @@ class TestRotateEndpoint:
                         body=BYOKRotateRequest(new_key_id="key-new"),
                         store=store,
                         org_id="org1",
+                        _role=None,
+                        request=MagicMock(),
                     )
 
         assert old_key.status == "rotating"
@@ -533,6 +548,8 @@ class TestRotateEndpoint:
                             body=BYOKRotateRequest(new_key_id="key-new"),
                             store=store,
                             org_id="org1",
+                            _role=None,
+                            request=MagicMock(),
                         )
 
         assert old_key.status == "active"
@@ -557,7 +574,7 @@ class TestMigrationStatusEndpoint:
         from gateway.api.byok import get_migration_status
 
         db = self._make_db([(5, "managed")])
-        response = await get_migration_status(db=db, _user_id="user1", org_id="org1")
+        response = await get_migration_status(db=db, _user_id="user1", org_id="org1", _role=None)
 
         assert response.total == 5
         assert response.managed == 5
@@ -570,7 +587,7 @@ class TestMigrationStatusEndpoint:
         from gateway.api.byok import get_migration_status
 
         db = self._make_db([(3, "byok")])
-        response = await get_migration_status(db=db, _user_id="user1", org_id="org1")
+        response = await get_migration_status(db=db, _user_id="user1", org_id="org1", _role=None)
 
         assert response.total == 3
         assert response.byok == 3
@@ -583,7 +600,7 @@ class TestMigrationStatusEndpoint:
         from gateway.api.byok import get_migration_status
 
         db = self._make_db([(2, "byok"), (4, "managed")])
-        response = await get_migration_status(db=db, _user_id="user1", org_id="org1")
+        response = await get_migration_status(db=db, _user_id="user1", org_id="org1", _role=None)
 
         assert response.total == 6
         assert response.byok == 2
@@ -596,7 +613,7 @@ class TestMigrationStatusEndpoint:
         from gateway.api.byok import get_migration_status
 
         db = self._make_db([])
-        response = await get_migration_status(db=db, _user_id="user1", org_id="org1")
+        response = await get_migration_status(db=db, _user_id="user1", org_id="org1", _role=None)
 
         assert response.total == 0
         assert response.byok == 0

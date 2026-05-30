@@ -11,6 +11,9 @@ class AuditEntry(BaseModel):
     id: str
     timestamp: float
     event_type: str  # query | execute | connect | block | mcp_tool | mcp_sql
+    # admin events: byok_key_create | byok_key_rotate | byok_key_validate | byok_migrate
+    # | byok_revert | api_key_create | api_key_delete | credential_export
+    # | connection_import | connection_delete | connection_update
     connection_name: str | None = None
     sandbox_id: str | None = None
     sql: str | None = None

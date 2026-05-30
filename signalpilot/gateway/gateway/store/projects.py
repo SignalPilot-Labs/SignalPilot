@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
@@ -16,6 +17,17 @@ import gateway.store._constants as _constants
 import gateway.store.dbt_templates as dbt_templates
 from gateway.db.models import GatewayProject
 from gateway.models import ConnectionInfo, ProjectCreate, ProjectInfo, ProjectStorage, ProjectUpdate
+
+_ORG_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _validate_org_id(org_id: str) -> None:
+    if not _ORG_ID_RE.match(org_id):
+        raise ValueError(f"Invalid org_id {org_id!r}: must match ^[A-Za-z0-9_\\-]{{1,64}}$")
+
+
+def _org_projects_root(org_id: str) -> Path:
+    return _constants.DATA_DIR / "projects" / org_id
 
 
 async def list_projects(session: AsyncSession, *, org_id: str) -> list[ProjectInfo]:
@@ -52,9 +64,9 @@ async def create_project(
         raise ValueError(f"Connection '{proj.connection_name}' not found")
 
     if proj.source.value == "local":
-        info = create_local_project(proj, connection)
+        info = create_local_project(proj, connection, org_id=org_id)
     else:
-        info = create_new_project(proj, connection)
+        info = create_new_project(proj, connection, org_id=org_id)
 
     db_proj = GatewayProject(
         id=info.id,
@@ -81,9 +93,16 @@ async def create_project(
     return info
 
 
-def create_new_project(proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
-    project_dir = _constants.DATA_DIR / "projects" / proj.name
-    project_dir.mkdir(parents=True, exist_ok=True)
+def create_new_project(proj: ProjectCreate, connection: ConnectionInfo, *, org_id: str) -> ProjectInfo:
+    _validate_org_id(org_id)
+    org_root = _org_projects_root(org_id)
+    org_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(org_root), 0o700)
+    project_dir = org_root / proj.name
+    try:
+        project_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        raise ValueError(f"Project '{proj.name}' already exists on disk")
     for d in dbt_templates._SCAFFOLD_DIRS:
         (project_dir / d).mkdir(parents=True, exist_ok=True)
     for d in ("models/staging", "models/marts"):
@@ -107,13 +126,17 @@ def create_new_project(proj: ProjectCreate, connection: ConnectionInfo) -> Proje
     )
 
 
-def create_local_project(proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
+def create_local_project(proj: ProjectCreate, connection: ConnectionInfo, *, org_id: str) -> ProjectInfo:
+    _validate_org_id(org_id)
     local = Path(proj.local_path or "")
     if not local.exists() or not (local / "dbt_project.yml").exists():
         raise ValueError(f"Path '{local}' does not exist or lacks dbt_project.yml")
     if proj.link_mode == "copy":
-        project_dir = _constants.DATA_DIR / "projects" / proj.name
-        shutil.copytree(str(local), str(project_dir), dirs_exist_ok=True)
+        org_root = _org_projects_root(org_id)
+        org_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(org_root), 0o700)
+        project_dir = org_root / proj.name
+        shutil.copytree(str(local), str(project_dir), dirs_exist_ok=False)
         storage = ProjectStorage.managed
     else:
         project_dir = local
@@ -179,6 +202,36 @@ async def update_project(
     return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
 
 
+async def _migrate_legacy_project_dir(
+    session: AsyncSession, org_id: str, name: str, stored_dir: Path
+) -> Path:
+    """Move a legacy DATA_DIR/projects/<name> dir under DATA_DIR/projects/<org_id>/<name>.
+
+    Unambiguous case (single DB row pointing at stored_dir): move dir, update row in-place,
+    flush. Returns the new path; caller commits.
+    Ambiguous case (multiple rows share stored_dir): raises ValueError. Leaves FS unchanged.
+    """
+    legacy_dir_str = str(stored_dir)
+    result = await session.execute(
+        select(GatewayProject).where(GatewayProject.project_dir == legacy_dir_str)
+    )
+    rows = result.scalars().all()
+    if len(rows) > 1:
+        raise ValueError(
+            f"Legacy project dir {stored_dir} is shared by multiple orgs; "
+            "operator must resolve manually before delete"
+        )
+    new_dir = _org_projects_root(org_id) / name
+    org_root = _org_projects_root(org_id)
+    org_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(org_root), 0o700)
+    shutil.move(str(stored_dir), str(new_dir))
+    # rows[0] is the same DB row the caller loaded; update it in-place.
+    rows[0].project_dir = str(new_dir)
+    await session.flush()
+    return new_dir
+
+
 async def delete_project(session: AsyncSession, *, org_id: str, name: str) -> bool:
     result = await session.execute(
         select(GatewayProject).where(GatewayProject.org_id == org_id, GatewayProject.name == name)
@@ -186,10 +239,18 @@ async def delete_project(session: AsyncSession, *, org_id: str, name: str) -> bo
     row = result.scalar_one_or_none()
     if not row:
         return False
-    if row.storage == "managed" and row.project_dir:
-        project_dir = Path(row.project_dir)
-        if project_dir.exists():
-            shutil.rmtree(project_dir)
+    if row.storage == "managed":
+        if row.project_dir:
+            stored_dir = Path(row.project_dir).resolve()
+            legacy_projects_root = (_constants.DATA_DIR / "projects").resolve()
+            if stored_dir.parent == legacy_projects_root:
+                stored_dir = await _migrate_legacy_project_dir(session, org_id, name, stored_dir)
+            org_root = _org_projects_root(org_id).resolve()
+            if not stored_dir.is_relative_to(org_root):
+                raise ValueError(
+                    f"Project dir {stored_dir} is outside org root {org_root}; refusing to delete"
+                )
+            shutil.rmtree(str(stored_dir))
     await session.delete(row)
     await session.commit()
     return True

@@ -38,7 +38,90 @@ This provisions:
 The gateway pod must run as this ServiceAccount. Per-namespace Roles and
 RoleBindings are created lazily by the gateway on first session per org.
 
-### (c) Required environment variables for the gateway pod
+### (c) Runtime sandbox (gVisor / Kata)
+
+#### Threat model
+
+User notebook pods run arbitrary code supplied by LLM agents. Without a kernel-level sandbox, any container-escape primitive (CVE in the container runtime or kernel) lands the attacker as root on the EC2/k3s node. `runtimeClassName` routes the pod through an alternative OCI runtime (gVisor `runsc` or Kata Containers) that interposes a user-space kernel or a dedicated VM between the pod and the host kernel.
+
+#### Required: set SP_NOTEBOOK_RUNTIME_CLASS
+
+In cloud mode (`SP_DEPLOYMENT_MODE=cloud`), `SP_NOTEBOOK_RUNTIME_CLASS` **must** be set explicitly. The gateway refuses to start if it is empty. Recommended value: `gvisor`.
+
+```bash
+SP_NOTEBOOK_RUNTIME_CLASS=gvisor
+```
+
+In local/dev mode, the variable may be left empty (no sandbox runtime applied).
+
+#### Apply the RuntimeClass resource
+
+```yaml
+# gvisor-runtimeclass.yaml
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+```
+
+```bash
+kubectl apply -f gvisor-runtimeclass.yaml
+```
+
+#### k3s: install gVisor (runsc)
+
+Follow the [gVisor k3s guide](https://gvisor.dev/docs/user_guide/k3s/):
+
+```bash
+# On each k3s node:
+curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+sudo apt-get update && sudo apt-get install -y runsc
+
+# Add runsc shim to containerd config (/var/lib/rancher/k3s/agent/etc/containerd/config.toml):
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+
+sudo systemctl restart k3s
+```
+
+#### EKS: install gVisor
+
+Use a custom launch template or a maintained AMI with gVisor pre-installed. After nodes are ready:
+
+```bash
+# Create the RuntimeClass (handler must match containerd runtime registration):
+kubectl apply -f gvisor-runtimeclass.yaml
+```
+
+Alternatively, use managed node groups with the [gVisor EKS AMI](https://gvisor.dev/docs/user_guide/eks/) or install runsc via user-data.
+
+#### Kata Containers alternative
+
+If gVisor is unavailable (e.g. ARM64 or environments requiring full VM isolation), use Kata:
+
+```yaml
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata
+handler: kata
+```
+
+Set `SP_NOTEBOOK_RUNTIME_CLASS=kata` and install kata-runtime on each node per the [Kata Containers docs](https://katacontainers.io/docs/).
+
+#### RBAC
+
+The gateway needs `get` on `node.k8s.io/runtimeclasses` for the pre-flight check. This is included in `gateway-rbac.yaml` (`ClusterRole signalpilot-gateway-runtimeclass-reader`). Re-apply after upgrading:
+
+```bash
+kubectl apply -f deploy/k8s/gateway-rbac.yaml
+```
+
+---
+
+### (d) Required environment variables for the gateway pod
 
 | Variable | Example | Purpose |
 |---|---|---|
@@ -52,8 +135,9 @@ RoleBindings are created lazily by the gateway on first session per org.
 | `SP_NOTEBOOK_NAMESPACE_PREFIX` | `sp-nb` | Prefix for org namespaces. **Set at bootstrap, never change** (see warning below). |
 | `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow notebook pods to reach this CIDR on port 443 (e.g. S3). **Validator hard-fails on startup if this CIDR contains AWS IMDS (`169.254.169.254` or `fd00:ec2::/32`). `0.0.0.0/0` and `169.254.0.0/16` are rejected.** |
 | `SP_NOTEBOOK_IMAGE` | `your-registry/notebook:tag` | Container image for notebook pods. |
+| `SP_NOTEBOOK_RUNTIME_CLASS` | `gvisor` | **Required in cloud mode.** RuntimeClass name for notebook pod isolation. Empty in local mode. |
 
-### (d) IMDSv2 hop-limit enforcement at the EC2 node level
+### (e) IMDSv2 hop-limit enforcement at the EC2 node level
 
 The NetworkPolicy `except:` list blocks link-local IMDS routes at the CNI layer.
 For defense in depth, enforce IMDSv2 with hop-limit=1 at the node level so that
@@ -64,7 +148,7 @@ even if the CNI is misconfigured, container processes cannot reach the host IMDS
 - [ ] Verify `SP_NOTEBOOK_EGRESS_CIDR` is set to the narrowest range your workload requires. `0.0.0.0/0` is rejected by the validator. `169.254.0.0/16` is rejected.
 - [ ] Confirm the deployed CNI enforces NetworkPolicy (Calico, Cilium, AWS VPC CNI with policy add-on). Without enforcement, the `except` list is documentation only.
 
-### (e) Verification: cross-namespace network isolation
+### (f) Verification: cross-namespace network isolation
 
 After deploying, verify that the CNI enforces cross-org isolation:
 
@@ -89,7 +173,7 @@ kubectl exec -n signalpilot $GATEWAY_POD -- nc -zv -w 3 $ORG_A_POD_IP 2718
 If the cross-namespace `nc` succeeds (step 2), the CNI is **not** enforcing
 NetworkPolicy. Investigate the CNI configuration before proceeding.
 
-### (f) One-way config: SP_NOTEBOOK_NAMESPACE_PREFIX
+### (g) One-way config: SP_NOTEBOOK_NAMESPACE_PREFIX
 
 `SP_NOTEBOOK_NAMESPACE_PREFIX` determines the name of every org namespace:
 `{prefix}-{sha256(org_id)[:16]}`. **Set this once at initial deployment and never

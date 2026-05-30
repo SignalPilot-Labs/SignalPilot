@@ -47,6 +47,98 @@ def _parse_single_kv(selector_str: str) -> dict[str, str]:
     return {k: v}
 
 
+def _build_pod_spec(
+    *,
+    runtime_class: str | None,
+    env: list[dict],
+    image: str,
+    session_id: str,
+) -> dict:
+    """Build the pod spec dict. Separated from _pod_manifest to keep each under 50 lines.
+
+    runtimeClassName is only set when runtime_class is non-empty — never emit empty string.
+    The pod-entrypoint 'sh -c' below is NOT an LLM-injection sink: all strings are
+    gateway-controlled constants derived from validated session_id; no user input reaches here.
+    """
+    spec: dict = {
+        # Pods must not mount the SA token — no K8s API access from within notebook pods.
+        "automountServiceAccountToken": False,
+        # Suppress per-Service env var injection (SVC_SERVICE_HOST, SVC_PORT, etc.).
+        # Prevents information disclosure of cluster Service topology to notebook pods.
+        "enableServiceLinks": False,
+        "securityContext": {
+            "runAsNonRoot": True,
+            "runAsUser": 10001,
+            "runAsGroup": 10001,
+            "fsGroup": 10001,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "containers": [
+            {
+                "name": "notebook",
+                "image": (
+                    f"docker.io/library/{image}"
+                    if ":" in image and "/" not in image
+                    else image
+                ),
+                "imagePullPolicy": "IfNotPresent",
+                # Pod entrypoint: runs project_sync_boot to git-clone /workspace,
+                # then execs sp edit. wait_for_ready's TCP probe on :2718 already
+                # gates correctly — clone failure → entrypoint exits non-zero →
+                # :2718 never binds → wait_for_ready times out.
+                # --no-token: pod runs without the notebook server's built-in auth;
+                # the gateway proxy is the sole auth gate.
+                # --base-url: tells the notebook server to emit asset/WS URLs under /notebook/{session_id}.
+                "command": [
+                    "sh", "-c",
+                    "python -m signalpilot._server.files.project_sync_boot && "
+                    f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
+                    f"--no-skew-protection --allow-origins 'http://localhost:3200,http://localhost:3300' "
+                    f"--base-url /notebook/{session_id} /workspace",
+                ],
+                "ports": [{"containerPort": 2718}],
+                "env": env,
+                "resources": {
+                    "requests": {"memory": "512Mi", "cpu": "500m"},
+                    "limits": {"memory": "2Gi", "cpu": "2"},
+                },
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "readOnlyRootFilesystem": False,
+                    "capabilities": {"drop": ["ALL"]},
+                },
+                "volumeMounts": [
+                    {"name": "tmp", "mountPath": "/tmp"},
+                    {"name": "home", "mountPath": "/home/notebook"},
+                    {"name": "workspace", "mountPath": "/workspace"},
+                ],
+                "readinessProbe": {
+                    "tcpSocket": {"port": 2718},
+                    "initialDelaySeconds": 1,
+                    "periodSeconds": 1,
+                    "failureThreshold": 60,
+                },
+                "livenessProbe": {
+                    "tcpSocket": {"port": 2718},
+                    "initialDelaySeconds": 30,
+                    "periodSeconds": 30,
+                    "failureThreshold": 5,
+                },
+            }
+        ],
+        "volumes": [
+            {"name": "tmp", "emptyDir": {}},
+            {"name": "home", "emptyDir": {}},
+            {"name": "workspace", "emptyDir": {}},
+        ],
+        "restartPolicy": "Never",
+        "terminationGracePeriodSeconds": 5,
+    }
+    if runtime_class:
+        spec["runtimeClassName"] = runtime_class
+    return spec
+
+
 def _pod_manifest(
     *,
     pod_name: str,
@@ -61,8 +153,9 @@ def _pod_manifest(
     session_id: str,
     access_token: str | None,
     extra_env: dict[str, str] | None = None,
+    runtime_class: str | None = None,
 ) -> dict:
-    """Build the pod spec dict for the Kubernetes API.
+    """Build the pod manifest dict for the Kubernetes API.
 
     Injects SP_SESSION_JWT and SP_SESSION_ID into the pod env.
     Does NOT inject SP_API_KEY (replaced by per-session JWT) or SP_ACCESS_TOKEN
@@ -76,6 +169,7 @@ def _pod_manifest(
     container-level securityContext (readOnlyRootFilesystem, drop ALL caps),
     automountServiceAccountToken: false, emptyDir volumes for writable scratch,
     and env additions for HOME, PYTHONDONTWRITEBYTECODE, SP_LOG_DIR.
+    R4: Adds optional runtimeClassName for gVisor/Kata sandbox isolation.
     """
     static_internal_url = os.getenv("SP_GATEWAY_INTERNAL_URL", "")
     gateway_port = os.getenv("SP_PUBLIC_GATEWAY_PORT", "3300")
@@ -118,80 +212,12 @@ def _pod_manifest(
                 "signalpilot.ai/org": org_id[:63],
             },
         },
-        "spec": {
-            # Pods must not mount the SA token — no K8s API access from within notebook pods.
-            "automountServiceAccountToken": False,
-            # Suppress per-Service env var injection (SVC_SERVICE_HOST, SVC_PORT, etc.).
-            # Prevents information disclosure of cluster Service topology to notebook pods.
-            "enableServiceLinks": False,
-            "securityContext": {
-                "runAsNonRoot": True,
-                "runAsUser": 10001,
-                "runAsGroup": 10001,
-                "fsGroup": 10001,
-                "seccompProfile": {"type": "RuntimeDefault"},
-            },
-            "containers": [
-                {
-                    "name": "notebook",
-                    "image": (
-                        f"docker.io/library/{image}"
-                        if ":" in image and "/" not in image
-                        else image
-                    ),
-                    "imagePullPolicy": "IfNotPresent",
-                    # Pod entrypoint: runs project_sync_boot to git-clone /workspace,
-                    # then execs sp edit. wait_for_ready's TCP probe on :2718 already
-                    # gates correctly — clone failure → entrypoint exits non-zero →
-                    # :2718 never binds → wait_for_ready times out.
-                    # --no-token: pod runs without the notebook server's built-in auth;
-                    # the gateway proxy is the sole auth gate.
-                    # --base-url: tells the notebook server to emit asset/WS URLs under /notebook/{session_id}.
-                    "command": [
-                        "sh", "-c",
-                        "python -m signalpilot._server.files.project_sync_boot && "
-                        f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
-                        f"--no-skew-protection --allow-origins 'http://localhost:3200,http://localhost:3300' "
-                        f"--base-url /notebook/{session_id} /workspace",
-                    ],
-                    "ports": [{"containerPort": 2718}],
-                    "env": env,
-                    "resources": {
-                        "requests": {"memory": "512Mi", "cpu": "500m"},
-                        "limits": {"memory": "2Gi", "cpu": "2"},
-                    },
-                    "securityContext": {
-                        "allowPrivilegeEscalation": False,
-                        "readOnlyRootFilesystem": False,
-                        "capabilities": {"drop": ["ALL"]},
-                    },
-                    "volumeMounts": [
-                        {"name": "tmp", "mountPath": "/tmp"},
-                        {"name": "home", "mountPath": "/home/notebook"},
-                        {"name": "workspace", "mountPath": "/workspace"},
-                    ],
-                    "readinessProbe": {
-                        "tcpSocket": {"port": 2718},
-                        "initialDelaySeconds": 1,
-                        "periodSeconds": 1,
-                        "failureThreshold": 60,
-                    },
-                    "livenessProbe": {
-                        "tcpSocket": {"port": 2718},
-                        "initialDelaySeconds": 30,
-                        "periodSeconds": 30,
-                        "failureThreshold": 5,
-                    },
-                }
-            ],
-            "volumes": [
-                {"name": "tmp", "emptyDir": {}},
-                {"name": "home", "emptyDir": {}},
-                {"name": "workspace", "emptyDir": {}},
-            ],
-            "restartPolicy": "Never",
-            "terminationGracePeriodSeconds": 5,
-        },
+        "spec": _build_pod_spec(
+            runtime_class=runtime_class,
+            env=env,
+            image=image,
+            session_id=session_id,
+        ),
     }
 
 
@@ -233,6 +259,13 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         self._gateway_port: int | None = None
         self._egress_cidr: str | None = None
         self._gateway_service_account: str | None = None
+        self._runtime_class: str | None = None
+        # Set to True only after read_runtime_class returns successfully (or local mode skip).
+        # Never set on failure — ensures retried callers re-attempt the check.
+        self._runtime_class_verified: bool = False
+        # Created lazily on first _ensure_client call to avoid binding to a running event loop
+        # at construction time (asyncio.Lock() must be created inside a coroutine or after loop start).
+        self._init_lock: asyncio.Lock | None = None
 
     def _load_settings(self) -> None:
         """Load K8s settings on first use. Called from _ensure_client."""
@@ -247,34 +280,95 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         self._gateway_port = settings.sp_public_gateway_port
         self._egress_cidr = settings.sp_notebook_egress_cidr
         self._gateway_service_account = settings.sp_gateway_service_account
+        self._runtime_class = settings.sp_notebook_runtime_class or None
 
     async def _ensure_client(self) -> None:
-        if self._client is not None:
-            return
-        self._load_settings()
-        from kubernetes_asyncio import client, config
+        # Lazy-create the lock here so it's always created inside a running event loop.
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if self._client is not None:
+                return
+            self._load_settings()
+            from kubernetes_asyncio import client, config
 
-        kubeconfig = os.getenv("KUBECONFIG")
-        k8s_host = os.getenv("SP_K8S_HOST")
-        try:
-            if kubeconfig and os.path.exists(kubeconfig):
-                await config.load_kube_config(config_file=kubeconfig)
-                if k8s_host:
-                    cfg = client.Configuration.get_default_copy()
-                    cfg.host = k8s_host
-                    cfg.verify_ssl = False
-                    self._client = client.ApiClient(configuration=cfg)
-            else:
-                config.load_incluster_config()
-        except Exception as e:
-            logger.warning("K8s config failed: %s — orchestrator disabled", e)
+            kubeconfig = os.getenv("KUBECONFIG")
+            k8s_host = os.getenv("SP_K8S_HOST")
+            # Use a local variable until preflight succeeds — only assign self._client
+            # after _preflight_runtime_class() returns. This guarantees that a failed
+            # preflight leaves self._client = None so the next caller retries.
+            client_obj = None
+            try:
+                if kubeconfig and os.path.exists(kubeconfig):
+                    await config.load_kube_config(config_file=kubeconfig)
+                    if k8s_host:
+                        cfg = client.Configuration.get_default_copy()
+                        cfg.host = k8s_host
+                        cfg.verify_ssl = False
+                        client_obj = client.ApiClient(configuration=cfg)
+                else:
+                    config.load_incluster_config()
+            except Exception as e:
+                logger.warning("K8s config failed: %s — orchestrator disabled", e)
+                return
+            if client_obj is None:
+                client_obj = client.ApiClient()
+            core_api = client.CoreV1Api(client_obj)
+            networking_api = client.NetworkingV1Api(client_obj)
+            rbac_api = client.RbacAuthorizationV1Api(client_obj)
+            logger.info("K8s orchestrator connected (namespace_prefix=%s)", self._namespace_prefix)
+            # Run preflight against the not-yet-committed client. On failure (cloud mode),
+            # _preflight_runtime_class raises and we never reach the assignments below —
+            # self._client remains None so the next call retries.
+            await self._preflight_runtime_class(client_obj)
+            # Preflight passed — commit client state atomically.
+            self._client = client_obj
+            self._core_api = core_api
+            self._networking_api = networking_api
+            self._rbac_api = rbac_api
+
+    async def _preflight_runtime_class(self, client_obj: object | None = None) -> None:
+        """Verify the configured runtimeClass exists in the cluster (fail-closed).
+
+        Called once from _ensure_client with the not-yet-committed client_obj.
+        Results are cached via _runtime_class_verified; no re-check on subsequent
+        pod creates. If sp_notebook_runtime_class is empty, does nothing.
+
+        In cloud mode: missing RuntimeClass → RuntimeError (fail-closed).
+            _runtime_class_verified is NOT set on failure so the next caller retries.
+        In local mode: missing RuntimeClass → log warning, continue.
+            _runtime_class_verified is set so we do not spam warnings on every call.
+        """
+        if self._runtime_class_verified:
             return
-        if self._client is None:
-            self._client = client.ApiClient()
-        self._core_api = client.CoreV1Api(self._client)
-        self._networking_api = client.NetworkingV1Api(self._client)
-        self._rbac_api = client.RbacAuthorizationV1Api(self._client)
-        logger.info("K8s orchestrator connected (namespace_prefix=%s)", self._namespace_prefix)
+
+        runtime_class = self._runtime_class
+        if not runtime_class:
+            return
+
+        is_cloud = os.environ.get("SP_DEPLOYMENT_MODE", "").lower() == "cloud"
+        api_client = client_obj if client_obj is not None else self._client
+
+        try:
+            from kubernetes_asyncio import client as k8s_client
+
+            node_api = k8s_client.NodeV1Api(api_client)
+            await node_api.read_runtime_class(name=runtime_class)
+            logger.info("RuntimeClass %r verified in cluster", runtime_class)
+            # Only mark verified after a successful read — never on exception.
+            self._runtime_class_verified = True
+        except Exception as exc:
+            msg = (
+                f"RuntimeClass {runtime_class!r} not found in cluster (error: {exc}). "
+                "Install the RuntimeClass resource or set SP_NOTEBOOK_RUNTIME_CLASS='' "
+                "to disable sandbox enforcement."
+            )
+            if is_cloud:
+                # Do NOT set _runtime_class_verified — next caller must re-attempt.
+                raise RuntimeError(msg) from exc
+            logger.warning("%s — continuing (local mode)", msg)
+            # In local mode, mark verified to avoid repeated warnings.
+            self._runtime_class_verified = True
 
     def _resolve_namespace(self, org_id: str) -> str:
         """Resolve the namespace for an org_id. Raises ValueError on empty org_id."""
@@ -351,6 +445,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             session_id=session_id,
             access_token=access_token,
             extra_env=extra_env,
+            runtime_class=self._runtime_class,
         )
         await self._core_api.create_namespaced_pod(namespace=ns, body=manifest)
         logger.info("Created pod %s in namespace %s (pod_ip mode)", pod_name, ns)
@@ -490,9 +585,20 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
 
     async def exec_in_pod(
-        self, pod_name: str, *, org_id: str, argv: list[str], timeout: int = 300
+        self,
+        pod_name: str,
+        *,
+        org_id: str,
+        argv: list[str],
+        timeout: int = 300,
+        stdin_bytes: bytes | None = None,
     ) -> tuple[str, str, int]:
-        """Run a command in a pod and return (stdout, stderr, exit_code)."""
+        """Run a command in a pod and return (stdout, stderr, exit_code).
+
+        When stdin_bytes is provided, the payload is written to stdin (channel 0)
+        after the exec connection is established and EOF is signaled so that
+        commands like `tee` exit cleanly. See pod_exec_io for size limits.
+        """
         if not org_id:
             raise ValueError("org_id must not be empty")
         await self._ensure_client()
@@ -508,6 +614,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             pod_name=pod_name,
             argv=argv,
             timeout_seconds=timeout,
+            stdin_bytes=stdin_bytes,
         )
 
     async def close(self) -> None:

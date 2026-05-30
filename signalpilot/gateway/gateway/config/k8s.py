@@ -41,6 +41,22 @@ class K8sSettings(_GatewaySettingsBase):
     # This is the ONLY source of the gateway port for NetworkPolicy; never parsed from the URL.
     sp_public_gateway_port: int = Field(3300, alias="SP_PUBLIC_GATEWAY_PORT")
 
+    # Runtime sandbox class for user notebook pods.
+    # Empty string means no runtimeClassName is set (acceptable in local mode only).
+    # In cloud mode SP_NOTEBOOK_RUNTIME_CLASS must be set explicitly (e.g. "gvisor").
+    sp_notebook_runtime_class: str = Field("", alias="SP_NOTEBOOK_RUNTIME_CLASS")
+
+    @field_validator("sp_notebook_runtime_class", mode="after")
+    @classmethod
+    def _require_runtime_class_in_cloud_mode(cls, v: str) -> str:
+        is_cloud = os.environ.get("SP_DEPLOYMENT_MODE", "").lower() == "cloud"
+        if is_cloud and not v:
+            raise ValueError(
+                "SP_NOTEBOOK_RUNTIME_CLASS must be set explicitly in cloud mode "
+                "(recommended value: 'gvisor'). Empty string is only allowed in local mode."
+            )
+        return v
+
     @field_validator("sp_public_gateway_url", mode="after")
     @classmethod
     def _require_in_cloud_mode(cls, v: str) -> str:

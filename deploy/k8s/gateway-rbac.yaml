@@ -42,6 +42,38 @@ rules:
     verbs: ["create", "get", "list", "patch"]
 
 ---
+# ClusterRole: read RuntimeClass resources (node.k8s.io/v1).
+# Required for the pre-flight check that verifies the configured runtimeClassName
+# (SP_NOTEBOOK_RUNTIME_CLASS) exists before the orchestrator creates any pods.
+# RuntimeClass is cluster-scoped — no namespace qualifier needed.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: signalpilot-gateway-runtimeclass-reader
+  labels:
+    signalpilot.ai/managed-by: gateway
+rules:
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: signalpilot-gateway-runtimeclass-reader-binding
+  labels:
+    signalpilot.ai/managed-by: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-runtimeclass-reader
+subjects:
+  - kind: ServiceAccount
+    name: signalpilot-gateway
+    namespace: signalpilot
+
+---
 # ClusterRole: create/get/patch Roles and RoleBindings in any namespace.
 # Required so ensure_org_namespace can install the per-namespace Role+RoleBinding
 # that grants the gateway workload write power within that namespace only.

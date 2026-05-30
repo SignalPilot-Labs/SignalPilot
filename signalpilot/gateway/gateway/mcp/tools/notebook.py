@@ -1,6 +1,7 @@
 """MCP tool: run_notebook — execute a notebook in a cloud pod."""
 
 import logging
+import re
 import uuid
 
 from gateway.mcp.audit import audited_tool
@@ -8,6 +9,26 @@ from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
 from gateway.mcp.server import mcp
 
 logger = logging.getLogger(__name__)
+
+# Filename must be a plain name with no path separators.
+# Rejects shell metacharacters, path traversal, and anything not a safe Python filename.
+# Branch names are copied from notebook-server/signalpilot/_server/files/project_sync.py:28.
+_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.py$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
+
+
+def _validate_filename(filename: str) -> str | None:
+    """Return None if filename is valid, else an error string."""
+    if not _FILENAME_RE.match(filename):
+        return "Error: filename must match [A-Za-z0-9._-]+.py (no path separators or special chars)"
+    return None
+
+
+def _validate_branch(branch: str) -> str | None:
+    """Return None if branch is valid, else an error string."""
+    if not branch or branch.startswith("-") or not _BRANCH_RE.match(branch):
+        return f"Error: agent_branch {branch!r} is invalid (must match [A-Za-z0-9._/\\-]+ and not start with -)"
+    return None
 
 
 @audited_tool(mcp)
@@ -33,8 +54,11 @@ async def run_notebook(
     org_id = mcp_org_id_var.get(None) or "local"
     user_id = mcp_user_id_var.get(None) or "local"
 
-    if not filename.endswith(".py"):
-        return "Error: filename must end with .py"
+    # Validate filename first — before any use in paths or exec calls.
+    filename_err = _validate_filename(filename)
+    if filename_err:
+        return filename_err
+
     if not code.strip():
         return "Error: code is empty"
 
@@ -43,6 +67,9 @@ async def run_notebook(
         project = await store.get_workspace_project(project_id)
         if not project:
             return f"Error: project {project_id} not found"
+        project_name = getattr(project, "name", None)
+        if not project_name:
+            return f"Error: project {project_id} has no name — cannot resolve pod project directory"
 
     # 2. Create or reuse agent branch via git
     from gateway.git.repos import _run_git, repo_exists, repo_path
@@ -61,6 +88,10 @@ async def run_notebook(
             return f"Error creating branch: {err}"
         logger.info("Created agent branch %s for project %s", agent_branch, project_id)
     else:
+        # Validate branch name before using it in exec argv.
+        branch_err = _validate_branch(agent_branch)
+        if branch_err:
+            return branch_err
         # Verify branch exists
         rc, out, err = _run_git("rev-parse", "--verify", f"refs/heads/{agent_branch}", cwd=rp)
         if rc != 0:
@@ -142,35 +173,37 @@ async def run_notebook(
                 return f"Error starting notebook pod: {exc}"
 
     # 4. Locate the git clone that project_sync_boot placed in the pod at boot.
-    # The entrypoint ran sync_down before sp edit, so the repo is guaranteed present.
-    project_base = f"/home/notebook/.sp/projects/{project_id}"
-    find_out, _, find_rc = await orch.exec_in_pod(
+    # The entrypoint ran project_sync_boot before sp edit, so the deterministic path
+    # is guaranteed. If missing, the boot failed — hard error, no fallback.
+    project_dir = f"/home/notebook/.sp/projects/{project_id}/{project_name}"
+
+    # Verify the project directory exists in the pod.
+    check_out, check_err, check_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["find", project_base, "-name", ".git", "-type", "d", "-maxdepth", 3],
+        argv=["test", "-d", project_dir],
         timeout=10,
     )
-    if find_rc == 0 and find_out.strip():
-        project_dir = find_out.strip().split("\n")[0].replace("/.git", "")
-    else:
-        # Boot should have cloned the repo; fall back to /workspace if find fails.
-        project_dir = "/workspace"
-        logger.warning("Git clone not found at %s after ready, falling back to /workspace", project_base)
+    if check_rc != 0:
+        return (
+            f"Error: project directory {project_dir!r} not found in pod. "
+            "project_sync_boot may have failed. Check pod logs."
+        )
 
-    # 5. Write the .py file into the project directory via exec
+    # 5. Write the .py file into the project directory via tee (argv + stdin, no shell).
     w_out, w_err, w_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["sh", "-c", f"cat > {project_dir}/{filename} << 'SPEOF'\n{code}\nSPEOF"],
-        timeout=10,
+        argv=["tee", f"{project_dir}/{filename}"],
+        stdin_bytes=code.encode("utf-8"),
+        timeout=30,
     )
     if w_rc != 0:
         logger.warning("Failed to write %s to pod %s (rc=%d): %s", filename, pod_name, w_rc, w_err.strip())
 
-    # 6. Run sp export session from the project directory
+    # 6. Run sp export session from the project directory — absolute paths, no cd, no sh -c.
     stdout, stderr, exit_code = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["sh", "-c",
-              f"cd {project_dir} && python -m signalpilot export session "
-              f"{project_dir}/{filename} --force-overwrite --verbose"],
+        argv=["python", "-m", "signalpilot", "export", "session",
+              f"{project_dir}/{filename}", "--force-overwrite", "--verbose"],
         timeout=300,
     )
 
@@ -190,18 +223,18 @@ async def run_notebook(
     except Exception as e:
         logger.warning("Failed to read session JSON: %s", e)
 
-    # 8. Commit and push results back via git (from project dir)
+    # 8. Commit and push results back via git — three separate exec calls, all argv.
     push_result = ""
     try:
-        git_cmds = [
-            f"cd {project_dir} && git add -A",
-            f"cd {project_dir} && git commit -m 'agent: {filename}'",
-            f"cd {project_dir} && git push origin HEAD:refs/heads/{agent_branch}",
+        git_steps = [
+            ["git", "-C", project_dir, "add", "-A"],
+            ["git", "-C", project_dir, "commit", "-m", f"agent: {filename}"],
+            ["git", "-C", project_dir, "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
         ]
-        for cmd in git_cmds:
+        for git_argv in git_steps:
             g_out, g_err, g_rc = await orch.exec_in_pod(
                 pod_name, org_id=org_id,
-                argv=["sh", "-c", cmd],
+                argv=git_argv,
                 timeout=30,
             )
             if g_rc != 0 and "nothing to commit" not in g_err:
@@ -213,7 +246,7 @@ async def run_notebook(
         logger.warning("Failed to push results to git: %s", e)
         push_result = f"push failed: {e}"
 
-    # 8. Build notebook URL — link to the web app, not the gateway proxy
+    # 9. Build notebook URL — link to the web app, not the gateway proxy
     import os
     from urllib.parse import quote
     web_url = os.getenv("SP_WEB_URL", "https://app.signalpilot.ai").rstrip("/")
@@ -222,7 +255,7 @@ async def run_notebook(
         f"?project={project_id}&branch={quote(agent_branch)}&file={quote(filename)}"
     )
 
-    # 9. Format result
+    # 10. Format result
     parts = []
     if exit_code == 0:
         parts.append(f"Notebook executed successfully. ({push_result})")
@@ -248,7 +281,7 @@ def _format_cell_outputs(session_data: dict) -> str:
     """Extract human-readable cell outputs from the session JSON."""
     import html
     import json
-    import re
+    import re as _re
 
     parts = []
     cells = session_data.get("cells", [])
@@ -283,7 +316,7 @@ def _format_cell_outputs(session_data: dict) -> str:
                 cell_parts.append(plain.strip()[:2000])
             elif html_content:
                 # Extract table data from sp-table elements
-                match = re.search(r"data-data='(.*?)'", html_content)
+                match = _re.search(r"data-data='(.*?)'", html_content)
                 if match:
                     try:
                         raw = html.unescape(match.group(1))

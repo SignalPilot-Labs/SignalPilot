@@ -8,12 +8,19 @@ import { spaNavigate } from "@/core/router/spa-navigate";
 import { useNotebookConfig } from "./notebook-context";
 import { bootRuntime, type NotebookStaticData } from "./boot-runtime";
 
-function LoadingSpinner() {
+const PHASE_LABELS: Record<string, string> = {
+  health: "starting runtime...",
+  syncing: "syncing project files...",
+  sessions: "connecting kernel...",
+  ready: "loading notebook...",
+};
+
+function LoadingSpinner({ phase }: { phase: string }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4">
       <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-dim)]" />
       <span className="text-xs text-[var(--color-text-dim)] tracking-wider uppercase">
-        loading notebook...
+        {PHASE_LABELS[phase] ?? "loading notebook..."}
       </span>
     </div>
   );
@@ -34,6 +41,7 @@ export default function NotebookBoot({
   const clientRef = useRef<SignalpilotClient | null>(null);
   const staticDataRef = useRef<NotebookStaticData | null>(null);
   const [ready, setReady] = useState(false);
+  const [phase, setPhase] = useState<string>("health");
 
   const onReadyRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
@@ -46,6 +54,7 @@ export default function NotebookBoot({
   }, [onPhaseChange]);
 
   const handlePhase = useCallback((p: string) => {
+    setPhase(p);
     onPhaseChangeRef.current?.(p);
   }, []);
 
@@ -106,7 +115,7 @@ export default function NotebookBoot({
   }
 
   if (!ready || !clientRef.current || !staticDataRef.current) {
-    return <LoadingSpinner />;
+    return <LoadingSpinner phase={phase} />;
   }
 
   const staticData = staticDataRef.current;

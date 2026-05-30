@@ -456,6 +456,9 @@ export const deleteNotebookSession = () =>
 export const pingNotebookSession = () =>
   request<void>("/api/notebook-sessions/ping", { method: "POST" });
 
+export const requestNotebookHandshake = (sessionId: string): Promise<{ url: string }> =>
+  request<{ url: string }>(`/api/notebook-sessions/${sessionId}/handshake`, { method: "POST" });
+
 // GitHub App
 export const getGitHubInstallUrl = () =>
   request<{ install_url: string }>("/api/github/install-url");

@@ -79,6 +79,8 @@ class TestInitHardening:
 
     def test_init_response_has_referrer_policy_no_referrer(self, monkeypatch) -> None:
         """Successful _init 302 response carries Referrer-Policy: no-referrer."""
+        from gateway.notebook_proxy.init_token import issue_init_token
+
         session_id = "testinitsess1"
         access_token = "secret-tok-init"
         internal = _make_internal_session(session_id=session_id, access_token=access_token)
@@ -87,9 +89,12 @@ class TestInitHardening:
         import gateway.notebook_proxy.routes as routes_mod
         monkeypatch.setattr(routes_mod, "_init_hits", defaultdict(list))
 
+        # Mint a one-time handshake token (replaces ?token=access_token).
+        init_token = issue_init_token(session_id, internal.user_id)
+
         for client in _build_init_client(monkeypatch, session_id, internal):
             resp = client.get(
-                f"/notebook/{session_id}/_init?token={access_token}",
+                f"/notebook/{session_id}/_init?token={init_token}",
                 follow_redirects=False,
             )
 
@@ -99,6 +104,7 @@ class TestInitHardening:
 
     def test_init_rate_limit_429_after_threshold(self, monkeypatch) -> None:
         """After _INIT_RATE_MAX requests, the next request returns 429."""
+        from gateway.notebook_proxy.init_token import issue_init_token
         from gateway.notebook_proxy.routes import _INIT_RATE_MAX
 
         session_id = "testinitsess2"
@@ -110,17 +116,19 @@ class TestInitHardening:
         monkeypatch.setattr(routes_mod, "_init_hits", defaultdict(list))
 
         for client in _build_init_client(monkeypatch, session_id, internal):
-            # Exhaust the rate limit
+            # Exhaust the rate limit — each request needs a fresh one-time token.
             for _ in range(_INIT_RATE_MAX):
+                token = issue_init_token(session_id, internal.user_id)
                 r = client.get(
-                    f"/notebook/{session_id}/_init?token={access_token}",
+                    f"/notebook/{session_id}/_init?token={token}",
                     follow_redirects=False,
                 )
                 assert r.status_code == 302, f"Expected 302, got {r.status_code}"
 
-            # Next request should hit the rate limit
+            # Next request should hit the rate limit (rate limiter fires before token check).
+            extra_token = issue_init_token(session_id, internal.user_id)
             r = client.get(
-                f"/notebook/{session_id}/_init?token={access_token}",
+                f"/notebook/{session_id}/_init?token={extra_token}",
                 follow_redirects=False,
             )
 

@@ -32,6 +32,7 @@ from ..runtime.mode import is_cloud_mode
 from ..store import notebook_sessions as ns
 from .auth import SESSION_ID_PATTERN, ProxySession, resolve_proxy_session
 from .cookies import set_proxy_cookie
+from .init_token import consume_init_token
 from .proxy import NotebookProxy
 
 # Keys that must be scrubbed from logged query strings to prevent token leakage.
@@ -89,18 +90,21 @@ async def init_notebook(
     request: Request,
     token: str | None = None,
 ) -> Response:
+    # DO NOT log request.url or request.query_params raw — token must not appear in logs.
     """Set the HttpOnly proxy cookie and redirect to the notebook.
 
     Auth chain (in order):
-    1. Clerk JWT / API key → resolve_user_id (works when called from same origin)
-    2. ?token= query param → session access_token (works cross-origin from web FE)
-
-    The token param is a signed session secret embedded in notebook_url by the
-    gateway when the session is created. It allows the web frontend (different
-    origin, no Clerk cookie) to initialize the session cookie securely.
+    1. SESSION_ID_PATTERN check
+    2. _init_rate_limit_check (R11 S-4)
+    3. DB load session_internal (required before step 5 — user_id needed)
+    4. Clerk JWT / API key → resolve_user_id
+    5. If still unauthed and token present → consume_init_token
+       (consume_init_token requires session.user_id, so it MUST run after DB load.
+       Do not reorder.)
+    6. If not authed → 401
+    7. Set HttpOnly cookie + 302
+    8. Referrer-Policy: no-referrer (R11 S-4)
     """
-    import secrets as _secrets
-
     if not SESSION_ID_PATTERN.match(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -118,7 +122,7 @@ async def init_notebook(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Auth: try Clerk/API key first, fall back to ?token= param
+    # Step 4: try Clerk/API key auth
     authed = False
     try:
         user_id = await resolve_user_id(request)
@@ -127,8 +131,10 @@ async def init_notebook(
     except Exception:
         pass
 
+    # Step 5: if still unauthed, attempt single-use handshake token redemption.
+    # consume_init_token requires session_internal.user_id (step 3). Do not reorder.
     if not authed and token:
-        if _secrets.compare_digest(token, session.access_token or ""):
+        if consume_init_token(token, session_id, session.user_id):
             authed = True
 
     if not authed:

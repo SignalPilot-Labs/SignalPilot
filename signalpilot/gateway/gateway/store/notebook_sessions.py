@@ -219,7 +219,7 @@ def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
     """
     notebook_url = None
     if row.status == "running" and row.pod_ip:
-        notebook_url = f"/notebook/{row.id}/_init?token={row.access_token}"
+        notebook_url = f"/notebook/{row.id}/_init"
     return NotebookSessionInfo(
         id=row.id,
         org_id=row.org_id,

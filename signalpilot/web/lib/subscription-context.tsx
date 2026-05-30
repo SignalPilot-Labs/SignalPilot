@@ -60,7 +60,10 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const [planTier, setPlanTier] = useState("free");
   const [status, setStatus] = useState("active");
   const [maxApiKeys, setMaxApiKeys] = useState(50);
-  const [isLoaded, setIsLoaded] = useState(true);
+  // Starts false: consumers (e.g. the projects paywall, tier branding, billing)
+  // must wait for the real tier before rendering, otherwise the default "free"
+  // value flashes gated/upgrade UI for a frame on refresh.
+  const [isLoaded, setIsLoaded] = useState(false);
   const [pendingDowngradeTo, setPendingDowngradeTo] = useState<string | null>(null);
   const [pendingDowngradeDate, setPendingDowngradeDate] = useState<string | null>(null);
   const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(false);

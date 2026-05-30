@@ -436,6 +436,10 @@ def _gateway_org_role(namespace: str) -> dict:
             # R4: pods/exec create — required for gateway-side workspace sync via tar.
             # Mitigated by: pod_exec_io is the sole caller (C4 AST test), container
             # hardcoded to "notebook", paths confined to /workspace/, argv is a list literal.
+            # R9 F-21: RBAC cannot prefix-match pod names, so the broad pods/exec grant is
+            # narrowed by Kyverno admission policy. Operator MUST also deploy
+            # admission/restrict-pod-exec-kyverno.yaml; it enforces pod-name shape
+            # (^nb-[0-9a-f]{12}$) and container=notebook as defense-in-depth.
             {
                 "apiGroups": [""],
                 "resources": ["pods/exec"],

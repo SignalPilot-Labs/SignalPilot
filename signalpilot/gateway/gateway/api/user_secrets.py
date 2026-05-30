@@ -6,7 +6,7 @@ All values Fernet-encrypted at rest using the gateway's encryption key.
 
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from ..security.scope_guard import RequireScope
@@ -28,9 +28,10 @@ class UserSecretsResponse(BaseModel):
 @router.get("/secrets", response_model=UserSecretsResponse, dependencies=[RequireScope("read")])
 async def get_secrets(store: StoreD):
     """Get user's stored secrets (masked for display)."""
-    from ..db.models import GatewayUserSecrets
-    from ..store.crypto import _decrypt
     from sqlalchemy import select
+
+    from ..db.models import GatewayUserSecrets
+    from ..store.crypto import _decrypt_with_migration, _encrypt
 
     org_id = store.org_id or "local"
     user_id = store.user_id or "local"
@@ -47,7 +48,10 @@ async def get_secrets(store: StoreD):
         return UserSecretsResponse(has_anthropic_key=False)
 
     try:
-        key = _decrypt(row.anthropic_api_key_enc)
+        key, needs_migration = _decrypt_with_migration(row.anthropic_api_key_enc)
+        if needs_migration:
+            row.anthropic_api_key_enc = _encrypt(key)
+            await store.session.commit()
         preview = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "****"
     except Exception:
         preview = "****"
@@ -62,9 +66,10 @@ async def get_secrets(store: StoreD):
 @router.put("/secrets", response_model=UserSecretsResponse, dependencies=[RequireScope("write")])
 async def update_secrets(body: UserSecretsUpdate, store: StoreD):
     """Store or update user secrets. Values are encrypted at rest."""
-    from ..db.models import GatewayUserSecrets
-    from ..store.crypto import _encrypt, _decrypt
     from sqlalchemy import select
+
+    from ..db.models import GatewayUserSecrets
+    from ..store.crypto import _decrypt_with_migration, _encrypt
 
     org_id = store.org_id or "local"
     user_id = store.user_id or "local"
@@ -93,9 +98,12 @@ async def update_secrets(body: UserSecretsUpdate, store: StoreD):
 
     has_key = row.anthropic_api_key_enc is not None
     preview = None
-    if has_key:
+    if has_key and row.anthropic_api_key_enc is not None:
         try:
-            key = _decrypt(row.anthropic_api_key_enc)
+            key, needs_migration = _decrypt_with_migration(row.anthropic_api_key_enc)
+            if needs_migration:
+                row.anthropic_api_key_enc = _encrypt(key)
+                await store.session.commit()
             preview = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "****"
         except Exception:
             preview = "****"
@@ -109,9 +117,10 @@ async def update_secrets(body: UserSecretsUpdate, store: StoreD):
 
 async def get_user_anthropic_key(session, org_id: str, user_id: str) -> str | None:
     """Internal: get the decrypted Anthropic API key for pod injection."""
-    from ..db.models import GatewayUserSecrets
-    from ..store.crypto import _decrypt
     from sqlalchemy import select
+
+    from ..db.models import GatewayUserSecrets
+    from ..store.crypto import _decrypt_with_migration, _encrypt
 
     result = await session.execute(
         select(GatewayUserSecrets).where(
@@ -123,6 +132,10 @@ async def get_user_anthropic_key(session, org_id: str, user_id: str) -> str | No
     if not row or not row.anthropic_api_key_enc:
         return None
     try:
-        return _decrypt(row.anthropic_api_key_enc)
+        plaintext, needs_migration = _decrypt_with_migration(row.anthropic_api_key_enc)
+        if needs_migration:
+            row.anthropic_api_key_enc = _encrypt(plaintext)
+            await session.commit()
+        return plaintext
     except Exception:
         return None

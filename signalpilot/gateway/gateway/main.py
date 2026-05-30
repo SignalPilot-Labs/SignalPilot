@@ -70,6 +70,19 @@ async def lifespan(app: FastAPI):
             logger.error("STARTUP FATAL: %s", e)
             raise SystemExit(1) from e
 
+    # F-18 S9: Eager K8s settings validation — in cloud mode this validates
+    # SP_NOTEBOOK_IMAGE digest format (and other cloud-mode validators). Crash
+    # at startup rather than at request-time so misconfiguration is visible
+    # immediately in deploy logs.
+    from pydantic import ValidationError as _ValidationError
+
+    from .config.k8s import get_k8s_settings as _get_k8s_settings
+    try:
+        _get_k8s_settings()
+    except _ValidationError as e:
+        logger.error("STARTUP FATAL: K8s settings validation failed: %s", e)
+        raise SystemExit(1) from e
+
     # Shared httpx client for the notebook proxy — one client, shared across requests.
     # Closed in lifespan teardown. Timeouts: connect=5s, read=None (SSE/long-poll),
     # write=10s, pool=10s. Per-chunk idle watchdog wraps each chunk read in the proxy.

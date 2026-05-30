@@ -164,7 +164,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
                 org_id=org_id,
                 project_id=body.project_id,
                 branch=body.branch,
-                image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
+                image=get_k8s_settings().sp_notebook_image,
                 gateway_url=gateway_url,
                 session_jwt_secret_name=f"sp-jwt-{pod}",
                 session_id=session_info.id,

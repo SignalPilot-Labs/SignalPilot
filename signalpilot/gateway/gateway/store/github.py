@@ -130,14 +130,18 @@ async def delete_installation(session: AsyncSession, *, org_id: str, installatio
 
 
 async def get_valid_token(session: AsyncSession, row: GatewayGitHubInstallation) -> str:
-    from ..store.crypto import _decrypt, _encrypt
     from ..config.github import get_github_settings
-    from ..github_client import generate_app_jwt, create_installation_token
+    from ..github_client import create_installation_token, generate_app_jwt
+    from ..store.crypto import _decrypt_with_migration, _encrypt
 
     if not row.access_token_enc:
         raise ValueError("Installation has no stored token")
 
-    token = _decrypt(row.access_token_enc)
+    token, needs_migration = _decrypt_with_migration(row.access_token_enc)
+    if needs_migration:
+        row.access_token_enc = _encrypt(token)
+        row.updated_at = time.time()
+        await session.commit()
     if row.token_expires_at and row.token_expires_at > time.time() + 300:
         return token
 

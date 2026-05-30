@@ -4,6 +4,7 @@ import logging
 import re
 import uuid
 
+from gateway.config.k8s import get_k8s_settings
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
 from gateway.mcp.server import mcp
@@ -157,7 +158,7 @@ async def run_notebook(
                 return await orch.create_pod(
                     pod_name=pod_name, user_id=user_id, org_id=org_id,
                     project_id=project_id, branch=agent_branch,
-                    image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
+                    image=get_k8s_settings().sp_notebook_image,
                     gateway_url=k8s_settings.sp_public_gateway_url,
                     session_jwt_secret_name=f"sp-jwt-{pod_name}",
                     session_id=session_id,

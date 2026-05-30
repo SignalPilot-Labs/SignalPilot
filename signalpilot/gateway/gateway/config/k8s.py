@@ -13,6 +13,8 @@ from ._base import _GatewaySettingsBase
 
 _LOCAL_GATEWAY_URL_DEFAULT = "http://gateway:3300"
 _SINGLE_KV_RE = re.compile(r"^[^=,\s]+=[^=,\s]+$")
+# F-18: cloud-mode image digest must be sha256 + exactly 64 lowercase hex chars.
+_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 
 
 class K8sSettings(_GatewaySettingsBase):
@@ -45,6 +47,25 @@ class K8sSettings(_GatewaySettingsBase):
     # Empty string means no runtimeClassName is set (acceptable in local mode only).
     # In cloud mode SP_NOTEBOOK_RUNTIME_CLASS must be set explicitly (e.g. "gvisor").
     sp_notebook_runtime_class: str = Field("", alias="SP_NOTEBOOK_RUNTIME_CLASS")
+
+    @field_validator("sp_notebook_image", mode="after")
+    @classmethod
+    def _require_digest_in_cloud_mode(cls, v: str) -> str:
+        """In cloud mode, SP_NOTEBOOK_IMAGE must reference a digest (@sha256:<64-hex>).
+
+        Plain floating tags (e.g. :latest) are rejected in cloud mode to guarantee
+        image immutability. Local mode accepts any reference for backcompat.
+        """
+        is_cloud = os.environ.get("SP_DEPLOYMENT_MODE", "").lower() == "cloud"
+        if is_cloud and not _DIGEST_RE.search(v):
+            raise ValueError(
+                "SP_NOTEBOOK_IMAGE must reference a digest in cloud mode "
+                "(e.g. your-registry/notebook@sha256:<64-hex>). "
+                "Floating tags like ':latest' are not allowed. "
+                "Look up the digest with: crane digest <image> OR "
+                "docker buildx imagetools inspect <image>"
+            )
+        return v
 
     @field_validator("sp_notebook_runtime_class", mode="after")
     @classmethod

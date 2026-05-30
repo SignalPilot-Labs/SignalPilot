@@ -348,7 +348,8 @@ class KubernetesOrchestrator(NotebookOrchestrator):
                 f"Got: {_UPSTREAM_MODE!r}. "
                 "NodePort mode was retired in R3. Use pod_ip for cloud/k8s deployments."
             )
-        self._image = image or os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest")
+        from ..config.k8s import get_k8s_settings
+        self._image = image or get_k8s_settings().sp_notebook_image
         self._client = None
         self._core_api = None
         self._networking_api = None

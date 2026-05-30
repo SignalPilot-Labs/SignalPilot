@@ -1,0 +1,47 @@
+---
+# Resources for restrict-pod-exec Kyverno test.
+# Represents exec admission requests (Pod/exec CONNECT) in various scenarios.
+
+# Case A: Valid notebook pod + container=notebook (simulated via object field)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nb-abc123def456
+  namespace: sp-nb-tenant-labeled
+spec:
+  containers:
+    - name: notebook
+      image: signalpilot-notebook@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# Case B: Valid pod name but wrong container
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nb-bad-container
+  namespace: sp-nb-tenant-labeled
+spec:
+  containers:
+    - name: other
+      image: busybox
+---
+# Case C: Invalid pod name
+apiVersion: v1
+kind: Pod
+metadata:
+  name: not-an-nb-pod
+  namespace: sp-nb-tenant-labeled
+spec:
+  containers:
+    - name: notebook
+      image: busybox
+---
+# Case D: Pod in unlabeled namespace (kube-system has no signalpilot.dev/tenant: user label)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nb-abc123def456
+  namespace: kube-system
+spec:
+  containers:
+    - name: notebook
+      image: busybox

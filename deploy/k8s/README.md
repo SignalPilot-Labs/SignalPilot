@@ -134,7 +134,7 @@ kubectl apply -f deploy/k8s/gateway-rbac.yaml
 | `SP_GATEWAY_SERVICE_ACCOUNT` | `signalpilot-gateway` | SA name for per-namespace RoleBinding subjects. |
 | `SP_NOTEBOOK_NAMESPACE_PREFIX` | `sp-nb` | Prefix for org namespaces. **Set at bootstrap, never change** (see warning below). |
 | `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow notebook pods to reach this CIDR on port 443 (e.g. S3). **Validator hard-fails on startup if this CIDR contains AWS IMDS (`169.254.169.254` or `fd00:ec2::/32`). `0.0.0.0/0` and `169.254.0.0/16` are rejected.** |
-| `SP_NOTEBOOK_IMAGE` | `your-registry/notebook:tag` | Container image for notebook pods. |
+| `SP_NOTEBOOK_IMAGE` | `your-registry/notebook@sha256:<64-hex>` | Container image for notebook pods. **In cloud mode, must be a digest reference** (`@sha256:<64-hex>`). Floating tags like `:latest` are rejected at startup. Look up the digest with `crane digest <image>` or `docker buildx imagetools inspect <image>`. |
 | `SP_NOTEBOOK_RUNTIME_CLASS` | `gvisor` | **Required in cloud mode.** RuntimeClass name for notebook pod isolation. Empty in local mode. |
 
 ### (e) IMDSv2 hop-limit enforcement at the EC2 node level
@@ -183,3 +183,107 @@ migrate or clean up the old ones.
 
 If you must change the prefix, drain all sessions first and perform a coordinated
 namespace migration.
+
+### (h) Pod PID limit (fork-bomb containment)
+
+Linux PIDs are a separate cgroup controller from CPU and memory. Without a
+`podPidsLimit`, a user notebook running a fork-bomb (`:(){:|:&};:`) exhausts
+node-wide PID space and starves kubelet, making the entire node unresponsive.
+
+#### k3s: set podPidsLimit via kubelet arg
+
+Append `--kubelet-arg=pod-max-pids=4096` to the k3s install command on every
+server and agent node. `pod-max-pids` is the kubelet flag corresponding to
+`podPidsLimit` in `KubeletConfiguration`.
+
+```bash
+# Example k3s server install with PID limit
+curl -sfL https://get.k3s.io | sh -s - server \
+  --kubelet-arg=pod-max-pids=4096 \
+  # ... other args ...
+
+# On each agent node:
+curl -sfL https://get.k3s.io | sh -s - agent \
+  --kubelet-arg=pod-max-pids=4096 \
+  # ... other args ...
+```
+
+If you prefer a `KubeletConfiguration` file (e.g. for version compatibility),
+use `--kubelet-arg=config=/etc/rancher/k3s/kubelet.yaml` with a file containing:
+
+```yaml
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+podPidsLimit: 4096
+```
+
+#### EKS: set podPidsLimit via node group config
+
+Add to your `eksctl` cluster config or launch template user-data:
+
+```yaml
+# eksctl nodeGroup section
+kubeletExtraConfig:
+  podPidsLimit: 4096
+```
+
+Or via a `KubeletConfiguration` file in user-data.
+
+#### Optional: node-wide kernel PID ceiling
+
+This is **optional** — the kernel default (`kernel.pid_max`) is already 4,194,304
+(4M), which is sufficient for nearly all workloads. If you have a specific reason
+to lower the node-wide PID cap, create a sysctl drop-in:
+
+```bash
+# /etc/sysctl.d/99-signalpilot.conf
+# Optional — kernel default is 4194304. Lower only if you have justification.
+kernel.pid_max = 4194304
+```
+
+This is a node-level kernel setting, NOT a kubelet flag.
+
+#### Verification
+
+After applying, verify the setting took effect:
+
+```bash
+NODE=<your-node-name>
+kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" | jq '.kubeletconfig.podPidsLimit'
+# Expected: 4096
+```
+
+#### Checklist
+
+- [ ] kubelet `podPidsLimit=4096` configured on every node.
+
+### (i) Master key rotation
+
+When rotating `SP_ENCRYPTION_KEY`:
+
+1. Generate a new Fernet key:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+2. Set `SP_ENCRYPTION_KEY=<new-key>` and `SP_ENCRYPTION_KEY_OLD=<previous-key>`.
+   Rolling restart the gateway. The old key stays active for decryption.
+
+3. Reads automatically re-encrypt rows under the new primary key via
+   `needs_migration=True` — this covers `connections`, `user_secrets`, and
+   `github_credentials` (all three C1 callsites routed through
+   `_decrypt_with_migration`).
+
+4. **HARD PRECONDITION before step 5:** EITHER:
+   - (a) The bake period exceeds the maximum row lifetime AND a query confirms
+     zero rows have ciphertext older than the rotation epoch, OR
+   - (b) Run the admin re-encrypt task: `python -m gateway.admin.reencrypt_all`
+     *(planned — not required if routine reads cover all rows during bake period)*.
+
+   **Dropping `SP_ENCRYPTION_KEY_OLD` before all rows are migrated will
+   permanently lose access to tokens encrypted under the old key.**
+
+5. Drop `SP_ENCRYPTION_KEY_OLD` and rolling restart.
+
+**Old key cap:** Maximum 8 entries in `SP_ENCRYPTION_KEY_OLD` (comma-separated).
+Exceeding this limit raises a hard error at startup.

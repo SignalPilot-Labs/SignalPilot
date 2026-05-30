@@ -118,17 +118,17 @@ class TestGetEncryptionKey:
     """Two simultaneous starts must return the same Fernet key."""
 
     def test_generates_and_caches_key(self, tmp_path: Path) -> None:
-        with patch("gateway.store._constants.DATA_DIR", tmp_path), patch("gateway.store.crypto._CACHED_KEY", None):
+        with patch("gateway.store._constants.DATA_DIR", tmp_path), patch("gateway.store.crypto._CACHED_MULTIFERNET", None):
             import gateway.store.crypto as _crypto_module
 
-            old_cache = _crypto_module._CACHED_KEY
-            _crypto_module._CACHED_KEY = None
+            old_cache = _crypto_module._CACHED_MULTIFERNET
+            _crypto_module._CACHED_MULTIFERNET = None
             try:
                 key = _get_encryption_key()
                 assert key is not None
                 assert len(key) > 0
             finally:
-                _crypto_module._CACHED_KEY = old_cache
+                _crypto_module._CACHED_MULTIFERNET = old_cache
 
     def test_key_is_stripped_from_existing_file(self, tmp_path: Path) -> None:
         """Key file with trailing newline must be stripped."""
@@ -140,8 +140,8 @@ class TestGetEncryptionKey:
 
         import gateway.store.crypto as _crypto_module
 
-        original_cache = _crypto_module._CACHED_KEY
-        _crypto_module._CACHED_KEY = None
+        original_cache = _crypto_module._CACHED_MULTIFERNET
+        _crypto_module._CACHED_MULTIFERNET = None
         try:
             with patch("gateway.store._constants.DATA_DIR", tmp_path), patch.dict("os.environ", {}, clear=False):
                 # Remove SP_ENCRYPTION_KEY if set
@@ -156,16 +156,16 @@ class TestGetEncryptionKey:
                     if env_backup is not None:
                         os.environ["SP_ENCRYPTION_KEY"] = env_backup
         finally:
-            _crypto_module._CACHED_KEY = original_cache
+            _crypto_module._CACHED_MULTIFERNET = original_cache
 
     def test_race_condition_returns_same_key(self, tmp_path: Path) -> None:
         """Two calls without cached key both end up with the same key bytes."""
         import gateway.store.crypto as _crypto_module
 
-        original_cache = _crypto_module._CACHED_KEY
+        original_cache = _crypto_module._CACHED_MULTIFERNET
 
         def reset_and_call() -> bytes:
-            _crypto_module._CACHED_KEY = None
+            _crypto_module._CACHED_MULTIFERNET = None
             return _get_encryption_key()
 
         import os
@@ -175,12 +175,12 @@ class TestGetEncryptionKey:
             with patch("gateway.store._constants.DATA_DIR", tmp_path):
                 key_a = reset_and_call()
                 # Second call: cache may be set, but file now exists — result is the same
-                _crypto_module._CACHED_KEY = None
+                _crypto_module._CACHED_MULTIFERNET = None
                 key_b = _get_encryption_key()
         finally:
             if env_backup is not None:
                 os.environ["SP_ENCRYPTION_KEY"] = env_backup
-            _crypto_module._CACHED_KEY = original_cache
+            _crypto_module._CACHED_MULTIFERNET = original_cache
 
         assert key_a == key_b
 

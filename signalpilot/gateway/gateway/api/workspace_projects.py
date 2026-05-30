@@ -10,9 +10,11 @@ from ..models.workspace import (
     WorkspaceProjectUpdate,
 )
 from ..security.scope_guard import RequireScope
-from .deps import StoreD
+from .deps import ProjectsGate, StoreD
 
-router = APIRouter(prefix="/api")
+# All workspace-project routes require the paid "projects" feature.
+# In local mode the tier resolves to "unlimited", so the gate is a no-op.
+router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
 
 
 async def _get_project_or_404(store, project_id: str) -> WorkspaceProjectInfo:

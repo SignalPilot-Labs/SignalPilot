@@ -38,6 +38,25 @@ async def get_store(
 
 StoreD = Annotated[Store, Depends(get_store)]
 
+
+# ─── Plan-gate dependency ────────────────────────────────────────────────────
+
+
+async def require_projects_feature(org_id: OrgID) -> None:
+    """FastAPI dependency: gate the projects/notebooks feature to paid plans.
+
+    Resolves the org's plan tier and raises 403 if the projects feature is not
+    available (free tier). In local mode the tier resolves to "unlimited", so
+    this is a no-op — local deployments are never gated.
+    """
+    from ..governance.plan_limits import check_feature, get_org_limits
+
+    limits = await get_org_limits(org_id)
+    check_feature("projects", limits)
+
+
+ProjectsGate = Depends(require_projects_feature)
+
 # ─── SQLglot dialect mapping ─────────────────────────────────────────────────
 
 SQLGLOT_DIALECTS: dict[str, str] = {

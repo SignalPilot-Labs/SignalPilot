@@ -16,14 +16,16 @@ from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
 from ..notebook_proxy.cookies import clear_proxy_cookie
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
-from .deps import StoreD
+from .deps import ProjectsGate, StoreD
 
 # Single source of truth for session_id charset validation (shared with proxy auth).
 _SESSION_ID_PATTERN = re.compile(SESSION_ID_PATTERN_STR)
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/notebook-sessions")
+# Notebook sessions are part of the paid "projects" feature. In local mode the
+# tier resolves to "unlimited", so the gate is a no-op.
+router = APIRouter(prefix="/api/notebook-sessions", dependencies=[ProjectsGate])
 
 
 def _pod_name(org_id: str, user_id: str) -> str:

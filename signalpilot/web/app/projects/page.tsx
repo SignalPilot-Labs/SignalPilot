@@ -24,6 +24,9 @@ import {
   type NotebookConfig,
 } from "~/components/notebook/notebook-context";
 import type { BootPhase } from "~/components/notebook/boot-runtime";
+import { useSubscription } from "~/lib/subscription-context";
+
+const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
 const NotebookBoot = dynamic(
   () => import("~/components/notebook/notebook-boot"),
@@ -73,6 +76,12 @@ function IDEHeader({
 export default function ProjectsPage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
+  const { planTier, isLoaded: subLoaded } = useSubscription();
+
+  // Projects is a paid feature. Local mode reports "team" so it's never gated.
+  // In cloud mode, free-tier users see an upgrade paywall instead of the IDE.
+  const isPaid = PAID_TIERS.includes(planTier);
+  const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
 
   const urlProject = searchParams.get("project") || "";
   const urlBranch = searchParams.get("branch") || "";
@@ -110,6 +119,14 @@ export default function ProjectsPage() {
   }
 
   useEffect(() => {
+    // Wait for the subscription to load before deciding anything in cloud mode.
+    if (IS_CLOUD_MODE && !subLoaded) return;
+    // Gated (free-tier cloud) users never launch a session — the paywall renders.
+    if (gated) {
+      setState("no-session");
+      return;
+    }
+
     let cancelled = false;
 
     async function init() {
@@ -159,7 +176,7 @@ export default function ProjectsPage() {
       cancelled = true;
       if (pingRef.current) clearInterval(pingRef.current);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoaded, gated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notebookConfig && (state === "ready" || state === "booting")) {
@@ -250,6 +267,37 @@ export default function ProjectsPage() {
     } catch {
       toast(url, "success");
     }
+  }
+
+  // ─── Render: Paywall (free-tier cloud users) ──────────────────
+  if (gated) {
+    return (
+      <div className="p-8 animate-fade-in">
+        <div className="max-w-md mx-auto mt-24">
+          <div className="flex items-center gap-3 mb-6">
+            <Code className="w-6 h-6 text-[var(--color-text)]" />
+            <h1 className="text-lg font-bold uppercase tracking-wider text-[var(--color-text)]">
+              SignalPilot IDE
+            </h1>
+          </div>
+          <div className="border border-[var(--color-border)] p-6 space-y-4">
+            <p className="text-sm text-[var(--color-text)]">
+              Notebooks &amp; projects are a Pro feature.
+            </p>
+            <p className="text-xs text-[var(--color-text-dim)] leading-relaxed">
+              Upgrade to Pro, Team, or Enterprise to create governed notebook
+              workspaces backed by your connections and dbt projects.
+            </p>
+            <a
+              href="/settings/billing"
+              className="inline-flex items-center gap-2 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            >
+              Upgrade plan
+            </a>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // ─── Render: Loading ──────────────────────────────────────────

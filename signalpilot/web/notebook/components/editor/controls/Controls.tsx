@@ -8,8 +8,7 @@ import {
   SquareIcon,
   Undo2Icon,
 } from "lucide-react";
-import { type JSX, useContext } from "react";
-import { SpEmbedConfigContext } from "@/embed/SpEmbedConfigContext";
+import type { JSX } from "react";
 import { NotebookMenuDropdown } from "@/components/editor/controls/notebook-menu-dropdown";
 import { ShutdownButton } from "@/components/editor/controls/shutdown-button";
 import { Button } from "@/components/editor/inputs/Inputs";
@@ -74,14 +73,8 @@ export const Controls = ({
     ? getConnectionTooltip(connectionState)
     : undefined;
 
-  // When embedded in the SignalPilot app (the /projects IDE), the app provides
-  // its own navigation and header. Hide the notebook's "back to home" and
-  // settings buttons — they overlap the app's header and are redundant. They
-  // still render in the standalone notebook view (the "External" link).
-  const isEmbedded = useContext(SpEmbedConfigContext) !== null;
-
   if (isRawFileView) {
-    return <RawFileControls disabled={disabled} connectionTooltip={connectionTooltip} closed={closed} isEmbedded={isEmbedded} />;
+    return <RawFileControls disabled={disabled} connectionTooltip={connectionTooltip} closed={closed} />;
   }
 
   let undoControl: JSX.Element | null = null;
@@ -114,14 +107,12 @@ export const Controls = ({
               disabled={disabled}
               tooltip={connectionTooltip}
             />
-            {!isEmbedded && <ConfigButton disabled={disabled} tooltip={connectionTooltip} />}
+            <ConfigButton disabled={disabled} tooltip={connectionTooltip} />
           </>
         )}
-        {!isEmbedded && (
-          <ShutdownButton
-            description="This will terminate the Python kernel. You'll lose all data that's in memory."
-          />
-        )}
+        <ShutdownButton
+          description="This will terminate the Python kernel. You'll lose all data that's in memory."
+        />
       </div>
 
       <div className={cn(bottomRightControls)}>
@@ -169,8 +160,7 @@ const RawFileControls: React.FC<{
   disabled: boolean;
   connectionTooltip: string | undefined;
   closed: boolean;
-  isEmbedded: boolean;
-}> = ({ disabled, connectionTooltip, closed, isEmbedded }) => {
+}> = ({ disabled, connectionTooltip, closed }) => {
   const rawNeedsSave = useAtomValue(rawFileNeedsSaveAtom);
   const rawSaveFn = useAtomValue(rawFileSaveFnAtom);
 
@@ -186,14 +176,12 @@ const RawFileControls: React.FC<{
               disabled={disabled}
               tooltip={connectionTooltip}
             />
-            {!isEmbedded && <ConfigButton disabled={disabled} tooltip={connectionTooltip} />}
+            <ConfigButton disabled={disabled} tooltip={connectionTooltip} />
           </>
         )}
-        {!isEmbedded && (
-          <ShutdownButton
-            description="This will terminate the Python kernel. You'll lose all data that's in memory."
-          />
-        )}
+        <ShutdownButton
+          description="This will terminate the Python kernel. You'll lose all data that's in memory."
+        />
       </div>
 
       <div className={cn(bottomRightControls)}>

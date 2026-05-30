@@ -14,6 +14,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,34 @@ PROJECTS_ROOT = Path.home() / ".sp" / "projects"
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+# TTL for the project-name and clone-info caches.  Auth tokens embedded in
+# clone-info become stale when the gateway rotates installation tokens / PATs;
+# a 5-minute TTL bounds staleness and caps unbounded memory growth.
+_CACHE_TTL_SECONDS = 300
+
+# Sync lock — module is reachable from both sync and async callers;
+# do not use asyncio.Lock here.
+_cache_lock = threading.Lock()
+
+
+def _cache_get(cache: dict[str, tuple[float, Any]], key: str) -> Any | None:
+    """Return cached value if present and within TTL, else pop and return None."""
+    with _cache_lock:
+        entry = cache.get(key)
+        if entry is None:
+            return None
+        ts, value = entry
+        if time.monotonic() - ts > _CACHE_TTL_SECONDS:
+            cache.pop(key, None)
+            return None
+        return value
+
+
+def _cache_put(cache: dict[str, tuple[float, Any]], key: str, value: Any) -> None:
+    """Write value into cache with current monotonic timestamp."""
+    with _cache_lock:
+        cache[key] = (time.monotonic(), value)
 
 
 def _validate_branch(branch: str) -> None:
@@ -95,7 +125,7 @@ def _make_basic_auth_header(username: str, token: str) -> str:
 
 # ── Project name cache ───────────────────────────────────────────
 
-_project_name_cache: dict[str, str] = {}
+_project_name_cache: dict[str, tuple[float, str]] = {}
 
 
 def _fetch_project_name(project_id: str) -> str:
@@ -114,14 +144,17 @@ def _fetch_project_name(project_id: str) -> str:
 
 
 def _get_project_name(project_id: str) -> str:
-    if project_id not in _project_name_cache:
-        _project_name_cache[project_id] = _fetch_project_name(project_id)
-    return _project_name_cache[project_id]
+    cached = _cache_get(_project_name_cache, project_id)
+    if cached is not None:
+        return cached
+    name = _fetch_project_name(project_id)
+    _cache_put(_project_name_cache, project_id, name)
+    return name
 
 
 # ── Clone URL ────────────────────────────────────────────────────
 
-_clone_url_cache: dict[str, dict[str, Any]] = {}
+_clone_url_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _gateway_url_raw() -> str:
@@ -134,9 +167,12 @@ def get_clone_info(project_id: str) -> dict[str, Any]:
 
     Uses the raw gateway URL (not rewritten) so the clone URL the gateway
     returns matches the hostname its git HTTP handler is bound to.
+
+    Only caches responses with a truthy clone_url — a temporarily-unavailable
+    gateway should not poison the cache with the empty fallback dict.
     """
-    cached = _clone_url_cache.get(project_id)
-    if cached and cached.get("clone_url"):
+    cached: dict[str, Any] | None = _cache_get(_clone_url_cache, project_id)
+    if cached is not None:
         return cached
 
     try:
@@ -148,7 +184,7 @@ def get_clone_info(project_id: str) -> dict[str, Any]:
         if resp.status_code == 200:
             data = resp.json()
             if data.get("clone_url"):
-                _clone_url_cache[project_id] = data
+                _cache_put(_clone_url_cache, project_id, data)
             return data
     except Exception:
         pass

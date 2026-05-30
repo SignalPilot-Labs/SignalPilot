@@ -144,29 +144,31 @@ async def run_notebook(
                 ttl=k8s_settings.sp_session_jwt_ttl_seconds,
             )
 
-            try:
-                from gateway.orchestrator.jwt_secret_lifecycle import (
-                    create_jwt_secret_with_owner_ref,
+            from gateway.orchestrator.jwt_secret_lifecycle import (
+                create_jwt_secret_with_owner_ref,
+            )
+            from gateway.orchestrator.namespaces import namespace_for_org
+
+            await orch._ensure_client()  # type: ignore[attr-defined]
+            ns_name = namespace_for_org(org_id, prefix=orch._namespace_prefix or "sp-nb")
+            core_v1 = orch._core_api  # type: ignore[attr-defined]
+
+            async def _create_pod_fn():
+                return await orch.create_pod(
+                    pod_name=pod_name, user_id=user_id, org_id=org_id,
+                    project_id=project_id, branch=agent_branch,
+                    image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
+                    gateway_url=k8s_settings.sp_public_gateway_url,
+                    session_jwt_secret_name=f"sp-jwt-{pod_name}",
+                    session_id=session_id,
+                    access_token=session_info.access_token,
+                    extra_env={"SP_AGENT_MODE": "true"},
                 )
-                from gateway.orchestrator.namespaces import namespace_for_org
 
-                await orch._ensure_client()  # type: ignore[attr-defined]
-                ns_name = namespace_for_org(org_id, prefix=orch._namespace_prefix or "sp-nb")
-                core_v1 = orch._core_api  # type: ignore[attr-defined]
-
-                async def _create_pod_fn():
-                    return await orch.create_pod(
-                        pod_name=pod_name, user_id=user_id, org_id=org_id,
-                        project_id=project_id, branch=agent_branch,
-                        image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
-                        gateway_url=k8s_settings.sp_public_gateway_url,
-                        session_jwt_secret_name=f"sp-jwt-{pod_name}",
-                        session_id=session_id,
-                        access_token=session_info.access_token,
-                        extra_env={"SP_AGENT_MODE": "true"},
-                    )
-
-                # R7 F-13: shared helper ensures Secret either has ownerRef OR is deleted.
+            # Inner try: helper owns its own cleanup. Just convert to user-facing error.
+            # R7 F-13: create_jwt_secret_with_owner_ref already deletes Pod + Secret
+            # on its own failure path before re-raising — do NOT delete_pod here.
+            try:
                 await create_jwt_secret_with_owner_ref(
                     core_v1,
                     namespace=ns_name,
@@ -174,9 +176,16 @@ async def run_notebook(
                     session_jwt=session_jwt,
                     create_pod_fn=_create_pod_fn,
                 )
+            except Exception as exc:
+                # Helper already deleted Secret + Pod (if pod existed) before re-raising.
+                await ns.update_session_status(session, session_id=session_id, status="error")
+                return f"Error starting notebook pod: {exc}"
+
+            # Outer try: post-helper waits. Pod EXISTS here; we own its cleanup.
+            # Pod entrypoint reads JWT from emptyDir, unlinks, then exec sp edit.
+            # wait_for_ready's TCP probe on :2718 gates readiness.
+            try:
                 await orch.wait_for_running(pod_name, org_id=org_id, timeout=90)
-                # Pod entrypoint reads JWT from emptyDir, unlinks, then exec sp edit.
-                # wait_for_ready's TCP probe on :2718 gates readiness.
                 await orch.wait_for_ready(pod_name, org_id=org_id, timeout=90)
                 pod_info = await orch.get_pod(pod_name, org_id=org_id)
                 await ns.update_session_status(
@@ -186,10 +195,11 @@ async def run_notebook(
                 )
             except Exception as exc:
                 await ns.update_session_status(session, session_id=session_id, status="error")
+                # Helper succeeded but readiness failed — pod is ours to clean up.
                 try:
                     await orch.delete_pod(pod_name, org_id=org_id)
                 except Exception:
-                    pass
+                    logger.warning("Failed to delete pod %s after readiness failure", pod_name)
                 return f"Error starting notebook pod: {exc}"
 
     # 4. Locate the git clone that project_sync_boot placed in the pod at boot.

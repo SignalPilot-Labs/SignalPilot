@@ -5,7 +5,6 @@ import type { AppConfig } from "@/core/config/config-schema";
 import { isAppClosed } from "@/core/websocket/connection-utils";
 import type { ConnectionStatus } from "@/core/websocket/types";
 import { cn } from "@/utils/cn";
-import { DynamicFavicon } from "./dynamic-favicon";
 import { StatusOverlay } from "./header/status";
 import { WrappedWithSidebar } from "./renderers/vertical-layout/sidebar/wrapped-with-sidebar";
 
@@ -27,7 +26,6 @@ export const AppContainer: React.FC<PropsWithChildren<Props>> = ({
 
   return (
     <>
-      <DynamicFavicon isRunning={isRunning} />
       <StatusOverlay
         connection={connection}
         isRunning={isRunning}

@@ -297,7 +297,29 @@ async def validate_byok_key(
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
     from ..store.byok_state import _byok_provider as provider
 
+    client_ip, user_agent = _extract_request_meta(request)
+
     if provider is None:
+        metadata = {
+            "key_id": key_id,
+            "provider_type": "unknown",
+            "result": "error",
+            "reason": "provider_not_found",
+        }
+        # Audit-DB failure must not block the error response; best-effort observability.
+        try:
+            await store.append_audit(
+                AuditEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    event_type="byok_key_validate",
+                    metadata=metadata,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to append audit log for byok_key_validate key_id=%s", key_id)
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
 
     result = await db.execute(
@@ -310,29 +332,46 @@ async def validate_byok_key(
     if key is None or key.org_id != org_id:
         raise HTTPException(status_code=404, detail="Key not found")
 
+    result_status = "success"
     try:
         ciphertext, wrapped_dek = await encrypt_envelope(
             provider, key.org_id, key.key_alias, BYOK_HEALTH_CHECK_PLAINTEXT
         )
         recovered = await decrypt_envelope(provider, key.org_id, key.key_alias, wrapped_dek, ciphertext)
         if recovered != BYOK_HEALTH_CHECK_PLAINTEXT:
-            return {"valid": False, "error": "Round-trip produced incorrect plaintext"}
+            result_status = "invalid"
     except BYOKKeyError as exc:
         logger.warning("BYOK key validation failed for key_id=%s: %s", key_id, exc)
-        return {"valid": False, "error": "Key validation failed"}
+        result_status = "invalid"
     except Exception:
         logger.exception("BYOK key validation failed for key_id=%s", key_id)
-        return {"valid": False, "error": "Validation failed due to an internal error"}
+        result_status = "invalid"
 
-    client_ip, user_agent = _extract_request_meta(request)
-    # Audit-DB failure must not block the successful validation; best-effort observability.
+    if result_status == "invalid":
+        audit_metadata = {
+            "key_id": key_id,
+            "key_alias": key.key_alias,
+            "provider_type": key.provider_type,
+            "result": "error",
+            "reason": "validation_failed",
+        }
+    else:
+        audit_metadata = {
+            "key_id": key_id,
+            "key_alias": key.key_alias,
+            "provider_type": key.provider_type,
+            "result": "success",
+            "reason": "success",
+        }
+
+    # Audit-DB failure must not block the validation response; best-effort observability.
     try:
         await store.append_audit(
             AuditEntry(
                 id=str(uuid.uuid4()),
                 timestamp=time.time(),
                 event_type="byok_key_validate",
-                metadata={"key_id": key_id, "key_alias": key.key_alias, "provider_type": key.provider_type},
+                metadata=audit_metadata,
                 client_ip=client_ip,
                 user_agent=user_agent,
             )
@@ -340,6 +379,8 @@ async def validate_byok_key(
     except Exception:
         logger.warning("Failed to append audit log for byok_key_validate key_id=%s", key_id)
 
+    if result_status == "invalid":
+        return {"valid": False, "error": "Key validation failed"}
     return {"valid": True}
 
 

@@ -21,6 +21,21 @@ from gateway.store import CredentialEncryptionError
 
 logger = logging.getLogger(__name__)
 
+# When adding a new secret-bearing field to ConnectionUpdate, also add
+# the field name here so connection_update audit entries correctly flag
+# credential rotation. The set is intentionally explicit (not derived
+# from the model) to make the audit-policy decision visible at the
+# call site.
+_SECRET_FIELDS: frozenset[str] = frozenset({
+    "connection_string",
+    "password",
+    "credentials_json",
+    "access_token",
+    "private_key",
+    "private_key_passphrase",
+    "ssh_tunnel",
+})
+
 
 def _extract_request_meta(request: Request) -> tuple[str | None, str | None]:
     """Extract client_ip and user_agent from the incoming HTTP request."""
@@ -112,7 +127,7 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
     old_conn_str = await store.get_connection_string(name)
-    credentials_changed = "connection_string" in update_data
+    credentials_changed = bool(_SECRET_FIELDS & update_data.keys())
 
     try:
         result = await store.update_connection(name, update)

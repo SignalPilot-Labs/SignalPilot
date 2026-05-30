@@ -2,6 +2,8 @@
 
 import os
 
+_TRUTHY_VALUES: frozenset[str] = frozenset({"1", "true", "yes"})
+
 
 def is_cloud_mode() -> bool:
     return os.environ.get("SP_DEPLOYMENT_MODE", "local") == "cloud"
@@ -9,6 +11,22 @@ def is_cloud_mode() -> bool:
 
 def is_local_mode() -> bool:
     return not is_cloud_mode()
+
+
+def byok_custom_endpoint_allowed() -> bool:
+    """Return True when custom endpoint_url is permitted for BYOK providers.
+
+    In local mode (SP_DEPLOYMENT_MODE unset or not "cloud"), defaults to True
+    so the LocalStack/dev workflow continues to work without requiring an env
+    opt-in. In cloud mode, defaults to False; require explicit env opt-in via
+    SP_BYOK_ALLOW_CUSTOM_ENDPOINT=1|true|yes.
+    """
+    raw = os.environ.get("SP_BYOK_ALLOW_CUSTOM_ENDPOINT", "").strip().lower()
+    if raw in _TRUTHY_VALUES:
+        return True
+    if is_local_mode():
+        return True
+    return False
 
 
 def assert_cloud_hardening_intact() -> None:

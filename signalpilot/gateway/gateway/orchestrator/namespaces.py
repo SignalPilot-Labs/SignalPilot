@@ -159,8 +159,20 @@ async def ensure_org_namespace(
             lambda: core_api.create_namespace(body=_namespace_manifest(namespace, sha)),
             f"Namespace/{namespace}",
         )
+        # ALWAYS block egress to cloud IMDS — even when the full default-deny
+        # NetworkPolicy set is skipped. This is a targeted, non-disruptive policy
+        # (allows all other egress) that stops a malicious notebook from reaching
+        # 169.254.169.254 and stealing the node IAM role. Defense-in-depth on top
+        # of the node IMDS hop-limit.
+        await _create_idempotent(
+            lambda: networking_api.create_namespaced_network_policy(
+                namespace=namespace,
+                body=_block_imds_egress_policy(namespace),
+            ),
+            f"NetworkPolicy/block-imds-egress in {namespace}",
+        )
         if skip_network_policy:
-            logger.info("Skipping NetworkPolicy creation in local mode (SP_NOTEBOOK_NETWORK_POLICY=false)")
+            logger.info("Skipping default-deny NetworkPolicy in local mode (SP_NOTEBOOK_NETWORK_POLICY=false); IMDS egress still blocked")
         if not skip_network_policy:
             await _create_idempotent(
                 lambda: networking_api.create_namespaced_network_policy(
@@ -240,6 +252,37 @@ def _namespace_manifest(namespace: str, sha: str) -> dict:
                 # signalpilot.dev/tenant=user to scope enforcement to tenant namespaces only.
                 "signalpilot.dev/tenant": "user",
             },
+        },
+    }
+
+
+def _block_imds_egress_policy(namespace: str) -> dict:
+    """Allow all egress EXCEPT cloud IMDS link-local addresses.
+
+    Applied unconditionally (even when the default-deny set is skipped) so a
+    malicious notebook can't reach 169.254.169.254 / fd00:ec2::/32 and steal the
+    node IAM role. Non-disruptive: all other egress (DNS, gateway, DBs, pip, git)
+    is allowed because the ipBlock is 0.0.0.0/0 with only IMDS in `except`.
+    """
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+            "name": "block-imds-egress",
+            "namespace": namespace,
+            "labels": {"signalpilot.ai/managed-by": "gateway"},
+        },
+        "spec": {
+            "podSelector": {},
+            "policyTypes": ["Egress"],
+            "egress": [
+                {
+                    "to": [
+                        {"ipBlock": {"cidr": "0.0.0.0/0", "except": ["169.254.169.254/32", "169.254.169.253/32"]}},
+                        {"ipBlock": {"cidr": "::/0", "except": ["fd00:ec2::/32"]}},
+                    ]
+                }
+            ],
         },
     }
 

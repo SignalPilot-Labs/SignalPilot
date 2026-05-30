@@ -478,7 +478,14 @@ export function useSpKernelConnection(opts: {
     /**
      * Unique URL for this session.
      */
-    url: async () => (await runtimeManager.getWsURL(getSessionId())).toString(),
+    // Auth is conveyed via Sec-WebSocket-Protocol (two-token form:
+    // ["signalpilot.auth", "<token>"]) — never via query param.
+    // Both url and protocols are resolved together inside
+    // createConnectionTransport's wrappedUrlFactory to share a single
+    // getWsURL() call per connection attempt. We split them here into
+    // two factories; the transport layer awaits them in parallel.
+    url: async () => (await runtimeManager.getWsURL(getSessionId())).url.toString(),
+    protocols: async () => (await runtimeManager.getWsURL(getSessionId())).subprotocols,
 
     /**
      * Open callback. Set the connection status to open.

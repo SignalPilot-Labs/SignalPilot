@@ -6,7 +6,6 @@ import json
 import os
 import struct
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
@@ -14,6 +13,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 from signalpilot import _loggers
 from signalpilot._server.api.auth import validate_auth
 from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.endpoints._cwd_validation import (
+    validate_terminal_cwd,
+)
 from signalpilot._server.codes import WebSocketCodes
 from signalpilot._server.router import APIRouter
 from signalpilot._session.model import SessionMode
@@ -544,12 +546,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         LOGGER.error(f"Failed to accept websocket connection: {e}")
         return
 
-    # Use cwd from query param if provided
-    cwd = websocket.query_params.get("cwd")
-    if cwd and os.path.isdir(cwd):
-        LOGGER.debug(f"Terminal cwd from query param: {cwd}")
-    else:
-        cwd = None
+    # Validate and resolve the ?cwd= query parameter.
+    # Fail-fast (close with 1008) on invalid cwd — a stale or malicious ?cwd=
+    # value is a hard error, not a silent fallback. This is intentional and
+    # security-motivated: containment to ~/.sp/projects/ (cloud) or
+    # projects+home (local) prevents directory traversal to secrets paths.
+    raw_cwd = websocket.query_params.get("cwd")
+    try:
+        cwd = validate_terminal_cwd(raw_cwd)
+    except ValueError as e:
+        LOGGER.warning("Terminal WS rejected: %s", e)
+        await websocket.close(code=1008, reason="invalid cwd")
+        return
 
     try:
         backend = _create_pty_backend(cwd)

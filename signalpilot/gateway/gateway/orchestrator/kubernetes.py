@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 
+from ..runtime.mode import is_cloud_mode
 from . import NotebookOrchestrator, PodInfo
 from .namespaces import ensure_org_namespace, namespace_for_org
 
@@ -511,7 +512,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         gateway_port: int = self._gateway_port  # type: ignore[assignment]
         gateway_service_account: str = self._gateway_service_account  # type: ignore[assignment]
 
-        skip_netpol = os.getenv("SP_NOTEBOOK_NETWORK_POLICY", "true").lower() == "false"
+        skip_netpol = (not is_cloud_mode()) and os.getenv("SP_NOTEBOOK_NETWORK_POLICY", "true").lower() == "false"
         await ensure_org_namespace(
             self._core_api,
             self._networking_api,

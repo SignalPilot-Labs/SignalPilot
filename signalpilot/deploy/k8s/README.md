@@ -17,6 +17,12 @@ lives in git.
 
 ---
 
+## Admission Policies
+
+**F-12:** `admission/` contains policies that require `runtimeClassName: gvisor` on all pods in tenant namespaces. **Default:** apply the `ValidatingAdmissionPolicy` YAML (k8s >= 1.30). Kyverno fallback for older clusters. See [`admission/README.md`](admission/README.md) for full details — including the mandate that only ONE enforcement mechanism be installed at a time.
+
+---
+
 ## pods/exec RBAC
 
 Each org namespace receives a `Role` with `pods/exec create`. This is required

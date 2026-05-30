@@ -218,8 +218,17 @@ def local_project_dir(project_id: str, branch: str = "") -> Path:
 
 def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
     """Clone or pull latest from gateway bare repo."""
+    from signalpilot._server.files.git_auth import (
+        purge_persisted_auth,
+        run_git_authed as _run_ga,
+    )
+
     _validate_branch(branch)
     repo = local_project_dir(project_id)
+
+    # Upgrade safety: scrub any stale http.extraHeader written by pre-F-9 code.
+    purge_persisted_auth(repo)
+
     clone_url, auth_header = _get_clone_url_and_auth(project_id)
 
     if not clone_url:
@@ -272,15 +281,10 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
 
         _run_git(repo, "config", "user.email", "notebook@signalpilot.dev")
         _run_git(repo, "config", "user.name", "SignalPilot")
-        if auth_header:
-            _run_git(repo, "config", "--local", "http.extraHeader",
-                     f"Authorization: {auth_header}")
+        # Auth header is per-process via -c; never persist into .git/config.
     else:
-        # Existing repo — refresh auth config and fetch latest
-        if auth_header:
-            _run_git(repo, "config", "--local", "http.extraHeader",
-                     f"Authorization: {auth_header}")
-        _run_git(repo, "fetch", "origin")
+        # Existing repo — fetch latest (auth passed per-invocation, not persisted)
+        _run_ga(repo, project_id, "fetch", "origin")
 
     # Checkout the requested branch — hard reset, discard all local changes
     current = _current_git_branch(repo)
@@ -296,10 +300,11 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
             _run_git(repo, "checkout", "-b", branch)
 
     # Pull latest from remote (fast-forward if possible)
+    # Use authed runner — pull is a remote operation and credentials must not be persisted.
     if _git_remote_branch_exists(repo, branch):
-        code, out, err = _run_git(repo, "pull", "--ff-only", "origin", branch)
+        code, out, err = _run_ga(repo, project_id, "pull", "--ff-only", "origin", branch)
         if code != 0:
-            _run_git(repo, "pull", "origin", branch, "--no-edit")
+            _run_ga(repo, project_id, "pull", "origin", branch, "--no-edit")
 
     file_count = sum(
         1 for f in repo.rglob("*")
@@ -316,18 +321,21 @@ def sync_down(project_id: str, branch: str = "main") -> dict[str, Any]:
 
 def sync_up(project_id: str, branch: str = "main") -> dict[str, Any]:
     """Commit and push local changes to gateway."""
+    from signalpilot._server.files.git_auth import (
+        purge_persisted_auth,
+        run_git_authed as _run_ga,
+    )
+
     _validate_branch(branch)
     repo = local_project_dir(project_id)
     if not (repo / ".git").exists():
         return {"error": "No local repo"}
 
-    # Refresh auth config (token may have been refreshed)
-    _, auth_header = _get_clone_url_and_auth(project_id)
-    if auth_header:
-        _run_git(repo, "config", "--local", "http.extraHeader",
-                 f"Authorization: {auth_header}")
+    # Upgrade safety: scrub any stale http.extraHeader written by pre-F-9 code.
+    purge_persisted_auth(repo)
 
-    code, out, err = _run_git(repo, "push", "origin", branch)
+    # Auth header is per-process via -c; never persist into .git/config.
+    code, out, err = _run_ga(repo, project_id, "push", "origin", branch)
     if code != 0:
         LOGGER.error("Push failed: %s", _redact_url(err))
         return {"error": err.strip()}

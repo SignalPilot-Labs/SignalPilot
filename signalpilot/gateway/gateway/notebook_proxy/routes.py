@@ -17,20 +17,23 @@ from __future__ import annotations
 
 import logging
 import re
+import urllib.parse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.websockets import WebSocket
 
-from ..api.deps import StoreD
-from ..auth.user import resolve_org_id, resolve_user_id
+from ..auth.user import resolve_user_id
 from ..config.k8s import get_k8s_settings
 from ..runtime.mode import is_cloud_mode
 from ..store import notebook_sessions as ns
 from .auth import SESSION_ID_PATTERN, ProxySession, resolve_proxy_session
 from .cookies import set_proxy_cookie
 from .proxy import NotebookProxy
+
+# Keys that must be scrubbed from logged query strings to prevent token leakage.
+_SENSITIVE_QUERY_KEYS = frozenset({"access_token", "token"})
 
 # Safe charset for forwarded WS query strings.
 # Allows URL-safe characters: alphanumeric, hyphen, underscore, dot, tilde,
@@ -166,36 +169,68 @@ async def proxy_websocket(
     to a close before accept. We additionally guard with an explicit close on
     failure path in the proxy.
 
+    Subprotocol echo: if auth succeeded via Sec-WebSocket-Protocol two-token form,
+    the WS accept echoes back ONLY the sentinel "signalpilot.auth" — never the token.
+    This is per RFC 6455 (server selects one subprotocol from the offered list).
+
     No RequireScope — see module docstring.
     """
     raw_query = ws.url.query
+
+    # Scrub sensitive keys from query string BEFORE logging or forwarding upstream.
+    # access_token / token values must never appear in log records or be forwarded
+    # to the upstream pod (where they would appear in pod/ingress access logs).
+    if raw_query:
+        safe_pairs = [
+            (k, v)
+            for k, v in urllib.parse.parse_qsl(raw_query, keep_blank_values=True)
+            if k not in _SENSITIVE_QUERY_KEYS
+        ]
+        logged_query = urllib.parse.urlencode(safe_pairs)
+        forwarded_query = logged_query
+    else:
+        logged_query = ""
+        forwarded_query = ""
+
     logger.info(
         "WS HANDLER: session=%s path=%s query=%s upstream_base=%s user=%s org=%s",
-        session_id, path, raw_query, proxy_session.upstream_base,
+        session_id, path, logged_query, proxy_session.upstream_base,
         getattr(proxy_session, "user_id", "?"), getattr(proxy_session, "org_id", "?"),
     )
+
     # M-3: Validate query string before forwarding to upstream.
     # Reject CR/LF and any char outside the safe URL charset to prevent response-
     # splitting and notebook server session-ID abuse via querystring manipulation.
-    # Since the pod runs --no-token, no secrets are at risk, but we still must
-    # not forward attacker-controlled bytes into the upstream WS URL.
-    if raw_query and not _WS_QUERY_SAFE_PATTERN.match(raw_query):
+    if forwarded_query and not _WS_QUERY_SAFE_PATTERN.match(forwarded_query):
         logger.warning(
             "WS query string contains unsafe characters for session %s — dropping query",
             proxy_session.session_id,
         )
-        raw_query = ""
+        forwarded_query = ""
 
     upstream_url = (
         f"ws://{proxy_session.upstream_base.removeprefix('http://')}/{path.lstrip('/')}"
     )
-    if raw_query:
-        upstream_url = f"{upstream_url}?{raw_query}"
+    if forwarded_query:
+        upstream_url = f"{upstream_url}?{forwarded_query}"
 
-    logger.info("WS UPSTREAM URL: %s", upstream_url)
+    logger.info(
+        "WS UPSTREAM URL: ws://%s/%s query=%s",
+        proxy_session.upstream_base.removeprefix("http://"),
+        path.lstrip("/"),
+        logged_query,
+    )
+
+    # Echo the sentinel subprotocol if the client offered the two-token form.
+    # Never echo the token itself — it must not appear in the handshake response.
+    offered = ws.headers.get("sec-websocket-protocol", "")
+    offered_entries = [e.strip() for e in offered.split(",")] if offered else []
+    accept_subprotocol = (
+        "signalpilot.auth" if "signalpilot.auth" in offered_entries else None
+    )
 
     proxy = NotebookProxy(
         proxy_session.upstream_base,
         http_client=_get_proxy_client(ws),
     )
-    await proxy.forward_ws(ws, upstream_url)
+    await proxy.forward_ws(ws, upstream_url, accept_subprotocol=accept_subprotocol)

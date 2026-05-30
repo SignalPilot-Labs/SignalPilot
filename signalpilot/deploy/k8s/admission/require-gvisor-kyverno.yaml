@@ -1,0 +1,43 @@
+---
+# F-12: Require runtimeClassName: gvisor on all pods in tenant namespaces.
+#
+# FALLBACK path — install this ONLY if your cluster is < k8s 1.30 or the
+# ValidatingAdmissionPolicy feature gate is disabled.
+#
+# Do NOT also install the VAP policy.  See README.md for full guidance.
+# Double-enforcement risks conflicting failure modes and policy conflicts.
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-gvisor-runtime-class
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+  annotations:
+    policies.kyverno.io/title: Require gVisor RuntimeClass
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/description: >-
+      Pods in SignalPilot tenant namespaces must use runtimeClassName: gvisor.
+      This complements the gateway-side F-5 preflight check and closes the
+      bypass where a pod is created by a path other than the gateway.
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: require-gvisor
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              operations:
+                - CREATE
+              namespaceSelector:
+                matchLabels:
+                  signalpilot.dev/tenant: user
+      validate:
+        message: "Pods in tenant namespaces must set runtimeClassName: gvisor"
+        pattern:
+          spec:
+            runtimeClassName: gvisor

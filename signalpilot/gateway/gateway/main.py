@@ -38,7 +38,7 @@ from .http import (
     enforce_principal_rate_limit,
 )
 from .models import ConnectionUpdate
-from .runtime.mode import is_cloud_mode
+from .runtime.mode import assert_cloud_hardening_intact, is_cloud_mode
 from .store import Store, configure_byok
 from .store.crypto import _validate_encryption_health
 
@@ -58,6 +58,17 @@ async def lifespan(app: FastAPI):
         PROXY_READ_TIMEOUT_SECONDS,
         PROXY_WRITE_TIMEOUT_SECONDS,
     )
+
+    # Cloud hardening kill-switch: must run before any DB/proxy/client init.
+    # A misconfigured cloud deploy should fail before opening DB connections
+    # or loading secrets. Local mode short-circuits immediately.
+    if is_cloud_mode():
+        logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
+        try:
+            assert_cloud_hardening_intact()
+        except RuntimeError as e:
+            logger.error("STARTUP FATAL: %s", e)
+            raise SystemExit(1) from e
 
     # Shared httpx client for the notebook proxy — one client, shared across requests.
     # Closed in lifespan teardown. Timeouts: connect=5s, read=None (SSE/long-poll),
@@ -126,9 +137,6 @@ async def lifespan(app: FastAPI):
         byok_provider = make_provider(byok_provider_type, byok_provider_config)
         configure_byok(byok_provider, dek_cache)
         logger.info("STARTUP: BYOK provider configured (%s)", byok_provider_type)
-
-    if is_cloud_mode():
-        logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
 
     # Clean up stale notebook sessions on startup.
     # After a deploy/restart, pods from the previous run may be gone but

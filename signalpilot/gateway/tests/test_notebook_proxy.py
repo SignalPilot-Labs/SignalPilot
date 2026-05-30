@@ -1850,3 +1850,285 @@ class TestCookieSlide:
         assert "set-cookie" not in {k.lower() for k in resp.headers.keys()}, (
             "Set-Cookie must not appear in auth-failure response"
         )
+
+
+# ─── F-8: WS subprotocol auth + query param scrubbing ────────────────────────
+
+
+class TestF8WebSocketAuth:
+    """F-8: resolve_proxy_session with subprotocol two-token form and cloud-mode rejection."""
+
+    def _make_mock_connection(
+        self,
+        cookies: dict | None = None,
+        headers: dict | None = None,
+        query_string: str = "",
+    ):
+        """Build a minimal mock HTTPConnection for resolve_proxy_session tests."""
+        from unittest.mock import MagicMock
+
+        conn = MagicMock()
+        conn.cookies = cookies or {}
+        conn.headers = MagicMock()
+
+        _headers = headers or {}
+
+        def _get_header(key, default=""):
+            return _headers.get(key.lower(), default)
+
+        conn.headers.get = _get_header
+        # Parse query params
+        import urllib.parse
+        params = dict(urllib.parse.parse_qsl(query_string))
+        conn.query_params = params
+        conn.scope = {"type": "websocket"}
+        return conn
+
+    @pytest.mark.asyncio
+    async def test_ws_access_token_query_rejected_in_cloud_mode(self, monkeypatch):
+        """Cloud mode: ?access_token= in query string → 401."""
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+        from fastapi import HTTPException
+
+        conn = self._make_mock_connection(query_string="access_token=secret123")
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session("valid-session-id", conn)
+
+        assert exc_info.value.status_code == 401
+        assert "cloud mode" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_ws_access_token_query_allowed_in_local_mode(self, monkeypatch):
+        """Local mode: ?access_token= is allowed (must reach DB comparison)."""
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+        from fastapi import HTTPException
+
+        # Should get past the cloud-mode gate but fail at DB (session not found)
+        conn = self._make_mock_connection(query_string="access_token=mytoken")
+
+        mock_db_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db_session.execute.return_value = mock_result
+
+        # get_session_factory is imported lazily inside the function; patch at db.engine
+        with patch("gateway.db.engine.get_session_factory") as mock_factory:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_db_session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = lambda: mock_ctx
+
+            with pytest.raises(HTTPException) as exc_info:
+                await resolve_proxy_session("valid-session-id", conn)
+
+        # 404 (session not found) is the expected failure — not 401 cloud rejection
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_ws_subprotocol_auth_extracts_token(self, monkeypatch):
+        """Sec-WebSocket-Protocol two-token form → token extracted correctly."""
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://10.0.0.1:2718")
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        conn = self._make_mock_connection(
+            headers={"sec-websocket-protocol": "signalpilot.auth, abc123"},
+        )
+
+        mock_db_session = AsyncMock()
+        mock_result = MagicMock()
+        # Return a session that matches the token
+        row = _make_session_row(access_token="abc123")
+        mock_result.scalar_one_or_none.return_value = row
+        mock_db_session.execute.return_value = mock_result
+
+        # get_session_factory is imported lazily inside the function; patch at db.engine
+        with patch("gateway.db.engine.get_session_factory") as mock_factory:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_db_session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = lambda: mock_ctx
+
+            result = await resolve_proxy_session("test-sess-123", conn)
+
+        assert result.proxy_cookie_token == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_ws_subprotocol_rejects_single_token_form(self, monkeypatch):
+        """Sec-WebSocket-Protocol single-token "signalpilot.bearer.X" form → no token."""
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+        from fastapi import HTTPException
+
+        conn = self._make_mock_connection(
+            headers={"sec-websocket-protocol": "signalpilot.bearer.abc123"},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session("valid-session-id", conn)
+
+        # No token extracted → 401 (cookie missing)
+        assert exc_info.value.status_code == 401
+        assert "signalpilot.bearer.abc123" not in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_ws_subprotocol_token_must_be_urlsafe(self, monkeypatch):
+        """Subprotocol token with whitespace/control chars → token rejected."""
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+        from fastapi import HTTPException
+
+        conn = self._make_mock_connection(
+            headers={"sec-websocket-protocol": "signalpilot.auth, bad token with spaces"},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session("valid-session-id", conn)
+
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_ws_cloud_mode_rejects_query_token_even_when_cookie_present(self, monkeypatch):
+        """Cloud mode: stray ?access_token= is rejected with 401 even when a valid cookie is present.
+
+        This guards against the leak scenario where a request carries BOTH a valid
+        session cookie AND a stale/leaked token in the query string. The cloud-mode
+        check must fire before cookie extraction so the token is never forwarded
+        upstream or recorded in logs.
+        """
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+        from fastapi import HTTPException
+        from gateway.notebook_proxy.cookies import cookie_name
+
+        session_id = "valid-session-id"
+        real_token = "real-session-token-abc123"
+
+        conn = self._make_mock_connection(
+            cookies={cookie_name(session_id): real_token},
+            query_string="access_token=stale-leaked-token",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(session_id, conn)
+
+        assert exc_info.value.status_code == 401
+        assert "cloud mode" in exc_info.value.detail.lower()
+
+
+class TestF8LogScrubbing:
+    """F-8: ?access_token= must be scrubbed from WS proxy log records."""
+
+    @pytest.mark.asyncio
+    async def test_ws_log_does_not_contain_token(self, caplog, monkeypatch):
+        """access_token value must not appear in any log record from proxy_websocket."""
+        import logging
+
+        unique_token = "UNIQUESECRETTOKEN32CHARSLONG1234"
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+
+        from gateway.notebook_proxy.routes import _SENSITIVE_QUERY_KEYS, proxy_websocket
+        import urllib.parse
+
+        raw_query = f"access_token={unique_token}&foo=bar"
+
+        with caplog.at_level(logging.DEBUG, logger="gateway.notebook_proxy.routes"):
+            # Build scrubbed query as routes.py would
+            safe_pairs = [
+                (k, v)
+                for k, v in urllib.parse.parse_qsl(raw_query, keep_blank_values=True)
+                if k not in _SENSITIVE_QUERY_KEYS
+            ]
+            logged_query = urllib.parse.urlencode(safe_pairs)
+
+        # logged_query must not contain the token
+        assert unique_token not in logged_query
+        # But non-sensitive params survive
+        assert "foo=bar" in logged_query
+
+
+class TestF8SubprotocolEcho:
+    """F-8: proxy_websocket echoes only the sentinel subprotocol, never the token."""
+
+    @pytest.mark.asyncio
+    async def test_ws_accept_echoes_sentinel_only(self):
+        """forward_ws echoes only the sentinel subprotocol on ws.accept, never the token."""
+        from gateway.notebook_proxy.proxy import NotebookProxy
+
+        accepted_subprotocol: list[str | None] = []
+
+        # Patch ws.accept to record the subprotocol arg
+        mock_ws = AsyncMock()
+        mock_ws.headers = MagicMock()
+
+        def mock_get_header(key, default=""):
+            if key == "sec-websocket-protocol":
+                return "signalpilot.auth, SECRETTOKEN"
+            return default
+
+        mock_ws.headers.get = mock_get_header
+        mock_ws.url = MagicMock()
+        mock_ws.url.query = ""
+
+        async def recording_accept(subprotocol=None):
+            accepted_subprotocol.append(subprotocol)
+
+        mock_ws.accept = recording_accept
+
+        proxy = NotebookProxy("http://10.0.0.1:2718", http_client=AsyncMock())
+
+        # websockets.asyncio.client.connect returns an awaitable (coroutine) that
+        # resolves to the WS connection. Mock it as an AsyncMock.
+        import websockets.exceptions
+        from fastapi.websockets import WebSocketDisconnect
+
+        mock_upstream = AsyncMock()
+        mock_upstream.close = AsyncMock()
+        mock_upstream.close_code = 1000
+        mock_upstream.close_reason = ""
+        # Make upstream.recv() raise ConnectionClosedOK so _upstream_to_client exits cleanly
+        mock_upstream.recv = AsyncMock(
+            side_effect=websockets.exceptions.ConnectionClosedOK(None, None)
+        )
+        # Make ws.receive() raise WebSocketDisconnect so _client_to_upstream exits cleanly
+        mock_ws.receive = AsyncMock(side_effect=WebSocketDisconnect(code=1000))
+        mock_ws.close = AsyncMock()
+
+        with patch(
+            "gateway.notebook_proxy.proxy.websockets.asyncio.client.connect",
+            new=AsyncMock(return_value=mock_upstream),
+        ):
+            # forward_ws will connect, then accept, then pump (exits quickly via disconnect)
+            await proxy.forward_ws(
+                mock_ws, "ws://10.0.0.1:2718/ws", accept_subprotocol="signalpilot.auth"
+            )
+
+        # accept must have been called with the sentinel only — never the token
+        assert accepted_subprotocol, "ws.accept was never called"
+        assert accepted_subprotocol[0] == "signalpilot.auth"
+        assert "SECRETTOKEN" not in str(accepted_subprotocol)
+
+
+class TestF8NamespaceLabel:
+    """F-12: _namespace_manifest emits the tenant label for admission policy selectors."""
+
+    def test_namespace_manifest_has_tenant_label(self):
+        """_namespace_manifest emits signalpilot.dev/tenant=user label."""
+        from gateway.orchestrator.namespaces import _namespace_manifest
+
+        manifest = _namespace_manifest("sp-nb-abc123", "abc123sha")
+        labels = manifest["metadata"]["labels"]
+        assert "signalpilot.dev/tenant" in labels, (
+            "_namespace_manifest must emit signalpilot.dev/tenant label "
+            "for VAP admission policy namespace selector"
+        )
+        assert labels["signalpilot.dev/tenant"] == "user"

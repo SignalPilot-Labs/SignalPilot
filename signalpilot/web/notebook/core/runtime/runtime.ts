@@ -119,27 +119,36 @@ export class RuntimeManager {
   }
 
   /**
-   * Build a WS URL and append `?access_token=` when cross-origin and the
-   * resolved token is non-empty. This is the single source of truth for
-   * token attachment on WebSocket / SSE connections.
+   * Build a WS URL and return it alongside the subprotocols list for auth.
+   *
+   * Auth is conveyed via Sec-WebSocket-Protocol (two-token form:
+   * ["signalpilot.auth", "<token>"]) — NEVER via `?access_token=` query param.
+   * The query-param path is rejected by the gateway in cloud mode; keeping the
+   * token out of the URL also prevents it from appearing in access logs,
+   * browser history, and Referer headers.
+   *
+   * This is the single source of truth for WS token attachment.
    */
-  async resolveWsURL(path: string, searchParams?: URLSearchParams): Promise<URL> {
+  async resolveWsURL(
+    path: string,
+    searchParams?: URLSearchParams,
+  ): Promise<{ url: URL; subprotocols: string[] }> {
     const url = this.buildWsURL(path, searchParams);
 
-    if (!this.isSameOrigin) {
-      const token = await this.resolveAuthToken();
-      if (token) {
-        url.searchParams.set(KnownQueryParams.accessToken, token);
-      }
-    }
+    // Always resolve the token; attach via subprotocol when non-empty.
+    // Same-origin connections may still have a token (e.g. cloud proxy path).
+    const token = await this.resolveAuthToken();
+    const subprotocols: string[] = token
+      ? ["signalpilot.auth", token]
+      : [];
 
-    return url;
+    return { url, subprotocols };
   }
 
   /**
    * The WebSocket URL of the runtime.
    */
-  async getWsURL(sessionId: SessionId): Promise<URL> {
+  async getWsURL(sessionId: SessionId): Promise<{ url: URL; subprotocols: string[] }> {
     const baseUrl = new URL(this.config.url);
     const searchParams = new URLSearchParams(baseUrl.search);
 
@@ -158,27 +167,25 @@ export class RuntimeManager {
   /**
    * The WebSocket URL of the terminal.
    */
-  async getTerminalWsURL(): Promise<URL> {
+  async getTerminalWsURL(): Promise<{ url: URL; subprotocols: string[] }> {
     return this.resolveWsURL("/terminal/ws");
   }
 
   /**
    * The URL of the copilot server.
    *
-   * For copilot, strip all query parameters except the auth token.
-   * Copilot doesn't understand arbitrary query params, but we still
-   * need access_token for cross-origin authentication.
+   * For copilot, strip all query parameters (auth is in subprotocols, not URL).
    * `resolveWsURL` is the single source of truth for token attachment.
    */
-  async getLSPURL(lsp: "pylsp" | "basedpyright" | "copilot" | "ty" | "pyrefly"): Promise<URL> {
+  async getLSPURL(
+    lsp: "pylsp" | "basedpyright" | "copilot" | "ty" | "pyrefly",
+  ): Promise<{ url: URL; subprotocols: string[] }> {
     if (lsp === "copilot") {
-      const url = await this.resolveWsURL(`/lsp/${lsp}`);
-      const accessToken = url.searchParams.get(KnownQueryParams.accessToken);
-      url.search = "";
-      if (accessToken) {
-        url.searchParams.set(KnownQueryParams.accessToken, accessToken);
-      }
-      return url;
+      const result = await this.resolveWsURL(`/lsp/${lsp}`);
+      // Copilot doesn't understand arbitrary query params; strip them all.
+      // Auth is already in subprotocols — no need to carry access_token in URL.
+      result.url.search = "";
+      return result;
     }
     return this.resolveWsURL(`/lsp/${lsp}`);
   }

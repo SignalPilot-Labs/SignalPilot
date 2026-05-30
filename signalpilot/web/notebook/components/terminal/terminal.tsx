@@ -254,12 +254,18 @@ const TerminalComponent: React.FC<TerminalComponentProps> = ({
       try {
         await waitForConnectionOpen();
 
-        const terminalUrl = await runtimeManager.getTerminalWsURL();
+        const { url: terminalUrl, subprotocols } =
+          await runtimeManager.getTerminalWsURL();
         const cwd = store.get(cwdAtom);
         if (cwd) {
           terminalUrl.searchParams.set("cwd", cwd);
         }
-        const socket = new WebSocket(terminalUrl);
+        // Auth is sent via Sec-WebSocket-Protocol (two-token form) — never via
+        // query param. The server echoes back only the sentinel "signalpilot.auth".
+        const socket = new WebSocket(
+          terminalUrl.toString(),
+          subprotocols.length > 0 ? subprotocols : undefined,
+        );
         const attachAddon = new AttachAddon(socket);
         terminal.loadAddon(attachAddon);
         wsRef.current = socket;

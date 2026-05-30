@@ -160,7 +160,7 @@ async def ensure_org_namespace(
             f"Namespace/{namespace}",
         )
         if skip_network_policy:
-            logger.info("Skipping NetworkPolicy creation (SP_NOTEBOOK_NETWORK_POLICY=false)")
+            logger.info("Skipping NetworkPolicy creation in local mode (SP_NOTEBOOK_NETWORK_POLICY=false)")
         if not skip_network_policy:
             await _create_idempotent(
                 lambda: networking_api.create_namespaced_network_policy(
@@ -235,6 +235,10 @@ def _namespace_manifest(namespace: str, sha: str) -> dict:
                 MANAGED_BY_LABEL: "gateway",
                 # Required by NetworkPolicy namespaceSelector matching.
                 "kubernetes.io/metadata.name": namespace,
+                # Required by F-12 admission policy namespace selector.
+                # The ValidatingAdmissionPolicy (and Kyverno fallback) match on
+                # signalpilot.dev/tenant=user to scope enforcement to tenant namespaces only.
+                "signalpilot.dev/tenant": "user",
             },
         },
     }

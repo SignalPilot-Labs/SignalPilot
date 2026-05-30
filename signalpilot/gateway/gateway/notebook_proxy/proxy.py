@@ -151,11 +151,22 @@ class NotebookProxy:
             media_type=media_type,
         )
 
-    async def forward_ws(self, ws: WebSocket, upstream_url: str) -> None:
+    async def forward_ws(
+        self,
+        ws: WebSocket,
+        upstream_url: str,
+        accept_subprotocol: str | None = None,
+    ) -> None:
         """Bridge a WebSocket connection to the upstream pod.
 
         Auth must have already succeeded. ws.accept() is called inside this method
         after the upstream connection is established.
+
+        accept_subprotocol: if provided, echo this subprotocol back to the client
+        on ws.accept(). Used for the F-8 two-token auth form — echo only the sentinel
+        "signalpilot.auth", never the token. Per RFC 6455, the server selects one
+        subprotocol from the client's offered list; selecting the sentinel only is
+        sufficient to complete the handshake without reflecting the secret.
 
         - Strips Cookie and Authorization from the upstream WS handshake.
         - TEXT frames stay TEXT; BINARY frames stay BINARY (recv() returns str|bytes).
@@ -175,7 +186,7 @@ class NotebookProxy:
             await ws.close(code=1011)
             return
 
-        await ws.accept()
+        await ws.accept(subprotocol=accept_subprotocol)
         logger.info("WS PROXY bridge established (client ↔ upstream)")
 
         client_frames = 0

@@ -413,11 +413,15 @@ def _allow_gateway_policy(
         )
         # Public HTTPS egress: git push/pull to the public gateway domain
         # (gateway.signalpilot.ai) resolves to a public IP outside the VPC. Allow
-        # 443 to any address EXCEPT IMDS/link-local/loopback. All other ports stay
-        # denied, so a compromised notebook cannot open arbitrary outbound sockets.
+        # 443 to any IPv4 address EXCEPT IMDS/link-local/loopback. All other ports
+        # stay denied, so a compromised notebook cannot open arbitrary outbound
+        # sockets. The cidr is IPv4 (0.0.0.0/0); k8s requires every `except` entry
+        # to be the same family, so filter to IPv4-only (drops the IPv6 IMDS range,
+        # which an IPv4 rule can never match anyway).
+        public_except = _filter_except_entries("0.0.0.0/0", list(_MANDATORY_EGRESS_EXCEPT))
         egress_rules.append(
             {
-                "to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": list(_MANDATORY_EGRESS_EXCEPT)}}],
+                "to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": public_except}}],
                 "ports": [{"protocol": "TCP", "port": 443}],
             }
         )

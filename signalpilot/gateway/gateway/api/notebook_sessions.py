@@ -14,6 +14,7 @@ from ..config.k8s import get_k8s_settings
 from ..models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
 from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
 from ..notebook_proxy.cookies import clear_proxy_cookie
+from ..notebook_proxy.init_token import issue_init_token
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .deps import ProjectsGate, StoreD
@@ -100,11 +101,11 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
         )
         session_info.status = "running"
         session_info.pod_ip = host_port
-        # Fetch the real token — session_info.access_token is always None
-        # in FE-facing responses (stripped by _to_info for security).
-        internal = await ns.get_session_internal(store.session, session_id=session_info.id)
-        real_token = internal.access_token if internal else ""
-        session_info.notebook_url = f"/notebook/{session_info.id}/_init?token={real_token}"
+        # F-16: single-use handshake token (not the long-lived access_token).
+        session_info.notebook_url = (
+            f"/notebook/{session_info.id}/_init"
+            f"?token={issue_init_token(session_info.id, user_id)}"
+        )
         return session_info
 
     pod = _pod_name(org_id, user_id)
@@ -197,8 +198,12 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
         )
         session_info.status = "running"
         session_info.pod_ip = pod_info.ip
-        # Proxy-based URL — relative path, no token, no host, no port.
-        session_info.notebook_url = f"/notebook/{session_info.id}/_init"
+        # F-16: single-use handshake token redeemed once at /_init; not the
+        # long-lived access_token. The FE re-handshakes for cached/reused sessions.
+        session_info.notebook_url = (
+            f"/notebook/{session_info.id}/_init"
+            f"?token={issue_init_token(session_info.id, user_id)}"
+        )
 
     except ValueError as e:
         logger.warning("Invalid org_id for notebook session: %s", e)
@@ -352,3 +357,32 @@ async def ping_session(store: StoreD):
 
     org_id = store.org_id or ""
     return await ns.ping_session(store.session, org_id=org_id, user_id=store.user_id or "local")
+
+
+@router.post("/{session_id}/handshake", dependencies=[RequireScope("read")])
+async def handshake_session(session_id: str, store: StoreD) -> dict[str, str]:
+    """Issue a single-use handshake token for the caller's session (F-16).
+
+    The FE calls this immediately before navigation/iframe mount when the cached
+    GET response returns a tokenless notebook_url. The returned URL is valid for
+    INIT_TOKEN_TTL_S seconds and redeems exactly once at /_init.
+    """
+    from ..store import notebook_sessions as ns
+
+    # M-4: Validate session_id charset at the boundary.
+    if not _SESSION_ID_PATTERN.match(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    org_id = store.org_id or ""
+    user_id = store.user_id or "local"
+
+    session = await ns.get_session_by_id(store.session, session_id=session_id, org_id=org_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # M-1: Ownership check — same-org peers cannot obtain tokens for each other's sessions.
+    if session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    token = issue_init_token(session_id, user_id)
+    return {"url": f"/notebook/{session_id}/_init?token={token}"}

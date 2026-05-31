@@ -159,21 +159,26 @@ async def ensure_org_namespace(
             lambda: core_api.create_namespace(body=_namespace_manifest(namespace, sha)),
             f"Namespace/{namespace}",
         )
-        # ALWAYS block egress to cloud IMDS — even when the full default-deny
-        # NetworkPolicy set is skipped. This is a targeted, non-disruptive policy
-        # (allows all other egress) that stops a malicious notebook from reaching
-        # 169.254.169.254 and stealing the node IAM role. Defense-in-depth on top
-        # of the node IMDS hop-limit.
-        await _create_idempotent(
-            lambda: networking_api.create_namespaced_network_policy(
-                namespace=namespace,
-                body=_block_imds_egress_policy(namespace),
-            ),
-            f"NetworkPolicy/block-imds-egress in {namespace}",
-        )
         if skip_network_policy:
-            logger.info("Skipping default-deny NetworkPolicy in local mode (SP_NOTEBOOK_NETWORK_POLICY=false); IMDS egress still blocked")
-        if not skip_network_policy:
+            # netpol OFF: apply ONLY the targeted IMDS-block. It allows all other
+            # egress (non-disruptive) but stops a malicious notebook from reaching
+            # 169.254.169.254 and stealing the node IAM role. Defense-in-depth on
+            # top of the node IMDS hop-limit. NOT applied when default-deny is on,
+            # because "allow all except IMDS" would UNION with (and neutralize) the
+            # default-deny set — IMDS is instead denied by omission below.
+            await _create_idempotent(
+                lambda: networking_api.create_namespaced_network_policy(
+                    namespace=namespace,
+                    body=_block_imds_egress_policy(namespace),
+                ),
+                f"NetworkPolicy/block-imds-egress in {namespace}",
+            )
+            logger.info("Skipping default-deny NetworkPolicy (SP_NOTEBOOK_NETWORK_POLICY=false); IMDS egress still blocked")
+        else:
+            # netpol ON: default-deny + allow-gateway fully constrain egress to
+            # DNS + gateway + 443. IMDS (169.254.0.0/16) is denied by omission, so
+            # no separate block-imds policy is needed (and it must NOT be applied —
+            # see the union note above).
             await _create_idempotent(
                 lambda: networking_api.create_namespaced_network_policy(
                     namespace=namespace,
@@ -181,7 +186,6 @@ async def ensure_org_namespace(
                 ),
                 f"NetworkPolicy/default-deny in {namespace}",
             )
-        if not skip_network_policy:
             await _create_idempotent(
                 lambda: networking_api.create_namespaced_network_policy(
                     namespace=namespace,
@@ -394,9 +398,26 @@ def _allow_gateway_policy(
             ip_block: dict = {"cidr": egress_cidr, "except": filtered_except}
         else:
             ip_block = {"cidr": egress_cidr}
+        # VPC egress: the gateway runs on EC2 inside the VPC and is reached at
+        # gateway_port for callbacks/MCP (SP_GATEWAY_INTERNAL_URL), plus 443 for any
+        # in-VPC HTTPS. egress_cidr should be the VPC CIDR in the external-gateway
+        # topology.
         egress_rules.append(
             {
                 "to": [{"ipBlock": ip_block}],
+                "ports": [
+                    {"protocol": "TCP", "port": gateway_port},
+                    {"protocol": "TCP", "port": 443},
+                ],
+            }
+        )
+        # Public HTTPS egress: git push/pull to the public gateway domain
+        # (gateway.signalpilot.ai) resolves to a public IP outside the VPC. Allow
+        # 443 to any address EXCEPT IMDS/link-local/loopback. All other ports stay
+        # denied, so a compromised notebook cannot open arbitrary outbound sockets.
+        egress_rules.append(
+            {
+                "to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": list(_MANDATORY_EGRESS_EXCEPT)}}],
                 "ports": [{"protocol": "TCP", "port": 443}],
             }
         )

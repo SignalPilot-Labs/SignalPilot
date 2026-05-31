@@ -473,17 +473,51 @@ export function useSpKernelConnection(opts: {
 
   const isRawFallback = useAtomValue(rawFallbackAtom);
 
+  // Memoize the in-flight getWsURL() promise so that both the `url` and
+  // `protocols` factories (awaited in parallel by wrappedUrlFactory in
+  // useWebSocket.tsx) share a SINGLE token-resolution per connection attempt.
+  // Without this, two independent getWsURL() calls could produce mismatched
+  // tokens when a Clerk JWT refresh races between the two awaits.
+  // The cache is keyed on sessionId and cleared in onOpen/onClose so that
+  // each reconnect re-derives a fresh token.
+  const wsResolveRef = useRef<{
+    sessionId: SessionId | null;
+    promise: Promise<{ url: URL; subprotocols: string[] }> | null;
+  }>({ sessionId: null, promise: null });
+
+  const resolveWsOnce = (): Promise<{ url: URL; subprotocols: string[] }> => {
+    const sid = getSessionId();
+    if (wsResolveRef.current.sessionId !== sid || wsResolveRef.current.promise === null) {
+      wsResolveRef.current = {
+        sessionId: sid,
+        promise: runtimeManager.getWsURL(sid),
+      };
+    }
+    // promise is guaranteed non-null here — TypeScript doesn't narrow the
+    // conditional assignment above, so we assert.
+    return wsResolveRef.current.promise!;
+  };
+
   const ws = useConnectionTransport({
     static: isStaticNotebook() || isRawFallback,
     /**
      * Unique URL for this session.
      */
-    url: async () => (await runtimeManager.getWsURL(getSessionId())).toString(),
+    // Auth is conveyed via Sec-WebSocket-Protocol (two-token form:
+    // ["signalpilot.auth", "<token>"]) — never via query param.
+    // Both factories hit resolveWsOnce() synchronously before any await,
+    // so wrappedUrlFactory's Promise.all sees the SAME in-flight promise —
+    // exactly one getWsURL() invocation per connection attempt.
+    url: async () => (await resolveWsOnce()).url.toString(),
+    protocols: async () => (await resolveWsOnce()).subprotocols,
 
     /**
      * Open callback. Set the connection status to open.
      */
     onOpen: async () => {
+      // Invalidate the cached promise so the next reconnect re-derives a
+      // fresh token rather than reusing a potentially-stale one.
+      wsResolveRef.current.promise = null;
       // If we are open, we can reset our reconnecting flag.
       shouldTryReconnecting.current = true;
       retryCount.current = 0;
@@ -534,6 +568,11 @@ export function useSpKernelConnection(opts: {
      * Handle a close event. We may want to reconnect.
      */
     onClose: (e) => {
+      // Invalidate the cached promise so the next reconnect re-derives a fresh
+      // token. Belt-and-suspenders: onOpen also clears it, but clearing here
+      // ensures stale tokens are never reused across reconnect cycles even if
+      // onOpen never fires (e.g. connection fails immediately).
+      wsResolveRef.current.promise = null;
       Logger.warn("WebSocket closed", e.code, e.reason);
       const decision = classifyCloseEvent(e, {
         retryCount: ws.retryCount,

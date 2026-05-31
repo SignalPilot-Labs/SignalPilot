@@ -16,6 +16,7 @@ import {
   getNotebookSession,
   deleteNotebookSession,
   pingNotebookSession,
+  requestNotebookHandshake,
 } from "~/lib/api";
 import { StatusDot } from "~/components/ui/data-viz";
 import { useToast } from "~/components/ui/toast";
@@ -159,7 +160,14 @@ export default function ProjectsPage() {
             console.log("[projects] Session project mismatch — deleting stale session");
             await deleteNotebookSession().catch(() => {});
           } else {
-            const config = buildConfig(session.id, session.notebook_url, apiKey);
+            // F-16: the GET response now returns a tokenless URL (no ?token=).
+            // Mint a fresh single-use handshake token immediately before navigation.
+            let navigableUrl: string = session.notebook_url;
+            if (!extractToken(navigableUrl)) {
+              const handshake = await requestNotebookHandshake(session.id);
+              navigableUrl = handshake.url;
+            }
+            const config = buildConfig(session.id, navigableUrl, apiKey);
             if (config) {
               setNotebookConfig(config);
               setState("booting");
@@ -229,7 +237,12 @@ export default function ProjectsPage() {
       }
       setLaunchStatus("waiting for pod...");
       const full = await getNotebookSession();
-      const notebookUrl = full?.notebook_url ?? session.notebook_url ?? "";
+      // F-16: the POST response (session.notebook_url) carries the minted
+      // handshake token; the re-GET (full.notebook_url) is now tokenless —
+      // prefer the POST URL, only using the GET URL if it carries a token.
+      const getUrl = full?.notebook_url ?? null;
+      const notebookUrl =
+        (getUrl && extractToken(getUrl) ? getUrl : null) ?? session.notebook_url ?? "";
 
       const config = buildConfig(session.id, notebookUrl, apiKey);
       if (!config) {

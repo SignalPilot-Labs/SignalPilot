@@ -219,7 +219,10 @@ def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
     """
     notebook_url = None
     if row.status == "running" and row.pod_ip:
-        notebook_url = f"/notebook/{row.id}/_init?token={row.access_token}"
+        # F-16: tokenless cached URL. The FE redeems a single-use handshake token
+        # via POST /{id}/handshake right before navigation; the long-lived
+        # access_token must never be embedded in an FE-facing URL.
+        notebook_url = f"/notebook/{row.id}/_init"
     return NotebookSessionInfo(
         id=row.id,
         org_id=row.org_id,

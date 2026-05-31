@@ -52,6 +52,14 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
 
+    # F-11: refuse to boot in cloud mode if any security kill-switch is disabled
+    # (network policy off, no sandbox runtime class, direct-URL bypass, sandbox
+    # disabled). Complements the pydantic-settings validators with a runtime check
+    # that catches paths bypassing settings instantiation.
+    from .runtime.mode import assert_cloud_hardening_intact
+
+    assert_cloud_hardening_intact()
+
     from .notebook_proxy.constants import (
         PROXY_CONNECT_TIMEOUT_SECONDS,
         PROXY_POOL_TIMEOUT_SECONDS,

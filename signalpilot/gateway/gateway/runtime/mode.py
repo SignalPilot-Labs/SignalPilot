@@ -52,9 +52,23 @@ def assert_cloud_hardening_intact() -> None:
 
     violations: list[str] = []
 
+    # SP_NOTEBOOK_NETWORK_POLICY=false is a WARNING, not a boot-blocking violation,
+    # on this deployment. Full default-deny requires the AWS VPC CNI NetworkPolicy
+    # agent, whose eBPF enforcement does NOT compose with gVisor pods (the runsc
+    # userspace netstack egress isn't matched by the agent's ipBlock allow rules),
+    # so enabling it severs pod->gateway egress and breaks every notebook. The
+    # crown-jewel threat this kill-switch defends — node IAM credential theft via
+    # IMDS — is independently closed by the IMDS hop-limit=1 (verified: a pod's
+    # IMDSv2 token PUT times out) PLUS the always-on block-imds-egress NetworkPolicy.
+    # Revisit if/when gVisor + VPC CNI NetworkPolicy interop is fixed upstream.
     netpol = os.environ.get("SP_NOTEBOOK_NETWORK_POLICY", "true").strip().lower()
     if netpol == "false":
-        violations.append("SP_NOTEBOOK_NETWORK_POLICY")
+        logger.warning(
+            "SP_NOTEBOOK_NETWORK_POLICY=false in cloud mode: full default-deny is "
+            "disabled (gVisor + VPC CNI NetworkPolicy incompatibility). IMDS "
+            "credential theft remains blocked via hop-limit + block-imds-egress "
+            "policy; arbitrary outbound egress from notebooks is NOT restricted."
+        )
 
     runtime_class = os.environ.get("SP_NOTEBOOK_RUNTIME_CLASS", "").strip()
     if runtime_class == "":

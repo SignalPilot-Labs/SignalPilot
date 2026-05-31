@@ -1,6 +1,9 @@
 """Deployment mode helpers."""
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _TRUTHY_VALUES: frozenset[str] = frozenset({"1", "true", "yes"})
 

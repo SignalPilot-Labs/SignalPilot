@@ -255,20 +255,32 @@ async def run_notebook(
     push_result = ""
     try:
         # add/commit are local and use `git -C <dir>`. Push goes through the
-        # notebook-server's authed git runner — the auth header is passed
-        # per-invocation (F-9); a bare `git push` would fail now that the
-        # credential is no longer persisted in .git/config. The git_auth CLI
-        # takes the repo path as its first arg, so we pass project_dir (no cd).
+        # notebook-server's authed git runner (F-9): the auth header is passed
+        # per-invocation, never persisted in .git/config. Under F-6 the JWT is no
+        # longer in the pod env, so the exec'd git_auth process can't inherit it —
+        # we mint a short-lived session JWT and pipe it over stdin (never on argv,
+        # so it never lands in /proc/<pid>/cmdline). The git_auth CLI takes the
+        # repo path as its first arg, so we pass project_dir (no cd).
+        from gateway.auth.notebook_jwt import mint_session_jwt
+        from gateway.config.k8s import get_k8s_settings as _get_k8s_settings
+
+        push_jwt = mint_session_jwt(
+            user_id=user_id, org_id=org_id, session_id=session_id,
+            project_id=project_id, branch=agent_branch,
+            ttl=_get_k8s_settings().sp_session_jwt_ttl_seconds,
+        )
         git_steps = [
-            ["git", "-C", project_dir, "add", "-A"],
-            ["git", "-C", project_dir, "commit", "-m", f"agent: {filename}"],
-            ["python", "-m", "signalpilot._server.files.git_auth", project_dir,
-             project_id, "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
+            (["git", "-C", project_dir, "add", "-A"], None),
+            (["git", "-C", project_dir, "commit", "-m", f"agent: {filename}"], None),
+            (["python", "-m", "signalpilot._server.files.git_auth", project_dir,
+              project_id, "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
+             push_jwt.encode("utf-8")),
         ]
-        for git_argv in git_steps:
+        for git_argv, git_stdin in git_steps:
             g_out, g_err, g_rc = await orch.exec_in_pod(
                 pod_name, org_id=org_id,
                 argv=git_argv,
+                stdin_bytes=git_stdin,
                 timeout=30,
             )
             if g_rc != 0 and "nothing to commit" not in g_err:

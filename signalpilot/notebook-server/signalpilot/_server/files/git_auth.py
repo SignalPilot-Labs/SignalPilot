@@ -96,12 +96,28 @@ def _main() -> int:
     Runs an authed git invocation (auth header per-process, never persisted).
     Used by the gateway's run_notebook push-back so it doesn't rely on a
     credential persisted in .git/config (removed by F-9).
+
+    The session JWT is read from stdin when SP_SESSION_JWT is absent from the
+    environment. Under F-6 the JWT is no longer in the pod spec env, so a
+    kubectl-exec'd process (this CLI) cannot inherit it — the gateway pipes a
+    short-lived session JWT over stdin instead (never on argv, so it does not
+    appear in /proc/<pid>/cmdline).
     """
+    import os
     import sys
 
     if len(sys.argv) < 4:
         sys.stderr.write("usage: git_auth <repo> <project_id> <git-args...>\n")
         return 2
+
+    # Prime the JWT from stdin if the environment does not carry it (F-6).
+    # load_session_jwt() (called inside run_git_authed) pops SP_SESSION_JWT from
+    # os.environ, so setting it here makes the authed header resolve correctly.
+    if not os.environ.get("SP_SESSION_JWT") and not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        if piped:
+            os.environ["SP_SESSION_JWT"] = piped
+
     repo = Path(sys.argv[1])
     project_id = sys.argv[2]
     rc, out, err = run_git_authed(repo, project_id, *sys.argv[3:])

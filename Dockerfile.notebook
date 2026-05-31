@@ -40,4 +40,4 @@ ENV SP_GATEWAY_URL=""
 ENV SP_API_KEY=""
 ENV SP_LOG_LEVEL="10"
 
-CMD ["sp", "edit", "--host", "0.0.0.0", "--port", "2718", "--headless", "--no-token", "--no-skew-protection", "/workspace"]
+CMD ["python", "-m", "signalpilot._server.entrypoint", "--host", "0.0.0.0", "--port", "2718", "--headless", "--no-token", "--no-skew-protection", "/workspace"]

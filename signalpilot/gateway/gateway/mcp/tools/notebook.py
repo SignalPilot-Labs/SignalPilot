@@ -142,16 +142,46 @@ async def run_notebook(
                 ttl=k8s_settings.sp_session_jwt_ttl_seconds,
             )
 
-            try:
-                await orch.create_pod(
+            # F-6/F-13: stage the JWT in a per-session Secret, create the pod (which
+            # mounts the Secret via initContainer -> tmpfs), then patch the Secret's
+            # ownerRef to the pod — all via the shared lifecycle helper so the Secret
+            # is never both-leaked-and-orphaned. The pod env no longer carries the JWT.
+            from gateway.orchestrator.jwt_secret_lifecycle import (
+                create_jwt_secret_with_owner_ref,
+            )
+
+            await orch._ensure_client()
+            if not orch._core_api:
+                await ns.update_session_status(session, session_id=session_id, status="error")
+                return "Error starting notebook pod: K8s orchestrator not available"
+            core_v1 = orch._core_api
+            # Ensure the namespace exists BEFORE the Secret (else create fails on a new org).
+            ns_name = await orch.ensure_namespace(org_id)
+
+            async def _create_pod_fn():
+                return await orch.create_pod(
                     pod_name=pod_name, user_id=user_id, org_id=org_id,
                     project_id=project_id, branch=agent_branch,
                     image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
                     gateway_url=k8s_settings.sp_public_gateway_url,
-                    session_jwt=session_jwt, session_id=session_id,
+                    session_jwt_secret_name=f"sp-jwt-{pod_name}",
+                    session_id=session_id,
                     access_token=session_info.access_token,
                     extra_env={"SP_AGENT_MODE": "true"},
                 )
+
+            # Inner try: the helper owns Secret+Pod cleanup on its own failure path.
+            try:
+                await create_jwt_secret_with_owner_ref(
+                    core_v1, namespace=ns_name, pod_name=pod_name,
+                    session_jwt=session_jwt, create_pod_fn=_create_pod_fn,
+                )
+            except Exception as exc:
+                await ns.update_session_status(session, session_id=session_id, status="error")
+                return f"Error starting notebook pod: {exc}"
+
+            # Outer try: pod EXISTS here; readiness waits are ours to clean up.
+            try:
                 await orch.wait_for_running(pod_name, org_id=org_id, timeout=90)
                 # Pod entrypoint runs project_sync_boot (git clone) then exec sp edit.
                 # wait_for_ready's TCP probe on :2718 gates clone success.

@@ -145,19 +145,40 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, response: R
     gateway_url = k8s_settings.sp_public_gateway_url
 
     try:
-        # access_token is no longer passed to the pod env or CLI (R2: --no-token).
-        # It is stored on the DB row only as the gateway proxy cookie value.
-        await orch.create_pod(
+        # F-6/F-13: stage the JWT in a per-session Secret, create the pod (mounts the
+        # Secret via initContainer -> tmpfs), then patch the Secret's ownerRef to the
+        # pod — via the shared lifecycle helper. The pod env no longer carries the JWT.
+        # access_token is no longer passed to the pod env or CLI (R2: --no-token);
+        # it is stored on the DB row only as the gateway proxy cookie value.
+        from ..orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
+
+        await orch._ensure_client()  # type: ignore[attr-defined]
+        if not orch._core_api:  # type: ignore[attr-defined]
+            raise RuntimeError("K8s orchestrator not available")
+        core_v1 = orch._core_api  # type: ignore[attr-defined]
+        # Ensure the namespace exists BEFORE the Secret (else create fails on a new org).
+        ns_name = await orch.ensure_namespace(org_id)
+
+        async def _create_pod_fn():
+            return await orch.create_pod(
+                pod_name=pod,
+                user_id=user_id,
+                org_id=org_id,
+                project_id=body.project_id,
+                branch=body.branch,
+                image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
+                gateway_url=gateway_url,
+                session_jwt_secret_name=f"sp-jwt-{pod}",
+                session_id=session_info.id,
+                access_token=session_info.access_token,
+            )
+
+        await create_jwt_secret_with_owner_ref(
+            core_v1,
+            namespace=ns_name,
             pod_name=pod,
-            user_id=user_id,
-            org_id=org_id,
-            project_id=body.project_id,
-            branch=body.branch,
-            image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
-            gateway_url=gateway_url,
             session_jwt=session_jwt,
-            session_id=session_info.id,
-            access_token=session_info.access_token,
+            create_pod_fn=_create_pod_fn,
         )
         logger.info("Waiting for pod %s to be running...", pod)
         await orch.wait_for_running(pod, org_id=org_id, timeout=90)

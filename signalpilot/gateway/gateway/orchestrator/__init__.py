@@ -30,10 +30,15 @@ class NotebookOrchestrator(ABC):
         branch: str,
         image: str,
         gateway_url: str,
-        session_jwt: str,
+        session_jwt_secret_name: str,
         session_id: str,
         access_token: str | None,
     ) -> PodInfo:
+        ...
+
+    @abstractmethod
+    async def ensure_namespace(self, org_id: str) -> str:
+        """Idempotently create the org's tenant namespace. Returns the namespace name."""
         ...
 
     @abstractmethod

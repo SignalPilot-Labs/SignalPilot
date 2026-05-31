@@ -316,6 +316,17 @@ async def lifespan(app: FastAPI):
                         await ns.mark_stopped(session, session_id=s.id)
             except Exception as e:
                 logger.warning("Notebook cleanup loop error: %s", e)
+            # F-13: reap sp-jwt-* Secrets orphaned by a gateway crash between
+            # Secret-create and ownerRef-patch. kube GC handles the happy path
+            # (ownerRef set); this catches leaks that survive a gateway restart.
+            try:
+                from .orchestrator.jwt_secret_gc import gc_orphan_jwt_secrets
+
+                deleted = await gc_orphan_jwt_secrets(orch)
+                if deleted:
+                    logger.info("JWT-secret GC: deleted %d orphan Secret(s)", deleted)
+            except Exception as e:
+                logger.warning("JWT-secret GC error: %s", e)
 
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())

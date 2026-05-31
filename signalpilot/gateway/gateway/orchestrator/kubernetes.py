@@ -36,6 +36,11 @@ _NOTEBOOK_RUNTIME_CLASS = os.getenv("SP_NOTEBOOK_RUNTIME_CLASS", "").strip()
 _NOTEBOOK_NODE_LABEL_KEY = os.getenv("SP_NOTEBOOK_NODE_LABEL_KEY", "signalpilot.ai/notebook").strip()
 _NOTEBOOK_NODE_LABEL_VALUE = os.getenv("SP_NOTEBOOK_NODE_LABEL_VALUE", "true").strip()
 
+# Mount paths for the per-session JWT secret volume (initContainer -> emptyDir tmpfs).
+# These MUST stay in sync with signalpilot/_server/entrypoint.py _JWT_PATH (F-6).
+SP_SESSION_JWT_MOUNT_DIR = "/var/run/sp/session_jwt"
+SP_SESSION_JWT_MOUNT_FILE = "/var/run/sp/session_jwt/session_jwt"
+
 
 def _parse_single_kv(selector_str: str) -> dict[str, str]:
     """Parse a single k=v selector string into a dict. Raises on violation."""
@@ -64,14 +69,18 @@ def _pod_manifest(
     project_id: str | None,
     branch: str,
     gateway_url: str,
-    session_jwt: str,
+    session_jwt_secret_name: str,
     session_id: str,
     access_token: str | None,
     extra_env: dict[str, str] | None = None,
 ) -> dict:
     """Build the pod spec dict for the Kubernetes API.
 
-    Injects SP_SESSION_JWT and SP_SESSION_ID into the pod env.
+    F-6: SP_SESSION_JWT is NOT injected via pod env. The per-session Secret named
+    session_jwt_secret_name is staged into an emptyDir tmpfs by the jwt-stager
+    initContainer; the entrypoint reads and unlinks the file before exec sp edit.
+
+    Injects SP_SESSION_ID into the pod env.
     Does NOT inject SP_API_KEY (replaced by per-session JWT) or SP_ACCESS_TOKEN
     (removed in R2 — the gateway proxy is the sole auth gate; the pod runs --no-token).
     --token-password is removed unconditionally; the pod runs --no-token always.
@@ -99,7 +108,8 @@ def _pod_manifest(
         {"name": "SP_BRANCH", "value": branch},
         {"name": "SP_USER_ID", "value": user_id},
         {"name": "SP_ORG_ID", "value": org_id},
-        {"name": "SP_SESSION_JWT", "value": session_jwt},
+        # SP_SESSION_JWT is NOT here (F-6) — it is delivered via the session-jwt
+        # Secret -> initContainer -> tmpfs and read by the pod entrypoint.
         {"name": "SP_SESSION_ID", "value": session_id},
         # Required because sp-notebook is installed at /opt/sp-notebook which is on the
         # read-only root FS; without this, Python attempts to write __pycache__/*.pyc
@@ -112,6 +122,12 @@ def _pod_manifest(
         for k, v in extra_env.items():
             env.append({"name": k, "value": v})
     # SP_ACCESS_TOKEN removed in R2. access_token is stored for the proxy cookie only.
+
+    notebook_image = (
+        f"docker.io/library/{image}"
+        if ":" in image and "/" not in image
+        else image
+    )
 
     return {
         "apiVersion": "v1",
@@ -155,33 +171,67 @@ def _pod_manifest(
                 "runAsUser": 10001,
                 "runAsGroup": 10001,
                 "fsGroup": 10001,
+                # F-14: kubelet chowns emptyDir mounts to gid 10001 at mount time so
+                # the non-root jwt-stager initContainer can write the tmpfs file
+                # without CAP_CHOWN.
+                "fsGroupChangePolicy": "OnRootMismatch",
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
+            # F-6/F-14: copy the per-session JWT Secret into the writable tmpfs the
+            # main container reads at boot. Constant sh -c string — no user input.
+            "initContainers": [
+                {
+                    "name": "jwt-stager",
+                    "image": notebook_image,
+                    "imagePullPolicy": "Always",
+                    "command": [
+                        "sh", "-c",
+                        "cp /var/run/sp/session_jwt-src/session_jwt "
+                        f"{SP_SESSION_JWT_MOUNT_FILE} && chmod 0400 {SP_SESSION_JWT_MOUNT_FILE}",
+                    ],
+                    "securityContext": {
+                        "runAsUser": 10001,
+                        "runAsGroup": 10001,
+                        "runAsNonRoot": True,
+                        "readOnlyRootFilesystem": True,
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "volumeMounts": [
+                        {"name": "session-jwt-src", "mountPath": "/var/run/sp/session_jwt-src", "readOnly": True},
+                        {"name": "session-jwt", "mountPath": SP_SESSION_JWT_MOUNT_DIR},
+                    ],
+                    "resources": {
+                        "requests": {"cpu": "10m", "memory": "16Mi"},
+                        "limits": {"cpu": "100m", "memory": "32Mi"},
+                    },
+                },
+            ],
             "containers": [
                 {
                     "name": "notebook",
-                    "image": (
-                        f"docker.io/library/{image}"
-                        if ":" in image and "/" not in image
-                        else image
-                    ),
+                    "image": notebook_image,
                     # Always pull: the image uses a mutable :latest tag, so
                     # IfNotPresent would serve a stale image on nodes that cached
                     # an older :latest. In-region ECR pulls are fast.
                     "imagePullPolicy": "Always",
-                    # Pod entrypoint: runs project_sync_boot to git-clone /workspace,
-                    # then execs sp edit. wait_for_ready's TCP probe on :2718 already
-                    # gates correctly — clone failure → entrypoint exits non-zero →
-                    # :2718 never binds → wait_for_ready times out.
-                    # --no-token: pod runs without the notebook server's built-in auth;
-                    # the gateway proxy is the sole auth gate.
-                    # --base-url: tells the notebook server to emit asset/WS URLs under /notebook/{session_id}.
-                    "command": [
-                        "sh", "-c",
-                        "python -m signalpilot._server.files.project_sync_boot && "
-                        f"exec sp edit --host 0.0.0.0 --port 2718 --headless --no-token "
-                        f"--no-skew-protection --allow-origins 'http://localhost:3200,http://localhost:3300' "
-                        f"--base-url /notebook/{session_id} /workspace",
+                    # F-6/F-4: argv-only entrypoint (no sh -c in the main container).
+                    # entrypoint.py reads+unlinks the JWT from the tmpfs, runs
+                    # project_sync_boot to git-clone /workspace, then execvp sp edit.
+                    # wait_for_ready's TCP probe on :2718 gates correctly — clone
+                    # failure -> entrypoint exits non-zero -> :2718 never binds ->
+                    # wait_for_ready times out.
+                    "command": ["python", "-m", "signalpilot._server.entrypoint"],
+                    "args": [
+                        "--host", "0.0.0.0",
+                        "--port", "2718",
+                        "--headless",
+                        "--no-token",
+                        "--no-skew-protection",
+                        "--allow-origins", "http://localhost:3200,http://localhost:3300",
+                        "--base-url", f"/notebook/{session_id}",
+                        "/workspace",
                     ],
                     "ports": [{"containerPort": 2718}],
                     "env": env,
@@ -207,6 +257,9 @@ def _pod_manifest(
                         {"name": "tmp", "mountPath": "/tmp"},
                         {"name": "home", "mountPath": "/home/notebook"},
                         {"name": "workspace", "mountPath": "/workspace"},
+                        # Writable tmpfs the entrypoint reads the JWT from and unlinks.
+                        # The main container does NOT mount the Secret (session-jwt-src).
+                        {"name": "session-jwt", "mountPath": SP_SESSION_JWT_MOUNT_DIR},
                     ],
                     "readinessProbe": {
                         "tcpSocket": {"port": 2718},
@@ -233,6 +286,18 @@ def _pod_manifest(
                     if os.getenv("SP_NOTEBOOK_PVC")
                     else [{"name": "workspace", "emptyDir": {"sizeLimit": "2Gi"}}]
                 ),
+                # F-6: memory-backed tmpfs the initContainer stages the JWT into and
+                # the entrypoint unlinks. Tiny — one short-lived token.
+                {"name": "session-jwt", "emptyDir": {"medium": "Memory", "sizeLimit": "1Mi"}},
+                # Read-only Secret volume — mounted ONLY by the initContainer.
+                {
+                    "name": "session-jwt-src",
+                    "secret": {
+                        "secretName": session_jwt_secret_name,
+                        "defaultMode": 0o400,
+                        "items": [{"key": "session_jwt", "path": "session_jwt"}],
+                    },
+                },
             ],
             "restartPolicy": "Never",
             "terminationGracePeriodSeconds": 5,
@@ -338,21 +403,13 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         assert self._gateway_port is not None, "gateway_port not loaded"
         assert self._gateway_service_account is not None, "gateway_service_account not loaded"
 
-    async def create_pod(
-        self,
-        *,
-        pod_name: str,
-        user_id: str,
-        org_id: str,
-        project_id: str | None,
-        branch: str,
-        image: str,
-        gateway_url: str,
-        session_jwt: str,
-        session_id: str,
-        access_token: str | None,
-        extra_env: dict[str, str] | None = None,
-    ) -> PodInfo:
+    async def ensure_namespace(self, org_id: str) -> str:
+        """Idempotently create the org's tenant namespace (+ quota/limits/netpol/RBAC).
+
+        Returns the namespace name. The F-6 flow stages a per-session Secret BEFORE
+        the pod, so callers must call this first — otherwise the Secret create would
+        fail with namespace-not-found on a brand-new org.
+        """
         if not org_id:
             raise ValueError("org_id must not be empty")
         await self._ensure_client()
@@ -382,6 +439,26 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             gateway_service_account=gateway_service_account,
             skip_network_policy=skip_netpol,
         )
+        return ns
+
+    async def create_pod(
+        self,
+        *,
+        pod_name: str,
+        user_id: str,
+        org_id: str,
+        project_id: str | None,
+        branch: str,
+        image: str,
+        gateway_url: str,
+        session_jwt_secret_name: str,
+        session_id: str,
+        access_token: str | None,
+        extra_env: dict[str, str] | None = None,
+    ) -> PodInfo:
+        # ensure_namespace is idempotent — safe even if the caller already called it
+        # (the F-6 path does, before staging the Secret).
+        ns = await self.ensure_namespace(org_id)
 
         manifest = _pod_manifest(
             pod_name=pod_name,
@@ -392,7 +469,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             project_id=project_id,
             branch=branch,
             gateway_url=gateway_url,
-            session_jwt=session_jwt,
+            session_jwt_secret_name=session_jwt_secret_name,
             session_id=session_id,
             access_token=access_token,
             extra_env=extra_env,

@@ -1,0 +1,76 @@
+---
+# F-21: Restrict pods/exec in tenant namespaces to nb-<12hex> pods and the notebook container.
+#
+# Policy is SA-agnostic; relies on namespace label + pod-name shape + container name.
+# Operators using non-default SP_GATEWAY_SERVICE_ACCOUNT need no policy edits.
+#
+# Defense-in-depth layer over:
+#   - Gateway AST gate (tests/test_pod_exec_caller_invariant.py, R4 C4)
+#   - Hardcoded container name "notebook" in kubernetes.py pod_exec_io
+#   - RBAC broad pods/exec (RBAC cannot prefix-match pod names)
+#
+# Match shape: Pod/exec subresource + CONNECT verb (what admission sees for kubectl exec).
+# Namespace scoped to signalpilot.dev/tenant: user label (mirrors require-gvisor-kyverno.yaml).
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-pod-exec-signalpilot
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+  annotations:
+    policies.kyverno.io/title: Restrict pods/exec to notebook pods
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/description: >-
+      In SignalPilot tenant namespaces, exec is only permitted into pods named
+      nb-<12hex> (gateway-created notebook pods) and only into the 'notebook'
+      container. Defense-in-depth over the AST gate and gateway argv whitelist.
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: restrict-pod-name
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod/exec
+              operations:
+                - CONNECT
+              namespaceSelector:
+                matchLabels:
+                  signalpilot.dev/tenant: user
+      validate:
+        message: "Exec on tenant namespaces only allowed for nb-<12hex> pods."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.name }}"
+                operator: NotMatch
+                value: "^nb-[0-9a-f]{12}$"
+
+    - name: restrict-container
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod/exec
+              operations:
+                - CONNECT
+              namespaceSelector:
+                matchLabels:
+                  signalpilot.dev/tenant: user
+      validate:
+        message: "Exec on tenant pods only allowed for container=notebook."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.container }}"
+                operator: NotEquals
+                value: "notebook"
+                # Only deny when container field is non-empty. Empty container means
+                # kubectl exec picked the first container — gateway always sets the field,
+                # so an empty value from a non-gateway caller is also suspicious.
+                # Kyverno evaluates this condition only when container is set;
+                # if empty string, NotEquals "notebook" is also true → deny correctly.

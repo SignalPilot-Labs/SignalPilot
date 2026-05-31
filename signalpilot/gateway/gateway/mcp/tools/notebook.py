@@ -1,6 +1,7 @@
 """MCP tool: run_notebook — execute a notebook in a cloud pod."""
 
 import logging
+import re
 import uuid
 
 from gateway.mcp.audit import audited_tool
@@ -8,6 +9,27 @@ from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
 from gateway.mcp.server import mcp
 
 logger = logging.getLogger(__name__)
+
+# F-4: filename and branch are LLM-controlled and flow into pod exec calls and
+# file paths. Validate both before any use. Filename must be a plain name with no
+# path separators (rejects path traversal and shell metacharacters); branch chars
+# are copied from notebook-server/signalpilot/_server/files/project_sync.py:28.
+_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.py$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
+
+
+def _validate_filename(filename: str) -> str | None:
+    """Return None if filename is valid, else an error string."""
+    if not _FILENAME_RE.match(filename):
+        return "Error: filename must match [A-Za-z0-9._-]+.py (no path separators or special chars)"
+    return None
+
+
+def _validate_branch(branch: str) -> str | None:
+    """Return None if branch is valid, else an error string."""
+    if not branch or branch.startswith("-") or not _BRANCH_RE.match(branch):
+        return f"Error: agent_branch {branch!r} is invalid (must match [A-Za-z0-9._/\\-]+ and not start with -)"
+    return None
 
 
 @audited_tool(mcp)
@@ -33,8 +55,15 @@ async def run_notebook(
     org_id = mcp_org_id_var.get(None) or "local"
     user_id = mcp_user_id_var.get(None) or "local"
 
-    if not filename.endswith(".py"):
-        return "Error: filename must end with .py"
+    # F-4: validate filename and any caller-supplied branch before they flow into
+    # pod exec argv or file paths.
+    filename_err = _validate_filename(filename)
+    if filename_err:
+        return filename_err
+    if agent_branch:
+        branch_err = _validate_branch(agent_branch)
+        if branch_err:
+            return branch_err
     if not code.strip():
         return "Error: code is empty"
 
@@ -156,21 +185,23 @@ async def run_notebook(
         project_dir = "/workspace"
         logger.warning("Git clone not found at %s after ready, falling back to /workspace", project_base)
 
-    # 5. Write the .py file into the project directory via exec
+    # 5. Write the .py file into the project directory via tee (argv + stdin, no shell).
+    # F-4: code is piped over stdin and the path is a non-shell argv element, so
+    # neither code nor filename can inject shell commands.
     w_out, w_err, w_rc = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["sh", "-c", f"cat > {project_dir}/{filename} << 'SPEOF'\n{code}\nSPEOF"],
-        timeout=10,
+        argv=["tee", f"{project_dir}/{filename}"],
+        stdin_bytes=code.encode("utf-8"),
+        timeout=30,
     )
     if w_rc != 0:
         logger.warning("Failed to write %s to pod %s (rc=%d): %s", filename, pod_name, w_rc, w_err.strip())
 
-    # 6. Run sp export session from the project directory
+    # 6. Run sp export session — absolute path argv, no cd, no sh -c (F-4).
     stdout, stderr, exit_code = await orch.exec_in_pod(
         pod_name, org_id=org_id,
-        argv=["sh", "-c",
-              f"cd {project_dir} && python -m signalpilot export session "
-              f"{project_dir}/{filename} --force-overwrite --verbose"],
+        argv=["python", "-m", "signalpilot", "export", "session",
+              f"{project_dir}/{filename}", "--force-overwrite", "--verbose"],
         timeout=300,
     )
 
@@ -190,21 +221,24 @@ async def run_notebook(
     except Exception as e:
         logger.warning("Failed to read session JSON: %s", e)
 
-    # 8. Commit and push results back via git (from project dir)
+    # 8. Commit and push results back via git — all argv, no sh -c (F-4).
     push_result = ""
     try:
-        # Push via the notebook-server's authed git runner — the auth header is
-        # passed per-invocation (F-9); a bare `git push` would fail now that the
-        # credential is no longer persisted in .git/config.
-        git_cmds = [
-            f"cd {project_dir} && git add -A",
-            f"cd {project_dir} && git commit -m 'agent: {filename}'",
-            f"cd {project_dir} && python -m signalpilot._server.files.git_auth . {project_id} push origin HEAD:refs/heads/{agent_branch}",
+        # add/commit are local and use `git -C <dir>`. Push goes through the
+        # notebook-server's authed git runner — the auth header is passed
+        # per-invocation (F-9); a bare `git push` would fail now that the
+        # credential is no longer persisted in .git/config. The git_auth CLI
+        # takes the repo path as its first arg, so we pass project_dir (no cd).
+        git_steps = [
+            ["git", "-C", project_dir, "add", "-A"],
+            ["git", "-C", project_dir, "commit", "-m", f"agent: {filename}"],
+            ["python", "-m", "signalpilot._server.files.git_auth", project_dir,
+             project_id, "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
         ]
-        for cmd in git_cmds:
+        for git_argv in git_steps:
             g_out, g_err, g_rc = await orch.exec_in_pod(
                 pod_name, org_id=org_id,
-                argv=["sh", "-c", cmd],
+                argv=git_argv,
                 timeout=30,
             )
             if g_rc != 0 and "nothing to commit" not in g_err:

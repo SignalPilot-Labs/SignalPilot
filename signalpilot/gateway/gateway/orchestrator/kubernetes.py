@@ -187,13 +187,20 @@ def _pod_manifest(
                     "env": env,
                     "resources": {
                         # Limit:request ratio must stay <= 4 (namespace LimitRange
-                        # maxLimitRequestRatio). 512/128 = 4, 1000m/250m = 4.
-                        "requests": {"memory": "128Mi", "cpu": "250m"},
-                        "limits": {"memory": "512Mi", "cpu": "1"},
+                        # maxLimitRequestRatio for cpu/memory). 512/128 = 4, 1000m/250m = 4.
+                        # ephemeral-storage has no ratio constraint (F-7b): caps the
+                        # writable layer + disk-backed emptyDirs (tmp, home) so a
+                        # runaway notebook can't fill the node disk.
+                        "requests": {"memory": "128Mi", "cpu": "250m", "ephemeral-storage": "256Mi"},
+                        "limits": {"memory": "512Mi", "cpu": "1", "ephemeral-storage": "4Gi"},
                     },
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
-                        "readOnlyRootFilesystem": False,
+                        # F-7a: root FS is read-only; all writes go to the mounted
+                        # emptyDir/PVC volumes (/tmp, /home/notebook, /workspace).
+                        # PYTHONDONTWRITEBYTECODE=1 keeps Python from writing .pyc to
+                        # the read-only /opt/sp-notebook install.
+                        "readOnlyRootFilesystem": True,
                         "capabilities": {"drop": ["ALL"]},
                     },
                     "volumeMounts": [
@@ -216,12 +223,15 @@ def _pod_manifest(
                 }
             ],
             "volumes": [
-                {"name": "tmp", "emptyDir": {}},
-                {"name": "home", "emptyDir": {}},
+                # F-7b: sizeLimit caps each disk-backed scratch volume so a single
+                # session can't exhaust node ephemeral storage. Sum (tmp+home) stays
+                # under the container ephemeral-storage limit (4Gi).
+                {"name": "tmp", "emptyDir": {"sizeLimit": "256Mi"}},
+                {"name": "home", "emptyDir": {"sizeLimit": "1Gi"}},
                 *(
                     [{"name": "workspace", "persistentVolumeClaim": {"claimName": os.getenv("SP_NOTEBOOK_PVC", "notebooks-pvc")}}]
                     if os.getenv("SP_NOTEBOOK_PVC")
-                    else [{"name": "workspace", "emptyDir": {}}]
+                    else [{"name": "workspace", "emptyDir": {"sizeLimit": "2Gi"}}]
                 ),
             ],
             "restartPolicy": "Never",
@@ -525,9 +535,14 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
 
     async def exec_in_pod(
-        self, pod_name: str, *, org_id: str, argv: list[str], timeout: int = 300
+        self, pod_name: str, *, org_id: str, argv: list[str],
+        stdin_bytes: bytes | None = None, timeout: int = 300,
     ) -> tuple[str, str, int]:
-        """Run a command in a pod and return (stdout, stderr, exit_code)."""
+        """Run a command in a pod and return (stdout, stderr, exit_code).
+
+        When stdin_bytes is provided it is written to the command's stdin and the
+        stream is closed (used to pipe file contents via argv-only commands, F-4).
+        """
         if not org_id:
             raise ValueError("org_id must not be empty")
         await self._ensure_client()
@@ -542,6 +557,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             namespace=ns,
             pod_name=pod_name,
             argv=argv,
+            stdin_bytes=stdin_bytes,
             timeout_seconds=timeout,
         )
 

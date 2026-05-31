@@ -30,6 +30,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 _CONTAINER_NAME = "notebook"
+_STDIN_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
 
 
 async def exec_command_in_pod(
@@ -39,10 +40,18 @@ async def exec_command_in_pod(
     pod_name: str,
     argv: list[str],
     timeout_seconds: int = 300,
+    stdin_bytes: bytes | None = None,
 ) -> tuple[str, str, int]:
     """Execute a command in the pod and return (stdout, stderr, exit_code).
 
     The caller is responsible for validating the command.
+
+    When stdin_bytes is provided:
+    - stdin=True is passed to the exec API.
+    - The payload is written to channel 0 (stdin) after the connection is open.
+    - An EOF is signaled by writing a zero-length channel-0 frame so that
+      commands like `tee` exit cleanly.
+    - Raises ValueError if stdin_bytes exceeds 1 MiB.
     """
     import asyncio
     import json as _json
@@ -50,6 +59,13 @@ async def exec_command_in_pod(
     from kubernetes_asyncio import client
     from kubernetes_asyncio.stream import WsApiClient
 
+    if stdin_bytes is not None and len(stdin_bytes) > _STDIN_MAX_BYTES:
+        raise ValueError(
+            f"stdin_bytes payload ({len(stdin_bytes)} bytes) exceeds the 1 MiB cap. "
+            "Split the payload into smaller chunks."
+        )
+
+    use_stdin = stdin_bytes is not None
     cfg = core_api.api_client.configuration
     async with WsApiClient(configuration=cfg) as ws_client:
         v1 = client.CoreV1Api(api_client=ws_client)
@@ -59,7 +75,7 @@ async def exec_command_in_pod(
             container=_CONTAINER_NAME,
             command=argv,
             stderr=True,
-            stdin=False,
+            stdin=use_stdin,
             stdout=True,
             tty=False,
             _preload_content=False,
@@ -70,6 +86,8 @@ async def exec_command_in_pod(
         try:
             async with asyncio.timeout(timeout_seconds):
                 async with ws_connect as ws:
+                    if use_stdin and stdin_bytes is not None:
+                        await _write_stdin_and_close(ws, stdin_bytes)
                     async for msg in ws:
                         data = msg.data
                         if isinstance(data, str):
@@ -100,4 +118,36 @@ async def exec_command_in_pod(
         bytes(stdout_buf).decode("utf-8", errors="replace"),
         bytes(stderr_buf).decode("utf-8", errors="replace"),
         rc,
+    )
+
+
+async def _write_stdin_and_close(ws, payload: bytes) -> None:
+    """Write payload to channel 0 (stdin) and signal EOF.
+
+    Tries write_stdin() first (kubernetes-asyncio 32.x). Falls back to
+    sending a raw channel-0 framed byte sequence. After the payload, sends
+    a zero-length channel-0 frame to signal EOF so commands like `tee` exit.
+
+    Raises NotImplementedError if neither mechanism is available.
+    """
+    # Primary path: write_stdin is present on the websocket object.
+    if hasattr(ws, "write_stdin"):
+        await ws.write_stdin(payload)
+        # Signal EOF by sending a zero-length channel-0 frame.
+        # kubernetes-asyncio ≥32.x exposes write_stdin but not a dedicated
+        # stdin-close; sending empty bytes on channel 0 acts as EOF sentinel.
+        await ws.write_stdin(b"")
+        return
+
+    # Fallback path: send raw framed bytes.
+    # Channel 0 = stdin; frame = bytes([channel_id]) + payload.
+    if hasattr(ws, "send_bytes"):
+        await ws.send_bytes(bytes([0]) + payload)
+        # EOF sentinel: zero-length channel-0 frame.
+        await ws.send_bytes(bytes([0]))
+        return
+
+    raise NotImplementedError(
+        "Cannot write stdin: websocket object exposes neither write_stdin() "
+        "nor send_bytes(). Upgrade kubernetes-asyncio or use a different exec path."
     )

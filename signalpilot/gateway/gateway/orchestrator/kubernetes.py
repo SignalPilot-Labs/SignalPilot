@@ -203,7 +203,9 @@ def _pod_manifest(
                         {"name": "session-jwt", "mountPath": SP_SESSION_JWT_MOUNT_DIR},
                     ],
                     "resources": {
-                        "requests": {"cpu": "10m", "memory": "16Mi"},
+                        # Ratio must stay <= 4 (namespace LimitRange maxLimitRequestRatio):
+                        # cpu 100/25 = 4, memory 32/16 = 2.
+                        "requests": {"cpu": "25m", "memory": "16Mi"},
                         "limits": {"cpu": "100m", "memory": "32Mi"},
                     },
                 },

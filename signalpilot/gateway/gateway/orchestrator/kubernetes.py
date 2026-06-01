@@ -183,7 +183,10 @@ def _pod_manifest(
                 {
                     "name": "jwt-stager",
                     "image": notebook_image,
-                    "imagePullPolicy": "Always",
+                    # IfNotPresent: F-18 pins the image by @sha256 digest, which is
+                    # immutable, so a cached layer is always correct and a new digest
+                    # always re-pulls. Avoids a per-spawn ECR manifest round-trip.
+                    "imagePullPolicy": "IfNotPresent",
                     "command": [
                         "sh", "-c",
                         "cp /var/run/sp/session_jwt-src/session_jwt "
@@ -214,10 +217,11 @@ def _pod_manifest(
                 {
                     "name": "notebook",
                     "image": notebook_image,
-                    # Always pull: the image uses a mutable :latest tag, so
-                    # IfNotPresent would serve a stale image on nodes that cached
-                    # an older :latest. In-region ECR pulls are fast.
-                    "imagePullPolicy": "Always",
+                    # IfNotPresent: F-18 pins the image by @sha256 digest (immutable),
+                    # so a cached layer is always correct and a new digest re-pulls
+                    # regardless. Skips the per-spawn ECR manifest round-trip that
+                    # Always incurs even when layers are already cached.
+                    "imagePullPolicy": "IfNotPresent",
                     # F-6/F-4: argv-only entrypoint (no sh -c in the main container).
                     # entrypoint.py reads+unlinks the JWT from the tmpfs, runs
                     # project_sync_boot to git-clone /workspace, then execvp sp edit.

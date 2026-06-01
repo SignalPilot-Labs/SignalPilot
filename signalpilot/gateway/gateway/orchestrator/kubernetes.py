@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 from . import NotebookOrchestrator, PodInfo
 from .namespaces import ensure_org_namespace, namespace_for_org
@@ -57,6 +58,31 @@ def _parse_single_kv(selector_str: str) -> dict[str, str]:
             f"Gateway pod selector key and value must be non-empty. Got: {selector_str!r}"
         )
     return {k: v}
+
+
+_SUBPATH_SAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+_SUBPATH_MAX_SEGMENT_LEN = 63
+
+
+def _workspace_subpath(org_id: str, session_id: str) -> str:
+    """Return a relative PVC subPath isolating this org+session: ``{org_id}/{session_id}``.
+
+    org_id is always the outermost segment so cross-org isolation holds even when
+    session_id values collide between orgs.  Both segments are sanitised to
+    ``[A-Za-z0-9_-]`` (unsafe chars replaced with ``_``) and capped at 63 chars to
+    mirror the label-truncation pattern used elsewhere in _pod_manifest.
+
+    The kubelet creates missing subPath directories on mount — no init step is needed.
+
+    Raises ValueError if org_id is empty (matches _resolve_namespace behaviour —
+    an empty org_id reaching the manifest builder is an invariant violation).
+    """
+    if not org_id:
+        raise ValueError("org_id must be non-empty for workspace subPath isolation")
+    safe_org = _SUBPATH_SAFE_CHARS_RE.sub("_", org_id)[:_SUBPATH_MAX_SEGMENT_LEN]
+    safe_session = _SUBPATH_SAFE_CHARS_RE.sub("_", session_id)[:_SUBPATH_MAX_SEGMENT_LEN]
+    return f"{safe_org}/{safe_session}"
 
 
 def _pod_manifest(
@@ -262,7 +288,11 @@ def _pod_manifest(
                     "volumeMounts": [
                         {"name": "tmp", "mountPath": "/tmp"},
                         {"name": "home", "mountPath": "/home/notebook"},
-                        {"name": "workspace", "mountPath": "/workspace"},
+                        *(
+                            [{"name": "workspace", "mountPath": "/workspace", "subPath": _workspace_subpath(org_id, session_id)}]
+                            if os.getenv("SP_NOTEBOOK_PVC")
+                            else [{"name": "workspace", "mountPath": "/workspace"}]
+                        ),
                         # Writable tmpfs the entrypoint reads the JWT from and unlinks.
                         # The main container does NOT mount the Secret (session-jwt-src).
                         {"name": "session-jwt", "mountPath": SP_SESSION_JWT_MOUNT_DIR},

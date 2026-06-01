@@ -25,7 +25,7 @@ def _make_manifest(**kwargs) -> dict:
         "project_id": None,
         "branch": "main",
         "gateway_url": "http://gateway:3300",
-        "session_jwt": "test.jwt.token",
+        "session_jwt_secret_name": "sp-jwt-sess-abc",
         "session_id": "sess-abc",
         "access_token": None,
     }

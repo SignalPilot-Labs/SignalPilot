@@ -213,6 +213,8 @@ async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
             repo_id=body.repo_id,
             default_branch=body.default_branch,
         )
+    except gh_store.ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Project not found")
     except Exception as e:
         if "uq_gw_ghrepo_org_project" in str(e):
             raise HTTPException(status_code=409, detail="Project already linked to a repo")

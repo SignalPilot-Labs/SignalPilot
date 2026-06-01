@@ -16,7 +16,8 @@ from __future__ import annotations
 import logging
 import time
 
-from .repos import repo_path, repo_exists, _run_git, list_branches
+from ..store import workspace_projects as wp_store
+from .repos import _run_git, list_branches, repo_exists, repo_path
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,9 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
 
     factory = get_session_factory()
     async with factory() as session:
+        proj = await wp_store.get_project(session, org_id=org_id, project_id=project_id)
+        if proj is None:
+            return {"error": "Project not found"}
         link = await gh_store.get_repo_link_for_project(session, org_id=org_id, project_id=project_id)
         if not link:
             return {"error": "No GitHub repo linked to this project"}

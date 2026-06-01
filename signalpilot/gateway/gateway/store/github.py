@@ -10,8 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import GatewayGitHubInstallation, GatewayGitHubRepoLink, GatewayWorkspaceProject
 from ..models.github import GitHubInstallationInfo, GitHubRepoLinkInfo
+from . import workspace_projects as _wp
 
 logger = logging.getLogger(__name__)
+
+
+class ProjectNotFoundError(Exception):
+    """Project does not exist in the caller's org. Fail-closed for IDOR."""
+
+
+async def _assert_project_in_org(session: AsyncSession, *, org_id: str, project_id: str) -> None:
+    proj = await _wp.get_project(session, org_id=org_id, project_id=project_id)
+    if proj is None:
+        raise ProjectNotFoundError(project_id)
 
 
 def _installation_to_info(row: GatewayGitHubInstallation) -> GitHubInstallationInfo:
@@ -179,6 +190,7 @@ async def create_repo_link(
     repo_id: int,
     default_branch: str = "main",
 ) -> GitHubRepoLinkInfo:
+    await _assert_project_in_org(session, org_id=org_id, project_id=project_id)
     now = time.time()
     row = GatewayGitHubRepoLink(
         org_id=org_id,

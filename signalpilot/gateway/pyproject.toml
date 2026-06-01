@@ -97,3 +97,8 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.22.1",
+]

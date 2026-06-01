@@ -209,12 +209,14 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
             env=env,
             timeout=120,
         )
-        logger.warning(
-            "GITDBG op=%s method=%s in_len=%d rc=%d out_len=%d proto=%s err=%s",
-            remainder, request.method, len(body), proc.returncode,
-            len(proc.stdout), env.get("GIT_PROTOCOL", "v0"),
-            proc.stderr.decode("utf-8", errors="replace")[:300],
-        )
+        if proc.returncode != 0 or len(proc.stdout) == 0:
+            logger.warning(
+                "git http-backend nonzero/empty: op=%s method=%s in_len=%d rc=%d out_len=%d proto=%s CL=%s body_head=%r err=%s",
+                remainder, request.method, len(body), proc.returncode,
+                len(proc.stdout), env.get("GIT_PROTOCOL", "v0"),
+                env.get("CONTENT_LENGTH"), body[:80],
+                proc.stderr.decode("utf-8", errors="replace")[:300],
+            )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Git operation timed out")
     except FileNotFoundError:

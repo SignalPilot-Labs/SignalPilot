@@ -62,7 +62,7 @@ async def handle_startup(
         params = await read_startup_message(reader)
     except Exception as exc:
         err_id = uuid.uuid4().hex
-        logger.warning("dbt_proxy startup_message error id=%s exc=%r", err_id, exc)
+        logger.warning("dbt_proxy startup_message error id=%s exc_type=%s", err_id, type(exc).__name__)
         writer.write(write_error_response("protocol error", sqlstate="08006"))
         await writer.drain()
         writer.close()
@@ -78,7 +78,7 @@ async def handle_startup(
         password = await read_password_message(reader)
     except Exception as exc:
         err_id = uuid.uuid4().hex
-        logger.warning("dbt_proxy password_message error id=%s exc=%r", err_id, exc)
+        logger.warning("dbt_proxy password_message error id=%s exc_type=%s", err_id, type(exc).__name__)
         writer.write(write_error_response("protocol error", sqlstate="28P01"))
         await writer.drain()
         writer.close()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextvars
-import os as _os
 from contextlib import asynccontextmanager
 
 from gateway.db.engine import get_session_factory
@@ -19,9 +18,6 @@ mcp_raw_key_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mc
 mcp_audit_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_audit_id", default=None)
 mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_client_ip", default=None)
 mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
-
-_is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
-
 
 def require_mcp_org_id() -> str:
     """Resolve mcp_org_id_var with cloud-mode fail-closed semantics.

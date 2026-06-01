@@ -81,7 +81,7 @@ class TestPodSecurityContext:
         """Pod env contains PYTHONDONTWRITEBYTECODE=1 (required for read-only root FS)."""
         manifest = _make_manifest()
         env = manifest["spec"]["containers"][0]["env"]
-        env_dict = {e["name"]: e["value"] for e in env}
+        env_dict = {e["name"]: e["value"] for e in env if "value" in e}
         assert "PYTHONDONTWRITEBYTECODE" in env_dict
         assert env_dict["PYTHONDONTWRITEBYTECODE"] == "1"
 
@@ -89,7 +89,7 @@ class TestPodSecurityContext:
         """Pod env contains SP_LOG_DIR pointing to a path under /tmp."""
         manifest = _make_manifest()
         env = manifest["spec"]["containers"][0]["env"]
-        env_dict = {e["name"]: e["value"] for e in env}
+        env_dict = {e["name"]: e["value"] for e in env if "value" in e}
         assert "SP_LOG_DIR" in env_dict
         assert env_dict["SP_LOG_DIR"].startswith("/tmp")
 
@@ -97,7 +97,7 @@ class TestPodSecurityContext:
         """Pod env contains HOME=/home/notebook (writable emptyDir for UID 10001)."""
         manifest = _make_manifest()
         env = manifest["spec"]["containers"][0]["env"]
-        env_dict = {e["name"]: e["value"] for e in env}
+        env_dict = {e["name"]: e["value"] for e in env if "value" in e}
         assert "HOME" in env_dict
         assert env_dict["HOME"] == "/home/notebook"
 

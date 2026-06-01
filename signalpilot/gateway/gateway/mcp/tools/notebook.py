@@ -35,6 +35,42 @@ def _validate_branch(branch: str) -> str | None:
     return None
 
 
+_AGENT_BRANCH_PREFIX = "signalpilot-agent/"
+
+
+def _validate_agent_branch(branch: str) -> str | None:
+    """Return None if branch is a safe agent-owned ref, else an error string.
+
+    Enforces both the canonical syntactic check AND the agent-prefix allowlist.
+    Used at every push site so a caller-supplied branch can never resolve to
+    main/master/a release branch.
+    """
+    syntactic = _validate_branch(branch)
+    if syntactic:
+        return syntactic
+    if not branch.startswith(_AGENT_BRANCH_PREFIX):
+        return (
+            f"Error: agent_branch {branch!r} must start with "
+            f"{_AGENT_BRANCH_PREFIX!r} (agent pushes are restricted to that namespace)"
+        )
+    # Defense-in-depth: even if the prefix were misconfigured, explicitly
+    # reject the well-known protected names (case-insensitive) and ref-name
+    # hygiene escapes (`..`, `//`, leading/trailing `/`) that git itself
+    # rejects but which we want blocked before we shell out.
+    tail = branch[len(_AGENT_BRANCH_PREFIX):]
+    tail_lc = tail.lower()
+    if (
+        tail_lc in {"", "main", "master", "head"}
+        or tail_lc.startswith(("release/", "releases/"))
+        or ".." in tail
+        or "//" in tail
+        or tail.startswith("/")
+        or tail.endswith("/")
+    ):
+        return f"Error: agent_branch {branch!r} targets a reserved name"
+    return None
+
+
 def _build_export_invocation(
     *,
     cloud: bool,
@@ -116,7 +152,7 @@ async def run_notebook(
     if filename_err:
         return filename_err
     if agent_branch:
-        branch_err = _validate_branch(agent_branch)
+        branch_err = _validate_agent_branch(agent_branch)
         if branch_err:
             return branch_err
     if not code.strip():
@@ -149,6 +185,10 @@ async def run_notebook(
         rc, out, err = _run_git("rev-parse", "--verify", f"refs/heads/{agent_branch}", cwd=rp)
         if rc != 0:
             return f"Error: branch {agent_branch} not found"
+
+    agent_branch_err = _validate_agent_branch(agent_branch)
+    if agent_branch_err:
+        return agent_branch_err
 
     # 3. Get or create notebook session (pod reuse)
     from gateway.db.engine import get_session_factory
@@ -322,43 +362,47 @@ async def run_notebook(
 
     # 8. Commit and push results back via git — all argv, no sh -c (F-4).
     push_result = ""
-    try:
-        # add/commit are local and use `git -C <dir>`. Push goes through the
-        # notebook-server's authed git runner (F-9): the auth header is passed
-        # per-invocation, never persisted in .git/config. Under F-6 the JWT is no
-        # longer in the pod env, so the exec'd git_auth process can't inherit it —
-        # we mint a short-lived session JWT and pipe it over stdin (never on argv,
-        # so it never lands in /proc/<pid>/cmdline). The git_auth CLI takes the
-        # repo path as its first arg, so we pass project_dir (no cd).
-        push_jwt = mint_session_jwt(
-            user_id=user_id, org_id=org_id, session_id=session_id,
-            project_id=project_id, branch=agent_branch,
-            ttl=_get_k8s_settings().sp_session_jwt_ttl_seconds,
-        )
-        git_steps = [
-            (["git", "-C", project_dir, "add", "-A"], None),
-            (["git", "-C", project_dir, "commit", "-m", f"agent: {filename}"], None),
-            (["python", "-m", "signalpilot._server.files.git_auth", project_dir,
-              project_id, "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
-             # Trailing newline so git_auth's readline() returns without needing a
-             # stdin EOF (the k8s exec stdin channel doesn't deliver one).
-             (push_jwt + "\n").encode("utf-8")),
-        ]
-        for git_argv, git_stdin in git_steps:
-            g_out, g_err, g_rc = await orch.exec_in_pod(
-                pod_name, org_id=org_id,
-                argv=git_argv,
-                stdin_bytes=git_stdin,
-                timeout=30,
+    agent_branch_err = _validate_agent_branch(agent_branch)
+    if agent_branch_err:
+        push_result = agent_branch_err
+    else:
+        try:
+            # add/commit are local and use `git -C <dir>`. Push goes through the
+            # notebook-server's authed git runner (F-9): the auth header is passed
+            # per-invocation, never persisted in .git/config. Under F-6 the JWT is no
+            # longer in the pod env, so the exec'd git_auth process can't inherit it —
+            # we mint a short-lived session JWT and pipe it over stdin (never on argv,
+            # so it never lands in /proc/<pid>/cmdline). The git_auth CLI takes the
+            # repo path as its first arg, so we pass project_dir (no cd).
+            push_jwt = mint_session_jwt(
+                user_id=user_id, org_id=org_id, session_id=session_id,
+                project_id=project_id, branch=agent_branch,
+                ttl=_get_k8s_settings().sp_session_jwt_ttl_seconds,
             )
-            if g_rc != 0 and "nothing to commit" not in g_err:
-                push_result = f"failed: {g_err.strip()}"
-                break
-        else:
-            push_result = "pushed to git"
-    except Exception as e:
-        logger.warning("Failed to push results to git: %s", e)
-        push_result = f"push failed: {e}"
+            git_steps = [
+                (["git", "-C", project_dir, "add", "-A"], None),
+                (["git", "-C", project_dir, "commit", "-m", f"agent: {filename}"], None),
+                (["python", "-m", "signalpilot._server.files.git_auth", project_dir,
+                  project_id, "push", "origin", f"HEAD:refs/heads/{agent_branch}"],
+                 # Trailing newline so git_auth's readline() returns without needing a
+                 # stdin EOF (the k8s exec stdin channel doesn't deliver one).
+                 (push_jwt + "\n").encode("utf-8")),
+            ]
+            for git_argv, git_stdin in git_steps:
+                g_out, g_err, g_rc = await orch.exec_in_pod(
+                    pod_name, org_id=org_id,
+                    argv=git_argv,
+                    stdin_bytes=git_stdin,
+                    timeout=30,
+                )
+                if g_rc != 0 and "nothing to commit" not in g_err:
+                    push_result = f"failed: {g_err.strip()}"
+                    break
+            else:
+                push_result = "pushed to git"
+        except Exception as e:
+            logger.warning("Failed to push results to git: %s", e)
+            push_result = f"push failed: {e}"
 
     # 8. Build notebook URL — link to the web app, not the gateway proxy
     import os

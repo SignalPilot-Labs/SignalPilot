@@ -1,7 +1,7 @@
 """MCP tool: list_workspace_projects — list notebook projects with git/GitHub status."""
 
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
+from gateway.mcp.context import _store_session, require_mcp_org_id, require_mcp_user_id
 from gateway.mcp.server import mcp
 
 
@@ -12,8 +12,11 @@ async def list_workspace_projects() -> str:
     Returns project ID (needed for run_notebook), name, source (managed/github),
     default branch, and file count.
     """
-    org_id = mcp_org_id_var.get(None) or "local"
-    user_id = mcp_user_id_var.get(None) or "local"
+    try:
+        org_id = require_mcp_org_id()
+        user_id = require_mcp_user_id()
+    except RuntimeError as e:
+        return f"Error: {e}"
 
     async with _store_session(user_id=user_id, org_id=org_id) as store:
         projects, total = await store.list_workspace_projects(status="active", limit=50)

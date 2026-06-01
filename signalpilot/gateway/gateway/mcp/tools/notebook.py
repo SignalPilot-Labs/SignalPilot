@@ -7,7 +7,7 @@ import uuid
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.k8s import get_k8s_settings as _get_k8s_settings
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
+from gateway.mcp.context import _store_session, require_mcp_org_id, require_mcp_user_id
 from gateway.mcp.server import mcp
 from gateway.runtime.mode import is_cloud_mode
 
@@ -143,8 +143,11 @@ async def run_notebook(
         project_id: Workspace project ID to run against
         agent_branch: Branch name from a previous call (empty = create new branch)
     """
-    org_id = mcp_org_id_var.get(None) or "local"
-    user_id = mcp_user_id_var.get(None) or "local"
+    try:
+        org_id = require_mcp_org_id()
+        user_id = require_mcp_user_id()
+    except RuntimeError as e:
+        return f"Error: {e}"
 
     # F-4: validate filename and any caller-supplied branch before they flow into
     # pod exec argv or file paths.

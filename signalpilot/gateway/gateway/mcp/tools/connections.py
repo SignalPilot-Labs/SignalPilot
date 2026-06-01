@@ -5,7 +5,7 @@ import httpx
 from gateway.errors.mcp import sanitize_proxy_response
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _gateway_url, _gw_headers, _store_session, mcp_org_id_var
+from gateway.mcp.context import _gateway_url, _gw_headers, _store_session, require_mcp_org_id
 from gateway.mcp.helpers import _format_health_stats
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE
@@ -48,7 +48,10 @@ async def connection_health(connection_name: str = "") -> str:
     """
     from gateway.connectors.health_monitor import health_monitor
 
-    org_id = mcp_org_id_var.get(None) or "local"
+    try:
+        org_id = require_mcp_org_id()
+    except RuntimeError as e:
+        return f"Error: {e}"
     token = current_org_id_var.set(org_id)
     try:
         if connection_name:

@@ -3,7 +3,7 @@
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import mcp_org_id_var
+from gateway.mcp.context import require_mcp_org_id
 from gateway.mcp.helpers import _fetch_date_boundaries
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _validate_connection_name
@@ -27,7 +27,10 @@ async def get_date_boundaries(connection_name: str) -> str:
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
 
-    org_id = mcp_org_id_var.get(None) or "local"
+    try:
+        org_id = require_mcp_org_id()
+    except RuntimeError as e:
+        return f"Error: {e}"
     token = current_org_id_var.set(org_id)
     try:
         try:

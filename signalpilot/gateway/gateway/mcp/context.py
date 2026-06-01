@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from gateway.db.engine import get_session_factory
 from gateway.governance.context import current_org_id_var
+from gateway.runtime.mode import is_cloud_mode
 from gateway.store import Store
 
 # Context variables set by MCPAuthMiddleware with the authenticated user_id and org_id
@@ -20,6 +21,38 @@ mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("
 mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
 
 _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
+
+
+def require_mcp_org_id() -> str:
+    """Resolve mcp_org_id_var with cloud-mode fail-closed semantics.
+
+    In cloud mode (is_cloud_mode() True): raise RuntimeError if unset.
+    In local mode: return "local" literal to preserve local/dev workflow.
+    """
+    value = mcp_org_id_var.get(None)
+    if value:
+        return value
+    if is_cloud_mode():
+        raise RuntimeError(
+            "MCP tool requires authenticated org context in cloud mode; mcp_org_id_var is unset"
+        )
+    return "local"
+
+
+def require_mcp_user_id() -> str:
+    """Resolve mcp_user_id_var with cloud-mode fail-closed semantics.
+
+    In cloud mode (is_cloud_mode() True): raise RuntimeError if unset.
+    In local mode: return "local" literal to preserve local/dev workflow.
+    """
+    value = mcp_user_id_var.get(None)
+    if value:
+        return value
+    if is_cloud_mode():
+        raise RuntimeError(
+            "MCP tool requires authenticated org context in cloud mode; mcp_user_id_var is unset"
+        )
+    return "local"
 
 
 @asynccontextmanager

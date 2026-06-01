@@ -3,7 +3,7 @@
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _store_session, mcp_org_id_var
+from gateway.mcp.context import _store_session, require_mcp_org_id
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _validate_connection_name
 
@@ -30,7 +30,8 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     from gateway.governance.annotations import load_annotations
 
     async with _store_session() as store:
-        tool_org_id: str = store.org_id or "local"
+        assert store.org_id is not None  # _store_session raises before yielding if org_id is unset
+        tool_org_id: str = store.org_id
         conn_info = await store.get_connection(connection_name)
         if not conn_info:
             available = [c.name for c in await store.list_connections()]
@@ -131,7 +132,10 @@ async def list_tables(connection_name: str) -> str:
 
         extras = await store.get_credential_extras(connection_name)
 
-    org_id = mcp_org_id_var.get(None) or "local"
+    try:
+        org_id = require_mcp_org_id()
+    except RuntimeError as e:
+        return f"Error: {e}"
     token = current_org_id_var.set(org_id)
     try:
         from gateway.connectors.schema_cache import schema_cache

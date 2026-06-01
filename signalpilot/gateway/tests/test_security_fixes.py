@@ -11,6 +11,8 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from starlette.testclient import TestClient
 
 from gateway.dbt_proxy.tokens import RunTokenClaims
 from gateway.engine.dbt_validation import validate_dbt_statement
@@ -662,3 +664,185 @@ class TestAuthErrorSanitization:
             # org_id must NOT appear in the format args of the log line
             log_args = str(info_call)
             assert "SENSITIVE_ORG" not in log_args
+
+
+# ─── L1: Cookie-auth CSRF Origin check ───────────────────────────────────────
+
+
+class TestL1CookieCsrfOriginCheck:
+    """Verify CookieAuthCsrfMiddleware blocks cross-origin cookie-only mutations."""
+
+    @pytest.fixture(scope="class")
+    def client(self) -> TestClient:
+        from gateway.http.middleware.csrf import CookieAuthCsrfMiddleware
+
+        mini = FastAPI()
+        mini.add_middleware(
+            CookieAuthCsrfMiddleware,
+            allowed_origins=["https://app.signalpilot.ai"],
+            enabled=True,
+        )
+
+        @mini.post("/echo")
+        async def echo_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.get("/echo")
+        async def echo_get() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.post("/api/webhooks/test")
+        async def webhook_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.post("/auth/github/test")
+        async def github_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        return TestClient(mini, raise_server_exceptions=False)
+
+    @pytest.fixture(scope="class")
+    def disabled_client(self) -> TestClient:
+        from gateway.http.middleware.csrf import CookieAuthCsrfMiddleware
+
+        mini = FastAPI()
+        mini.add_middleware(
+            CookieAuthCsrfMiddleware,
+            allowed_origins=["https://app.signalpilot.ai"],
+            enabled=False,
+        )
+
+        @mini.post("/echo")
+        async def echo_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        return TestClient(mini, raise_server_exceptions=False)
+
+    def test_cookie_post_no_origin_no_sec_fetch_rejected(self, client: TestClient) -> None:
+        resp = client.post("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 403
+
+    def test_cookie_post_allowed_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://app.signalpilot.ai"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_post_disallowed_origin_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 403
+
+    def test_cookie_post_sec_fetch_same_origin_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_post_sec_fetch_cross_site_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        assert resp.status_code == 403
+
+    def test_bearer_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            headers={"Authorization": "Bearer sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_plus_bearer_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Authorization": "Bearer sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_apikey_header_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"X-API-Key": "sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_get_cookie_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.get("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_options_preflight_ok(self, client: TestClient) -> None:
+        # OPTIONS is a safe method — CSRF check skips it entirely.
+        # Starlette returns 405 for OPTIONS on a POST-only handler in this isolated app
+        # (no CORS middleware); asserting NOT 403 is the meaningful check.
+        resp = client.options("/echo", cookies={"__session": "abc"})
+        assert resp.status_code != 403
+
+    def test_webhook_path_exempt(self, client: TestClient) -> None:
+        resp = client.post("/api/webhooks/test", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_github_callback_path_exempt(self, client: TestClient) -> None:
+        resp = client.post("/auth/github/test", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_referer_fallback_allowed_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://app.signalpilot.ai/dashboard"},
+        )
+        assert resp.status_code == 200
+
+    def test_referer_fallback_disallowed_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://evil.example/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_subdomain_spoofing_rejected(self, client: TestClient) -> None:
+        # Referer: https://app.signalpilot.ai.evil.com/x must NOT match because
+        # urlsplit recomposition produces https://app.signalpilot.ai.evil.com
+        # which is not in the allow-list.
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://app.signalpilot.ai.evil.com/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_schemeless_rejected(self, client: TestClient) -> None:
+        # Referer: //app.signalpilot.ai/x — urlsplit returns empty scheme,
+        # so recomposition produces "" which must never match the allow-list.
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "//app.signalpilot.ai/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_local_mode_bypass_disallowed_origin_ok(self, disabled_client: TestClient) -> None:
+        # enabled=False → middleware is a pass-through regardless of Origin
+        resp = disabled_client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 200
+
+    def test_rejection_response_shape(self, client: TestClient) -> None:
+        resp = client.post("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 403
+        assert resp.json() == {"detail": "Forbidden."}

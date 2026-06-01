@@ -31,6 +31,7 @@ from .dbt_proxy.config import DbtProxyConfig
 from .governance.context import current_org_id_var
 from .http import (
     APIKeyAuthMiddleware,
+    CookieAuthCsrfMiddleware,
     RateLimitMiddleware,
     RequestBodySizeLimitMiddleware,
     RequestCorrelationMiddleware,
@@ -439,14 +440,20 @@ def _build_allowed_origins() -> list[str]:
 
 
 _ALLOWED_ORIGINS = _build_allowed_origins()
+_CSRF_ENABLED = is_cloud_mode()
 
 # Middleware stack (last added = outermost = runs first)
 # Execution order (outermost → innermost):
-#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → Auth
+#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → CSRF → Auth
 # CORS is outermost so all error responses (including auth errors) get CORS headers.
-# RequestCorrelationMiddleware runs before Auth so auth logs already have a request ID.
+# RequestCorrelationMiddleware runs before CSRF so CSRF logs already have a request ID.
+# CookieAuthCsrfMiddleware runs after Correlation and before Auth — it inspects
+#   headers/cookies directly (same primitives as auth.py) without coupling to
+#   request.state.auth set by Auth.  RateLimit is outer of CSRF so a CSRF-blocked
+#   flood still costs the attacker general-tier quota.
 # APIKeyAuthMiddleware is innermost — closest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(CookieAuthCsrfMiddleware, allowed_origins=_ALLOWED_ORIGINS, enabled=_CSRF_ENABLED)
 app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
 app.add_middleware(SecurityHeadersMiddleware)

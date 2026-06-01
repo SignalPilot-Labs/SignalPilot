@@ -11,8 +11,22 @@ from typing import TYPE_CHECKING, cast
 # in _session/managers/ipc.py does not inherit it into kernel subprocesses.
 from signalpilot._server.auth.session_token import load_session_jwt as _prime_jwt
 
-_prime_jwt()
+_session_jwt = _prime_jwt()
 del _prime_jwt
+
+# The Data SDK (sp.init()) runs IN the kernel and needs a gateway credential.
+# Re-export the (now cache-held) session JWT as SP_API_KEY so kernels inherit it.
+# This must happen HERE, before the multiprocessing forkserver is lazily started
+# (_session/managers/_mp_context.py): the forkserver snapshots os.environ at its
+# launch and forks kernels from that snapshot, so a later os.environ assignment
+# would NOT reach kernels. SP_API_KEY is a distinct var from the F-6-scrubbed
+# SP_SESSION_JWT (which the server/git-auth key off and must not be in the
+# kernel); the gateway accepts the JWT as a Bearer (iss -> notebook-session
+# verifier; scopes read/write/query/execute). Local mode: empty JWT -> unset.
+# An operator-provided SP_API_KEY is never clobbered.
+if _session_jwt and not os.environ.get("SP_API_KEY"):
+    os.environ["SP_API_KEY"] = _session_jwt
+del _session_jwt
 from urllib.parse import urlparse
 
 import uvicorn

@@ -203,30 +203,54 @@ async def get_schema_filters(store: Store, name: str) -> tuple[list[str], list[s
 
 # ─── Sandbox client ───────────────────────────────────────────────────────────
 
-_sandbox_client: SandboxClient | None = None
+# Cache keyed by (org_id, sandbox_manager_url, sandbox_api_key).
+# Per-org isolation: org A's settings can never be returned to org B.
+_sandbox_clients: dict[tuple[str, str, str], SandboxClient] = {}
+_sandbox_clients_lock = asyncio.Lock()
 
 
 async def get_sandbox_client_with_store(store: Store) -> SandboxClient:
-    global _sandbox_client
-    if _sandbox_client is None:
-        settings = await store.load_settings()
-        _sandbox_client = SandboxClient(
-            base_url=settings.sandbox_manager_url,
-            api_key=settings.sandbox_api_key,
-        )
-    return _sandbox_client
+    org_id = store.org_id or ""
+    settings = await store.load_settings()
+    key = (org_id, settings.sandbox_manager_url or "", settings.sandbox_api_key or "")
+    client = _sandbox_clients.get(key)
+    if client is not None:
+        return client
+    async with _sandbox_clients_lock:
+        client = _sandbox_clients.get(key)
+        if client is None:
+            client = SandboxClient(
+                base_url=settings.sandbox_manager_url,
+                api_key=settings.sandbox_api_key,
+            )
+            _sandbox_clients[key] = client
+        return client
 
 
 def get_sandbox_client() -> SandboxClient:
-    """Legacy: get sandbox client without store (uses existing instance)."""
-    global _sandbox_client
-    if _sandbox_client is None:
+    """Legacy: return an arbitrary cached client (local-mode connector fallback).
+
+    Used only by sandboxed_sqlite / sandboxed_duckdb connectors in local mode,
+    which catch the exception and fall back to env-configured SandboxClient.
+    Raises 503 if no client has been initialized.
+    """
+    if not _sandbox_clients:
         raise HTTPException(status_code=503, detail="Sandbox client not initialized")
-    return _sandbox_client
+    # Return any client — local mode has only one org_id (LOCAL_ORG_ID), so
+    # this is deterministic in single-tenant deployments. In multi-tenant
+    # cloud mode this codepath is not reached (connectors use store-backed
+    # accessor via the API surface).
+    return next(iter(_sandbox_clients.values()))
 
 
-def reset_sandbox_client():
-    global _sandbox_client
-    if _sandbox_client is not None:
-        asyncio.create_task(_sandbox_client.close())
-    _sandbox_client = None
+def reset_sandbox_client() -> None:
+    """Close and drop all cached sandbox clients.
+
+    Called from `api/settings.py` on settings save. Preserves the existing
+    explicit-close contract — schedules an `asyncio.create_task` per client
+    so callers don't await close.
+    """
+    global _sandbox_clients
+    for client in _sandbox_clients.values():
+        asyncio.create_task(client.close())
+    _sandbox_clients = {}

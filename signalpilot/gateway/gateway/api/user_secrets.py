@@ -15,6 +15,11 @@ from .deps import StoreD
 router = APIRouter(prefix="/api/user")
 
 
+def _mask_preview(key: str) -> str:
+    """Return a safe prefix-only preview of an API key — never the trailing chars."""
+    return f"{key[:8]}..." if len(key) >= 8 else "****"
+
+
 class UserSecretsUpdate(BaseModel):
     anthropic_api_key: str | None = None
 
@@ -52,7 +57,7 @@ async def get_secrets(store: StoreD):
         if needs_migration:
             row.anthropic_api_key_enc = _encrypt(key)
             await store.session.commit()
-        preview = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "****"
+        preview = _mask_preview(key)
     except Exception:
         preview = "****"
 
@@ -104,7 +109,7 @@ async def update_secrets(body: UserSecretsUpdate, store: StoreD):
             if needs_migration:
                 row.anthropic_api_key_enc = _encrypt(key)
                 await store.session.commit()
-            preview = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "****"
+            preview = _mask_preview(key)
         except Exception:
             preview = "****"
 

@@ -60,6 +60,15 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         raise HTTPException(status_code=401, detail="User identity required")
     user_id = store.user_id or "local"
 
+    if body.project_id is not None:
+        from ..store import github as gh_store
+        try:
+            await gh_store._assert_project_in_org(
+                store.session, org_id=org_id, project_id=body.project_id
+            )
+        except gh_store.ProjectNotFoundError:
+            raise HTTPException(status_code=404, detail="Project not found")
+
     existing = await ns.get_active_session(store.session, org_id=org_id, user_id=user_id)
     if existing and existing.status == "running" and existing.pod_ip and existing.pod_name:
         direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")

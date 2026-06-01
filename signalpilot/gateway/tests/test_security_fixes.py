@@ -364,6 +364,47 @@ class TestV4DefaultBindHost:
         assert not any("non-loopback" in r.message for r in caplog.records)
 
 
+# ─── L7: Cloud-mode non-loopback bind hard-fail ──────────────────────────────
+
+
+class TestL7CloudModeBindHardFail:
+    """enforce_bind_safety() hard-fails in cloud mode; warns in local mode."""
+
+    def test_cloud_mode_non_loopback_raises(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with pytest.raises(RuntimeError, match="non-loopback") as exc_info:
+            config.enforce_bind_safety(cloud=True)
+        msg = str(exc_info.value)
+        assert "0.0.0.0" in msg
+        assert "SP_DBT_PROXY_HOST" in msg
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+    def test_cloud_mode_loopback_hosts_ok(self, host: str) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host=host)
+        config.enforce_bind_safety(cloud=True)  # must not raise
+
+    def test_local_mode_non_loopback_warns_no_raise(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        import logging
+
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with caplog.at_level(logging.WARNING):
+            config.enforce_bind_safety(cloud=False)  # must not raise
+
+        assert any("non-loopback" in r.message for r in caplog.records)
+
+    def test_cloud_mode_default_host_ok(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig()  # default 127.0.0.1
+        config.enforce_bind_safety(cloud=True)  # must not raise
+
+
 # ─── V5: Inline param substitution safety ────────────────────────────────────
 
 

@@ -355,7 +355,7 @@ async def lifespan(app: FastAPI):
 
     # Start dbt-proxy TCP listener
     dbt_proxy_config = DbtProxyConfig()
-    dbt_proxy_config.warn_if_non_loopback()
+    dbt_proxy_config.enforce_bind_safety(cloud=is_cloud_mode())
 
     # Fail closed: if secret is absent, token store is not created and the
     # server.start() context manager will log an error and skip binding.

@@ -462,6 +462,12 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         # (the F-6 path does, before staging the Secret).
         ns = await self.ensure_namespace(org_id)
 
+        # The pod name is deterministic per (org,user) and restartPolicy is Never,
+        # so a terminated/stale pod object lingers and blocks recreate with 409
+        # "already exists". Delete any pre-existing pod and wait for it to clear so
+        # create is idempotent.
+        await self._delete_pod_and_wait(pod_name, ns)
+
         manifest = _pod_manifest(
             pod_name=pod_name,
             namespace=ns,
@@ -479,6 +485,30 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         await self._core_api.create_namespaced_pod(namespace=ns, body=manifest)
         logger.info("Created pod %s in namespace %s (pod_ip mode)", pod_name, ns)
         return PodInfo(name=pod_name, ip=None, status="pending")
+
+    async def _delete_pod_and_wait(self, pod_name: str, ns: str, timeout: int = 30) -> None:
+        """Delete a pod (if present) and block until it is fully gone (404).
+
+        Idempotent: a 404 on delete or read is treated as already-absent.
+        """
+        try:
+            await self._core_api.delete_namespaced_pod(
+                name=pod_name, namespace=ns, grace_period_seconds=0,
+            )
+        except Exception as e:
+            if "404" in str(e) or "Not Found" in str(e):
+                return
+            logger.warning("Stale-pod delete for %s/%s failed: %s", ns, pod_name, e)
+            return
+        logger.info("Deleting stale pod %s/%s before recreate", ns, pod_name)
+        for _ in range(timeout * 2):
+            try:
+                await self._core_api.read_namespaced_pod(name=pod_name, namespace=ns)
+            except Exception as e:
+                if "404" in str(e) or "Not Found" in str(e):
+                    return
+            await asyncio.sleep(0.5)
+        logger.warning("Stale pod %s/%s still present after %ds wait", ns, pod_name, timeout)
 
     async def delete_pod(self, pod_name: str, *, org_id: str) -> bool:
         if not org_id:

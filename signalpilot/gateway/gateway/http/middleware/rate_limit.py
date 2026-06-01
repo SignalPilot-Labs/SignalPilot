@@ -34,6 +34,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         {
             "/api/query",
             "/api/sandboxes",
+            "/api/dbt-cloud/projects",
         }
     )
 

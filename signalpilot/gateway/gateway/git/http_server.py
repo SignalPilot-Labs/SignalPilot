@@ -257,7 +257,24 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
         for branch in _detect_pushed_branches(body):
             asyncio.ensure_future(mirror_push_to_github(project_id, org_id, branch))
 
-    return Response(content=body_bytes, status_code=status_code, headers=headers)
+    # The git smart-HTTP Content-Type (e.g. application/x-git-upload-pack-advertisement)
+    # MUST reach the client or git rejects the stream and the clone hangs
+    # ("remote end hung up unexpectedly"). Starlette's Response derives Content-Type
+    # from its media_type arg and overrides any Content-Type left in the headers dict,
+    # so extract it and pass it as media_type. Match case-insensitively (CGI emits
+    # "Content-Type").
+    media_type = None
+    for k in list(headers):
+        if k.lower() == "content-type":
+            media_type = headers.pop(k)
+            break
+
+    return Response(
+        content=body_bytes,
+        status_code=status_code,
+        headers=headers,
+        media_type=media_type,
+    )
 
 
 def _detect_pushed_branches(request_body: bytes) -> list[str]:

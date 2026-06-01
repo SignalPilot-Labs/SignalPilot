@@ -160,6 +160,26 @@ def construct_kernel_env(
     # even if a future caller passes an unscubbed base_env.
     env.pop("SP_SESSION_JWT", None)
 
+    # The SignalPilot Data SDK (`sp.init()`) runs IN the kernel and needs a gateway
+    # credential. F-6 keeps the raw SP_SESSION_JWT var out of the kernel (so code
+    # never reads the var the server/git-auth key off), but the kernel still needs
+    # to call the gateway as this session. Inject the session JWT under SP_API_KEY:
+    # the gateway accepts it as a Bearer (iss-routed to the notebook-session
+    # verifier) and it is short-lived + data-scoped (read/write/query/execute, no
+    # admin/billing). In local mode load_session_jwt() returns "" and SP_API_KEY
+    # stays unset (the local gateway needs no key). An operator-set SP_API_KEY is
+    # never clobbered.
+    if not env.get("SP_API_KEY"):
+        try:
+            from signalpilot._server.auth.session_token import load_session_jwt
+
+            _session_jwt = load_session_jwt()
+            if _session_jwt:
+                env["SP_API_KEY"] = _session_jwt
+        except Exception:
+            # Never block kernel startup on credential injection.
+            pass
+
     if kernel_pythonpath is not None:
         existing = env.get("PYTHONPATH", "")
         if existing:

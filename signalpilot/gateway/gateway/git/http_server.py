@@ -189,6 +189,17 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
         "GIT_CONFIG_VALUE_0": "*",
     }
 
+    # Forward the git wire-protocol version. Modern git clients (>=2.26) default to
+    # protocol v2 and send `Git-Protocol: version=2`. git-http-backend only speaks
+    # v2 when GIT_PROTOCOL is set; without it the server answers v0 while the client
+    # expects v2 → the clone fails "fatal: the remote end hung up unexpectedly".
+    git_protocol = request.headers.get("git-protocol")
+    if git_protocol:
+        # Constrain to the documented "version=N[:...]" shape; never forward
+        # arbitrary client bytes into the CGI environment.
+        if re.fullmatch(r"version=[0-9]+(:[A-Za-z0-9=_.-]+)*", git_protocol):
+            env["GIT_PROTOCOL"] = git_protocol
+
     # 10. Execute git http-backend
     try:
         proc = subprocess.run(

@@ -177,6 +177,16 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
         "REMOTE_ADDR": request.client.host if request.client else "127.0.0.1",
         "REMOTE_USER": auth.get("user_id", ""),
         "PATH": os.environ.get("PATH", "/usr/bin"),
+        # Repos under /repos are created by notebook pods (uid 10001) and served by
+        # the gateway (also uid 10001), but git's safe-directory check still flags
+        # them "dubious ownership" and then git-http-backend writes nothing to
+        # stdout — the client sees "remote end hung up unexpectedly". Mark the repos
+        # root safe via GIT_CONFIG env (inherited by http-backend and its
+        # upload-pack/receive-pack children); --global config does not work because
+        # the app user has no writable HOME.
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": "*",
     }
 
     # 10. Execute git http-backend

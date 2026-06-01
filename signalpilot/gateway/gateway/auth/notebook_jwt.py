@@ -54,6 +54,10 @@ def mint_session_jwt(
 
     Returns:
         Signed JWT string.
+
+    Caller contract: org membership for (user_id, org_id, project_id) MUST be
+    verified upstream. This function does not re-check; it only signs claims.
+    Likewise `branch` MUST be validated (see mcp.tools.notebook._validate_branch).
     """
     secret = load_session_jwt_secret()
     now = int(time.time())

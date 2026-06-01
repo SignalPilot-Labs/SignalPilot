@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..auth.notebook_jwt import mint_session_jwt
 from ..config.k8s import get_k8s_settings
+from ..mcp.tools.notebook import _validate_branch
 from ..models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
 from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
 from ..runtime.mode import is_cloud_mode
@@ -59,6 +60,11 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
     if is_cloud_mode() and not store.user_id:
         raise HTTPException(status_code=401, detail="User identity required")
     user_id = store.user_id or "local"
+
+    if body.branch:
+        branch_err = _validate_branch(body.branch)
+        if branch_err:
+            raise HTTPException(status_code=400, detail=branch_err)
 
     if body.project_id is not None:
         from ..store import github as gh_store
